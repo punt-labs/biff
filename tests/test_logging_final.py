@@ -1,0 +1,260 @@
+"""Private durable outcomes for checkout changes, HTTP shutdown, and outages."""
+
+from __future__ import annotations
+
+import logging
+import signal
+import subprocess
+from collections.abc import Iterator
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
+import uvicorn
+from fastmcp import FastMCP
+from punt_observe.logging import Role
+from typer.testing import CliRunner
+
+from biff.__main__ import app
+from biff.enablement import RepoEnablement
+from biff.logging_config import configure_logging
+from biff.nats_relay import NatsRelay
+from biff.server.transport_runtime import HttpLifecycleHandler
+
+
+@pytest.fixture
+def private_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "private-repository"
+    repo.mkdir()
+    subprocess.run(  # noqa: S603
+        ["git", "init", "-q", str(repo)],  # noqa: S607
+        check=True,
+        capture_output=True,
+    )
+    return repo
+
+
+@pytest.fixture
+def durable_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    loggers = [
+        logging.getLogger(),
+        *(
+            logger
+            for logger in logging.root.manager.loggerDict.values()
+            if isinstance(logger, logging.Logger)
+        ),
+    ]
+    saved = [
+        (logger, logger.level, logger.handlers[:], logger.propagate, logger.disabled)
+        for logger in loggers
+    ]
+    original_handlers = {
+        handler for _, _, handlers, _, _ in saved for handler in handlers
+    }
+    try:
+        configure_logging(Role.MCP, stderr_level="WARNING")
+        yield tmp_path / ".punt-labs/biff/logs/biff.log"
+    finally:
+        for logger in loggers:
+            for handler in logger.handlers:
+                if handler not in original_handlers:
+                    handler.close()
+        for logger, level, handlers, propagate, disabled in saved:
+            logger.handlers[:] = handlers
+            logger.setLevel(level)
+            logger.propagate = propagate
+            logger.disabled = disabled
+
+
+@pytest.mark.parametrize("operation", ["enable", "disable"])
+def test_checkout_outcome_changed_then_unchanged(
+    operation: str, private_repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = RepoEnablement(private_repo)
+    if operation == "disable":
+        manager.enable()
+    caplog.set_level(logging.INFO, logger="biff.enablement")
+    caplog.clear()
+    action = manager.enable if operation == "enable" else manager.disable
+    assert not action().failed
+    assert not action().failed
+    records = [r for r in caplog.records if r.name == "biff.enablement"]
+    assert len(records) == 2
+    assert f"operation={operation} outcome=changed " in records[0].message
+    labels = records[0].message.split("changes=")[1].split(",")
+    assert {"marker", "workflow", "hooks", "permissions"}.issubset(labels)
+    assert (
+        records[1].message
+        == f"Enablement operation={operation} outcome=unchanged changes=none"
+    )
+    assert all(r.levelno == logging.INFO and r.exc_info is None for r in records)
+    assert str(private_repo) not in caplog.text
+    assert "private" not in caplog.text
+
+
+@pytest.mark.parametrize("artifact", ["enabled", "CLAUDE.md"])
+def test_enable_reports_marker_or_guide_only_changes(
+    artifact: str, private_repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = RepoEnablement(private_repo)
+    manager.enable()
+    (private_repo / ".punt-labs/biff" / artifact).unlink()
+    caplog.clear()
+    caplog.set_level(logging.INFO, logger="biff.enablement")
+    manager.enable()
+    label = "marker" if artifact == "enabled" else "guide"
+    assert caplog.messages == [
+        f"Enablement operation=enable outcome=changed changes={label}"
+    ]
+
+
+def test_enable_error_does_not_log_success_or_exception_content(
+    private_repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="biff.enablement")
+    with (
+        patch(
+            "biff.enablement.deploy_ci_workflow", side_effect=OSError("private-error")
+        ),
+        pytest.raises(OSError),
+    ):
+        RepoEnablement(private_repo).enable()
+    assert not [r for r in caplog.records if r.name == "biff.enablement"]
+    assert "private" not in caplog.text
+
+
+def test_cli_outcomes_reach_durable_file(
+    private_repo: Path,
+    durable_log: Path,
+) -> None:
+    with patch("biff.__main__.find_git_root", return_value=private_repo):
+        for operation in ("enable", "enable", "disable", "disable"):
+            result = CliRunner().invoke(app, [operation])
+            assert result.exit_code == 0, result.output
+    text = durable_log.read_text()
+    records = [line for line in text.splitlines() if "Enablement operation=" in line]
+    assert len(records) == 4
+    for line, operation, outcome in zip(
+        records,
+        ("enable", "enable", "disable", "disable"),
+        ("changed", "unchanged", "changed", "unchanged"),
+        strict=True,
+    ):
+        assert f"operation={operation} outcome={outcome}" in line
+        assert "[INFO]" in line
+    assert str(private_repo) not in text
+    assert "private" not in text
+
+
+def test_http_forwarder_copies_only_fixed_events(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="biff.server.transport_runtime")
+    handler = HttpLifecycleHandler()
+    for msg in ("Shutting down", "Finished server process [%d]", "private-repo %s", ""):
+        handler.emit(
+            logging.LogRecord(
+                "uvicorn.error",
+                logging.INFO,
+                "/private/path",
+                1,
+                msg,
+                ("private-payload",),
+                None,
+            )
+        )
+    assert caplog.messages == [
+        "HTTP MCP shutdown outcome=started",
+        "HTTP MCP shutdown outcome=completed",
+    ]
+    assert all(r.levelno == logging.INFO for r in caplog.records)
+    assert "private" not in caplog.text
+
+
+async def test_uvicorn_graceful_shutdown_is_durable(
+    durable_log: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = uvicorn.Config(
+        FastMCP("private-repo").http_app(),
+        log_config=HttpLifecycleHandler.configuration(),
+        timeout_graceful_shutdown=1,
+        ws="websockets-sansio",
+    )
+    logging.getLogger().addHandler(caplog.handler)
+    caplog.set_level(logging.INFO)
+    server = uvicorn.Server(config)
+    server.servers = []
+
+    async def terminate() -> None:
+        server.handle_exit(signal.SIGTERM, None)
+
+    with (
+        patch.object(server, "startup", new=AsyncMock()),
+        patch.object(server, "main_loop", new=terminate),
+        patch("uvicorn.lifespan.on.LifespanOn.shutdown", new=AsyncMock()),
+    ):
+        await server._serve()
+    assert server.should_exit
+    messages = [
+        r.message for r in caplog.records if r.name == "biff.server.transport_runtime"
+    ]
+    assert messages == [
+        "HTTP MCP shutdown outcome=started",
+        "HTTP MCP shutdown outcome=completed",
+    ]
+    text = durable_log.read_text()
+    assert text.count("HTTP MCP shutdown outcome=started") == 1
+    assert text.count("HTTP MCP shutdown outcome=completed") == 1
+    assert "private" not in text
+
+
+async def test_relay_error_episodes_rearm_after_recovery_and_terminal_close(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    relay = NatsRelay(url="nats://localhost:4222", repo_name="private-repo")
+    callbacks = relay._connection_callbacks(relay._generation)
+    caplog.set_level(logging.DEBUG, logger="biff.nats_relay")
+    await callbacks["reconnected_cb"]()
+    for _ in range(3):
+        await callbacks["error_cb"](
+            ConnectionRefusedError("private-login /private/path")
+        )
+    await callbacks["reconnected_cb"]()
+    await callbacks["reconnected_cb"]()
+    await callbacks["error_cb"](TimeoutError("private-payload"))
+    await callbacks["closed_cb"]()
+    await callbacks["closed_cb"]()
+    await callbacks["error_cb"](ConnectionRefusedError("private-error"))
+    errors = [r for r in caplog.records if "NATS error" in r.message]
+    assert [r.levelno for r in errors] == [
+        logging.INFO,
+        logging.DEBUG,
+        logging.DEBUG,
+        logging.INFO,
+        logging.INFO,
+    ]
+    outcomes = [r.message for r in caplog.records if "outcome=" in r.message]
+    assert outcomes == [
+        "NATS connection outcome=recovered failures=3 error=ConnectionRefusedError",
+        "NATS connection outcome=closed failures=1 error=TimeoutError",
+    ]
+    assert "private" not in caplog.text
+    assert all(r.exc_info is None for r in caplog.records)
+
+
+async def test_initial_dial_reports_recovery_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    relay = NatsRelay(url="nats://localhost:4222", repo_name="private-repo")
+    callbacks = relay._connection_callbacks(relay._generation)
+    caplog.set_level(logging.INFO, logger="biff.nats_relay")
+    await callbacks["error_cb"](ConnectionRefusedError("private-error"))
+    with patch("biff.nats_relay.nats.connect", new=AsyncMock()):
+        await relay._dial()
+        await relay._dial()
+    assert caplog.messages == [
+        "NATS error (transient, auto-recovering): ConnectionRefusedError",
+        "NATS connection outcome=recovered failures=1 error=ConnectionRefusedError",
+    ]

@@ -1007,11 +1007,7 @@ async def _discover_org_repos(state: ServerState) -> None:
     # Counts as the first refresh attempt, so the first heartbeat tick's
     # _refresh_org_repos doesn't immediately re-query on top of this one.
     object.__setattr__(state, "org_repos_refreshed_at", time.monotonic())
-    logger.info(
-        "Org discovery: found %d repos: %s",
-        len(org_repos),
-        sorted(org_repos),
-    )
+    logger.info("Org discovery: found %d repos", len(org_repos))
     if org_repos:
         # Mutate in-place so tool closures (which captured `state`
         # during registration) see the updated visible_repos.
@@ -1121,10 +1117,7 @@ async def _running_lifespan(
 
     await _discover_org_repos(state)
 
-    logger.info(
-        "Visible repos: %s",
-        sorted(state.visible_repos),
-    )
+    logger.info("Visible repos: count=%d", len(state.visible_repos))
 
     try:
         yield state

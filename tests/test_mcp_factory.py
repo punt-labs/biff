@@ -18,6 +18,7 @@ from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
 from biff.server.entrypoints import McpServerOptions
 from biff.server.state import create_state
+from biff.server.transport_runtime import HttpLifecycleHandler
 from biff.statusline import UNREAD_DIR
 from biff.testing.caller import StampedClient
 
@@ -25,7 +26,7 @@ from biff.testing.caller import StampedClient
 def test_factory_creates_an_unbound_state_with_the_unread_directory(
     tmp_path: Path,
 ) -> None:
-    with patch("biff.server.entrypoints.create_server") as server:
+    with patch("biff.server.transport_runtime.create_server") as server:
         McpServerOptions(
             user="rmh", data_dir=tmp_path, relay_url="", prefix=tmp_path
         ).create_server()
@@ -46,7 +47,7 @@ def test_default_caller_uses_startup_session_and_explicit_user(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "startup-session")
-    with patch("biff.server.entrypoints.create_server") as server:
+    with patch("biff.server.transport_runtime.create_server") as server:
         McpServerOptions(
             user="devin",
             data_dir=tmp_path,
@@ -87,7 +88,7 @@ def test_default_caller_has_no_new_flag() -> None:
 def test_only_explicit_stdio_user_enables_default_caller(
     tmp_path: Path, transport: str
 ) -> None:
-    with patch("biff.server.entrypoints.create_server") as server:
+    with patch("biff.server.transport_runtime.create_server") as server:
         options = McpServerOptions(
             user=None if transport == "stdio" else "devin",
             data_dir=tmp_path,
@@ -100,7 +101,7 @@ def test_only_explicit_stdio_user_enables_default_caller(
 
 
 def test_explicit_user_gets_fresh_session_without_environment(tmp_path: Path) -> None:
-    with patch("biff.server.entrypoints.create_server") as server:
+    with patch("biff.server.transport_runtime.create_server") as server:
         options = McpServerOptions(
             user="devin", data_dir=tmp_path, relay_url="", prefix=tmp_path
         )
@@ -114,7 +115,7 @@ def test_explicit_user_gets_fresh_session_without_environment(tmp_path: Path) ->
 
 
 def test_inferred_default_user_does_not_enable_unstamped_calls(tmp_path: Path) -> None:
-    with patch("biff.server.entrypoints.create_server") as server:
+    with patch("biff.server.transport_runtime.create_server") as server:
         McpServerOptions(
             user=None, data_dir=tmp_path, relay_url="", prefix=tmp_path
         ).create_server(default_user="devin")
@@ -157,8 +158,16 @@ def test_session_setup_logs_no_identity(
             run.assert_called_once_with(transport="stdio")
         else:
             McpServerOptions.serve(ctx)
-            run.assert_called_once_with(transport="http", host="127.0.0.1", port=8419)
+            run.assert_called_once_with(
+                transport="http",
+                host="127.0.0.1",
+                port=8419,
+                uvicorn_config={"log_config": HttpLifecycleHandler.configuration()},
+            )
 
     messages = [r.getMessage() for r in caplog.records if r.name.startswith("biff")]
     assert any(m.startswith(f"Session ready: {state.tty} (") for m in messages)
     assert all("private-login" not in m and "Private Person" not in m for m in messages)
+    visible = [m for m in messages if m.startswith("Visible repos:")]
+    assert visible == ["Visible repos: count=1"]
+    assert all("test" not in m and str(tmp_path) not in m for m in visible)

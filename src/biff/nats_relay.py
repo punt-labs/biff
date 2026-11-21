@@ -38,7 +38,6 @@ import nats
 from nats.errors import Error as NatsError
 from nats.js.api import (
     ConsumerConfig,
-    KeyValueConfig,
     RetentionPolicy,
     StreamConfig,
 )
@@ -51,6 +50,7 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
+from biff._nats_connection import NatsConnectionSetup
 from biff.models import (
     Message,
     RelayAuth,
@@ -60,7 +60,6 @@ from biff.models import (
     UserSession,
     WallPost,
 )
-from biff.relay import SESSION_TTL_SECONDS
 from biff.tty import (
     SID_HINT_NAMESPACE,
     build_session_key,
@@ -81,7 +80,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_KV_TTL = SESSION_TTL_SECONDS  # NATS auto-expires keys not refreshed within this window
 _KV_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — shared bucket, all repos' sessions
 _STREAM_MAX_BYTES = 100 * 1024 * 1024  # 100 MiB — shared stream, all repos' messages
 _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
@@ -521,6 +519,7 @@ class NatsRelay:
         self._connect_lock = asyncio.Lock()
         self._wtmp_available: bool = False
         self._health = _ConnectionHealth(url)
+        self._setup = NatsConnectionSetup()
         # Monotonic per-dial token.  Each new client dialed in
         # ``_open_connection`` bumps it; the connection callbacks capture the
         # value in force at their registration and no-op when it no longer
@@ -793,6 +792,7 @@ class NatsRelay:
                 return  # stale callback from a superseded client
             # Health tracker owns the log line (with recovery latency).
             self._health.record_reconnected()
+            self._setup.finish("recovered")
             # A transparent same-object reconnect completed: advance the epoch
             # so a force-reconnect whose gate observed the earlier value skips
             # the now-healed client (nats-relay.tex Reconnect).  The
@@ -807,6 +807,7 @@ class NatsRelay:
             # the client so the next _ensure_connected builds a fresh one
             # instead of reusing a dead connection.
             self._health.record_closed()
+            self._setup.finish("closed")
             self._nc = None
             self._js = None
             self._kv = None
@@ -815,23 +816,7 @@ class NatsRelay:
         async def _on_error(exc: Exception) -> None:
             if self._generation != generation:
                 return  # stale callback from a superseded client
-            # Python 3.14 raises APPLICATION_DATA_AFTER_CLOSE_NOTIFY during TLS
-            # teardown.  Harmless — suppress.
-            ssl_teardown = isinstance(exc, ssl.SSLError) and (
-                "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" in str(exc)
-            )
-            if not ssl_teardown:
-                # INFO, not ERROR: these callback errors (TimeoutError, SSL
-                # shutdown timed out, Disconnected) are transient, background
-                # events that nats-py auto-recovers from — the connection
-                # self-heals without a restart.  At ERROR they cleared the
-                # CLI's WARNING stderr floor and dumped a traceback into the
-                # interactive REPL; at INFO they reach biff.log
-                # only. Retry callbacks log only the exception type, never
-                # repeated tracebacks or potentially identifying error text.
-                logger.info(
-                    "NATS error (transient, auto-recovering): %s", type(exc).__name__
-                )
+            self._setup.record(exc)
 
         return {
             "disconnected_cb": _on_disconnect,
@@ -881,11 +866,10 @@ class NatsRelay:
         finally:
             auth_kwargs.clear()
         if error_kind is not None or nc is None:
+            self._setup.finish("failed", error_kind or "unknown")
             host = sanitize_relay_url(self._url)
-            logger.warning(
-                "failed to connect to relay %s: %s", host, error_kind or "unknown"
-            )
             raise RelayConnectError(f"failed to connect to relay: {host}")
+        self._setup.finish("recovered")
         return nc
 
     async def _open_connection(self) -> tuple[JetStreamContext, KeyValue]:
@@ -963,11 +947,7 @@ class NatsRelay:
         # TTL auto-purges truly stale entries.  Never delete-recreate
         # shared infrastructure; use the existing bucket on config
         # mismatch.
-        kv_config = KeyValueConfig(
-            bucket=self._kv_bucket,
-            ttl=_KV_TTL,
-            max_bytes=_KV_MAX_BYTES,
-        )
+        kv_config = self._setup.key_value_config(self._kv_bucket, _KV_MAX_BYTES)
         try:
             kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
                 config=kv_config,
@@ -997,11 +977,7 @@ class NatsRelay:
 
         # KV bucket for TTY name reservations — shared across all repos (DES-035).
         # Separate from sessions: no repo prefix in keys, 1 MiB max.
-        names_config = KeyValueConfig(
-            bucket=self._names_bucket,
-            ttl=_KV_TTL,
-            max_bytes=1 * 1024 * 1024,  # 1 MiB
-        )
+        names_config = self._setup.key_value_config(self._names_bucket, 1 * 1024 * 1024)
         try:
             names_kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
                 config=names_config,

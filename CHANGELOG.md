@@ -45,6 +45,13 @@
 
 ### Fixed
 
+- Record private durable INFO outcomes for `biff enable` and `biff disable`,
+  including unchanged configurations and fixed labels for changed artifacts.
+  HTTP MCP graceful shutdown start and completion now reach the durable log.
+- Bound relay retry diagnostics to one INFO onset per outage, DEBUG repeats,
+  and an INFO recovery or terminal outcome, without exception content.
+- Log visible repository counts instead of names, and omit checkout paths
+  from missing-origin ethos diagnostics.
 - Include safe operation, failed step, exception class, and source location in
   talk hangup, withdrawal, auto-accept, and connected-send failure diagnostics.
   Keep these diagnostics in the durable INFO log without interrupting the REPL.
