@@ -371,11 +371,11 @@
     "avg_lcom": 0.0
   },
   "src/biff/nats_relay.py": {
-    "efferent_coupling": 3.0,
+    "efferent_coupling": 4.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.903,
-    "avg_lcom": 0.709
+    "max_lcom": 0.899,
+    "avg_lcom": 0.707
   },
   "src/biff/prob_gate.py": {
     "efferent_coupling": 0.0,
@@ -389,7 +389,7 @@
     "public_names": 10.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
-    "avg_lcom": 0.939
+    "avg_lcom": 0.942
   },
   "src/biff/repl_display.py": {
     "efferent_coupling": 0.0,
@@ -539,7 +539,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/server/tools/messaging.py": {
-    "efferent_coupling": 8.0,
+    "efferent_coupling": 9.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
