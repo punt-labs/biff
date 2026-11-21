@@ -38,14 +38,10 @@ touch them.
 
 from __future__ import annotations
 
-import errno
-import importlib.resources
-import os
-import stat
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self, final
 
-from biff._stdlib import remove_enabled_marker, write_enabled_marker
+from biff._enablement_artifacts import CheckoutArtifacts
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
 from biff.claude_md import UNCLOSED_FENCE, ClaudeMdImport
 from biff.claude_permissions import PermissionChange, ProjectPermissions
@@ -69,11 +65,7 @@ DISABLED_MESSAGE = (
     "Claude Code for changes to take effect."
 )
 
-_GUIDE_RESOURCE = "user-claude.md"
 _REPO_IMPORT_LINE = "@.punt-labs/biff/CLAUDE.md"
-# The shared punt lock files (CLAUDE.md import, .claude/settings.json) are
-# local-only; one glob keeps every punt tool's lock out of ``git status``.
-_LOCK_IGNORE = "*.punt-import.lock"
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,15 +106,13 @@ class EnablementChange:
 
     def disable_report(self) -> list[str]:
         """Return the permission lines and closing line for a ``disable`` run."""
+        closing = DISABLED_MESSAGE
         if self.failed:
-            return [
-                *self.permissions.lines("removed from"),
-                (
-                    "biff disabled, but its allow rules are still in "
-                    ".claude/settings.json. Fix the file and rerun biff disable."
-                ),
-            ]
-        return [*self.permissions.lines("removed from"), DISABLED_MESSAGE]
+            closing = (
+                "biff disabled, but its allow rules are still in "
+                ".claude/settings.json. Fix the file and rerun biff disable."
+            )
+        return [*self.permissions.lines("removed from"), closing]
 
 
 @final
@@ -189,13 +179,19 @@ class RepoEnablement:
         try:
             ci_changed = deploy_ci_workflow(self._root)
             hooks_changed = tuple(deploy_git_hooks(self._root))
-            self._deposit_guide()
-            self._guide_import().register()
-            self._ignore_locks()
-            write_enabled_marker(self._root)
+            changes = self._enable_artifacts()
         except BaseException:
             ProjectPermissions(self._root).revoke(permissions.changed)
             raise
+        CheckoutArtifacts.report(
+            "enable",
+            {
+                "workflow": ci_changed,
+                "hooks": bool(hooks_changed),
+                "permissions": bool(permissions.changed),
+                **changes,
+            },
+        )
         return EnablementChange(
             ci_workflow_changed=ci_changed,
             git_hooks_changed=hooks_changed,
@@ -217,11 +213,21 @@ class RepoEnablement:
         whether it resolved, for symmetry with :meth:`enable`.
         """
         resolved = resolve_hooks_dir(self._root) is not None
-        remove_enabled_marker(self._root)
+        marker_changed = self._remove_marker()
         permissions = ProjectPermissions(self._root).revoke()
         hooks_changed = tuple(remove_git_hooks(self._root))
         ci_changed = remove_ci_workflow(self._root)
-        self._guide_import().prune()
+        import_changed = self._guide_import().prune()
+        CheckoutArtifacts.report(
+            "disable",
+            {
+                "marker": marker_changed,
+                "workflow": ci_changed,
+                "hooks": bool(hooks_changed),
+                "permissions": bool(permissions.changed),
+                "guide_import": import_changed,
+            },
+        )
         return EnablementChange(
             ci_workflow_changed=ci_changed,
             git_hooks_changed=hooks_changed,
@@ -229,45 +235,17 @@ class RepoEnablement:
             permissions=permissions,
         )
 
-    def _ignore_locks(self) -> None:
-        """Append :data:`_LOCK_IGNORE` to the repo ``.gitignore`` once.
+    def _enable_artifacts(self) -> dict[str, bool]:
+        artifacts = CheckoutArtifacts(self._root)
+        return {
+            "guide": artifacts.deposit_guide(),
+            "guide_import": self._guide_import().register(),
+            "ignore": artifacts.ignore_locks(),
+            "marker": artifacts.write_marker(),
+        }
 
-        Opened ``O_NOFOLLOW``: a symlinked ``.gitignore`` is left alone (the
-        locks then merely show as untracked) rather than written through.
-        """
-        flags = os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC
-        try:
-            fd = os.open(self._root / ".gitignore", flags, 0o644)
-        except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                return
-            raise
-        with os.fdopen(fd, "r+b") as handle:
-            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-                return
-            text = handle.read().decode("utf-8", errors="replace")
-            if _LOCK_IGNORE in (line.strip() for line in text.splitlines()):
-                return
-            sep = "\n" if text and not text.endswith("\n") else ""
-            handle.write(f"{sep}{_LOCK_IGNORE}\n".encode())
+    def _remove_marker(self) -> bool:
+        return CheckoutArtifacts(self._root).remove_marker()
 
     def _guide_import(self) -> ClaudeMdImport:
         return ClaudeMdImport(self._root / "CLAUDE.md", _REPO_IMPORT_LINE)
-
-    def _deposit_guide(self) -> None:
-        """Write the bundled guide to ``.punt-labs/biff/CLAUDE.md`` wholesale.
-
-        Overwrites (§2.2 vendored zone); skips the write when the bytes already
-        match so re-running ``enable`` never churns the file.  The compare is on
-        bytes so a tampered non-UTF-8 guide is overwritten, not a crash.
-        """
-        want = (
-            importlib.resources.files("biff.data")
-            .joinpath(_GUIDE_RESOURCE)
-            .read_bytes()
-        )
-        guide = self._root / ".punt-labs" / "biff" / "CLAUDE.md"
-        if guide.is_file() and guide.read_bytes() == want:
-            return
-        guide.parent.mkdir(parents=True, exist_ok=True)
-        guide.write_bytes(want)

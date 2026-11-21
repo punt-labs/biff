@@ -229,3 +229,6 @@ class TestDiagnosable:
         with caplog.at_level("WARNING", logger="biff.ethos_team"):
             assert EthosTeams.for_repo_root(tmp_path).roles_of("claude") == ()
         assert "No origin slug" in caplog.text
+        assert "operation=ethos reason=missing_origin" in caplog.text
+        assert str(tmp_path) not in caplog.text
+        assert tmp_path.name not in caplog.text

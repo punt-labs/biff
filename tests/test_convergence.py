@@ -359,7 +359,10 @@ class TestInstallAndEnableAreDisjoint:
             ("repo", p) for p in enable_repo
         }
 
-        assert enable_writes, "enable must write the repo artifact set"
-        assert install_writes.isdisjoint(enable_writes)
-        # enable is repo-scoped: it never reaches into HOME.
-        assert enable_home == set()
+        assert enable_repo, "enable must write the repo artifact set"
+        shared_writes = install_writes & enable_writes
+        assert all(
+            scope == "home" and p.parts[:3] == _CLI_LOG_DIR
+            for scope, p in shared_writes
+        )
+        assert {p for p in enable_home if p.parts[:3] != _CLI_LOG_DIR} == set()

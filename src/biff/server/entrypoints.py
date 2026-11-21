@@ -11,9 +11,7 @@ import typer
 
 from biff._cli_runtime import McpInvocation
 from biff.config import RELAY_URL_UNSET, load_mcp_config
-from biff.server.app import create_server
-from biff.server.caller_policy import CallerPolicy
-from biff.server.launch import McpLaunch
+from biff.server.transport_runtime import HttpLifecycleHandler, McpServerBuilder
 from biff.usage import McpUsageMiddleware
 
 if TYPE_CHECKING:
@@ -61,17 +59,14 @@ class McpServerOptions:
             prefix=self.prefix,
         )
 
-        launch = McpLaunch(resolved, CallerPolicy.for_launch(self.user, self.transport))
-        return create_server(launch.state(), default_caller=launch.caller)
+        return McpServerBuilder(resolved, self.user, self.transport).create_server()
 
     def _observed_server(self, ctx: typer.Context) -> FastMCP[ServerState]:
-        invocation = ctx.find_object(McpInvocation)
-        server = self.create_server(
-            default_user=invocation.user if invocation else None
-        )
-        if invocation is not None:
+        if (invocation := ctx.find_object(McpInvocation)) is not None:
+            server = self.create_server(default_user=invocation.user)
             server.add_middleware(McpUsageMiddleware(invocation.usage))
-        return server
+            return server
+        return self.create_server()
 
     @classmethod
     def serve(
@@ -88,7 +83,8 @@ class McpServerOptions:
         server = cls(user, data_dir, relay_url, prefix, "http")._observed_server(ctx)
         logger.info("Starting Biff MCP server (HTTP): port=%d", port)
         typer.echo(f"Starting biff MCP server on http://{host}:{port}")
-        server.run(transport="http", host=host, port=port)
+        http = {"log_config": HttpLifecycleHandler.configuration()}
+        server.run(transport="http", host=host, port=port, uvicorn_config=http)
 
     @classmethod
     def mcp(
