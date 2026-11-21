@@ -201,6 +201,10 @@ class Relay(Protocol):
         """Return recent session events, optionally filtered by user."""
         ...
 
+    async def last_session_repo(self, address: str) -> str | None:
+        """Return the repo of the latest event for session ``user:tty``."""
+        ...
+
     # -- Wall (team broadcast) --
 
     async def set_wall(self, wall: WallPost | None) -> None:
@@ -313,10 +317,7 @@ class DormantRelay:
         """Return an empty result while disabled."""
         return []
 
-    async def get_sessions_for_repos(
-        self,
-        repos: frozenset[str],  # noqa: ARG002
-    ) -> list[UserSession]:
+    async def get_sessions_for_repos(self, repos: frozenset[str]) -> list[UserSession]:  # noqa: ARG002
         """Return an empty result while disabled."""
         return []
 
@@ -335,6 +336,10 @@ class DormantRelay:
         """Return an empty result while disabled."""
         return []
 
+    async def last_session_repo(self, address: str) -> str | None:  # noqa: ARG002
+        """Return no repo while disabled."""
+        return None
+
     async def set_wall(self, wall: WallPost | None) -> None:
         """Do nothing while disabled."""
 
@@ -342,12 +347,7 @@ class DormantRelay:
         """Return an empty result while disabled."""
         return None
 
-    async def reserve_tty_name(
-        self,
-        user: str,  # noqa: ARG002
-        name: str,  # noqa: ARG002
-        session_key: str,  # noqa: ARG002
-    ) -> bool:
+    async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool:  # noqa: ARG002
         """Accept the reservation without storing it while disabled."""
         return True
 
@@ -359,11 +359,7 @@ class DormantRelay:
     ) -> None:
         """Do nothing while disabled."""
 
-    async def get_tty_reservation_owner(
-        self,
-        user: str,  # noqa: ARG002
-        name: str,  # noqa: ARG002
-    ) -> str | None:
+    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:  # noqa: ARG002
         """Return an empty result while disabled."""
         return None
 
@@ -371,11 +367,7 @@ class DormantRelay:
         """Return an empty result while disabled."""
         return []
 
-    async def get_session_tty_hint(
-        self,
-        user: str,  # noqa: ARG002
-        session_id: str,  # noqa: ARG002
-    ) -> str | None:
+    async def get_session_tty_hint(self, user: str, session_id: str) -> str | None:  # noqa: ARG002
         """Return an empty result while disabled."""
         return None
 
@@ -700,6 +692,10 @@ class LocalRelay:
     ) -> list[SessionEvent]:
         """Return empty list — local relay does not persist session history."""
         return []
+
+    async def last_session_repo(self, address: str) -> str | None:  # noqa: ARG002
+        """Return no repo — local relay does not persist session history."""
+        return None
 
     # -- Wall (team broadcast) --
 

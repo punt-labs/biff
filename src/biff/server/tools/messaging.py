@@ -18,7 +18,8 @@ from biff.formatting import format_read
 from biff.models import Message
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import get_tty_name, refresh_read_messages
-from biff.server.tools._session import resolve_write_target, update_current_session
+from biff.server.tools._session import update_current_session
+from biff.server.tools._write_target import WriteRouter
 from biff.tty import parse_address
 
 if TYPE_CHECKING:
@@ -121,22 +122,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             user, tty = parse_address(to)
         except ValueError as exc:
             return str(exc)
-        sessions = (
-            await state.relay.get_sessions_for_repos(state.visible_repos) if tty else []
-        )
         try:
-            target = resolve_write_target(
-                sessions,
-                user,
-                tty,
-                local_repo=state.config.repo_name,
-                visible_repos=state.visible_repos,
-            )
+            target = await WriteRouter(
+                local_repo=state.config.repo_name, visible_repos=state.visible_repos
+            ).find(state.relay, user, tty)
         except ValueError as exc:
             _log.warning(
-                "Write recipient could not be resolved (repos=%d, sessions=%d)",
+                "Write recipient could not be resolved (repos=%d)",
                 len(state.visible_repos),
-                len(sessions),
             )
             return str(exc)
         chunks = chunk_message(message)

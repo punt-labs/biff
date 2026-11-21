@@ -13,7 +13,7 @@ from typing import cast
 
 from biff.commands._messaging import Delivery
 from biff.models import UserSession
-from biff.server.tools._session import resolve_write_target
+from biff.server.tools._write_target import WriteRouter
 
 HOOK = str(
     Path(__file__).resolve().parent.parent / "plugin" / "hooks" / "suppress-output.sh"
@@ -157,12 +157,10 @@ class TestWriteForwardNotice:
         assert _panel_summary(_run_hook("write", "Message sent to eric.")) == "sent"
 
     def test_forward_notice_is_preserved(self) -> None:
-        target = resolve_write_target(
+        target = WriteRouter(local_repo="", visible_repos=set()).resolve(
             [UserSession(user="eric", tty="aa", tty_name="tty1")],
             "eric",
             "tty9",
-            local_repo="",
-            visible_repos=set(),
         )
         notice = target.report(Delivery(text="Message sent to eric.", ok=True, parts=1))
         assert _panel_summary(_run_hook("write", notice)) == notice

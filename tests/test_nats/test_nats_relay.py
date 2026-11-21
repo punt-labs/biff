@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import biff.nats_relay as nats_relay_module
-from biff.models import Message, UserSession, WallPost
+from biff.models import Message, SessionEvent, UserSession, WallPost
 from biff.nats_relay import NatsRelay
 
 if TYPE_CHECKING:
@@ -377,7 +377,7 @@ class TestHeartbeat:
             await relay.heartbeat(key)
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
         assert len(warnings) == 1
-        assert key in warnings[0].message
+        assert key not in warnings[0].message  # session keys carry login names
 
     async def test_updates_last_active(self, relay: NatsRelay) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
@@ -479,6 +479,83 @@ class TestCrossRelay:
         users = {s.user for s in sessions}
         assert "kai" in users
         assert "eric" in users
+
+
+class TestLastSessionRepo:
+    """Find the repo of a named session from every repo's wtmp."""
+
+    async def test_returns_repo_of_most_recent_named_session(
+        self, relay: NatsRelay, nats_server: str
+    ) -> None:
+        other = NatsRelay(url=nats_server, repo_name="_test-nats-other")
+        try:
+            start = datetime.now(UTC) - timedelta(hours=1)
+            await relay.append_wtmp(
+                SessionEvent(
+                    session_key="kai:aa",
+                    event="login",
+                    user="kai",
+                    tty="aa",
+                    tty_name="qa",
+                    timestamp=start + timedelta(days=1),
+                )
+            )
+            await other.append_wtmp(
+                SessionEvent(
+                    session_key="kai:bb",
+                    event="logout",
+                    user="kai",
+                    tty="bb",
+                    tty_name="qa",
+                    timestamp=start + timedelta(minutes=5),
+                )
+            )
+            await relay.append_wtmp(
+                SessionEvent(
+                    session_key="kai:cc",
+                    event="login",
+                    user="kai",
+                    tty="cc",
+                    tty_name="tty1",
+                    timestamp=start + timedelta(minutes=10),
+                )
+            )
+            assert await relay.last_session_repo("kai:qa") == "_test-nats-other"
+            assert await relay.last_session_repo("kai:bb") == "_test-nats-other"
+            assert await relay.last_session_repo("kai:gone") is None
+            assert await relay.last_session_repo("eric:qa") is None
+        finally:
+            await other.close()
+
+    async def test_scans_past_the_ack_pending_limit(
+        self, relay: NatsRelay, nats_server: str
+    ) -> None:
+        # More history than one consumer may hold unacknowledged (1,000):
+        # the newest event, past that limit, must still be read.
+        other = NatsRelay(url=nats_server, repo_name="_test-nats-other")
+        try:
+            for i in range(1100):
+                await relay.append_wtmp(
+                    SessionEvent(
+                        session_key=f"kai:{i:08x}",
+                        event="login",
+                        user="kai",
+                        tty=f"{i:08x}",
+                        tty_name="qa",
+                    )
+                )
+            await other.append_wtmp(
+                SessionEvent(
+                    session_key="kai:ffffffff",
+                    event="logout",
+                    user="kai",
+                    tty="ffffffff",
+                    tty_name="qa",
+                )
+            )
+            assert await relay.last_session_repo("kai:qa") == "_test-nats-other"
+        finally:
+            await other.close()
 
 
 class TestPublishRebuildRobustness:
