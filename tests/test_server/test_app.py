@@ -35,6 +35,24 @@ def written(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
 
 
 class TestCreateServer:
+    @pytest.mark.parametrize("error", [OSError, RuntimeError])
+    def test_reap_fallback_logs_error_type_without_identity(
+        self,
+        state: ServerState,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        error: type[Exception],
+    ) -> None:
+        def fail(_repo: str, _key: str) -> None:
+            raise error("private-login")
+
+        monkeypatch.setattr(app, "_write_sentinel", fail)
+        app._write_reap_fallback_sentinels(state)
+        assert (
+            f"Failed to write reap-fallback sentinel: {error.__name__}" in caplog.text
+        )
+        assert "private-login" not in caplog.text
+
     def test_returns_fastmcp_instance(self, state: ServerState) -> None:
         mcp = create_server(state)
         assert isinstance(mcp, FastMCP)

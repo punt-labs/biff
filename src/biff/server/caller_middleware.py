@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING
@@ -10,6 +11,8 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from biff.caller_identity import CALLER_KEY, CallerIdentity, CallerIdentityError
+
+_logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from fastmcp.tools import ToolResult
@@ -50,11 +53,13 @@ class CallerIdentityMiddleware(Middleware):
         """
         arguments = context.message.arguments
         if arguments is None or CALLER_KEY not in arguments:
+            _logger.warning("Tool call denied: missing caller identity")
             raise ToolError(_UNIDENTIFIED)
         raw: object = arguments.pop(CALLER_KEY)
         try:
             caller = CallerIdentity.from_wire(raw)
         except CallerIdentityError as exc:
+            _logger.warning("Tool call denied: malformed caller identity")
             raise ToolError(str(exc)) from exc
         async with self._bind(caller):
             return await call_next(context)

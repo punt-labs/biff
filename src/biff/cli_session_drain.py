@@ -86,7 +86,7 @@ class InboxDrain:
                 failed.append(message.id)
                 logger.exception("Could not restore message %s", message.id)
         if failed:
-            logger.error("%d message(s) lost from %s; see the log", len(failed), key)
+            logger.error("Lost %d (tty=%s)", len(failed), key.partition(":")[2])
 
     @staticmethod
     def _transfer_id(source: uuid.UUID) -> uuid.UUID:

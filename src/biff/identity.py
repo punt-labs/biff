@@ -61,11 +61,7 @@ def get_github_identity() -> GitHubIdentity | None:
             # ``gh`` configured is indistinguishable here from an expired
             # token, rate limit, or network error -- avoid noise while
             # still leaving a trail for the uncommon cases.
-            logger.debug(
-                "gh api user failed (exit %d): %s",
-                result.returncode,
-                result.stderr.strip(),
-            )
+            logger.debug("gh api user failed (exit %d)", result.returncode)
             return None
         parts = result.stdout.strip().split("\t", maxsplit=1)
         login = parts[0].strip()
@@ -567,17 +563,15 @@ def resolve_human_identity(
         # side identically or a same-login-different-case bot fails open.
         if identity.login.strip().casefold() in scan.logins:
             logger.warning(
-                "GitHub login %r matches a known bot/agent identity; "
-                "falling back to OS user for CLI identity",
-                identity.login,
+                "GitHub login matches a known bot/agent identity; "
+                "falling back to OS user for CLI identity"
             )
         elif not scan.complete:
             unverified_login = identity.login
             logger.warning(
-                "Cannot confirm GitHub login %r is not a bot/agent identity "
+                "Cannot confirm GitHub login is not a bot/agent identity "
                 "-- the identity scan was incomplete; falling back to OS "
-                "user for CLI identity out of caution",
-                identity.login,
+                "user for CLI identity out of caution"
             )
         else:
             return identity.login, identity.display_name, ""
@@ -638,8 +632,8 @@ def git_user_name(repo_root: Path | None) -> str:
         result = subprocess.run(  # noqa: S603
             cmd, capture_output=True, text=True, check=False, timeout=5
         )
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.debug("git user.name could not be read: %s", exc)
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("git user.name could not be read")
         return ""
     if result.returncode != 0:
         logger.debug("git user.name is unset (git exited %d)", result.returncode)

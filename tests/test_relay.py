@@ -536,7 +536,8 @@ class TestHeartbeat:
             await relay.heartbeat("kai:tty1")
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
         assert len(warnings) == 1
-        assert "kai:tty1" in warnings[0].message
+        assert warnings[0].message == "Heartbeat found no session; skipping"
+        assert "kai" not in caplog.text
 
     async def test_rewarns_after_session_reappears_and_vanishes_again(
         self, relay: LocalRelay, caplog: pytest.LogCaptureFixture

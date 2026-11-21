@@ -1011,8 +1011,8 @@ class TestCallbackGenerationGuard:
             for r in caplog.records
             if r.levelno == logging.INFO
             and r.name == _LOGGER_NAME
-            and "boom" in r.getMessage()
+            and "RuntimeError" in r.getMessage()
         ]
         assert len(errors) == 1
-        # The full traceback is preserved for diagnosis in biff.log.
-        assert errors[0].exc_info is not None
+        assert errors[0].exc_info is None
+        assert "boom" not in errors[0].getMessage()
