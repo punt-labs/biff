@@ -14,6 +14,8 @@
 
 ### Changed
 
+- Keep Devin bootstrap files private despite repository ignore negations:
+  add a private nested ignore when safe, otherwise remove newly created files.
 - Inline the Devin SessionStart bootstrap in `hooks.json` so it works without
   a plugin-root environment variable, retaining symlink-safe local writes.
 - Install `punt-observe==0.1.0` from PyPI instead of a Git checkout.

@@ -186,6 +186,78 @@ def test_already_ignored_files(tmp_path: Path) -> None:
     assert (repo / _CONFIG).exists()
 
 
+@pytest.mark.parametrize("relative", [_IDENTITY, _CONFIG])
+def test_negation_gets_private_nested_ignore(tmp_path: Path, relative: str) -> None:
+    """A repository negation cannot expose newly vended bootstrap files."""
+    repo = _repo(tmp_path / "project")
+    parent = Path(relative).parent
+    (repo / ".gitignore").write_text(f"!{parent}/**\n")
+    result = _run_hook(tmp_path, repo)
+    assert result.returncode == 0
+    assert result.stdout == result.stderr == ""
+    assert (repo / relative).is_file()
+    ignore = parent / ".gitignore"
+    assert (repo / ignore).read_text() == f"/{Path(relative).name}\n/.gitignore\n"
+    assert _git(repo, "check-ignore", relative, str(ignore)).splitlines() == [
+        relative,
+        str(ignore),
+    ]
+    assert _git(repo, "status", "--porcelain", "--", relative, str(ignore)) == ""
+    before = (repo / ignore).read_bytes()
+    assert _run_hook(tmp_path, repo).returncode == 0
+    assert (repo / ignore).read_bytes() == before
+
+
+@pytest.mark.parametrize("relative", [_IDENTITY, _CONFIG])
+@pytest.mark.parametrize("existing", ["untracked", "tracked", "deleted", "symlink"])
+def test_negation_with_existing_ignore_removes_created_file(
+    tmp_path: Path, relative: str, existing: str
+) -> None:
+    """Existing ignore policy is never overwritten to conceal bootstrap output."""
+    repo = _repo(tmp_path / "project")
+    parent = Path(relative).parent
+    (repo / ".gitignore").write_text(f"!{parent}/**\n")
+    ignore = repo / parent / ".gitignore"
+    ignore.parent.mkdir(parents=True)
+    content = "# user-owned ignore policy\n"
+    outside = tmp_path / "outside-ignore"
+    if existing == "symlink":
+        outside.write_text(content)
+        ignore.symlink_to(outside)
+    else:
+        ignore.write_text(content)
+        if existing in {"tracked", "deleted"}:
+            _git(repo, "add", "--", str(parent / ".gitignore"))
+        if existing == "deleted":
+            ignore.unlink()
+    result = _run_hook(tmp_path, repo)
+    assert result.returncode == 0
+    assert result.stdout == result.stderr == ""
+    assert not (repo / relative).exists()
+    assert _git(repo, "status", "--porcelain", "--", relative) == ""
+    if existing == "deleted":
+        assert not ignore.exists()
+    else:
+        assert ignore.read_text() == content
+    if existing == "symlink":
+        assert ignore.is_symlink()
+        assert outside.read_text() == content
+
+
+@pytest.mark.parametrize("relative", [_IDENTITY, _CONFIG])
+def test_negation_preserves_preexisting_file(tmp_path: Path, relative: str) -> None:
+    """Fail-safe removal applies only to files created during this invocation."""
+    repo = _repo(tmp_path / "project")
+    parent = Path(relative).parent
+    (repo / ".gitignore").write_text(f"!{parent}/**\n")
+    target = repo / relative
+    target.parent.mkdir(parents=True)
+    target.write_text("user-owned\n")
+    assert _run_hook(tmp_path, repo).returncode == 0
+    assert target.read_text() == "user-owned\n"
+    assert not (target.parent / ".gitignore").exists()
+
+
 def test_outside_repositories(tmp_path: Path) -> None:
     """A session with no repositories is a silent successful no-op."""
     result = _run_hook(tmp_path, tmp_path)
