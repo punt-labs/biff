@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -95,6 +95,28 @@ class TestParseRepoSlug:
     def test_ssh_scheme_url_with_port(self) -> None:
         url = "ssh://git@github.com:2222/punt-labs/biff.git"
         assert _parse_repo_slug(url) == "punt-labs/biff"
+
+    @pytest.mark.parametrize("suffix", ["", ".git"])
+    def test_devin_github_proxy(self, suffix: str) -> None:
+        url = f"https://git-manager.devin.ai/proxy/github.com/punt-labs/biff{suffix}"
+        assert _parse_repo_slug(url) == "punt-labs/biff"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://example.com/proxy/github.com/punt-labs/biff",
+            "https://git-manager.devin.ai/proxy/gitlab.com/group/repo",
+            "https://git-manager.devin.ai/proxy/github.com",
+            "http://git-manager.devin.ai/proxy/github.com",
+            "ssh://git@GIT-MANAGER.DEVIN.AI/proxy/github.com",
+            "https://git-manager.devin.ai:443/proxy/github.com",
+            "https://git-manager.devin.ai/proxy/github.com//biff",
+            "https://git-manager.devin.ai/proxy/github.com/punt-labs/",
+            "https://git-manager.devin.ai/proxy/github.com/group/sub/repo",
+        ],
+    )
+    def test_invalid_proxy_route_rejected(self, url: str) -> None:
+        assert _parse_repo_slug(url) is None
 
     def test_nested_path_rejected(self) -> None:
         url = "https://gitlab.com/group/sub/repo.git"
@@ -345,6 +367,23 @@ class TestLoadCliConfig:
         _setup_repo_with_yaml(tmp_path)
         resolved = load_cli_config(start=tmp_path)
         assert resolved.config.repo_name == "punt-labs__biff"
+
+    @patch("biff.identity.get_github_identity")
+    @patch("biff._stdlib.subprocess.run")
+    def test_devin_proxy_keeps_repo_org_with_explicit_identity(
+        self, run: MagicMock, github_identity: MagicMock, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        run.return_value.returncode = 0
+        run.return_value.stdout = (
+            "https://git-manager.devin.ai/proxy/github.com/punt-labs/vox\n"
+        )
+        with patch("biff.config.get_repo_common_root", return_value=str(repo)):
+            resolved = load_cli_config(start=repo, user_override="devin")
+        assert resolved.config.user == "devin"
+        assert resolved.config.repo_name == "punt-labs__vox"
+        assert resolved.config.orgs == ("punt-labs",)
+        github_identity.assert_not_called()
 
     @patch("biff.config.get_repo_slug", return_value=None)
     @patch("biff.identity.get_github_identity", return_value=_KAI)
