@@ -24,7 +24,7 @@ from mcp.shared.exceptions import MCPError
 from mcp.types import INTERNAL_ERROR
 
 from biff._stdlib import remove_active_session, sentinel_dir
-from biff.models import SessionEvent, UserSession
+from biff.models import RelayConnectError, SessionEvent, UserSession
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -37,10 +37,10 @@ from biff.caller_identity import CallerIdentity
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
 from biff.server.mcp_protocol import NotificationServer
+from biff.server.relay_lifecycle import RelayLifecycle
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions, register_all_tools
 from biff.session_lock import routing_lock
-from biff.session_registry import register_session, write_marker
 from biff.session_routing import ID_RE, SessionRouting
 from biff.tty import build_session_key
 
@@ -819,10 +819,7 @@ async def _release_relay(state: ServerState) -> None:
         )
 
     async def close() -> None:
-        try:
-            await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
-        except Exception:
-            logger.warning("Failed to close relay", exc_info=True)
+        await RelayLifecycle.close(state, _TEARDOWN_STEP_TIMEOUT)
 
     await _run_cleanup_steps([primary, close])
 
@@ -968,12 +965,7 @@ async def _startup_cleanup(
 
     async def close() -> None:
         if state.owns_relay:
-            try:
-                await asyncio.wait_for(
-                    state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT
-                )
-            except Exception:
-                logger.warning("Failed to close startup relay", exc_info=True)
+            await RelayLifecycle.close(state, _TEARDOWN_STEP_TIMEOUT)
 
     steps: list[Callable[[], Awaitable[None]]] = [
         lambda: _cleanup_action(lambda: _remove_unread_files(state.unread_path))
@@ -1182,7 +1174,8 @@ class _LiveSession:
                 self._repointing = True
                 try:
                     await self._gate.wait_for(lambda: self._in_flight == 0)
-                    await self.attach(mcp, state, caller.routing)
+                    with RelayLifecycle.tool_call():
+                        await self.attach(mcp, state, caller.routing)
                 finally:
                     self._repointing = False
                     self._gate.notify_all()
@@ -1210,7 +1203,8 @@ class _LiveSession:
         if not ID_RE.fullmatch(raw):
             return
         async with self._gate:
-            await self.attach(mcp, state, SessionRouting(raw))
+            with RelayLifecycle.startup():
+                await self.attach(mcp, state, SessionRouting(raw))
 
     async def attach(
         self,
@@ -1242,6 +1236,8 @@ class _LiveSession:
             await asyncio.gather(*self.tasks, return_exceptions=True)
             self.tasks.clear()
             self.reaper = None
+            if isinstance(exc, RelayConnectError):
+                raise
             if isinstance(exc, Exception):
                 raise MCPError(INTERNAL_ERROR, "Internal server error") from None
             raise
@@ -1280,28 +1276,9 @@ class _LiveSession:
     async def _register_and_start(
         self, mcp: FastMCP[ServerState], state: ServerState
     ) -> None:
-        # Claim-then-write (DES-035): reserve the TTY name first, then write
-        # the KV row once with ``tty_name`` populated.  ``register_session``
-        # is get-or-create: the SessionStart hook may have written the row.
-        repo = state.config.repo_name
-        _, final_name = await register_session(
-            state.relay,
-            state.config.user,
-            state.tty,
-            display_name=state.config.display_name,
-            kind=state.config.kind,
-            hostname=state.hostname,
-            pwd=state.pwd,
-            repo=repo,
-            launched_by=state.config.launched_by,
-            owner_git=state.config.owner_git,
-            on_claim=self.registered_names.append,
-        )
+        final_name = await RelayLifecycle.register(state, self.registered_names.append)
         _descriptions.set_tty_name(final_name)
         state.talk.set_tty_name(final_name)
-        # Written after register_session succeeds so "marker exists iff KV
-        # row exists" holds under registration failure.
-        write_marker(repo, state.session_key, str(state.repo_common_root))
         logger.info("Session ready: %s (%s)", state.tty, final_name)
 
         await _descriptions.refresh_read_messages(mcp, state)

@@ -31,6 +31,9 @@
 
 ### Fixed
 
+- Keep MCP initialization and tool discovery available when relay authentication
+  fails or the relay is unreachable. Initial dials fail promptly with sanitized
+  errors; established connections still reconnect indefinitely after disconnects.
 - Resolve GitHub repository names and org peers through the Devin Git proxy.
 - Keep login and display names out of session and identity diagnostics, and
   record a warning when an MCP tool call has missing or malformed caller identity.

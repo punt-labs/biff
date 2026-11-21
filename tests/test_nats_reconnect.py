@@ -194,8 +194,15 @@ class TestHalfOpenWedgeRecovery:
         kwargs = connect.await_args.kwargs
         detection = kwargs["ping_interval"] * kwargs["max_outstanding_pings"]
         assert detection <= 90, f"wedge detection {detection}s exceeds 90s budget"
-        # Never give up mid-outage — a bounded count strands the MCP server.
-        assert kwargs["max_reconnect_attempts"] == -1
+        assert kwargs["max_reconnect_attempts"] == 1
+        assert kwargs["allow_reconnect"] is False
+        assert isinstance(relay._nc, MagicMock)
+        relay._nc.options.update.assert_called_once_with(
+            allow_reconnect=True,
+            connect_timeout=2,
+            max_reconnect_attempts=-1,
+            reconnect_time_wait=2,
+        )
 
     @pytest.mark.anyio()
     async def test_wedge_detection_invalidates_and_recovers(self) -> None:

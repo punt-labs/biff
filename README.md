@@ -305,6 +305,11 @@ Setup and maintenance commands:
 | `biff serve` | Start the MCP server over HTTP (default `127.0.0.1:8419`) |
 | `biff version` | Print the package version, and the plugin version if installed |
 
+The MCP server remains available for initialization and tool discovery when the
+relay is unreachable or rejects authentication. Tool calls report a relay
+connection failure until connectivity is restored; established connections keep
+reconnecting indefinitely after a disconnect.
+
 Global flags go before the subcommand:
 
 | Flag | What it does |

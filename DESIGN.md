@@ -1588,6 +1588,22 @@ frequency" (30s instead of 2s) but the NATS connection stays open.  This preserv
 4. **Heartbeat loop** — No longer skips during nap.  Heartbeats fire on schedule
    regardless of activity state.
 
+### Initial Dial Failure (2026-11-21)
+
+Infinite reconnect applies only after a connection succeeds. Each fresh dial
+disables reconnect during authentication, uses a one-second connection timeout,
+and permits at most two transport attempts without backoff. This also bounds
+nats-py's server-selection loop when DNS or TCP fails before authentication.
+After success, the client resumes infinite reconnect, two-second backoff, and
+the library's normal connection timeout. No token or raw server error is logged.
+
+Relay failure during declared-session registration is nonfatal to the MCP
+lifespan: initialization and tool discovery remain available. A subsequent tool
+call retries attachment and returns a sanitized relay connection failure if the
+relay is still unavailable. Org discovery remains best-effort. Registration and
+local marker publication share one lifecycle boundary so failed attachment does
+not publish a marker for a session that never registered.
+
 ### Why Not Keep Connection Conservation
 
 | Concern | Resolution |
