@@ -189,7 +189,7 @@ class TestServeCommand:
     """``biff serve`` is HTTP-only; ``biff mcp`` is stdio-only."""
 
     @patch("biff.server.entrypoints.create_server")
-    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.launch.create_state")
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_http_default(
         self,
@@ -206,7 +206,7 @@ class TestServeCommand:
         )
 
     @patch("biff.server.entrypoints.create_server")
-    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.launch.create_state")
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_custom_host_port(
         self,
@@ -226,7 +226,7 @@ class TestServeCommand:
         )
 
     @patch("biff.server.entrypoints.create_server")
-    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.launch.create_state")
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_passes_user_override(
         self,
@@ -245,7 +245,7 @@ class TestMcpCommand:
     """``biff mcp`` starts the MCP server with stdio transport."""
 
     @patch("biff.server.entrypoints.create_server")
-    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.launch.create_state")
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_stdio_transport(
         self,
@@ -260,7 +260,7 @@ class TestMcpCommand:
         mock_mcp.run.assert_called_once_with(transport="stdio")
 
     @patch("biff.server.entrypoints.create_server")
-    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.launch.create_state")
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_passes_data_dir_override(
         self,
@@ -274,7 +274,7 @@ class TestMcpCommand:
         assert call_kwargs["data_dir_override"] == Path("/custom/dir")
 
     @patch("biff.server.entrypoints.create_server")
-    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.launch.create_state")
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_passes_prefix(
         self,
@@ -288,7 +288,7 @@ class TestMcpCommand:
         assert call_kwargs["prefix"] == Path("/var/spool")
 
     @patch("biff.server.entrypoints.create_server")
-    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.launch.create_state")
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_no_user_delegates_to_config(
         self,

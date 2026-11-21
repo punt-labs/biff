@@ -1,0 +1,14 @@
+{
+  "SessionStart": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "#!/bin/sh\n\nprepare_parent() (\n    parent=$(dirname \"$1\")\n    component=$parent\n    while [ \"$component\" != . ]; do\n        [ ! -L \"$component\" ] || exit 1\n        component=$(dirname \"$component\")\n    done\n    mkdir -p \"$parent\" || exit 1\n    physical_parent=$(cd -P \"$parent\" && pwd -P) || exit 1\n    case \"$physical_parent/\" in\n        \"$physical_root/\"*) exit 0 ;;\n        *) exit 1 ;;\n    esac\n)\n\nexclude_created() {\n    file=$1\n    git check-ignore -q -- \"$file\" && return\n    [ -z \"$(git ls-files -- \"$file\")\" ] || return\n    exclude=$(git rev-parse --git-path info/exclude) &&\n        mkdir -p \"$(dirname \"$exclude\")\" &&\n        printf '\\n/%s\\n' \"$file\" >> \"$exclude\"\n    git check-ignore -q -- \"$file\" && return\n    ignore=\"$(dirname \"$file\")/.gitignore\"\n    if [ ! -e \"$ignore\" ] && [ ! -L \"$ignore\" ] &&\n        tracked=$(git ls-files -- \"$ignore\") && [ -z \"$tracked\" ] &&\n        prepare_parent \"$ignore\"; then\n        if (set -C; printf '/%s\\n/.gitignore\\n' \"$(basename \"$file\")\" > \"$ignore\"); then\n            git check-ignore -q -- \"$file\" && return\n        fi\n    fi\n    rm -f \"$file\"\n}\n\nprepare_repo() (\n    cd \"$1\" || exit 0\n    [ -e .git ] || exit 0\n    root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0\n    cd \"$root\" || exit 0\n    physical_root=$(pwd -P) || exit 0\n    config=.punt-labs/biff/config.local.yaml\n    identity=.punt-labs/ethos/identities/devin.yaml\n    if [ ! -e \"$config\" ] && [ ! -L \"$config\" ] && prepare_parent \"$config\"; then\n        if (set -C; printf '%s\\n' \\\n            'team:' \\\n            '  members: [jmf-pobox, github-actions]' \\\n            'peers:' \\\n            '  orgs: [punt-labs]' \\\n            '  repos: [local-scripts]' > \"$config\"); then\n            exclude_created \"$config\"\n        fi\n    fi\n    if [ ! -e \"$identity\" ] && [ ! -L \"$identity\" ] && prepare_parent \"$identity\"; then\n        if (set -C; printf '%s\\n' \\\n            'name: Devin' \\\n            'handle: devin' \\\n            'kind: agent' \\\n            'email: \"158243242+devin-ai-integration[bot]@users.noreply.github.com\"' \\\n            'github: \"devin-ai-integration[bot]\"' > \"$identity\"); then\n            exclude_created \"$identity\"\n        fi\n    fi\n)\n\nseen='\n'\nfor repo in \"${DEVIN_PROJECT_DIR:-}\" \"$HOME/repos/punt-labs\" \"$HOME\"/repos/*; do\n    [ -n \"$repo\" ] && [ -e \"$repo/.git\" ] || continue\n    root=$(git -C \"$repo\" rev-parse --show-toplevel 2>/dev/null) || continue\n    case \"$seen\" in\n        *\"\n$root\n\"*) continue ;;\n    esac\n    seen=\"$seen$root\n\"\n    prepare_repo \"$root\" >/dev/null 2>&1\ndone\nexit 0\n",
+          "timeout": 30
+        }
+      ]
+    }
+  ]
+}
