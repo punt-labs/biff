@@ -575,6 +575,12 @@ that reached it.
 
 \subsection{Ensure Connected (Lazy Connect)}
 
+Fresh connection attempts have two outcomes: $EnsureConnected$ succeeds,
+while $EnsureConnectFailed$ returns a relay connection error without
+installing a client or handles.  An unsuccessful attempt closes its owned
+transport, including when authentication fails after TCP connects.  Initial
+dials are bounded; indefinite reconnect applies only after a successful dial.
+
 \begin{schema}{EnsureConnected}
   \Delta Connection
   \where
@@ -595,6 +601,30 @@ that reached it.
   subGen' = subGen \\
   spuriousTeardown' = spuriousTeardown
 \end{schema}
+
+\begin{schema}{EnsureConnectFailed}
+  \Delta Connection
+  \where
+  connState = disconnected \\
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = wtmpAvailable \\
+  ( generation < maxGeneration \land
+    generation' = generation + 1 ) \lor
+  ( generation = maxGeneration \land generation' = generation ) \\
+  reconnectEpoch' = 0 \\
+  epochPending' = zfalse \\
+  subGen' = subGen \\
+  spuriousTeardown' = spuriousTeardown
+\end{schema}
+
+Failure advances the dial generation just like a successful fresh attempt,
+but leaves no provisioned handles and permits a subsequent caller to retry.
+The failed transport is closed, not retained for infinite initial retries.
+This covers authentication rejection and unreachable relays; MCP discovery
+does not depend on a successful connection outcome.
 
 The relay's lazy connect (\texttt{\_ensure\_connected}).  It is
 enabled only from $disconnected$ (a fresh connect) or $connected$

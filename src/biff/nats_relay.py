@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 from uuid import UUID
 
-import nats
+from nats.aio.client import DEFAULT_CONNECT_TIMEOUT, Client as NatsClient
 from nats.errors import Error as NatsError
 from nats.js.api import (
     ConsumerConfig,
@@ -75,7 +75,6 @@ from biff.wtmp_reader import (
 )
 
 if TYPE_CHECKING:
-    from nats.aio.client import Client as NatsClient
     from nats.js.client import JetStreamContext
     from nats.js.kv import KeyValue
 
@@ -88,6 +87,7 @@ _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
 # relay caller
+_INITIAL_CONNECT_TIMEOUT = 5
 _TEARDOWN_TIMEOUT = 5.0  # bound nc.close()'s wait_closed() so a half-open socket
 # can't hold _connect_lock (taken by _force_reconnect) and freeze the poller
 # and heartbeat; the client is being discarded, so abandoning it is safe
@@ -546,9 +546,7 @@ class NatsRelay:
 
     def _auth_kwargs(self) -> dict[str, str]:
         """Build authentication keyword arguments for ``nats.connect()``."""
-        if self._auth is None:
-            return {}
-        return self._auth.as_nats_kwargs()
+        return self._auth.as_nats_kwargs() if self._auth is not None else {}
 
     def _tls_kwargs(self) -> dict[str, bool]:
         """Build TLS keyword arguments for ``nats.connect()``.
@@ -567,9 +565,7 @@ class NatsRelay:
         is therefore an explicit operator opt-in (``relay.tls_handshake_first``
         in config), not inferred from the URL.
         """
-        if not self._tls_handshake_first:
-            return {}
-        return {"tls_handshake_first": True}
+        return {"tls_handshake_first": True} if self._tls_handshake_first else {}
 
     def _cached_handles(
         self,
@@ -754,10 +750,7 @@ class NatsRelay:
                 _WEDGE_FORCE_RECONNECT_THRESHOLD,
             )
             await safe_close(wedged)
-            self._nc = None
-            self._js = None
-            self._kv = None
-            self._names_kv = None
+            self._nc = self._js = self._kv = self._names_kv = None
             # Discarding the client resets the epoch: a counter of reconnects on
             # the current client is meaningless once there is no current client
             # (nats-relay.tex: ForceReconnect sets reconnectEpoch' = 0, and the
@@ -784,9 +777,7 @@ class NatsRelay:
             self._health.record_disconnected()
             # Proactively invalidate cached handles so the next tool call
             # reconnects instead of using stale JetStream/KV refs (DES-029).
-            self._js = None
-            self._kv = None
-            self._names_kv = None
+            self._js = self._kv = self._names_kv = None
 
         async def _on_reconnect() -> None:
             if self._generation != generation:
@@ -807,10 +798,7 @@ class NatsRelay:
             # the client so the next _ensure_connected builds a fresh one
             # instead of reusing a dead connection.
             self._health.record_closed()
-            self._nc = None
-            self._js = None
-            self._kv = None
-            self._names_kv = None
+            self._nc = self._js = self._kv = self._names_kv = None
 
         async def _on_error(exc: Exception) -> None:
             if self._generation != generation:
@@ -861,18 +849,36 @@ class NatsRelay:
         """
         auth_kwargs = self._auth_kwargs()
         error_kind: str | None = None
-        nc: NatsClient | None = None
+        nc = NatsClient()
+        connected = False
+        callbacks = self._connection_callbacks(self._generation)
         try:
-            nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
+            await nc.connect(
                 self._url,
                 name=self._name,
                 ping_interval=_PING_INTERVAL,
                 max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
+                max_reconnect_attempts=1,
+                reconnect_time_wait=0,
+                connect_timeout=_INITIAL_CONNECT_TIMEOUT,
+                allow_reconnect=False,
+                disconnected_cb=callbacks["disconnected_cb"],
+                reconnected_cb=callbacks["reconnected_cb"],
+                closed_cb=callbacks["closed_cb"],
+                error_cb=callbacks["error_cb"],
+                token=auth_kwargs.get("token"),
+                nkeys_seed=auth_kwargs.get("nkeys_seed"),
+                user_credentials=auth_kwargs.get("user_credentials"),
+                tls_handshake_first=self._tls_kwargs().get(
+                    "tls_handshake_first", False
+                ),
+            )
+            connected = True
+            nc.options.update(
+                allow_reconnect=True,
+                connect_timeout=DEFAULT_CONNECT_TIMEOUT,
                 max_reconnect_attempts=_MAX_RECONNECT_ATTEMPTS,
                 reconnect_time_wait=_RECONNECT_TIME_WAIT,
-                **self._connection_callbacks(self._generation),
-                **auth_kwargs,
-                **self._tls_kwargs(),
             )
         except Exception as exc:  # noqa: BLE001 — boundary: record only the
             # exception kind here; never re-raise exc itself, or its frame
@@ -880,12 +886,13 @@ class NatsRelay:
             error_kind = type(exc).__name__
         finally:
             auth_kwargs.clear()
-        if error_kind is not None or nc is None:
+            if not connected:
+                with suppress(Exception):
+                    await safe_close(nc)
+        if error_kind is not None:
             host = sanitize_relay_url(self._url)
-            logger.warning(
-                "failed to connect to relay %s: %s", host, error_kind or "unknown"
-            )
-            raise RelayConnectError(f"failed to connect to relay: {host}")
+            logger.warning("Relay connection failed %s: %s", host, error_kind)
+            raise RelayConnectError(f"Relay connection failed: {host}")
         return nc
 
     async def _open_connection(self) -> tuple[JetStreamContext, KeyValue]:
@@ -934,16 +941,10 @@ class NatsRelay:
             # semantics; ``asyncio.timeout()``'s own ``__aexit__`` converts
             # it to ``TimeoutError`` at its boundary as usual.
             await safe_close(nc)
-            self._nc = None
-            self._js = None
-            self._kv = None
-            self._names_kv = None
+            self._nc = self._js = self._kv = self._names_kv = None
             raise
 
-        self._nc = nc
-        self._js = js
-        self._kv = kv
-        self._names_kv = names_kv
+        self._nc, self._js, self._kv, self._names_kv = nc, js, kv, names_kv
         provision_ms = (time.monotonic() - provision_start) * 1000
         self._health.record_connected(provision_ms, is_new_connection=is_new_connection)
         return js, kv
@@ -1122,9 +1123,7 @@ class NatsRelay:
         (e.g. test cleanup) to ensure the next operation re-creates
         them.  The underlying NATS connection is preserved.
         """
-        self._js = None
-        self._kv = None
-        self._names_kv = None
+        self._js = self._kv = self._names_kv = None
         self._wtmp_available = False
 
     async def purge_data(self) -> None:
@@ -1163,9 +1162,7 @@ class NatsRelay:
         clearing cached JetStream/KV handles to force re-provisioning.
         """
         await self.purge_data()
-        self._js = None
-        self._kv = None
-        self._names_kv = None
+        self._js = self._kv = self._names_kv = None
 
     async def flush(self, *, timeout: int = 2) -> None:
         """Flush pending NATS publishes to the server.
@@ -1200,10 +1197,7 @@ class NatsRelay:
         async with self._connect_lock:
             if self._nc is not None and not self._nc.is_closed:
                 await safe_close(self._nc)
-            self._nc = None
-            self._js = None
-            self._kv = None
-            self._names_kv = None
+            self._nc = self._js = self._kv = self._names_kv = None
 
     async def close(self) -> None:
         """Close the NATS connection and release resources — permanently.
@@ -1226,10 +1220,7 @@ class NatsRelay:
             self._closed = True
             if self._nc is not None:
                 await safe_close(self._nc)
-                self._nc = None
-                self._js = None
-                self._kv = None
-                self._names_kv = None
+                self._nc = self._js = self._kv = self._names_kv = None
 
     @staticmethod
     def _validate_user(user: str) -> str:
