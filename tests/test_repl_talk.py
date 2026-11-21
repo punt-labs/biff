@@ -257,7 +257,7 @@ class TestWithdrawTalkInviteResilience:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         relay = MagicMock(spec=NatsRelay)
-        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("private-login"))
         relay.get_session = AsyncMock(return_value=None)
         talk = TalkState(
             relay=cast("Relay", relay),
@@ -280,6 +280,9 @@ class TestWithdrawTalkInviteResilience:
         records = [r for r in caplog.records if r.name == "biff.commands.talk"]
         assert records  # the failure was logged
         assert all(r.levelno == logging.INFO for r in records)
+        assert "TimeoutError" in records[0].getMessage()
+        assert "private-login" not in records[0].getMessage()
+        assert records[0].exc_info is None
 
 
 # ---------------------------------------------------------------------------
@@ -521,16 +524,25 @@ class TestPublishAutoAccept:
             tty_name="tty1",
         )
 
-    async def test_retries_once_then_gives_up_on_persistent_failure(self) -> None:
-        get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+    async def test_retries_once_then_gives_up_on_persistent_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        get_nc = AsyncMock(side_effect=TimeoutError("private-login"))
         talk = self._talk(get_nc=get_nc)
         ctx = MagicMock()
         ctx.talk = talk
 
-        ok = await talk_commands.publish_auto_accept(ctx, to_key="eric:def456")
+        with caplog.at_level(logging.INFO, logger="biff.commands.talk"):
+            ok = await talk_commands.publish_auto_accept(ctx, to_key="eric:def456")
 
         assert ok is False
         assert get_nc.await_count == 2  # published once, retried once
+        records = [r for r in caplog.records if r.name == "biff.commands.talk"]
+        assert len(records) == 2
+        assert all("TimeoutError" in r.getMessage() for r in records)
+        assert all(r.exc_info is None for r in records)
+        assert "private-login" not in caplog.text
+        assert "eric" not in caplog.text
 
     async def test_succeeds_without_retry_when_publish_works(self) -> None:
         get_nc = AsyncMock(return_value=AsyncMock())

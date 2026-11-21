@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -410,6 +411,25 @@ def _with_relay(host: SessionHost, relay: LocalRelay) -> SessionHost:
 
 
 class TestDrainFailure:
+    async def test_restore_loss_logs_session_id_without_login(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        relay = MagicMock(spec=LocalRelay)
+        relay.fetch = AsyncMock(return_value=[])
+        relay.deliver = AsyncMock(side_effect=OSError("restore failed"))
+        await InboxDrain(relay)._restore(
+            "private-login:safe-session-id",
+            [
+                Message(
+                    from_user="sender",
+                    to_user="private-login:safe-session-id",
+                    body="hi",
+                )
+            ],
+        )
+        assert "Lost 1 (tty=safe-session-id)" in caplog.text
+        assert "private-login" not in caplog.text
+
     @pytest.mark.parametrize("relay_cls", [_FailingMailbox, _ConsumingFetch])
     async def test_failed_drain_neither_duplicates_nor_loses(
         self, tmp_path: Path, relay_cls: type[_FailingMailbox]

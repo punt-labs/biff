@@ -825,10 +825,10 @@ class NatsRelay:
                 # self-heals without a restart.  At ERROR they cleared the
                 # CLI's WARNING stderr floor and dumped a traceback into the
                 # interactive REPL; at INFO they reach biff.log
-                # only.  exc_info keeps the full traceback for diagnosis; %r
-                # keeps the cause visible for message-less errors.
+                # only. Retry callbacks log only the exception type, never
+                # repeated tracebacks or potentially identifying error text.
                 logger.info(
-                    "NATS error (transient, auto-recovering): %r", exc, exc_info=exc
+                    "NATS error (transient, auto-recovering): %s", type(exc).__name__
                 )
 
         return {
@@ -1632,7 +1632,7 @@ class NatsRelay:
                 payload = b"1"
             await nc.publish(subject, payload)
         except Exception:  # noqa: BLE001 — notification is best-effort
-            logger.debug("Talk notification failed for %s", to_user)
+            logger.debug("Talk notification failed")
 
     async def _publish_inbox_notification(self, repo: str, user: str) -> None:
         """Publish a payload-less wake poke for a broadcast message (DES-062).
@@ -1650,7 +1650,7 @@ class NatsRelay:
             subject = self.inbox_notify_subject(repo, user)
             await nc.publish(subject, b"1")
         except Exception:  # noqa: BLE001 — notification is best-effort
-            logger.debug("Inbox notification failed for %s in %s", user, repo)
+            logger.debug("Inbox notification failed in %s", repo)
 
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.
@@ -1663,10 +1663,7 @@ class NatsRelay:
         return f"{self._repo_name}-inbox-{session_key.replace(':', '-')}"
 
     async def _fetch_from_subject(
-        self,
-        js: JetStreamContext,
-        subject: str,
-        durable: str,
+        self, js: JetStreamContext, subject: str, durable: str
     ) -> list[Message]:
         """Pull valid frames, ack them, and delete the consumer for a subject.
 
@@ -1709,12 +1706,13 @@ class NatsRelay:
                     # term() then deletes the only other copy.  Log field
                     # locations and error types only, with input/url/context
                     # scrubbed (PII guard).
-                    detail = _scrub_validation_error(exc)
                     logger.error(
-                        "Terminating malformed NATS frame on %s (%d bytes): %s",
-                        subject,
+                        "Terminating malformed NATS frame in %s inbox (%d bytes): %s",
+                        ("user", "session")[
+                            subject.removeprefix(self._subject_prefix + ".").count(".")
+                        ],
                         len(raw.data),
-                        detail,
+                        _scrub_validation_error(exc),
                     )
                     await raw.term()
                     continue
@@ -1737,7 +1735,7 @@ class NatsRelay:
             try:
                 await js.delete_consumer(self._stream_name, durable)
             except (NatsError, TimeoutError):
-                logger.debug("Consumer cleanup failed for %s (will expire)", durable)
+                logger.debug("Consumer cleanup failed (will expire)")
 
     async def fetch(self, session_key: str) -> list[Message]:
         """Pull and ack all messages — WORK_QUEUE deletes them on ack."""
@@ -1861,7 +1859,7 @@ class NatsRelay:
         """
         if session_key not in self._heartbeat_missing_warned:
             self._heartbeat_missing_warned.add(session_key)
-            logger.warning("Heartbeat found no session for %s; skipping", session_key)
+            logger.warning("Heartbeat found no session; skipping")
 
     async def heartbeat(self, session_key: str) -> None:
         """Update ``last_active`` for an existing session.
@@ -1894,7 +1892,7 @@ class NatsRelay:
             # INFO: heartbeat runs in the background loop; a skipped tick is
             # harmless (3-day TTL) and must not print into the interactive
             # REPL.  biff.log records the anomaly.
-            logger.info("Corrupt session for %s, skip heartbeat", session_key)
+            logger.info("Corrupt session, skip heartbeat")
             return
         self._heartbeat_missing_warned.discard(session_key)
         updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
@@ -2067,9 +2065,7 @@ class NatsRelay:
             # teardown-path failure is self-healing and must not print into
             # the interactive REPL.
             logger.info(
-                "Consumer cleanup failed for %s (will auto-expire): %s",
-                session_key,
-                exc,
+                "Consumer cleanup failed (will auto-expire): %s", type(exc).__name__
             )
 
     # -- TTY name reservation (DES-035) --
@@ -2121,20 +2117,15 @@ class NatsRelay:
         try:
             entry = await names_kv.get(key)
         except (KeyNotFoundError, BucketNotFoundError):
-            logger.info("TTY reservation %s gone, cannot refresh", key)
+            logger.info("TTY reservation gone, cannot refresh")
             return
         if entry.value is None or entry.value.decode() != session_key:
-            logger.info(
-                "TTY reservation %s owned by another session, skipping refresh",
-                key,
-            )
+            logger.info("TTY reservation owned by another session, skipping refresh")
             return
         try:
             await names_kv.update(key, session_key.encode(), last=entry.revision)
         except KeyWrongLastSequenceError:
-            logger.info(
-                "TTY reservation %s changed concurrently, skipping refresh", key
-            )
+            logger.info("TTY reservation changed concurrently, skipping refresh")
 
     async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
         """Return the session key that holds *name*, or ``None``."""

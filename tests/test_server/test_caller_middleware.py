@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -49,7 +50,9 @@ async def test_valid_caller_is_stripped_and_bound() -> None:
     assert binder.bound == [CallerIdentity("sess-1", "agent-1")]
 
 
-async def test_unidentified_call_is_refused_naming_causes() -> None:
+async def test_unidentified_call_is_refused_naming_causes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     binder = _Binder()
     mcp, seen = _server(binder)
     async with Client(mcp) as client:
@@ -57,6 +60,11 @@ async def test_unidentified_call_is_refused_naming_causes() -> None:
             await client.call_tool("echo", {"message": "hi"})
     assert seen == []
     assert binder.bound == []
+    assert (
+        "biff.server.caller_middleware",
+        logging.WARNING,
+        "Tool call denied: missing caller identity",
+    ) in caplog.record_tuples
 
 
 @pytest.mark.parametrize(
@@ -68,7 +76,9 @@ async def test_unidentified_call_is_refused_naming_causes() -> None:
         {"session_id": "s", "agent_id": ""},
     ],
 )
-async def test_malformed_caller_is_named_error(bad: object) -> None:
+async def test_malformed_caller_is_named_error(
+    bad: object, caplog: pytest.LogCaptureFixture
+) -> None:
     binder = _Binder()
     mcp, seen = _server(binder)
     async with Client(mcp) as client:
@@ -76,6 +86,14 @@ async def test_malformed_caller_is_named_error(bad: object) -> None:
             await client.call_tool("echo", {"message": "hi", "_caller": bad})
     assert seen == []
     assert binder.bound == []
+    assert (
+        "biff.server.caller_middleware",
+        logging.WARNING,
+        "Tool call denied: malformed caller identity",
+    ) in caplog.record_tuples
+    records = [r for r in caplog.records if r.name == "biff.server.caller_middleware"]
+    assert len(records) == 1
+    assert records[0].args == ()
 
 
 async def test_create_server_strips_and_refuses_on_a_real_tool(tmp_path: Path) -> None:

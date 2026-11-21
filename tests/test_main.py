@@ -722,13 +722,14 @@ class TestNatsErrorStaysOffTerminal:
         assert "Traceback" not in stderr_text
         assert "Operation timed out" not in stderr_text
 
-        # The durable sink keeps a single escaped record, including the traceback.
+        # The durable sink keeps only a concise exception-type record.
         file_text = log_file.read_text(encoding="utf-8")
         assert log_file.parent.stat().st_mode & 0o777 == 0o700
         assert log_file.stat().st_mode & 0o777 == 0o600
         assert "NATS error" in file_text
-        assert "Traceback" in file_text
-        assert "Operation timed out" in file_text
+        assert "TimeoutError" in file_text
+        assert "Traceback" not in file_text
+        assert "Operation timed out" not in file_text
         assert len(file_text.splitlines()) == 1
 
 

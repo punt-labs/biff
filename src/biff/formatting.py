@@ -348,7 +348,7 @@ def who_mgr(s: UserSession) -> str:
         if not name:
             continue
         if not ID_RE.fullmatch(name):
-            logger.debug("MGR candidate %r is not an addressable identity", name)
+            logger.debug("MGR candidate is not an addressable identity")
             continue
         if name.casefold() != own:
             return name

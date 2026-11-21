@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 from unittest.mock import patch
+
+import pytest
 
 from biff.hook import (
     _detect_collisions,
@@ -32,9 +35,6 @@ from biff.hook import (
     handle_session_resume,
     handle_session_start,
 )
-
-if TYPE_CHECKING:
-    import pytest
 
 # Deterministic worktree root for hint file tests.
 _FAKE_WORKTREE = "/test/worktree"
@@ -1856,7 +1856,10 @@ class TestPreToolStampDispatch:
     """``biff-hook claude-code pre-tool-stamp`` emits the stamped input."""
 
     def test_stamps_a_biff_tool_call_from_stdin(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         import io
 
@@ -1875,6 +1878,39 @@ class TestPreToolStampDispatch:
         updated = out["hookSpecificOutput"]["updatedInput"]
         assert updated["_caller"] == {"session_id": "sess-1", "agent_id": "sub-1"}
         assert "permissionDecision" not in out["hookSpecificOutput"]
+        assert not caplog.records
+
+    @pytest.mark.parametrize(
+        "identity",
+        [{}, {"session_id": "private-login:bad"}, {"session_id": "sess-1"}],
+    )
+    def test_unavailable_caller_logs_safe_warning(
+        self,
+        identity: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from biff import _hook_entry
+
+        payload: dict[str, object] = {
+            "tool_name": "mcp__plugin_biff_tty__who",
+            "tool_input": {"message": "private-message"},
+            **identity,
+        }
+        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        with patch("biff.caller_stamp.main_agent_id", return_value=None):
+            _hook_entry._cc_pre_tool_stamp()
+        spec = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+        assert spec["permissionDecision"] == "deny"
+        (record,) = caplog.records
+        assert record.name == "biff.caller_stamp"
+        assert record.levelno == logging.WARNING
+        assert record.getMessage() == (
+            "Caller stamping denied: caller identity unavailable"
+        )
+        assert record.exc_info is None
+        assert "private" not in caplog.text
 
     def test_runs_even_when_biff_is_not_enabled_in_the_repo(self) -> None:
         from biff import _hook_entry
@@ -1882,7 +1918,10 @@ class TestPreToolStampDispatch:
         assert "pre-tool-stamp" in _hook_entry.UNGATED_CC_EVENTS
 
     def test_a_stamper_crash_fails_closed_with_the_cause(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         from biff import _hook_entry
 
@@ -1900,6 +1939,10 @@ class TestPreToolStampDispatch:
         spec = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
         assert spec["permissionDecision"] == "deny"
         assert "psutil exploded" in spec["permissionDecisionReason"]
+        (record,) = caplog.records
+        assert record.levelno == logging.WARNING
+        assert "psutil exploded" not in caplog.text
+        assert record.exc_info is None
 
     def test_a_stamper_crash_on_another_tool_leaves_it_untouched(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

@@ -68,7 +68,7 @@ class TestGetGithubIdentity:
             mock_run.return_value.stdout = ""
             assert get_github_identity() is None
 
-    def test_failure_logs_at_debug_with_stderr(
+    def test_failure_logs_at_debug_without_stderr(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A ``gh api user`` failure (expired token, rate limit, network
@@ -81,10 +81,14 @@ class TestGetGithubIdentity:
         ):
             mock_run.return_value.returncode = 1
             mock_run.return_value.stdout = ""
-            mock_run.return_value.stderr = "HTTP 401: Bad credentials"
+            mock_run.return_value.stderr = "HTTP 401: private-login: Bad credentials"
             assert get_github_identity() is None
         debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
-        assert any("Bad credentials" in r.getMessage() for r in debug_records)
+        assert any(
+            "gh api user failed (exit 1)" in r.getMessage() for r in debug_records
+        )
+        assert "private-login" not in caplog.text
+        assert "Bad credentials" not in caplog.text
 
     def test_returns_none_when_empty(self) -> None:
         with patch("biff.identity.subprocess.run") as mock_run:

@@ -61,6 +61,20 @@ def _relay_with(raw_msgs: list[MagicMock]) -> tuple[NatsRelay, MagicMock]:
 
 
 class TestMalformedFrameNotSilentlyDropped:
+    @pytest.mark.parametrize(
+        "suffix, inbox", [("eric.tty2", "session"), ("eric", "user")]
+    )
+    async def test_log_identifies_inbox_without_login(
+        self, suffix: str, inbox: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        relay, js = _relay_with([_raw(b"not json")])
+        await relay._fetch_from_subject(
+            js, subject=f"biff.test.inbox.{suffix}", durable="d"
+        )
+        assert f"in {inbox} inbox" in caplog.text
+        assert "eric" not in caplog.text
+        assert "biff.test.inbox" not in caplog.text
+
     async def test_malformed_frame_is_termed_not_acked(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

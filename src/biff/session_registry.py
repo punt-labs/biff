@@ -39,7 +39,7 @@ def write_marker(repo_name: str, session_key: str, worktree_root: str) -> None:
     try:
         write_active_session(repo_name, session_key, worktree_root=worktree_root)
     except OSError as exc:
-        logger.warning("Failed to write active marker for %s: %s", session_key, exc)
+        logger.warning("Failed to write active marker: %s", type(exc).__name__)
 
 
 async def register_session(
@@ -83,11 +83,7 @@ async def register_session(
             preferred_name = candidate
             from_hint = True
         elif candidate is not None:
-            logger.warning(
-                "ignoring malformed reclaim hint %r for %s; using a fresh alias",
-                candidate,
-                user,
-            )
+            logger.warning("ignoring malformed reclaim hint; using a fresh alias")
     try:
         tty_name = await claim_tty_name(
             relay, user, session_key, preferred=preferred_name
@@ -130,11 +126,7 @@ async def register_session(
             try:
                 await relay.release_tty_name(user, existing.tty_name)
             except Exception:  # noqa: BLE001 — best-effort cleanup
-                logger.warning(
-                    "Failed to release stale TTY name %s for %s",
-                    existing.tty_name,
-                    session_key,
-                )
+                logger.warning("Failed to release stale TTY name")
     # Both activity timestamps start identical: a session that has never
     # invoked a tool reads idle as time-since-registration, its own
     # meaningful start time — not epoch-era or spuriously fresh.
