@@ -12,8 +12,10 @@ import typer
 from typer.testing import CliRunner
 
 from biff.__main__ import app
+from biff.caller_identity import CallerIdentity
 from biff.models import BiffConfig
 from biff.server.app import create_server
+from biff.server.caller_policy import CallerPolicy
 from biff.server.entrypoints import McpServerOptions
 from biff.server.state import create_state
 from biff.statusline import UNREAD_DIR
@@ -38,6 +40,91 @@ def test_removed_pin_flags_are_rejected() -> None:
         result = CliRunner().invoke(app, ["serve", flag, "ses_1"])
         assert result.exit_code != 0
         assert "No such option" in result.output
+
+
+def test_default_caller_uses_startup_session_and_explicit_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "startup-session")
+    with patch("biff.server.entrypoints.create_server") as server:
+        McpServerOptions(
+            user="devin",
+            data_dir=tmp_path,
+            relay_url="",
+            prefix=tmp_path,
+        ).create_server()
+    assert server.call_args.kwargs["default_caller"] == CallerIdentity(
+        "startup-session", "devin"
+    )
+
+
+@pytest.mark.parametrize("session", ["../invalid", "invalid/session"])
+def test_default_caller_requires_valid_startup_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, session: str
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", session)
+    with pytest.raises(typer.BadParameter, match="CLAUDE_CODE_SESSION_ID"):
+        McpServerOptions(
+            user="devin",
+            data_dir=tmp_path,
+            relay_url="",
+            prefix=tmp_path,
+        ).create_server()
+
+
+def test_default_caller_has_no_new_flag() -> None:
+    runner = CliRunner()
+    with patch.object(McpServerOptions, "_observed_server") as observed:
+        result = runner.invoke(app, ["mcp", "--user", "devin"])
+    assert result.exit_code == 0
+    observed.return_value.run.assert_called_once_with(transport="stdio")
+    result = runner.invoke(app, ["serve", "--default-caller"])
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+
+
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+def test_only_explicit_stdio_user_enables_default_caller(
+    tmp_path: Path, transport: str
+) -> None:
+    with patch("biff.server.entrypoints.create_server") as server:
+        options = McpServerOptions(
+            user=None if transport == "stdio" else "devin",
+            data_dir=tmp_path,
+            relay_url="",
+            prefix=tmp_path,
+            transport="stdio" if transport == "stdio" else "http",
+        )
+        options.create_server()
+    assert server.call_args.kwargs["default_caller"] is None
+
+
+def test_explicit_user_gets_fresh_session_without_environment(tmp_path: Path) -> None:
+    with patch("biff.server.entrypoints.create_server") as server:
+        options = McpServerOptions(
+            user="devin", data_dir=tmp_path, relay_url="", prefix=tmp_path
+        )
+        options.create_server()
+        first = server.call_args.kwargs["default_caller"]
+        options.create_server()
+        second = server.call_args.kwargs["default_caller"]
+    assert isinstance(first, CallerIdentity) and isinstance(second, CallerIdentity)
+    assert first.agent_id == second.agent_id == "devin"
+    assert first.session_id != second.session_id
+
+
+def test_inferred_default_user_does_not_enable_unstamped_calls(tmp_path: Path) -> None:
+    with patch("biff.server.entrypoints.create_server") as server:
+        McpServerOptions(
+            user=None, data_dir=tmp_path, relay_url="", prefix=tmp_path
+        ).create_server(default_user="devin")
+    assert server.call_args.kwargs["default_caller"] is None
+
+
+@pytest.mark.parametrize("user", ["", "../invalid", "a" * 129])
+def test_default_caller_rejects_invalid_explicit_users(user: str) -> None:
+    with pytest.raises(typer.BadParameter, match="user handle"):
+        CallerPolicy.for_launch(user, "stdio")
 
 
 @pytest.mark.parametrize("mode", ["mcp", "serve"])

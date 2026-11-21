@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Callable, Generator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING
 
 from mcp.shared.exceptions import MCPError
@@ -33,11 +33,14 @@ class RelayLifecycle:
             logger.warning("Relay connection failed during startup")
 
     @staticmethod
-    @contextmanager
-    def tool_call() -> Generator[None]:
+    @asynccontextmanager
+    async def tool_call(
+        binding: AbstractAsyncContextManager[None],
+    ) -> AsyncGenerator[None]:
         """Translate relay attachment failures into safe protocol errors."""
         try:
-            yield
+            async with binding:
+                yield
         except (RelayConnectError, TimeoutError):
             raise MCPError(INTERNAL_ERROR, "Relay connection failed") from None
 

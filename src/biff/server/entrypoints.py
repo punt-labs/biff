@@ -5,15 +5,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import typer
 
 from biff._cli_runtime import McpInvocation
-from biff.config import RELAY_URL_UNSET, is_enabled, load_mcp_config
+from biff.config import RELAY_URL_UNSET, load_mcp_config
 from biff.server.app import create_server
-from biff.server.state import create_state
-from biff.statusline import UNREAD_DIR
+from biff.server.caller_policy import CallerPolicy
+from biff.server.launch import McpLaunch
 from biff.usage import McpUsageMiddleware
 
 if TYPE_CHECKING:
@@ -48,6 +48,7 @@ class McpServerOptions:
     data_dir: Path | None
     relay_url: str | None
     prefix: Path
+    transport: Literal["stdio", "http"] = "stdio"
 
     def create_server(self, *, default_user: str | None = None) -> FastMCP[ServerState]:
         """Resolve configuration and build an unbound MCP server."""
@@ -60,17 +61,8 @@ class McpServerOptions:
             prefix=self.prefix,
         )
 
-        # SessionStart opens the durable record. The server binds its routing key
-        # and unread file to the caller's session when the call declares it.
-        state = create_state(
-            resolved.config,
-            resolved.data_dir,
-            unread_dir=UNREAD_DIR,
-            dormant=not is_enabled(resolved.repo_root),
-            repo_root=resolved.repo_root,
-            repo_common_root=resolved.repo_common_root,
-        )
-        return create_server(state)
+        launch = McpLaunch(resolved, CallerPolicy.for_launch(self.user, self.transport))
+        return create_server(launch.state(), default_caller=launch.caller)
 
     def _observed_server(self, ctx: typer.Context) -> FastMCP[ServerState]:
         invocation = ctx.find_object(McpInvocation)
@@ -93,7 +85,7 @@ class McpServerOptions:
         port: Annotated[int, typer.Option(help="HTTP port.")] = 8419,
     ) -> None:
         """Start the biff MCP server (HTTP transport)."""
-        server = cls(user, data_dir, relay_url, prefix)._observed_server(ctx)
+        server = cls(user, data_dir, relay_url, prefix, "http")._observed_server(ctx)
         logger.info("Starting Biff MCP server (HTTP): port=%d", port)
         typer.echo(f"Starting biff MCP server on http://{host}:{port}")
         server.run(transport="http", host=host, port=port)

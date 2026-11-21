@@ -14,24 +14,24 @@ if TYPE_CHECKING:
     from fastmcp.server.middleware import Middleware
     from mcp.server.subscriptions import SubscriptionBus
 
-    from biff.server.caller_middleware import CallerBinder
+    from biff.server.caller_policy import CallerPolicy
 
 
 class NotificationServer[LifespanT](FastMCP[LifespanT]):
     """FastMCP server with MCP 2026-07-28 tool list subscriptions."""
 
     def configure_transport(
-        self, bus: SubscriptionBus, handshake: Middleware, bind: CallerBinder
+        self, bus: SubscriptionBus, handshake: Middleware, policy: CallerPolicy
     ) -> None:
         """Register Biff's subscription and middleware handlers.
 
         Args:
             bus: The local event bus used by Biff's description refreshes.
             handshake: Middleware to capture the handshake-era session.
-            bind: Context manager factory that binds an authenticated tool caller.
+            policy: Caller validation and session binding for tool calls.
         """
         self._mcp_server.add_request_handler(
             "subscriptions/listen", SubscriptionsListenRequestParams, ListenHandler(bus)
         )
         self.add_middleware(handshake)
-        self.add_middleware(CallerIdentityMiddleware(bind))
+        self.add_middleware(CallerIdentityMiddleware(policy))
