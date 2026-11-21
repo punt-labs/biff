@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-11-21
+
 ### Added
 
 - A self-contained Devin plugin with a biff MCP server, local repository
