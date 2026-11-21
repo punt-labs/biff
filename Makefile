@@ -18,6 +18,7 @@ lint: check-comments check-docstrings ## Lint and format check (ruff + shellchec
 	uv run ruff check .
 	uv run ruff format --check .
 	shellcheck plugin/hooks/*.sh install.sh scripts/*.sh
+	uv run python -c 'import json, subprocess; hook = json.load(open("devin-plugin/hooks.json"))["SessionStart"][0]["hooks"][0]["command"]; subprocess.run(["shellcheck", "--shell=sh", "-"], input=hook, text=True, check=True)'
 
 check-comments: ## Reject commented-out code and tracker references in Python prose
 	uv run ruff check --select ERA001 src tests tools scripts

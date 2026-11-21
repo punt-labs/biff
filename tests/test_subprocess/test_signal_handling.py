@@ -126,8 +126,10 @@ class ActiveServer(NamedTuple):
     stderr_lines: queue.Queue[str | None]
 
 
-@pytest.fixture
-def active_server(tmp_path: Path) -> Generator[ActiveServer]:
+@pytest.fixture(params=[True])
+def active_server(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> Generator[ActiveServer]:
     """Spawn a real, non-dormant ``biff mcp`` subprocess.
 
     Isolated HOME redirects ``biff_data_dir()`` (``~/.punt-labs/biff``) so
@@ -143,6 +145,7 @@ def active_server(tmp_path: Path) -> Generator[ActiveServer]:
     data_dir.mkdir()
     env = dict(os.environ)
     env["HOME"] = str(home)
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
     # tmp_path's leaf directory name is unique per test invocation
     # (pytest appends a numeric suffix per parametrize case), so it
     # doubles as a collision-free username for this run.
@@ -153,8 +156,7 @@ def active_server(tmp_path: Path) -> Generator[ActiveServer]:
             "-m",
             "biff",
             "mcp",
-            "--user",
-            user,
+            *(["--user", user] if request.param else []),
             "--data-dir",
             str(data_dir),
             "--relay-url",
@@ -356,6 +358,7 @@ class TestSignalRemovesUnreadFiles:
 class TestUnboundServerSignal:
     """A signal before any call declared a session still terminates, cleanly."""
 
+    @pytest.mark.parametrize("active_server", [False], indirect=True)
     def test_unbound_server_exits_and_writes_no_sentinel(
         self, active_server: ActiveServer
     ) -> None:

@@ -2,31 +2,15 @@
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
-from biff.caller_identity import CALLER_KEY, CallerIdentity, CallerIdentityError
-
-_logger = logging.getLogger(__name__)
+from biff.server.caller_policy import CallerPolicy
 
 if TYPE_CHECKING:
     from fastmcp.tools import ToolResult
     from mcp.types import CallToolRequestParams
-
-# Entered around the whole tool call, so the server can keep one caller's
-# session pointed at while its tool runs.
-type CallerBinder = Callable[[CallerIdentity], AbstractAsyncContextManager[None]]
-
-_UNIDENTIFIED = (
-    f"call carried no {CALLER_KEY}: the biff stamping hook is not installed, "
-    "is disabled (.punt-hooks-kill), or was killed before this call. "
-    "Run `biff doctor`, then restart the session."
-)
 
 
 class CallerIdentityMiddleware(Middleware):
@@ -34,12 +18,12 @@ class CallerIdentityMiddleware(Middleware):
 
     fastmcp 3 runs ``on_call_tool`` before the tool's argument schema is
     checked, so the undeclared ``_caller`` is popped here and never reaches
-    a tool.  A call without a well-formed ``_caller`` is refused: biff never
-    falls back to guessing who is calling.
+    a tool. Missing identity is refused unless the process explicitly declares
+    a default caller at launch. Malformed identity is always refused.
     """
 
-    def __init__(self, bind: CallerBinder) -> None:
-        self._bind = bind
+    def __init__(self, policy: CallerPolicy) -> None:
+        self._policy = policy
 
     async def on_call_tool(
         self,
@@ -51,15 +35,6 @@ class CallerIdentityMiddleware(Middleware):
         Raises:
             ToolError: The caller identity is missing or malformed, or the tool fails.
         """
-        arguments = context.message.arguments
-        if arguments is None or CALLER_KEY not in arguments:
-            _logger.warning("Tool call denied: missing caller identity")
-            raise ToolError(_UNIDENTIFIED)
-        raw: object = arguments.pop(CALLER_KEY)
-        try:
-            caller = CallerIdentity.from_wire(raw)
-        except CallerIdentityError as exc:
-            _logger.warning("Tool call denied: malformed caller identity")
-            raise ToolError(str(exc)) from exc
-        async with self._bind(caller):
+        caller = self._policy.resolve(context.message.arguments)
+        async with self._policy.bind(caller):
             return await call_next(context)

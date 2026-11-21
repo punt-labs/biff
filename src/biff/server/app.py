@@ -36,12 +36,12 @@ if TYPE_CHECKING:
 from biff.caller_identity import CallerIdentity
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
+from biff.server.caller_policy import CallerPolicy
 from biff.server.mcp_protocol import NotificationServer
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions, register_all_tools
 from biff.session_lock import routing_lock
 from biff.session_registry import register_session, write_marker
-from biff.session_routing import ID_RE, SessionRouting
 from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
@@ -1182,7 +1182,7 @@ class _LiveSession:
                 self._repointing = True
                 try:
                     await self._gate.wait_for(lambda: self._in_flight == 0)
-                    await self.attach(mcp, state, caller.routing)
+                    await self.attach(mcp, state, caller)
                 finally:
                     self._repointing = False
                     self._gate.notify_all()
@@ -1194,9 +1194,7 @@ class _LiveSession:
                 self._in_flight -= 1
                 self._gate.notify_all()
 
-    async def start_declared(
-        self, mcp: FastMCP[ServerState], state: ServerState
-    ) -> None:
+    async def start_declared(self, policy: CallerPolicy) -> None:
         """Start the session Claude Code declared to this process, if any.
 
         The server is a long-lived subprocess, so without this it would hold
@@ -1206,27 +1204,26 @@ class _LiveSession:
         re-pointing.  It is never read per call.  Absent or malformed means
         stay unbound.
         """
-        raw = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
-        if not ID_RE.fullmatch(raw):
-            return
         async with self._gate:
-            await self.attach(mcp, state, SessionRouting(raw))
+            startup = policy.startup()
+        async with startup:
+            pass
 
     async def attach(
         self,
         mcp: FastMCP[ServerState],
         state: ServerState,
-        routing: SessionRouting,
+        caller: CallerIdentity,
     ) -> None:
-        """Bind *state* to *routing*'s session, then register and start tasks.
+        """Bind *state* to *caller*'s session, then register and start tasks.
 
         Runs with no call in flight: from :meth:`call` or at startup.
         """
-        if state.bound_session_id != routing.session_id and self.attached:
+        if state.bound_session_id != caller.session_id and self.attached:
             # /clear or resume changed session_id in place: release the old
             # session before the server is pointed at the new one.
             await self._detach(state)
-        state.bind(routing)
+        state.bind(caller.routing)
         if state.dormant or self.attached:
             return
         try:
@@ -1331,12 +1328,18 @@ class _LiveSession:
         self.tasks.append(asyncio.create_task(_kv_watcher_loop(state, self.shutdown)))
 
 
-def create_server(state: ServerState) -> FastMCP[ServerState]:
+def create_server(
+    state: ServerState, *, default_caller: CallerIdentity | None = None
+) -> FastMCP[ServerState]:
     """Create a FastMCP server with all biff tools registered.
 
     The returned server is ready to run via ``mcp.run(transport=...)``.
     Starts a background inbox poller that keeps the tool description
     and status file in sync with incoming messages.
+
+    Args:
+        state: The process configuration and session resources.
+        default_caller: Explicit launch identity for unstamped calls and startup.
     """
     live = _LiveSession()
 
@@ -1349,7 +1352,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
                 _remove_unread_files(state.unread_path)
             return
         async with _active_lifespan(state, live) as ctx:
-            await live.start_declared(mcp, state)
+            await live.start_declared(policy)
             yield ctx
 
     mcp = NotificationServer[ServerState](
@@ -1388,10 +1391,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     ) -> AbstractAsyncContextManager[None]:
         return live.call(mcp, state, caller)
 
-    mcp.configure_transport(
-        state.tool_events,
-        _SessionCaptureMiddleware(),
-        accept_caller,
-    )
+    policy = CallerPolicy(accept_caller, default_caller)
+    mcp.configure_transport(state.tool_events, _SessionCaptureMiddleware(), policy)
     register_all_tools(mcp, state)
     return mcp

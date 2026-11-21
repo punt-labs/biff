@@ -2,8 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- A self-contained Devin plugin with a biff MCP server, local repository
+  bootstrap, team mail polling rule, and who/read/write/wall skills.
+- `biff mcp --user <handle>` explicitly binds unstamped tool calls to the
+  startup session and resolved user for harnesses without caller stamping.
+  An absent startup session ID gets a fresh UUID; invalid IDs fail launch.
+  Plain `biff mcp` and HTTP retain strict stamping, and malformed caller
+  stamps remain refused. Devin launchers require biff 1.24.0 or newer.
+
 ### Changed
 
+- Keep Devin bootstrap files private despite repository ignore negations:
+  add a private nested ignore when safe, otherwise remove newly created files.
+- Inline the Devin SessionStart bootstrap in `hooks.json` so it works without
+  a plugin-root environment variable, retaining symlink-safe local writes.
 - Install `punt-observe==0.1.0` from PyPI instead of a Git checkout.
 - Use FastMCP 4 and MCP 2.3. Failed session attachment returns a sanitized
   internal error and logs only the error type and source line.
