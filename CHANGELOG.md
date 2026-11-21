@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- A self-contained Devin plugin with a biff MCP server, local repository
+  bootstrap, team mail polling rule, and who/read/write/wall skills.
+
 ### Changed
 
 - Install `punt-observe==0.1.0` from PyPI instead of a Git checkout.

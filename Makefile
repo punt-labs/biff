@@ -17,7 +17,7 @@ test: ## Run tests (unit + integration)
 lint: check-comments check-docstrings ## Lint and format check (ruff + shellcheck)
 	uv run ruff check .
 	uv run ruff format --check .
-	shellcheck plugin/hooks/*.sh install.sh scripts/*.sh
+	shellcheck plugin/hooks/*.sh devin-plugin/hooks/*.sh install.sh scripts/*.sh
 
 check-comments: ## Reject commented-out code and tracker references in Python prose
 	uv run ruff check --select ERA001 src tests tools scripts

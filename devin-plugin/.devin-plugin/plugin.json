@@ -1,0 +1,8 @@
+{
+  "name": "biff",
+  "description": "UNIX-style team communication for Devin: who, read, write, wall",
+  "author": {
+    "name": "Punt Labs",
+    "email": "hello@punt-labs.com"
+  }
+}

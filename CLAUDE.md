@@ -135,6 +135,12 @@ The marketplace installs this directory with Claude Code's `git-subdir` source (
 
 One rule follows from that, and it is load-bearing: **the plugin surface must not reach outside itself at runtime.** A hook script may use `$HOME`, the `biff`/`biff-hook` binaries, and paths under the *consumer's* repo root; it may not reference a file elsewhere in this repo, because that file will not exist on an installed plugin. `${CLAUDE_PLUGIN_ROOT}` is `plugin/`.
 
+The sibling `devin-plugin/` surface ships independently as a git-subdir
+plugin for Devin: `.devin-plugin/plugin.json`, `.mcp.json`, `hooks.json`,
+`hooks/`, `rules/`, and `skills/`. Its runtime references must stay within
+that surface (apart from consumer repositories, `$HOME`, and installed
+binaries), just like the Claude plugin. Never place relay tokens in it.
+
 ### Installer Is Source of Truth
 
 `biff install` deposits the user-scope agent guide (`~/.punt-labs/biff/CLAUDE.md` plus the `@` import in `~/.claude/CLAUDE.md`) and installs the plugin from the punt-labs marketplace — machine scope only. This clone's `.git/hooks` dispatchers are deployed by `biff enable` (a repo-level action), not `install`. Do not hand-edit the installed plugin cache under `~/.claude/plugins/` — a `claude plugin update` overwrites it. To change command or hook behavior, edit `plugin/commands/` or `plugin/hooks/` here and release; to try a change without releasing, run Claude Code with `--plugin-dir` pointed at this repo's `plugin/` directory.

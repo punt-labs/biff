@@ -415,6 +415,26 @@ What the two setup commands change:
 
 Run `biff doctor` to check the result. [Installing](docs/INSTALLING.md) has the full guide.
 
+### Devin
+
+An organization admin can install the Devin plugin from
+<https://github.com/punt-labs/biff/tree/main/devin-plugin>, binding its
+MCP installation environment to
+`MCP_BIFF_RELAY_TOKEN: secret:org:MCP_BIFF_RELAY_TOKEN`. The MCP config maps
+that secret placeholder to `BIFF_RELAY_TOKEN`; empty or unexpanded values
+are unset rather than sent to the relay. Never put a token value in files.
+The launcher uses installed biff 1.23.0 or newer, otherwise requests
+`punt-biff>=1.23.0` through `uvx` (or `uv tool run`), falling back to plain
+`biff` only when neither runner exists. Install uv or a current biff first.
+It supplies a fresh session ID when absent so startup can register presence.
+
+The plugin provides a long-lived MCP server, who/read/write/wall skills,
+and an always-on five-minute mail polling rule. Its session-start hook
+creates missing local team configuration and Devin identity records in
+`DEVIN_PROJECT_DIR` and repositories under `~/repos/`, excluding newly
+created files from Git without overwriting existing configuration. It
+does not run `biff enable` or change repository enablement policy.
+
 ## Status Bar
 
 `biff install-statusline` adds biff to the end of your existing Claude Code status line; it does not replace it. `biff uninstall-statusline` restores the original.
