@@ -272,7 +272,7 @@ async def end_or_cancel(ctx: TalkContext) -> CommandResult:
             await talk_state.send_withdraw(to_key=partner_key)
         else:
             await talk_state.send_end(to_key=partner_key)
-    except (NatsError, TimeoutError, OSError):
+    except (NatsError, TimeoutError, OSError) as exc:
         # INFO, not WARNING: the CLI raises the stderr handler to WARNING,
         # so a WARNING here would dump this best-effort-publish traceback
         # into the interactive REPL.
@@ -281,7 +281,7 @@ async def end_or_cancel(ctx: TalkContext) -> CommandResult:
             if was_inviting
             else "no TTL sweep for a connected session; peer may stay connected"
         )
-        logger.info("talk_end publish failed; %s", recovery)
+        logger.info("talk_end publish failed (%s); %s", type(exc).__name__, recovery)
         transient = True
     if transient:
         # The local session ended, but the peer was not notified — signal it as
@@ -319,10 +319,10 @@ async def publish_auto_accept(ctx: TalkContext, *, to_key: str) -> bool:
     for attempt in (1, 2):
         try:
             await ctx.talk.send_accept(to_key=to_key)
-        except (NatsError, TimeoutError, OSError):
+        except (NatsError, TimeoutError, OSError) as exc:
             # INFO, not WARNING: the CLI floors stderr at WARNING, so a WARNING
             # here would dump this best-effort-publish traceback into the REPL.
-            logger.info("talk auto-accept failed (attempt %d/2)", attempt)
+            logger.info("talk auto-accept: %s (%d/2)", type(exc).__name__, attempt)
         else:
             return True
     return False

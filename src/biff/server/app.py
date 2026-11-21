@@ -864,12 +864,12 @@ def _write_reap_fallback_sentinels(state: ServerState) -> None:
     # HOME is unset.
     try:
         _write_sentinel(state.config.repo_name, state.session_key)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError) as exc:
         # This sentinel is the only durable signal that a timed-out
         # teardown below needs reaping -- unlike the signal handler's sync
         # cleanup, this path is not itself a signal handler, so logging is
         # safe here.
-        logger.warning("Failed to write reap-fallback sentinel")
+        logger.warning("Failed to write reap-fallback sentinel: %s", type(exc).__name__)
 
 
 async def _lifespan_cleanup(

@@ -1663,10 +1663,7 @@ class NatsRelay:
         return f"{self._repo_name}-inbox-{session_key.replace(':', '-')}"
 
     async def _fetch_from_subject(
-        self,
-        js: JetStreamContext,
-        subject: str,
-        durable: str,
+        self, js: JetStreamContext, subject: str, durable: str
     ) -> list[Message]:
         """Pull valid frames, ack them, and delete the consumer for a subject.
 
@@ -1709,11 +1706,13 @@ class NatsRelay:
                     # term() then deletes the only other copy.  Log field
                     # locations and error types only, with input/url/context
                     # scrubbed (PII guard).
-                    detail = _scrub_validation_error(exc)
                     logger.error(
-                        "Terminating malformed NATS frame (%d bytes): %s",
+                        "Terminating malformed NATS frame in %s inbox (%d bytes): %s",
+                        ("user", "session")[
+                            subject.removeprefix(self._subject_prefix + ".").count(".")
+                        ],
                         len(raw.data),
-                        detail,
+                        _scrub_validation_error(exc),
                     )
                     await raw.term()
                     continue
