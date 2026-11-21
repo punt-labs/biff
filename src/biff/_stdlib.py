@@ -384,7 +384,7 @@ def sentinel_dir(repo_name: str) -> Path:
 def is_lux_enabled(repo_root: Path | None = None) -> bool:
     """Check whether lux display mode is enabled.
 
-    Reads ``.lux/config.md`` YAML frontmatter for ``display: "y"``.
+    Reads ``.punt-labs/lux.md`` YAML frontmatter for ``display: "y"``.
     Returns ``False`` if the file is absent, malformed, or display is off.
 
     Uses only stdlib — safe for hook entry points and lightweight callers.
@@ -393,7 +393,7 @@ def is_lux_enabled(repo_root: Path | None = None) -> bool:
         repo_root = find_git_root()
     if repo_root is None:
         return False
-    config = repo_root / ".lux" / "config.md"
+    config = repo_root / ".punt-labs" / "lux.md"
     if not config.is_file():
         return False
     try:
