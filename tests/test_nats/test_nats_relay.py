@@ -481,7 +481,7 @@ class TestCrossRelay:
         assert "eric" in users
 
 
-class TestLastTtyRepo:
+class TestLastSessionRepo:
     """Find the repo of a named session from every repo's wtmp."""
 
     async def test_returns_repo_of_most_recent_named_session(

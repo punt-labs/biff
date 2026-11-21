@@ -8280,3 +8280,9 @@ while wtmp already keeps 30 days of named-session history with the repo.
 next `read` in the repo that session ran in. The lookup reads only the
 recipient's wtmp subjects, and only on the forward path. A name older than
 wtmp's 30-day window falls back to DES-077's choice.
+
+The lookup trusts wtmp events as the session registry already is trusted:
+any holder of the team token can publish to every subject, including a
+user's mailbox in any repo, so a forged event grants nothing a direct
+publish does not. Ordering by stream sequence keeps a forged future
+timestamp from overriding a later real event.

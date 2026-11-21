@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 FETCH_BATCH = 100
+SCAN_BATCH = 1000  # history scans page through the whole retained window
 FETCH_TIMEOUT = 1.0
 CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 
@@ -48,8 +49,7 @@ class WtmpReader:
             info = await self.js.stream_info(self.stream)
         except NotFoundError:
             return []
-        last_seq = info.state.last_seq
-        if last_seq == 0:
+        if (last_seq := info.state.last_seq) == 0:
             return []
         batch = max(count * 2, FETCH_BATCH)
         config = ConsumerConfig(
@@ -75,7 +75,7 @@ class WtmpReader:
             inactive_threshold=CONSUMER_INACTIVE_THRESHOLD,
         )
         repo: str | None = None
-        for raw in await self._read(subject, config, batch=FETCH_BATCH, drain=True):
+        for raw in await self._read(subject, config, batch=SCAN_BATCH, drain=True):
             event = self._parse(raw)
             if event is not None and tty in (event.tty, event.tty_name):
                 repo = raw.subject.split(".")[1]
