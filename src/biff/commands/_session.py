@@ -34,8 +34,7 @@ async def update_current_session(ctx: CliContext, **updates: object) -> UserSess
         # plan text would silently be erased. Surface it rather than
         # rebuild the record without a trace.
         logger.warning(
-            "Session %s missing at update time; rebuilding from process environment",
-            ctx.session_key,
+            "Session missing at update time; rebuilding from process environment"
         )
         session = UserSession(
             user=ctx.user,

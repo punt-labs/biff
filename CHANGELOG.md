@@ -31,6 +31,8 @@
 
 ### Fixed
 
+- Keep login and display names out of session and identity diagnostics, and
+  record a warning when an MCP tool call has missing or malformed caller identity.
 - Background message alerts now reach modern MCP clients that subscribe to
   tool list changes. Handshake-era clients still receive standalone alerts.
 - `/wall` post and clear now reach idle peer sessions promptly. Wall changes

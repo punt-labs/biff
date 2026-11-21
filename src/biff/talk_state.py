@@ -330,7 +330,7 @@ class TalkState:
         try:
             invite = PendingInvite.from_notification(notif, arrived=arrived)
         except ValueError:
-            logger.debug("dropping malformed invite frame: %r", notif, exc_info=True)
+            logger.debug("dropping malformed invite frame")
             return
         at_capacity = len(self._pending) >= MAX_PENDING_INVITES
         if notif.nfrom not in self._pending and at_capacity:

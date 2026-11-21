@@ -307,4 +307,4 @@ class SessionHost:
                 )
             )
         except Exception:
-            logger.warning("failed to write wtmp %s", event, exc_info=True)
+            logger.warning("failed to write wtmp event", exc_info=True)

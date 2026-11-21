@@ -593,9 +593,7 @@ class LocalRelay:
             # interval for the lifetime of the process.
             if session_key not in self._heartbeat_missing_warned:
                 self._heartbeat_missing_warned.add(session_key)
-                logger.warning(
-                    "Heartbeat found no session for %s; skipping", session_key
-                )
+                logger.warning("Heartbeat found no session; skipping")
             return
         self._heartbeat_missing_warned.discard(session_key)
         sessions[session_key] = existing.model_copy(

@@ -293,7 +293,7 @@ async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
         if session is not None:
             await state.relay.append_wtmp(_build_logout_event(session_key, session))
     except Exception:  # noqa: BLE001
-        logger.warning("Failed to write sentinel logout for %s", session_key)
+        logger.warning("Failed to write sentinel logout")
     # Release TTY name reservation before deleting session (DES-035).
     # Separate try block so a wtmp failure doesn't leak the name reservation.
     if session is not None and session.tty_name:
@@ -308,7 +308,7 @@ async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
     try:
         await state.relay.delete_session(session_key)
     except Exception:
-        logger.warning("Failed to reap sentinel for %s", session_key, exc_info=True)
+        logger.warning("Failed to reap sentinel", exc_info=True)
         return False
     return True
 
@@ -560,7 +560,7 @@ async def _handle_kv_entry(
             )
             cache[session_key] = session
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to parse KV entry %s", key)
+            logger.debug("Failed to parse session KV entry")
     elif op in ("DEL", "PURGE"):
         await _handle_kv_delete(relay, state, cache, session_key)
 
@@ -582,19 +582,12 @@ async def _handle_kv_delete(
         return  # Our own shutdown writes logout explicitly
     cached = cache.pop(session_key, None)
     if cached is None:
-        logger.debug(
-            "No cached session for %s on DEL, skipping wtmp",
-            session_key,
-        )
+        logger.debug("No cached session on DEL, skipping wtmp")
         return
     try:
         await relay.append_wtmp(_build_logout_event(session_key, cached))
     except Exception:
-        logger.warning(
-            "Failed to append wtmp logout for %s",
-            session_key,
-            exc_info=True,
-        )
+        logger.warning("Failed to append wtmp logout", exc_info=True)
 
 
 async def _shutdown_tasks(
@@ -757,7 +750,7 @@ async def _close_orphaned_logins(
         try:
             await state.relay.append_wtmp(logout)
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to close orphaned login %s", login.session_key)
+            logger.debug("Failed to close orphaned login")
 
     if orphaned:
         logger.info("Closed %d orphaned login(s)", len(orphaned))
@@ -801,7 +794,7 @@ async def _delete_released_session(state: ServerState, session_key: str) -> None
             state.relay.delete_session(session_key), timeout=_TEARDOWN_STEP_TIMEOUT
         )
     except Exception:
-        logger.warning("Failed to delete session %s", session_key, exc_info=True)
+        logger.warning("Failed to delete session", exc_info=True)
     else:
         try:
             _remove_sentinel(state.config.repo_name, session_key)
@@ -811,9 +804,7 @@ async def _delete_released_session(state: ServerState, session_key: str) -> None
             # (relay.close) -- the next reaper tick
             # re-processing an already-deleted session is harmless, unlike
             # skipping the steps still queued after this one.
-            logger.warning(
-                "Failed to remove sentinel for %s", session_key, exc_info=True
-            )
+            logger.warning("Failed to remove sentinel")
 
 
 async def _release_relay(state: ServerState) -> None:
@@ -878,11 +869,7 @@ def _write_reap_fallback_sentinels(state: ServerState) -> None:
         # teardown below needs reaping -- unlike the signal handler's sync
         # cleanup, this path is not itself a signal handler, so logging is
         # safe here.
-        logger.warning(
-            "Failed to write reap-fallback sentinel for %s",
-            state.session_key,
-            exc_info=True,
-        )
+        logger.warning("Failed to write reap-fallback sentinel")
 
 
 async def _lifespan_cleanup(
@@ -1315,7 +1302,7 @@ class _LiveSession:
         # Written after register_session succeeds so "marker exists iff KV
         # row exists" holds under registration failure.
         write_marker(repo, state.session_key, str(state.repo_common_root))
-        logger.info("Session ready: %s (%s)", state.session_key, final_name)
+        logger.info("Session ready: %s (%s)", state.tty, final_name)
 
         await _descriptions.refresh_read_messages(mcp, state)
         await _descriptions.refresh_wall(mcp, state)

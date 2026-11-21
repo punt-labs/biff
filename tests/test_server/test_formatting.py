@@ -482,7 +482,8 @@ class TestWhoMgrColumn:
     ) -> None:
         with caplog.at_level("DEBUG", logger="biff.formatting"):
             assert who_mgr(self._row("", owner_git="Jane Doe")) == ""
-        assert "Jane Doe" in caplog.text
+        assert "MGR candidate is not an addressable identity" in caplog.text
+        assert "Jane Doe" not in caplog.text
 
     def test_unaddressable_os_user_is_blank(self) -> None:
         assert who_mgr(self._row("a b")) == ""

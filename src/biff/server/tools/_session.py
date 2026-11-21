@@ -58,15 +58,13 @@ async def get_or_create_session(state: ServerState) -> UserSession:
             # /who then renders as a plausible-looking but wrong row --
             # surface the resurrection rather than let it pass silently.
             logger.warning(
-                "Session %s reaped mid-run; resurrecting with default "
-                "plan/biff_enabled state",
-                state.session_key,
+                "Session reaped mid-run; resurrecting with default "
+                "plan/biff_enabled state"
             )
         else:
             logger.warning(
-                "Auto-creating session %s without a reserved tty_name; "
-                "lifespan registration may not have completed",
-                state.session_key,
+                "Auto-creating session without a reserved tty_name; "
+                "lifespan registration may not have completed"
             )
         tty_name = stashed or state.tty[:8]
         session = UserSession(

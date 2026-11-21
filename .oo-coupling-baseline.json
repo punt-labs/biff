@@ -374,7 +374,7 @@
     "efferent_coupling": 3.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.904,
+    "max_lcom": 0.903,
     "avg_lcom": 0.709
   },
   "src/biff/prob_gate.py": {
@@ -647,8 +647,8 @@
     "efferent_coupling": 2.0,
     "public_names": 5.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.747,
-    "avg_lcom": 0.747
+    "max_lcom": 0.737,
+    "avg_lcom": 0.737
   },
   "src/biff/talk_types.py": {
     "efferent_coupling": 2.0,
