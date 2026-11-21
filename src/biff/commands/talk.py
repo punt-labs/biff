@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, Protocol
 from nats.errors import Error as NatsError
 
 from biff.commands._result import CommandResult
+from biff.commands._talk_relay import publish_failure, resolve_target
 from biff.formatting import format_talk_echo
-from biff.server.tools._session import resolve_talk_target
 from biff.talk_types import MAX_BODY_LEN, TalkPhase
 from biff.tty import format_address, parse_address
 
@@ -69,35 +69,6 @@ class TalkContext(Protocol):
     def visible_repos(self) -> frozenset[str]:
         """Return the repositories visible to the caller."""
         ...
-
-
-async def resolve_target(
-    ctx: TalkContext, user: str, tty: str | None
-) -> tuple[str, str]:
-    """Resolve an address to ``(relay_key, display)``; raise if the user is offline.
-
-    Talk is session-scoped (DES-043): the address must name a live session.
-    ``resolve_talk_target`` maps a ``user:tty`` (or friendly ``tty_name``) to the
-    peer's identity key, refusing a bare user or the caller's own session.
-
-    Raises:
-        ValueError: The target is offline, ambiguous, invalid, or the caller.
-        OSError: Relay presence cannot be read.
-        ConnectionError: The network relay cannot establish a connection.
-        TimeoutError: The presence query exceeds its deadline.
-        nats.errors.Error: The NATS presence query fails.
-    """
-    all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
-    if not any(s.user == user for s in all_sessions):
-        msg = f"{user} is not online."
-        raise ValueError(msg)
-    return resolve_talk_target(
-        all_sessions,
-        user,
-        tty,
-        sender_key=ctx.session_key,
-        sender_repo=ctx.config.repo_name,
-    )
 
 
 async def accept_invite(
@@ -233,7 +204,8 @@ async def send_line(
         )
     try:
         await ctx.talk.send_message(to_key=to_key, body=message)
-    except (NatsError, TimeoutError, OSError):
+    except (NatsError, TimeoutError, OSError) as exc:
+        logger.warning("talk send failed: %s", publish_failure(exc))
         return CommandResult(
             text=f"Could not reach {display} — message not sent; try again.",
             error=True,
@@ -260,49 +232,35 @@ async def end_or_cancel(ctx: TalkContext) -> CommandResult:
     talk_state = ctx.talk
     if talk_state.phase is TalkPhase.IDLE:
         return CommandResult(text="No active talk session.")
-    partner = talk_state.partner
-    partner_key = talk_state.partner_key
+    partner, partner_key = talk_state.partner, talk_state.partner_key
     was_inviting = talk_state.phase is TalkPhase.INVITING
     talk_state.reset()
-    transient = False
+    send = talk_state.send_withdraw if was_inviting else talk_state.send_end
     # The publish is a no-op on a non-NATS relay (``TalkState._publish`` guards
     # the transport), so it is issued unconditionally — no relay-type gate here.
     try:
-        if was_inviting:
-            await talk_state.send_withdraw(to_key=partner_key)
-        else:
-            await talk_state.send_end(to_key=partner_key)
+        await send(to_key=partner_key)
     except (NatsError, TimeoutError, OSError) as exc:
         # INFO, not WARNING: the CLI raises the stderr handler to WARNING,
         # so a WARNING here would dump this best-effort-publish traceback
         # into the interactive REPL.
-        recovery = (
-            "invitee falls back to the pending-invite TTL sweep"
-            if was_inviting
-            else "no TTL sweep for a connected session; peer may stay connected"
+        logger.info(
+            "talk %s failed: %s",
+            "withdraw" if was_inviting else "hangup",
+            publish_failure(exc),
         )
-        logger.info("talk_end publish failed (%s); %s", type(exc).__name__, recovery)
-        transient = True
-    if transient:
         # The local session ended, but the peer was not notified — signal it as
         # an error so library/CLI callers see a non-zero outcome, consistent with
         # the publish-failure returns of invite/accept_invite/send_line.
-        if was_inviting:
-            return CommandResult(
-                text=(
-                    f"Talk invite to {partner} withdrawn locally; "
-                    "their pending invite times out in ~5 min."
-                ),
-                error=True,
-            )
-        return CommandResult(
-            text=(
-                f"Talk session with {partner} ended locally, but reaching them "
-                "failed — they may not know the talk ended; send nothing further "
-                "or ask them to run talk_end."
-            ),
-            error=True,
+        text = (
+            f"Talk invite to {partner} withdrawn locally; "
+            "their pending invite times out in ~5 min."
+            if was_inviting
+            else f"Talk session with {partner} ended locally, but reaching them "
+            "failed — they may not know the talk ended; send nothing further "
+            "or ask them to run talk_end."
         )
+        return CommandResult(text=text, error=True)
     return CommandResult(text=f"Talk session with {partner} ended.")
 
 
@@ -322,7 +280,11 @@ async def publish_auto_accept(ctx: TalkContext, *, to_key: str) -> bool:
         except (NatsError, TimeoutError, OSError) as exc:
             # INFO, not WARNING: the CLI floors stderr at WARNING, so a WARNING
             # here would dump this best-effort-publish traceback into the REPL.
-            logger.info("talk auto-accept: %s (%d/2)", type(exc).__name__, attempt)
+            logger.info(
+                "talk auto-accept failed (attempt=%d/2): %s",
+                attempt,
+                publish_failure(exc),
+            )
         else:
             return True
     return False
