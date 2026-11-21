@@ -377,7 +377,7 @@ class TestHeartbeat:
             await relay.heartbeat(key)
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
         assert len(warnings) == 1
-        assert key in warnings[0].message
+        assert key not in warnings[0].message  # session keys carry login names
 
     async def test_updates_last_active(self, relay: NatsRelay) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
@@ -524,6 +524,36 @@ class TestLastSessionRepo:
             assert await relay.last_session_repo("kai:bb") == "_test-nats-other"
             assert await relay.last_session_repo("kai:gone") is None
             assert await relay.last_session_repo("eric:qa") is None
+        finally:
+            await other.close()
+
+    async def test_scans_past_the_ack_pending_limit(
+        self, relay: NatsRelay, nats_server: str
+    ) -> None:
+        # More history than one consumer may hold unacknowledged (1,000):
+        # the newest event, past that limit, must still be read.
+        other = NatsRelay(url=nats_server, repo_name="_test-nats-other")
+        try:
+            for i in range(1100):
+                await relay.append_wtmp(
+                    SessionEvent(
+                        session_key=f"kai:{i:08x}",
+                        event="login",
+                        user="kai",
+                        tty=f"{i:08x}",
+                        tty_name="qa",
+                    )
+                )
+            await other.append_wtmp(
+                SessionEvent(
+                    session_key="kai:ffffffff",
+                    event="logout",
+                    user="kai",
+                    tty="ffffffff",
+                    tty_name="qa",
+                )
+            )
+            assert await relay.last_session_repo("kai:qa") == "_test-nats-other"
         finally:
             await other.close()
 

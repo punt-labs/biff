@@ -97,14 +97,14 @@ class WtmpReader:
                 except TimeoutError:
                     break
                 raws.extend(fetched)
+                for raw in fetched:  # ack per batch: max_ack_pending would stall
+                    await raw.ack()
                 if not drain or fetched[-1].metadata.num_pending == 0:
                     break
         finally:
             await sub.unsubscribe()
             with suppress(NotFoundError):
                 await self.js.delete_consumer(self.stream, name)
-        for raw in raws:
-            await raw.ack()
         return raws
 
     @staticmethod
