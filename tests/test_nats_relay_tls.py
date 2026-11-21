@@ -72,8 +72,9 @@ class TestConnectPassesTlsHandshakeFirst:
         relay._provision = AsyncMock(  # type: ignore[method-assign]
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
-        connect = AsyncMock(return_value=_fake_nc())
-        with patch("biff.nats_relay.nats.connect", connect):
+        nc = _fake_nc()
+        connect = nc.connect = AsyncMock()
+        with patch("biff.nats_relay.NatsClient", return_value=nc):
             await relay._ensure_connected()
 
         assert connect.await_args is not None
@@ -88,9 +89,10 @@ class TestConnectPassesTlsHandshakeFirst:
         relay._provision = AsyncMock(  # type: ignore[method-assign]
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
-        connect = AsyncMock(return_value=_fake_nc())
-        with patch("biff.nats_relay.nats.connect", connect):
+        nc = _fake_nc()
+        connect = nc.connect = AsyncMock()
+        with patch("biff.nats_relay.NatsClient", return_value=nc):
             await relay._ensure_connected()
 
         assert connect.await_args is not None
-        assert "tls_handshake_first" not in connect.await_args.kwargs
+        assert connect.await_args.kwargs["tls_handshake_first"] is False

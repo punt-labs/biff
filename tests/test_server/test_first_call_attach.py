@@ -192,7 +192,10 @@ async def test_attached_tool_failure_reports_relay_error(state: ServerState) -> 
     ) as client:
         await client.call_tool("who", {})
         with (
-            patch("nats.connect", AsyncMock(side_effect=OSError("private detail"))),
+            patch(
+                "nats.aio.client.Client.connect",
+                AsyncMock(side_effect=OSError("private detail")),
+            ),
             patch.object(
                 state.relay,
                 "get_sessions_for_repos",

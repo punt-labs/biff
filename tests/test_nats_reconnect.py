@@ -31,6 +31,7 @@ def _fake_nc() -> MagicMock:
     nc = MagicMock()
     nc.is_closed = False
     nc.close = AsyncMock()
+    nc.connect = AsyncMock()
     return nc
 
 
@@ -71,7 +72,7 @@ async def _keynotfound() -> str:
 
 
 def _fresh_nc(*_a: object, **_k: object) -> MagicMock:
-    """side_effect for nats.connect — hand back a new fake client per call."""
+    """side_effect for the client constructor — hand back a new fake client per call."""
     return _fake_nc()
 
 
@@ -88,7 +89,7 @@ class TestProvisionTimeout:
             raise AssertionError("unreachable")
 
         with (
-            patch("biff.nats_relay.nats.connect", AsyncMock(return_value=nc)),
+            patch("biff.nats_relay.NatsClient", MagicMock(return_value=nc)),
             patch("biff.nats_relay._CONNECT_PROVISION_TIMEOUT", 0.05),
             patch.object(relay, "_provision", _hang),
             pytest.raises(TimeoutError),
@@ -110,7 +111,7 @@ class TestProvisionTimeout:
             raise AssertionError("unreachable")
 
         with (
-            patch("biff.nats_relay.nats.connect", AsyncMock(return_value=nc)),
+            patch("biff.nats_relay.NatsClient", MagicMock(return_value=nc)),
             patch("biff.nats_relay._CONNECT_PROVISION_TIMEOUT", 0.05),
             patch.object(relay, "_provision", _hang),
             pytest.raises(TimeoutError),
@@ -135,8 +136,8 @@ class TestProvisionTimeout:
 
         with (
             patch(
-                "biff.nats_relay.nats.connect",
-                AsyncMock(side_effect=_fresh_nc),
+                "biff.nats_relay.NatsClient",
+                MagicMock(side_effect=_fresh_nc),
             ),
             patch("biff.nats_relay._CONNECT_PROVISION_TIMEOUT", 0.05),
             patch.object(relay, "_provision", _flaky),
@@ -166,9 +167,9 @@ class TestHalfOpenWedgeRecovery:
     @staticmethod
     def _connect_and_provision(
         relay: NatsRelay, handles: tuple[Any, Any, Any]
-    ) -> AsyncMock:
-        """Patch ``nats.connect`` (fresh client per call) and ``_provision``."""
-        connect = AsyncMock(side_effect=_fresh_nc)
+    ) -> MagicMock:
+        """Patch ``Client.connect`` (fresh client per call) and ``_provision``."""
+        connect = MagicMock(side_effect=_fresh_nc)
         relay._provision = AsyncMock(return_value=handles)  # type: ignore[method-assign]
         return connect
 
@@ -178,7 +179,7 @@ class TestHalfOpenWedgeRecovery:
 
         nats-py's ping timer cannot be advanced in a unit test, so verify
         the budget directly through the keepalive parameters passed to
-        ``nats.connect``.  ``ping_interval * max_outstanding_pings`` (~60s)
+        ``Client.connect``.  ``ping_interval * max_outstanding_pings`` (~60s)
         is the base detection budget; the real trip is up to one interval
         higher (~80s) because nats-py fires when the count *exceeds* the
         max, which the 90s ceiling accommodates.
@@ -187,18 +188,21 @@ class TestHalfOpenWedgeRecovery:
         connect = self._connect_and_provision(
             relay, (MagicMock(), MagicMock(), MagicMock())
         )
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("biff.nats_relay.NatsClient", connect):
             await relay._ensure_connected()
 
-        assert connect.await_args is not None
-        kwargs = connect.await_args.kwargs
+        stored = relay._nc
+        assert isinstance(stored, MagicMock)
+        assert stored.connect.await_args is not None
+        kwargs = stored.connect.await_args.kwargs
         detection = kwargs["ping_interval"] * kwargs["max_outstanding_pings"]
         assert detection <= 90, f"wedge detection {detection}s exceeds 90s budget"
         assert kwargs["max_reconnect_attempts"] == 1
         assert kwargs["connect_timeout"] == 5
         assert kwargs["allow_reconnect"] is False
-        assert isinstance(relay._nc, MagicMock)
-        relay._nc.options.update.assert_called_once_with(
+        stored = relay._nc
+        assert isinstance(stored, MagicMock)
+        stored.options.update.assert_called_once_with(
             allow_reconnect=True,
             connect_timeout=2,
             max_reconnect_attempts=-1,
@@ -217,14 +221,16 @@ class TestHalfOpenWedgeRecovery:
         relay = NatsRelay(url="tls://fake:4222", repo_name="test")
         js, kv, names_kv = MagicMock(), MagicMock(), MagicMock()
         connect = self._connect_and_provision(relay, (js, kv, names_kv))
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("biff.nats_relay.NatsClient", connect):
             await relay._ensure_connected()
             assert relay._cached_handles() is not None
 
             # nats-py's ping loop detects the dead socket and fires the
             # disconnect callback it was registered with.
-            assert connect.await_args is not None
-            on_disconnect = connect.await_args.kwargs["disconnected_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_disconnect = stored.connect.await_args.kwargs["disconnected_cb"]
             await on_disconnect()
             assert relay._cached_handles() is None
 
@@ -270,7 +276,7 @@ class TestProactiveWedgeDetector:
 
         js, kv, names_kv = MagicMock(), MagicMock(), MagicMock()
         relay._provision = AsyncMock(return_value=(js, kv, names_kv))  # type: ignore[method-assign]
-        with patch("biff.nats_relay.nats.connect", AsyncMock(side_effect=_fresh_nc)):
+        with patch("biff.nats_relay.NatsClient", MagicMock(side_effect=_fresh_nc)):
             result_js, result_kv = await relay._ensure_connected()
 
         assert result_js is js
@@ -387,9 +393,9 @@ class TestReconnectEpochGuard:
     """
 
     @staticmethod
-    def _dial() -> AsyncMock:
-        """Patch ``nats.connect`` to hand back a fresh fake client per call."""
-        return AsyncMock(side_effect=_fresh_nc)
+    def _dial() -> MagicMock:
+        """Patch ``Client.connect`` to hand back a fresh fake client per call."""
+        return MagicMock(side_effect=_fresh_nc)
 
     @pytest.mark.anyio()
     async def test_reconnected_cb_advances_epoch(self) -> None:
@@ -399,11 +405,13 @@ class TestReconnectEpochGuard:
         relay._provision = AsyncMock(  # type: ignore[method-assign]
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
-        with patch("biff.nats_relay.nats.connect", self._dial()) as connect:
+        with patch("biff.nats_relay.NatsClient", self._dial()):
             await relay._ensure_connected()
             assert relay._reconnect_epoch == 0
-            assert connect.await_args is not None
-            on_reconnect = connect.await_args.kwargs["reconnected_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_reconnect = stored.connect.await_args.kwargs["reconnected_cb"]
 
             await on_reconnect()
             assert relay._reconnect_epoch == 1
@@ -419,11 +427,13 @@ class TestReconnectEpochGuard:
         js, kv, names_kv = MagicMock(), MagicMock(), MagicMock()
         relay._provision = AsyncMock(return_value=(js, kv, names_kv))  # type: ignore[method-assign]
         nc = _live_nc()  # socket reads healthy both wedged and healed
-        connect = AsyncMock(return_value=nc)
-        with patch("biff.nats_relay.nats.connect", connect):
+        connect = MagicMock(return_value=nc)
+        with patch("biff.nats_relay.NatsClient", connect):
             await relay._ensure_connected()
-            assert connect.await_args is not None
-            on_reconnect = connect.await_args.kwargs["reconnected_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_reconnect = stored.connect.await_args.kwargs["reconnected_cb"]
             gate_epoch = relay._reconnect_epoch  # 0, captured at the gate
 
             await relay._connect_lock.acquire()
@@ -447,7 +457,7 @@ class TestReconnectEpochGuard:
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
         nc = _live_nc()
-        with patch("biff.nats_relay.nats.connect", AsyncMock(return_value=nc)):
+        with patch("biff.nats_relay.NatsClient", MagicMock(return_value=nc)):
             await relay._ensure_connected()
             # Bind to a local so the identity narrowing stays on ``stored`` and
             # does not leak onto ``relay._nc`` across the teardown call below,
@@ -472,10 +482,12 @@ class TestReconnectEpochGuard:
         relay._provision = AsyncMock(  # type: ignore[method-assign]
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
-        with patch("biff.nats_relay.nats.connect", self._dial()) as connect:
+        with patch("biff.nats_relay.NatsClient", self._dial()):
             await relay._ensure_connected()
-            assert connect.await_args is not None
-            on_reconnect = connect.await_args.kwargs["reconnected_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_reconnect = stored.connect.await_args.kwargs["reconnected_cb"]
             await on_reconnect()
             assert relay._reconnect_epoch == 1
 
@@ -503,10 +515,12 @@ class TestReconnectEpochGuard:
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
         nc = _live_nc()  # socket reads is_connected True throughout the window
-        with patch("biff.nats_relay.nats.connect", AsyncMock(return_value=nc)) as c:
+        with patch("biff.nats_relay.NatsClient", MagicMock(return_value=nc)):
             await relay._ensure_connected()
-            assert c.await_args is not None
-            on_reconnect = c.await_args.kwargs["reconnected_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_reconnect = stored.connect.await_args.kwargs["reconnected_cb"]
             gate_epoch = relay._reconnect_epoch  # 0, captured at the gate
 
             # Teardown fires in the flush window: epoch unchanged since the gate
@@ -528,7 +542,7 @@ class TestReconnectEpochGuard:
             assert relay._nc is None  # ... while the client is gone
 
         # Self-heal: the next dial resets the epoch and rebuilds the client.
-        with patch("biff.nats_relay.nats.connect", AsyncMock(return_value=_live_nc())):
+        with patch("biff.nats_relay.NatsClient", MagicMock(return_value=_live_nc())):
             await relay._ensure_connected()
         assert relay._reconnect_epoch == 0
         assert relay._nc is not None
@@ -885,8 +899,8 @@ class TestCallbackGenerationGuard:
     """
 
     @staticmethod
-    def _connect() -> AsyncMock:
-        return AsyncMock(side_effect=_fresh_nc)
+    def _connect() -> MagicMock:
+        return MagicMock(side_effect=_fresh_nc)
 
     @pytest.mark.anyio()
     async def test_stale_callbacks_do_not_null_live_connection(self) -> None:
@@ -895,11 +909,13 @@ class TestCallbackGenerationGuard:
         relay._provision = AsyncMock(  # type: ignore[method-assign]
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("biff.nats_relay.NatsClient", connect):
             await relay._ensure_connected()  # client A, generation 1
-            assert connect.await_args is not None
-            on_disconnect_a = connect.await_args.kwargs["disconnected_cb"]
-            on_closed_a = connect.await_args.kwargs["closed_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_disconnect_a = stored.connect.await_args.kwargs["disconnected_cb"]
+            on_closed_a = stored.connect.await_args.kwargs["closed_cb"]
 
             # Supersede A with a fresh client B (force reconnect + rebuild).
             await relay._force_reconnect(relay._reconnect_epoch)
@@ -927,11 +943,13 @@ class TestCallbackGenerationGuard:
         relay._provision = AsyncMock(  # type: ignore[method-assign]
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("biff.nats_relay.NatsClient", connect):
             await relay._ensure_connected()
             assert relay._cached_handles() is not None
-            assert connect.await_args is not None
-            on_closed = connect.await_args.kwargs["closed_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_closed = stored.connect.await_args.kwargs["closed_cb"]
             await on_closed()
 
         assert relay._nc is None
@@ -948,10 +966,12 @@ class TestCallbackGenerationGuard:
         relay._provision = AsyncMock(  # type: ignore[method-assign]
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("biff.nats_relay.NatsClient", connect):
             await relay._ensure_connected()
-            assert connect.await_args is not None
-            on_disconnect = connect.await_args.kwargs["disconnected_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_disconnect = stored.connect.await_args.kwargs["disconnected_cb"]
             await on_disconnect()
 
         assert relay._js is None
@@ -971,10 +991,12 @@ class TestCallbackGenerationGuard:
         relay._provision = AsyncMock(  # type: ignore[method-assign]
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("biff.nats_relay.NatsClient", connect):
             await relay._ensure_connected()  # client A, generation 1
-            assert connect.await_args is not None
-            on_error_a = connect.await_args.kwargs["error_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_error_a = stored.connect.await_args.kwargs["error_cb"]
 
             await relay._force_reconnect(relay._reconnect_epoch)
             relay._provision = AsyncMock(  # type: ignore[method-assign]
@@ -1005,10 +1027,12 @@ class TestCallbackGenerationGuard:
         relay._provision = AsyncMock(  # type: ignore[method-assign]
             return_value=(MagicMock(), MagicMock(), MagicMock())
         )
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("biff.nats_relay.NatsClient", connect):
             await relay._ensure_connected()
-            assert connect.await_args is not None
-            on_error = connect.await_args.kwargs["error_cb"]
+            stored = relay._nc
+            assert isinstance(stored, MagicMock)
+            assert stored.connect.await_args is not None
+            on_error = stored.connect.await_args.kwargs["error_cb"]
 
             caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
             await on_error(RuntimeError("boom"))
