@@ -434,7 +434,8 @@ Explicit `biff mcp --user devin` binds unstamped tool calls to that same session
 stamped calls keep their declared caller and malformed stamps are refused.
 
 The plugin provides a long-lived MCP server, who/read/write/wall skills,
-and an always-on five-minute mail polling rule. Its session-start hook
+and an always-on five-minute mail polling rule. Its self-contained SessionStart
+command is inline in `hooks.json`, requiring no plugin-root variable. It
 creates missing local team configuration and Devin identity records in
 `DEVIN_PROJECT_DIR` and repositories under `~/repos/`, excluding newly
 created files from Git without overwriting existing configuration. It

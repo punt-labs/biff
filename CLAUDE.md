@@ -137,7 +137,8 @@ One rule follows from that, and it is load-bearing: **the plugin surface must no
 
 The sibling `devin-plugin/` surface ships independently as a git-subdir
 plugin for Devin: `.devin-plugin/plugin.json`, `.mcp.json`, `hooks.json`,
-`hooks/`, `rules/`, and `skills/`. Its runtime references must stay within
+`rules/`, and `skills/`, with the SessionStart command inline in `hooks.json`
+so it needs no plugin-root variable. Its runtime references must stay within
 that surface (apart from consumer repositories, `$HOME`, and installed
 binaries), just like the Claude plugin. Never place relay tokens in it.
 

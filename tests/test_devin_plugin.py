@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -16,7 +15,6 @@ import yaml
 from biff.session_routing import ID_RE
 
 _SURFACE = Path(__file__).resolve().parent.parent / "devin-plugin"
-_HOOK = _SURFACE / "hooks" / "session-start.sh"
 _CONFIG = ".punt-labs/biff/config.local.yaml"
 _IDENTITY = ".punt-labs/ethos/identities/devin.yaml"
 _EXPECTED_CONFIG = {
@@ -40,16 +38,22 @@ def _repo(path: Path) -> Path:
     return path
 
 
+def _hook() -> str:
+    events = json.loads((_SURFACE / "hooks.json").read_text())
+    return cast("str", events["SessionStart"][0]["hooks"][0]["command"])
+
+
 def _run_hook(
     home: Path, project: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603
-        [str(_HOOK)],
+        ["/bin/sh", "-c", _hook()],
         cwd=home,
         env={
             **os.environ,
             "HOME": str(home),
             "DEVIN_PROJECT_DIR": str(project) if project else "",
+            "CLAUDE_PLUGIN_ROOT": "",
             "BIFF_RELAY_TOKEN": "test-sensitive-relay-value",
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -97,25 +101,16 @@ def test_manifest_and_server() -> None:
 
 
 def test_hook_wiring_and_surface_paths() -> None:
-    """Plugin-root references resolve within the independently shipped surface."""
+    """Hook commands are self-contained without plugin-root path expansion."""
     events = json.loads((_SURFACE / "hooks.json").read_text())
     hook = events["SessionStart"][0]["hooks"][0]
     assert hook["type"] == "command"
     assert hook["timeout"] == 30
-    assert hook["command"] == '"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"'
-    assert os.access(_HOOK, os.X_OK)
-    references: list[Path] = []
+    assert _hook().startswith("#!/bin/sh\n")
     for path in _SURFACE.rglob("*"):
         if not path.is_file():
             continue
-        for target in re.findall(
-            r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\s\"'\\]+)", path.read_text()
-        ):
-            resolved = (_SURFACE / target).resolve()
-            assert resolved.is_relative_to(_SURFACE)
-            assert resolved.exists()
-            references.append(resolved)
-    assert _HOOK in references
+        assert "CLAUDE_PLUGIN_ROOT" not in path.read_text()
 
 
 @pytest.mark.parametrize("name", ["who", "read", "write", "wall"])
@@ -139,7 +134,7 @@ def test_poll_rule() -> None:
 
 def test_bootstrap_and_deduplication(tmp_path: Path) -> None:
     """Every discovered repo gets private local files, without leaking the token."""
-    repos = [_repo(tmp_path / "repos" / name) for name in ("one", "two")]
+    repos = [_repo(tmp_path / "repos" / name) for name in ("one", "two", "punt-labs")]
     result = _run_hook(tmp_path, repos[0])
     assert result.returncode == 0
     assert result.stdout == result.stderr == ""
