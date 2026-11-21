@@ -34,3 +34,8 @@ class WtmpRelay(LocalRelay):
             events = [e for e in events if e.user == user]
         # Most recent first, like the real relay
         return sorted(events, key=lambda e: e.timestamp, reverse=True)[:count]
+
+    async def last_session_repo(self, address: str) -> str | None:
+        user, tty = address.split(":", 1)
+        named = [e for e in self._wtmp if e.user == user and tty in (e.tty, e.tty_name)]
+        return named[-1].repo if named else None

@@ -32,13 +32,12 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import nats
 from nats.errors import Error as NatsError
 from nats.js.api import (
     ConsumerConfig,
-    DeliverPolicy,
     KeyValueConfig,
     RetentionPolicy,
     StreamConfig,
@@ -68,6 +67,12 @@ from biff.tty import (
     validate_reclaimable_name,
     validate_routing_id,
 )
+from biff.wtmp_reader import (
+    CONSUMER_INACTIVE_THRESHOLD,
+    FETCH_BATCH,
+    FETCH_TIMEOUT,
+    WtmpReader,
+)
 
 if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
@@ -79,10 +84,7 @@ logger = logging.getLogger(__name__)
 _KV_TTL = SESSION_TTL_SECONDS  # NATS auto-expires keys not refreshed within this window
 _KV_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — shared bucket, all repos' sessions
 _STREAM_MAX_BYTES = 100 * 1024 * 1024  # 100 MiB — shared stream, all repos' messages
-_FETCH_BATCH = 100
-_FETCH_TIMEOUT = 1.0
 _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
-_CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
 # relay caller
@@ -1679,11 +1681,11 @@ class NatsRelay:
             subject,
             durable=durable,
             stream=self._stream_name,
-            config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
+            config=ConsumerConfig(inactive_threshold=CONSUMER_INACTIVE_THRESHOLD),
         )
         try:
             try:
-                raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
+                raw_msgs = await sub.fetch(batch=FETCH_BATCH, timeout=FETCH_TIMEOUT)
             except TimeoutError:
                 raw_msgs = []
             finally:
@@ -2237,70 +2239,24 @@ class NatsRelay:
         js, _ = await self._ensure_connected()
         if not self._wtmp_available:
             return []
-        count = max(1, min(count, 1000))
         subject = self._wtmp_subject(user) if user else f"{self._wtmp_prefix}.>"
+        reader = WtmpReader(js, self._wtmp_stream, f"{self._repo_name}-wtmp-peek")
+        return await reader.recent(subject, max(1, min(count, 1000)))
 
-        # Fetch from the tail of the stream so we get the most recent
-        # events, not the oldest.  Use opt_start_seq to skip to near
-        # the end — overshooting count*2 to account for per-user
-        # filtering (subject filter is applied server-side, but
-        # stream_info.state.messages is the total count across all
-        # subjects).
-        try:
-            info = await js.stream_info(self._wtmp_stream)
-        except NotFoundError:
-            return []
-        last_seq = info.state.last_seq
-        if last_seq == 0:
-            return []
+    async def last_session_repo(self, address: str) -> str | None:
+        """Return the repo of the latest event for session ``user:tty``.
 
-        batch = max(count * 2, _FETCH_BATCH)
-        start_seq = max(1, last_seq - batch + 1)
-        consumer_config = ConsumerConfig(
-            deliver_policy=DeliverPolicy.BY_START_SEQUENCE,
-            opt_start_seq=start_seq,
-            inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD,
-        )
-
-        # Use a unique named consumer per call and delete after use.
-        # Ephemeral consumers (durable=None) leak when the connection
-        # stays open — the same lesson documented in _durable_name().
-        # A UUID suffix avoids collisions between concurrent sessions
-        # of the same user (who share the same relay name).
-        # inactive_threshold is the safety net for crash cleanup.
-        consumer_name = f"{self._repo_name}-wtmp-peek-{uuid4().hex[:12]}"
-
-        sub = await js.pull_subscribe(
-            subject,
-            durable=consumer_name,
-            stream=self._wtmp_stream,
-            config=consumer_config,
-        )
-        try:
-            raw_msgs = await sub.fetch(batch=batch, timeout=_FETCH_TIMEOUT)
-        except TimeoutError:
-            raw_msgs = []
-        finally:
-            await sub.unsubscribe()
-            with suppress(NotFoundError):
-                await js.delete_consumer(self._wtmp_stream, consumer_name)
-
-        events: list[SessionEvent] = []
-        for raw in raw_msgs:
-            try:
-                event = SessionEvent.model_validate_json(raw.data)
-            except (ValidationError, ValueError):
-                logger.warning("Skipping malformed wtmp message")
-            else:
-                if event.version == 1:
-                    events.append(event)
-                else:
-                    logger.debug("Skipping wtmp v%d (unsupported)", event.version)
-            await raw.ack()
-
-        # Sort by timestamp descending (most recent first), take count
-        events.sort(key=lambda e: e.timestamp, reverse=True)
-        return events[:count]
+        Reads the user's wtmp across every repo (the stream keeps 30
+        days), so a write to an ended session can forward to the mailbox
+        of the repo that session ran in.
+        """
+        js, _ = await self._ensure_connected()
+        if not self._wtmp_available:
+            return None
+        user, tty = address.split(":", maxsplit=1)
+        self._validate_user(user)
+        reader = WtmpReader(js, self._wtmp_stream, f"{self._repo_name}-wtmp-scan")
+        return await reader.last_repo(f"{self._stream_prefix}.*.wtmp.{user}", tty)
 
     # -- Wall (team broadcast) --
 

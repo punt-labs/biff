@@ -293,8 +293,10 @@ The resolution rule when a `user:tty` target names no holder:
 2. Otherwise, if the user is known (any session of theirs is visible, or the
    user has a mailbox with a session on record), deliver to **that user's
    mailbox**, and report it to the sender: `tty3 has no active session;
-   delivered to kai's mailbox (any of their sessions will see it)`. The send
-   status is `forwarded`, distinct from `sent`.
+   delivered to kai's mailbox in punt-labs/vox (their next session there will
+   see it)`. The mailbox is the one in the repo where the named session last
+   ran, from wtmp (DES-081). The send status is `forwarded`, distinct from
+   `sent`.
 3. Otherwise error: `user kai not found in visible repos`. A message is never
    delivered to a user the sender did not name.
 

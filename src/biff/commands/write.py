@@ -6,7 +6,7 @@ from biff.chunking import chunk_message
 from biff.cli_context import CliContext
 from biff.commands._messaging import deliver_with_retry
 from biff.commands._result import CommandResult
-from biff.server.tools._session import resolve_write_target
+from biff.server.tools._write_target import WriteRouter
 from biff.tty import parse_address
 
 
@@ -20,18 +20,10 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
             json_data={"status": "error", "to": to, "error": str(exc)},
             error=True,
         )
-    # A bare user needs no session lookup: it targets the user's mailbox.
-    all_sessions = (
-        await ctx.relay.get_sessions_for_repos(ctx.visible_repos) if tty else []
-    )
     try:
-        target = resolve_write_target(
-            all_sessions,
-            bare_user,
-            tty,
-            local_repo=ctx.config.repo_name,
-            visible_repos=ctx.visible_repos,
-        )
+        target = await WriteRouter(
+            local_repo=ctx.config.repo_name, visible_repos=ctx.visible_repos
+        ).find(ctx.relay, bare_user, tty)
     except ValueError as exc:
         return CommandResult(
             text=str(exc),

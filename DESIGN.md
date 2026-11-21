@@ -8245,3 +8245,38 @@ transport selects the protocol before dispatching discovery.
 and re-list tools when reconnecting because the stream does not replay changes.
 Handshake clients continue to receive the standalone notification. The poller
 does not inherit request context, even when the first tool call starts it.
+
+---
+
+## DES-081: A Forward to an Ended Named Session Goes to the Repo It Ran In
+
+**Date:** 2026-11-21
+**Status:** SETTLED
+**Topic:** Which repo mailbox DES-077's forward targets when the named
+session has ended.
+**Related:** DES-077 (the forward this corrects), DES-020 (wtmp).
+
+**Context.** DES-077 chose the forward's repo from the recipient's current
+session rows, preferring live repos, then the first by name. An ended named
+session leaves no row, so its repo was unknown. A message to
+`devin:vox-qa-proxy`, which ran in `punt-labs/vox`, was forwarded to
+`punt-labs/biff`, where the same user also had a session. The sender saw a
+successful forward, and `biff read` in vox showed nothing.
+
+**Decision.** When no session holds `user:tty`, look the name up in the
+recipient's wtmp across every repo (`Relay.last_session_repo`). The name matches the session's routing id or tty name, and stream order picks
+the most recent event. When that event is in a visible repo, forward to the user mailbox
+in that repo. Otherwise keep DES-077's choice. The notice names the repo.
+`find_write_target()` fetches the sessions and history; the pure
+`resolve_write_target()` still makes the decision for both the CLI and MCP
+`write`.
+
+**Alternatives.** (1) **Publish to every repo the user is in.**
+The user would read the message once per repo. (2) **Keep the ended name's
+repo in the session KV.** That adds a second store with its own expiry,
+while wtmp already keeps 30 days of named-session history with the repo.
+
+**Outcome.** A message to an ended named session reaches the user's
+next `read` in the repo that session ran in. The lookup reads only the
+recipient's wtmp subjects, and only on the forward path. A name older than
+wtmp's 30-day window falls back to DES-077's choice.

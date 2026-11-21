@@ -36,6 +36,10 @@
   record a warning when an MCP tool call has missing or malformed caller identity.
 - Record caller-stamping hook denials as warnings, and keep relay retry
   diagnostics concise with exception types instead of repeated INFO tracebacks.
+- `biff write user:tty` to a named session that has ended now forwards to the
+  user's mailbox in the repo where that session ran, so their next `read`
+  there shows it. It used to pick the alphabetically first repo the user was
+  in, where nobody read it. The notice names the repo.
 - Background message alerts now reach modern MCP clients that subscribe to
   tool list changes. Handshake-era clients still receive standalone alerts.
 - `/wall` post and clear now reach idle peer sessions promptly. Wall changes
