@@ -31,6 +31,7 @@
 
 ### Fixed
 
+- Resolve GitHub repository names and org peers through the Devin Git proxy.
 - Background message alerts now reach modern MCP clients that subscribe to
   tool list changes. Handshake-era clients still receive standalone alerts.
 - `/wall` post and clear now reach idle peer sessions promptly. Wall changes

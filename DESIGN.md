@@ -4121,6 +4121,13 @@ auth, poll interval); it no longer carries an `enabled` key.
 - **Non-GitHub remotes:** `_parse_repo_slug` handles any
   `host:owner/repo` URL. GitLab nested groups (`group/sub/repo`) fail
   the two-part check and return `None` — correct, no single owner.
+- **Devin Git proxy:** `git remote get-url origin` expands `insteadOf`
+  rewrites. **Decision:** unwrap the known HTTPS proxy route for GitHub
+  before the two-part check. **Alternatives:** keep falling back to the
+  checkout name (loses org discovery), or take the last two segments of
+  any nested path (can misidentify the owner). **Outcome:** direct and
+  proxied clones share an org and relay namespace; other nested paths
+  are still rejected.
 - **Multiple remotes:** only `origin` is read. `upstream` is ignored.
 
 ### Trust Assessment
