@@ -208,6 +208,29 @@ def test_write_failure_is_nonfatal(tmp_path: Path) -> None:
     assert result.stdout == result.stderr == ""
 
 
+@pytest.mark.parametrize(
+    "parent",
+    [
+        ".punt-labs",
+        ".punt-labs/biff",
+        ".punt-labs/ethos",
+        ".punt-labs/ethos/identities",
+    ],
+)
+def test_symlinked_parents_are_skipped(tmp_path: Path, parent: str) -> None:
+    """Repository-controlled parent symlinks cannot redirect bootstrap writes."""
+    repo = _repo(tmp_path / "project")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = repo / parent
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside, target_is_directory=True)
+    result = _run_hook(tmp_path, repo)
+    assert result.returncode == 0
+    assert result.stdout == result.stderr == ""
+    assert list(outside.iterdir()) == []
+
+
 @pytest.mark.parametrize("choice", ["project", "preferred", "fallback", "empty"])
 def test_launcher_repo_selection(tmp_path: Path, choice: str) -> None:
     """The launcher honors priority and execs the CLI inside the selected repo."""
