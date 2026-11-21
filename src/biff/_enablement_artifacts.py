@@ -30,14 +30,14 @@ class CheckoutArtifacts:
     _root: Path
 
     def write_marker(self) -> bool:
-        """Write the policy marker, reporting whether it was absent."""
-        changed = not enabled_marker_path(self._root).exists()
+        """Write the policy marker, reporting replacement of non-regular entries."""
+        changed = not enabled_marker_path(self._root).is_file(follow_symlinks=False)
         write_enabled_marker(self._root)
         return changed
 
     def remove_marker(self) -> bool:
         """Remove the policy marker, reporting whether it was present."""
-        changed = enabled_marker_path(self._root).exists()
+        changed = enabled_marker_path(self._root).exists(follow_symlinks=False)
         remove_enabled_marker(self._root)
         return changed
 

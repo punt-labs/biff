@@ -109,6 +109,41 @@ def test_enable_reports_marker_or_guide_only_changes(
     ]
 
 
+@pytest.mark.parametrize("operation", ["enable", "disable"])
+@pytest.mark.parametrize("target_exists", [False, True])
+def test_marker_symlinks_report_changed_without_touching_targets(
+    operation: str,
+    target_exists: bool,
+    private_repo: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = RepoEnablement(private_repo)
+    manager.enable()
+    marker = private_repo / ".punt-labs/biff/enabled"
+    marker.unlink()
+    target = private_repo.parent / "private-target"
+    if target_exists:
+        target.write_text("private-content")
+    marker.symlink_to(target)
+    caplog.clear()
+    caplog.set_level(logging.INFO, logger="biff.enablement")
+    action = manager.enable if operation == "enable" else manager.disable
+    assert not action().failed
+    assert not marker.is_symlink()
+    assert marker.is_file() is (operation == "enable")
+    assert not action().failed
+    assert target.exists() is target_exists
+    if target_exists:
+        assert target.read_text() == "private-content"
+    assert len(caplog.records) == 2
+    assert f"operation={operation} outcome=changed " in caplog.messages[0]
+    assert "marker" in caplog.messages[0].split("changes=")[1].split(",")
+    assert caplog.messages[1] == (
+        f"Enablement operation={operation} outcome=unchanged changes=none"
+    )
+    assert "private" not in caplog.text
+
+
 def test_enable_error_does_not_log_success_or_exception_content(
     private_repo: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

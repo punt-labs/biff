@@ -8309,3 +8309,41 @@ any holder of the team token can publish to every subject, including a
 user's mailbox in any repo, so a forged event grants nothing a direct
 publish does not. Ordering by stream sequence keeps a forged future
 timestamp from overriding a later real event.
+
+---
+
+## DES-083: Durable Outcomes and Bounded Connection Diagnostics
+
+**Decision.** Keep operational diagnostics in the private `punt-observe`
+`biff.log` sink (DES-079). `server/transport_runtime.py` binds resolved
+configuration to transport caller policy and installs an allowlisted uvicorn
+handler for HTTP shutdown start and completion. It copies fixed event labels,
+not uvicorn arguments or exception content, into the biff logger while retaining
+uvicorn's stderr routing and signal handling.
+
+`_enablement_artifacts.py` owns marker, guide, and ignore-file writes and emits
+one INFO changed/unchanged outcome with fixed artifact labels after each
+completed enablement operation. Marker accounting examines the directory entry
+without following symlinks: replacing a symlink on enable or removing a
+dangling symlink on disable is a change. `_nats_connection.py` owns shared
+session/name bucket lifetime settings and connection-attempt diagnostics.
+It logs an outage's first error at INFO, demotes repeats to DEBUG, and records
+an INFO recovery or terminal summary with a failure count and exception class.
+Recovery and termination reset the episode counter. Relay generation guards
+continue to exclude callbacks from superseded clients.
+
+**Alternatives.** Relying on stderr loses durable CLI outcomes and uvicorn
+shutdown events because uvicorn does not propagate to biff's root sinks.
+Forwarding every uvicorn record risks recording request content. Logging every
+relay retry at INFO floods the durable log; dropping failures entirely loses
+onset and recovery evidence. Keeping these responsibilities in the existing
+orchestration modules increases module size and coupling instead of giving
+artifact writes and connection setup explicit boundaries.
+
+**Outcome.** Enable/disable and graceful HTTP shutdown are observable after the
+process exits. Relay outages retain bounded, useful diagnostics without changing
+retry behavior. Durable records use fixed operations, reasons, counts, and
+exception classes, never logins, repository names, checkout paths, payloads,
+exception text, or tracebacks. Caplog and durable-file tests cover the outcomes,
+symlink accounting, retry episodes, and HTTP lifecycle forwarding. The module
+boundaries keep the OO and coupling ratchets green without waivers.
