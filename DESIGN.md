@@ -8478,11 +8478,15 @@ existing started/completed records and uvicorn stderr routing.
 (the contract), `service`, `plugins/<tool>` (one Python adapter per AI tool),
 and `cli`. A package imports only from the packages below it. Code that exists
 for one AI tool lives in that tool's adapter, reached through
-`plugins/contract.py` (`Installer`, `DeliverySink`, `SessionStart`) and a
-registry that `cli` fills at startup. Python adapters are distinct from each
+`plugins/contract.py` (`Installer`, `SessionStart`) and a registry that `cli`
+fills at startup and hands to `service`. `DeliverySink` and the arrival summary
+live in `engine`, which calls them; `cli` passes each adapter's sink to the
+engine at startup, so the engine never imports `plugins`. A tool's own console
+script (Claude Code's `biff-hook`) lives in its adapter and needs no registry.
+Python adapters are distinct from each
 tool's shipped plugin (the repo-root `plugin/` directory for Claude Code).
 Four rules keep a future `biffd` daemon (PL-225) an extraction rather than a
-rewrite: entry points reach the engine through `commands` and the contract,
+rewrite: entry points reach the engine only through `commands`,
 arrivals leave through `DeliverySink`, `wire` types stay plain data, and the
 engine holds no per-tool state.
 

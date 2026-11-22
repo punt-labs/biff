@@ -33,14 +33,14 @@ From the bottom up:
 |---------|-------|------------|
 | `kernel` | Small helpers with no biff dependencies: session ids, locks, chunking, logging setup, usage counters, NATS connection helpers | nothing in biff |
 | `wire` | The data types biff passes around: messages, sessions, talk records, session routing, unread summaries | `kernel` |
-| `engine` | The relays (local and NATS), talk state, session registry, identity, configuration, tty names; the arrival summaries | `kernel`, `wire` |
+| `engine` | The relays (local and NATS), talk state, session registry, identity, configuration, tty names; the arrival summaries and the `DeliverySink` interface they are handed to | `kernel`, `wire` |
 | `render` | Text formatting that both the command line and the MCP server print: tables, `finger` output, message lists | `kernel`, `wire`, `engine` |
 | `commands` | One command object per biff operation, plus the context each command receives | `kernel`, `wire`, `engine`, `render` |
-| `server` | The MCP server and its tools, the same for every AI tool that connects | the above, plus `commands` |
-| `plugins` | The plugin contract (`plugins/contract.py`): the interfaces every AI tool's adapter implements, and the registry that holds them | `kernel`, `wire`, `engine` |
+| `server` | The MCP server and its tools, the same for every AI tool that connects | `kernel`, `wire`, `engine`, `render`, `commands` |
+| `plugins` | The plugin contract (`plugins/contract.py`): the `Installer` and `SessionStart` interfaces, and the registry that holds each tool's adapter | `kernel`, `wire`, `engine` |
 | `service` | Install, enable, `biff doctor`, git hooks, the CI notification workflow, optional integrations such as vox | `kernel`, `wire`, `engine`, `render`, `plugins` |
-| `plugins/<tool>` | One Python adapter per AI tool: `claude_code`, `codex`, `opencode`, `pi`, `devin`. Each implements the parts of the contract its tool needs | the above, plus `commands`, `service`; never another tool's adapter |
-| `cli` | The `biff` command, the interactive shell, command-line sessions; registers each tool's adapter at startup | everything above |
+| `plugins/<tool>` | One Python adapter per AI tool: `claude_code`, `codex`, `opencode`, `pi`, `devin`. Each implements the parts of the contract its tool needs, and may own that tool's console script (Claude Code's `biff-hook`) | `kernel`, `wire`, `engine`, `render`, `commands`, `plugins`, `service`; never `server`, `cli` or another tool's adapter |
+| `cli` | The `biff` command, the interactive shell, command-line sessions; registers each tool's adapter at startup | every package above |
 
 `cli` sits on top because it starts every other piece, including `biff mcp`,
 and it is the one place that knows which adapters exist.
@@ -80,7 +80,8 @@ The engine never knows which AI tool is on the other end. In particular it
 never writes the status-line file, never builds Claude Code tool descriptions,
 and never edits CLAUDE.md or permission settings. When the engine has news (a
 message arrived, a wall was posted), it produces an arrival summary and hands
-it to the registered `DeliverySink`s; each plugin decides how to show it.
+it to the `DeliverySink`s it was given at startup; each plugin decides how to
+show it.
 
 ## The plugin contract
 
@@ -88,6 +89,9 @@ Biff itself works the same for every AI coding tool. Each tool differs in
 three ways: what has to be installed for it, how a new arrival reaches its
 model, and what it shows at session start. `plugins/contract.py` names those
 three differences as interfaces, and each tool's Python adapter fills them in.
+`Installer` and `SessionStart` are defined there. `DeliverySink` is defined in
+`engine`, next to the arrival summary, because the engine is its caller and
+may not import `plugins`.
 
 | Interface | What it does | Called by |
 |-----------|--------------|-----------|
@@ -95,9 +99,18 @@ three differences as interfaces, and each tool's Python adapter fills them in.
 | `DeliverySink` | Takes an arrival summary from the engine and gets it in front of that tool's model | The engine, when the relay pushes an arrival |
 | `SessionStart` | Returns the text a session sees when it starts: orientation, and warnings such as "channels are not live" | The tool's session-start hook |
 
-A registry maps each tool name to its adapter. `cli` fills it at startup;
-`service` and the engine look adapters up through it and never import one
-directly, so adapters depend on biff and never the reverse.
+A registry maps each tool name to its adapter. `cli` fills it at startup and
+hands it to `service`, which looks adapters up through it and never imports
+one directly. `cli` also passes the registered adapters' `DeliverySink`s to the
+engine when it starts the relay, so the engine calls them without importing
+`plugins`. Adapters depend on biff and never the reverse.
+
+A tool's own console script is the exception that needs no registry. Claude
+Code's hooks run `biff-hook`, whose entry point lives in
+`plugins/claude_code/` and starts without `cli`. It already is the Claude Code
+adapter, so it calls that adapter's code directly; it builds a registry only if
+it ever has to reach another tool's adapter, which a hook for one tool never
+does.
 
 What each adapter implements, from Claude Code's code today and
 `research/harness-compatibility.md`:
@@ -135,9 +148,9 @@ standard does not design `biffd`. It keeps today's code shaped so that
 extracting `biffd` moves the engine into a new process instead of rewriting
 the code around it:
 
-1. **Entry points reach the engine only through `commands` and the plugin
-   contract.** `server`, `cli` and each `plugins/<tool>` adapter call command
-   objects and registry interfaces, not relay or talk-state internals. Under
+1. **Entry points reach the engine only through `commands`.** `server`,
+   `cli` and each `plugins/<tool>` adapter call command objects, not relay or
+   talk-state internals. Under
    `biffd` those calls become IPC requests; the callers do not change.
    Measured on `968e4c5`: 41 direct engine imports in 24 entry-point modules,
    counted as a separate, non-gating number until `biffd`'s design decides
@@ -220,9 +233,9 @@ above describe where each one is headed, not today's directories.
 
 In this table `claude_code` means `plugins/claude_code/`.
 
-Two placements in this count are judgment calls and may change at
-ratification: `formatting` and `_formatting` form their own `render` package,
-and `cli_context` (the context every command receives) belongs to `commands`.
+Two placements in this count were settled by DES-088: `formatting` and
+`_formatting` form their own `render` package, and `cli_context` (the context
+every command receives) belongs to `commands`.
 `biff.data` (bundled files, no code) is not assigned to a layer.
 
 One tool-specific leak the count does not show: `session_lock.py` names an
