@@ -13,8 +13,9 @@ apply are folded in below.
 2. Claude Code allows a channel once per user: an org admin allows biff, or a
    solo user starts Claude Code with the channel flag. That is Claude Code's
    rule, not a biff setting.
-3. Biff checks the channel once at session start and shows the result in the
-   status line and in `biff doctor`.
+3. `biff doctor`, run when the user wants to know, checks whether the channel
+   reaches each running biff session and says how to fix it if not. Nothing
+   runs at session start.
 4. A user who cannot get channels polls instead with the existing
    `/biff:read 2m`. Polling is the exception and only runs when the user
    starts it.
@@ -59,8 +60,8 @@ Two consequences shape the design:
   serves both protocol eras and answers the probe, so Claude Code connects on
   2026-07-28. The spike worked only because its older SDK failed the probe.
 - **Claude Code never says whether the channel is live.** It declares no
-  channel capability and acknowledges no event. Biff finds out with one test
-  event at session start.
+  channel capability and acknowledges no event. `biff doctor` finds out by
+  sending one test event on request.
 
 ## Decision
 
@@ -87,27 +88,38 @@ HTTP keeps its own runner and both protocol eras. Stdio sessions lose the
 2026-07-28 tool-list subscription stream and keep the standalone
 `tools/list_changed` (DES-061, DES-080).
 
-### 2. Session-start check
+### 2. `biff doctor` checks the channel
 
-On the first poller tick after `notifications/initialized`, the server sends
-one channel event:
+`biff doctor` is a one-off command the user runs in a shell. It does two
+things.
+
+**End-to-end check, per running session.** Doctor finds this user's running
+biff sessions in the current repo and sends each one a `channel_check`
+request over the relay. On receiving it, a session's server sends one channel
+event:
 
 | Field | Value |
 |-------|-------|
 | content | `biff channel check. Call channel_ack with token <token>. Do not reply to the user.` |
 | meta | `kind=channel_check` |
 
-`<token>` is 128 random bits in hex, made once per server process. It never
-leaves the server except in this event, so the relay cannot supply it.
+`<token>` is 128 random bits in hex, made fresh for each request by the
+session's server. It never leaves that server except in this event, so the
+relay cannot supply it. The new `channel_ack(token)` tool compares in constant
+time; a match writes `channel_checked_at` to the per-session unread file
+(DES-011a) and returns `biff channel live.` A wrong or repeated token returns
+an error and changes nothing. A session accepts at most one check request per
+minute, so a forged request cannot burn model turns.
 
-The new `channel_ack(token)` tool compares in constant time. A match writes
-`channel: "live"` to the per-session unread file (DES-011a) and returns
-`biff channel live.` A wrong or repeated token returns an error and changes
-nothing.
+Doctor waits up to 30 seconds and reports each session as `channel live` or
+`channel not confirmed`. A busy session may answer late; doctor says so and
+the user can run it again.
 
-The check only reports. Events are sent whether or not the ack has arrived.
-The status line shows the channel state, and `biff doctor` reports `live` or
-`not confirmed`. For `not confirmed` it checks each gate and prints the fix:
+The check only reports. Events are sent the same way whether or not a check
+ever ran.
+
+**Gate checks.** For any session not confirmed, doctor checks each gate and
+prints the fix:
 
 | Gate | Check |
 |------|-------|
@@ -237,7 +249,8 @@ silently re-enable them.
 |------|------------|
 | A stdio client that speaks only 2026-07-28 cannot connect once stdio always uses the handshake-only loop | Not yet checked. Wave 0 connects every harness biff ships a config for (Claude Code, Devin, opencode, codex, pi) before any code merges |
 | A future Claude Code drops the fallback to `initialize`, so biff cannot connect at all | Startup record and `biff doctor` show the negotiated version; the end-to-end tier runs against each new Claude Code release |
-| The model ignores the check event in a working channel session | Delivery is unaffected; the display says `not confirmed` while doctor finds every gate open, which points at the model |
+| The model ignores the check event in a working channel session | Delivery is unaffected; doctor reports `not confirmed` with every gate open, which points at the model |
+| A forged `channel_check` request over the relay costs model turns | One check per session per minute; the event carries no relay text |
 | A spurious `channel_ack` marks a dead channel live | The token is 128 random bits that only the channel carries |
 | The channel stops mid-session after the check passed | Every input it depends on is fixed when Claude Code starts the server, so this needs a Claude Code defect; send timeouts are logged |
 | FastMCP changes the internals the runner uses | Pinned FastMCP minor version; integration test through the real entry point |
@@ -275,9 +288,9 @@ Checks:
 
 | Tier | What it proves |
 |------|----------------|
-| Unit | Check token is 128 bits and sent once, after `notifications/initialized`; `channel_ack` accepts only the exact token, once, and writes `channel: "live"`; events are sent before the ack too; nudge hook runs only with `polling: true`. Event content and `meta` per kind; no body text; sender rule; each wall and invite key emitted once; own wall not emitted; mail by sequence (flat and flapping counts); rate limit and coalescing; last-sent record unchanged on timeout, mesg off, closed window, before initialization |
-| Integration (raw stdio through the real `biff mcp` entry point) | Probe refused with -32601; `initialize` succeeds with the capability; the check event is the first channel frame and comes after `notifications/initialized`; `channel_ack` writes the field; a relay arrival produces a `notifications/claude/channel` frame; a 2026-07-28 request after `initialize` is refused; clean exit when stdin closes. Over HTTP: both protocol eras still served |
-| End to end (tmux, real `claude`, local NATS) | Launched with the channel flag: the status line shows the channel live, and a wall, a `write` and a talk invite each reach an idle session as a channel event within 10 seconds, with no cron running. Launched without it: doctor reports `not confirmed` and names the launch-flag gate; after `/biff:read 2m` the same three arrive by polling |
+| Unit | A `channel_check` request makes exactly one check event with a fresh 128-bit token, at most once per minute per session; `channel_ack` accepts only that token, once, and writes `channel_checked_at`; delivery is the same with or without a check; nudge hook runs only with `polling: true`. Event content and `meta` per kind; no body text; sender rule; each wall and invite key emitted once; own wall not emitted; mail by sequence (flat and flapping counts); rate limit and coalescing; last-sent record unchanged on timeout, mesg off, closed window, before initialization |
+| Integration (raw stdio through the real `biff mcp` entry point) | Probe refused with -32601; `initialize` succeeds with the capability; no channel frame is sent before `notifications/initialized`; a relayed `channel_check` produces one check frame and `channel_ack` writes the field; a relay arrival produces a `notifications/claude/channel` frame; a 2026-07-28 request after `initialize` is refused; clean exit when stdin closes. Over HTTP: both protocol eras still served |
+| End to end (tmux, real `claude`, local NATS) | Launched with the channel flag: `biff doctor` reports the session `channel live`, and a wall, a `write` and a talk invite each reach an idle session as a channel event within 10 seconds, with no cron running. Launched without it: doctor reports `not confirmed` and names the launch-flag gate; after `/biff:read 2m` the same three arrive by polling |
 
 The tmux harness is the spike's `harness.sh`, rewritten for current config and
 marked as its own pytest tier. Release requires one passing end-to-end run.
@@ -321,12 +334,12 @@ worktree after ratification and ends tested and mergeable.
 |------|------|------|-------------|-------|
 | 0 | Prove: `serve_loop` registers main as a channel; the model answers the check event; every shipped stdio harness still connects | scratch branch only | Gates wave 1 | PL-1348 |
 | 1 | Channels on by default: capability, `serve_channel_stdio()`, startup record | `server/entrypoints.py`, `__main__.py` `mcp` command, `pyproject.toml` pin | After wave 0 | PL-1349 |
-| 1 | Session-start check: token, `channel_ack`, `channel` field, status line | new `server/tools/channel_ack.py`, `unread.py`, `statusline.py` | After PL-1349 | PL-1365 |
+| 1 | Channel check: relayed `channel_check` request, token, `channel_ack`, `channel_checked_at` field | new `server/tools/channel_ack.py`, the relay request handler, `unread.py` | After PL-1349 | PL-1365 |
 | 1 | Formal model | `docs/notification.tex` | Before channel events | PL-1351 |
 | 1 | Channel events: emitter, detection, content rules, last-sent record, rate limit, instructions | new `server/channel_emitter.py`, one call in `_active_tick`, `instructions` text | After PL-1349 and PL-1351 | PL-1350 |
 | 1 | Polling as the exception: nudge hook only while polling is on; poll fixes | `plugin/hooks/unread-nudge.sh`, `unread.py` `polling` field, per issue | Any time | PL-1337, PL-1338, PL-1339, PL-1341 |
 | 1 | End-to-end tier | `tests/` tier and harness | Passes after the units above | PL-1352 |
-| 1 | `biff doctor` channel state and gates, docs, `.envrc` guard | `doctor.py`, README, `docs/INSTALLING.md`, `.envrc`, its test | Any time | PL-1353 |
+| 1 | `biff doctor`: send the check to each running session, wait, report, gate checks; docs; `.envrc` guard | `doctor.py`, README, `docs/INSTALLING.md`, `.envrc`, its test | Any time | PL-1353 |
 | 2 | Allowlist and official list submission | docs | After release candidate | PL-1354 |
 | 2 | Release on both channels; dogfood; push vs poll latency | release | Last | PL-1355 |
 
@@ -334,7 +347,8 @@ worktree after ratification and ends tested and mergeable.
 
 1. **Channels on by default for stdio, with no switch**, accepting the
    handshake-only loop and the Wave 0 harness check. Recommend yes.
-2. **A session-start check that only reports.** Recommend yes.
+2. **The channel check lives in `biff doctor`, run on demand, and only
+   reports.** Recommend yes.
 3. **Polling only when the user starts it.** Recommend yes.
 4. **Summary-only, rate-limited events.** Recommend yes.
 5. **Submit to Anthropic's official channel list.** Recommend yes.

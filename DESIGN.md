@@ -8464,10 +8464,12 @@ while rate limited, and nothing stale is sent. Events carry no bodies, label
 senders as claimed, never tell the model to accept a talk, and are rate
 limited by fixed constants.
 
-At session start the server sends one check event with a 128-bit one-time
-token; the model calls `channel_ack` with it, and the unread file records
-`channel: "live"`. The check only reports: the status line and `biff doctor`
-show `live` or `not confirmed`, and doctor names the gate to open.
+`biff doctor`, a one-off command, checks the channel on demand: it asks each
+of the user's running sessions, over the relay, to send one check event with
+a fresh 128-bit token; the model calls `channel_ack` with it; doctor waits up
+to 30 seconds and reports each session `channel live` or `not confirmed`,
+naming the gate to open. Nothing runs at session start, and the check never
+changes delivery.
 
 A user who cannot get channels polls with `/biff:read 2m`. Polling, including
 the `unread-nudge` hook, runs only when the user starts it.
