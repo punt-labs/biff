@@ -8444,3 +8444,36 @@ Logging from unconditional cleanup would incorrectly report crashes as completed
 `stdio MCP shutdown outcome=completed` record without paths or payloads.
 Exceptions continue to propagate without a completed outcome. HTTP retains its
 existing started/completed records and uvicorn stderr routing.
+
+## DES-087: Channels Are the Primary Delivery Path; Polling Stays as Backup
+
+**Status.** Proposed, awaiting operator ratification. Full design, evidence
+and plan: `docs/design-channels.md`.
+
+**Decision.** In the Claude Code plugin, `biff mcp --channels` advertises
+`experimental["claude/channel"]`, serves stdio in the handshake protocol era
+only, and sends a summary-only `notifications/claude/channel` event when mail
+count rises, a new wall is posted, or talk activity arrives. Every existing
+path (tool descriptions, the `unread-nudge` hook, the `/biff:read` cron, the
+status line) keeps running for every arrival. Events detected before the
+client session is captured are owed and flushed, never dropped.
+
+**Why both paths.** Claude Code 2.1.330 declares no channel capability and
+does not acknowledge channel events, so the server cannot know whether its
+channel reached the model. The backup is the only path for sessions launched
+without the channel flag.
+
+**Why handshake-only.** Claude Code opens with a 2026-07-28 `server/discover`
+probe and does not register a 2026-07-28 server as a channel. Main answers
+the probe (DES-080), so it would never register. Refusing the probe makes
+Claude Code fall back to `initialize`, which is how the spike registered.
+Non-channel clients keep the dual-era loop.
+
+**Alternatives.** Channel only; detect-and-throttle; a user-set
+`MCP_PROTOCOL_NEGOTIATION=legacy`; disabling 2026-07-28 globally; bodies in
+event content; a `BIFF_CHANNELS` environment switch. Each is rejected in the
+design document.
+
+**Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
+**Amends.** DES-080, for Claude Code plugin sessions only. DES-063's `.envrc`
+deviation gains a guard test.
