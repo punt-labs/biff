@@ -8237,6 +8237,29 @@ code-only module sizes and excludes exceptions, enums, and dataclasses from
 the class count. The default fan-out limit increases from 7 to 10, retaining
 the CLI limit of 15. Suppression waivers stop applying once merged.
 
+**0.4.0 design shadow.** Declare responsibility layers for all current modules:
+entry for CLI, hooks and MCP boundaries; adapters for concrete filesystem,
+process and NATS integrations; application for command and session orchestration;
+domain for values, policies and pure transformations. Package location alone
+does not determine responsibility: `server.tools._presence` is a domain routing
+policy, while `talk_state` publishes through NATS and belongs to application.
+`CallerPolicy` reads process environment and raises transport/CLI errors, so
+it stays at entry rather than becoming a domain value like `CallerIdentity`.
+
+The alternative, layering whole packages without exceptions, would misclassify
+these boundaries. Existing layer-import and domain-I/O findings remain visible;
+they are not hidden by changing a module's declared responsibility.
+
+`make design-shadow` passes `DESIGN_BASE` (default `origin/main`) to the published
+CLI, which computes the merge-base internally. PR CI appends its output to the
+job summary even after an earlier gate fails. The reporting step, its verdict
+and input errors never gate CI. The previously empty `make report` now runs a
+non-failing full design scan; neither report is part of `make check`.
+OO, coupling and suppression gates retain their policies and baselines.
+The outcome is an advisory architecture inventory and comparison, not a new
+design gate. Unmatched future modules remain advisory `unlayered-module`
+findings until a maintainer assigns their responsibility.
+
 ---
 
 ## DES-079: Share Diagnostics and Keep Usage Local
