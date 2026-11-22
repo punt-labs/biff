@@ -37,42 +37,102 @@ From the bottom up:
 | `render` | Text formatting that both the command line and the MCP server print: tables, `finger` output, message lists | `kernel`, `wire`, `engine` |
 | `commands` | One command object per biff operation, plus the context each command receives | `kernel`, `wire`, `engine`, `render` |
 | `server` | The MCP server and its tools, the same for every AI tool that connects | the above, plus `commands` |
-| `service` | Install, enable, `biff doctor`, git hooks, the CI notification workflow, optional integrations such as vox | `kernel`, `wire`, `engine`, `render` |
-| `claude_code` | The Claude Code plugin's Python code: hook handlers, the status line, the per-session unread file, the CLAUDE.md and permission installers, the channel sender, the start-up channel warning | the above, plus `commands`, `service` |
-| `cli` | The `biff` command, the interactive shell, command-line sessions | everything above |
+| `plugins` | The plugin contract (`plugins/contract.py`): the interfaces every AI tool's adapter implements, and the registry that holds them | `kernel`, `wire`, `engine` |
+| `service` | Install, enable, `biff doctor`, git hooks, the CI notification workflow, optional integrations such as vox | `kernel`, `wire`, `engine`, `render`, `plugins` |
+| `plugins/<tool>` | One Python adapter per AI tool: `claude_code`, `codex`, `opencode`, `pi`, `devin`. Each implements the parts of the contract its tool needs | the above, plus `commands`, `service`; never another tool's adapter |
+| `cli` | The `biff` command, the interactive shell, command-line sessions; registers each tool's adapter at startup | everything above |
 
-`cli` sits on top because it starts every other piece, including `biff mcp`.
+`cli` sits on top because it starts every other piece, including `biff mcp`,
+and it is the one place that knows which adapters exist.
 
-### Why `claude_code` is its own package
+### Python adapters versus shipped plugins
+
+Two different things carry a tool's name, and this standard governs only the
+first:
+
+| | Python adapter | Shipped plugin |
+|--|----------------|----------------|
+| Where | `src/biff/plugins/<tool>/`, inside the `punt-biff` Python package | A directory at the repo root, e.g. `plugin/` for Claude Code today, `devin-plugin/` later; or a separate package (the opencode and pi plugins are TypeScript) |
+| What | Python code biff runs for that tool: installing its files, delivering arrivals to it, its session-start text | What the tool loads: manifest, hook scripts, slash commands, extension code |
+| Ships through | PyPI (`punt-biff`) | The tool's own marketplace or package registry |
+
+A shipped plugin calls biff through its public entry points (the `biff`
+command, `biff mcp`, `biff watch`) and never imports a Python adapter. A
+Python adapter may install or check a shipped plugin, but never ships inside
+it.
+
+### Why biff needs Python adapters
 
 Lux has no package for one AI tool; it treats its Claude Code plugin as a way
-to install the MCP server. Biff needs one because about a tenth of its code
-(2,647 of 24,827 lines) sits in modules that exist only for Claude Code: the
-hooks, the status line, the unread file the status line reads, and the
-CLAUDE.md and permission files biff installs. More is mixed into the MCP
+to install the MCP server. Biff needs adapters because about a tenth of its
+code (2,647 of 24,827 lines) sits in modules that exist only for Claude Code:
+the hook handlers, the status line, the unread file the status line reads, and
+the CLAUDE.md and permission files biff installs. More is mixed into the MCP
 server's tool-description module, and the Claude Code channel work (DES-087)
-adds more. Keeping all of it in one package
-keeps the engine and the MCP server the same for Devin, opencode, codex and pi.
-
-Other plugins mostly live outside this Python package: the opencode plugin is
-TypeScript and the pi plugin calls the `biff` command line. A plugin gets a
-package here only when it needs Python code inside biff.
+adds more. codex will need the same kind of code: biff writes codex's config
+and runs `codex queue` to deliver arrivals. Building the other tools' support
+requires the contract below, so it is designed now from Claude Code's code and
+the per-tool findings in `research/harness-compatibility.md`.
 
 ### What stays out of the engine
 
 The engine never knows which AI tool is on the other end. In particular it
 never writes the status-line file, never builds Claude Code tool descriptions,
 and never edits CLAUDE.md or permission settings. When the engine has news (a
-message arrived, a wall was posted), it produces an arrival summary; each
-plugin decides how to show it.
+message arrived, a wall was posted), it produces an arrival summary and hands
+it to the registered `DeliverySink`s; each plugin decides how to show it.
+
+## The plugin contract
+
+Biff itself works the same for every AI coding tool. Each tool differs in
+three ways: what has to be installed for it, how a new arrival reaches its
+model, and what it shows at session start. `plugins/contract.py` names those
+three differences as interfaces, and each tool's Python adapter fills them in.
+
+| Interface | What it does | Called by |
+|-----------|--------------|-----------|
+| `Installer` | Writes, removes and checks what one tool needs in a repo or on the machine: config entries, hook files, instruction files, permission rules, the shipped plugin | `biff enable`, `biff disable`, `biff doctor` (in `service`) |
+| `DeliverySink` | Takes an arrival summary from the engine and gets it in front of that tool's model | The engine, when the relay pushes an arrival |
+| `SessionStart` | Returns the text a session sees when it starts: orientation, and warnings such as "channels are not live" | The tool's session-start hook |
+
+A registry maps each tool name to its adapter. `cli` fills it at startup;
+`service` and the engine look adapters up through it and never import one
+directly, so adapters depend on biff and never the reverse.
+
+What each adapter implements, from Claude Code's code today and
+`research/harness-compatibility.md`:
+
+| Tool | `Installer` | `DeliverySink` | `SessionStart` |
+|------|-------------|----------------|----------------|
+| Claude Code | Hooks, CLAUDE.md, permission rules, status line | Channel event (DES-087); `/biff:read Xm` polling where channels are off | Session-start hook context, including the channel warning |
+| codex | `~/.codex/config.toml` MCP entry, `~/.codex/hooks.json`, prompt files, an AGENTS.md fragment | Runs `codex queue` (or `thread/queue/add`) for the session's thread | codex's hook engine accepts Claude Code's hook output |
+| opencode | The `mcp` entry and plugin reference in `opencode.json` | Its TypeScript plugin reads `biff watch` and calls `client.session.prompt` | Its TypeScript plugin |
+| pi | Checks the `@punt-labs/biff-pi` extension is installed | Its TypeScript extension reads `biff watch` and calls `pi.sendMessage` | Its TypeScript extension |
+| Devin | The `biff mcp --user` entry (DES-081) | To be designed | To be designed |
+
+Two pieces follow:
+
+- **`biff watch`**, a `cli` command that prints one JSON line per arrival
+  summary. It is how every shipped plugin running outside biff's process
+  (opencode, pi) receives arrivals, so none of them reads biff's internal
+  files.
+- **An adapter is only as big as its tool needs.** The opencode and pi
+  adapters are small, because their tools' real code lives in their
+  TypeScript plugins. The Claude Code and codex adapters hold real code.
+
+The interfaces' exact method signatures are settled by building the first two
+adapters, Claude Code and codex, against them; a third adapter must fit
+without changing the contract.
 
 ## Where new code goes
 
 Ask these in order and stop at the first yes:
 
-1. Does it exist only because of one AI tool? It goes in that tool's package
-   (`claude_code` today).
-2. Does it install, enable, diagnose or uninstall biff? `service`.
+1. Does it exist only because of one AI tool? It goes in that tool's adapter,
+   `plugins/<tool>/`. If biff itself needs to call it, add or extend an
+   interface in `plugins/contract.py` and call it through the registry.
+2. Does it install, enable, diagnose or uninstall biff, the same for every
+   tool? `service`.
 3. Is it a biff operation a user or agent can invoke? A command object in
    `commands`, then a thin adapter in `server` and in `cli`.
 4. Does it turn biff data into text for a person to read? `render`.
@@ -118,10 +178,17 @@ above describe where each one is headed, not today's directories.
 | `server` | `cli` | 1 | `server/entrypoints.py` imports `_cli_runtime.py` | The MCP server depends on the command line |
 | `claude_code` | `server` | 1 | `unread_file.py` imports `server/display_queue.py` | Plugin code reaches into the MCP server's internals |
 
+In this table `claude_code` means `plugins/claude_code/`.
+
 Two placements in this count are judgment calls and may change at
 ratification: `formatting` and `_formatting` form their own `render` package,
 and `cli_context` (the context every command receives) belongs to `commands`.
 `biff.data` (bundled files, no code) is not assigned to a layer.
+
+One tool-specific leak the count does not show: `session_lock.py` names an
+`opencode-` lock file, so opencode-specific code already sits in a module the
+standard places in `kernel`. It moves to `plugins/opencode/` or becomes
+tool-neutral.
 
 ## Migration
 
@@ -130,13 +197,21 @@ Lux's order, applied to biff:
 1. Ratify this document as a DES entry.
 2. Add the layer checker with today's 25 violations as its baseline, so
    nothing new slips in.
-3. Move one package per PR. Each PR moves its modules into the package
-   directory, fixes the imports it can, and lowers the count. Start with
-   `claude_code` and the `commands` → `server` imports, because the Claude Code
-   channel work (DES-087) lands there.
-4. Create new modules in their target package from the start. The channel
-   sender and start-up warning go in `claude_code`; the arrival summaries go in
-   `engine`.
+3. Add `plugins/contract.py` and the registry, and move the Claude Code
+   modules into `plugins/claude_code/` behind it. This removes the five
+   Claude Code imports from the engine and server and the three from
+   `service`, and it is the contract the other adapters build on.
+4. Move one package per PR after that. Each PR moves its modules into the
+   package directory, fixes the imports it can, and lowers the count. Fix the
+   `commands` → `server` imports early, because the channel work touches them.
+5. Create new modules in their target package from the start. The channel
+   sender and start-up warning go in `plugins/claude_code/`; the arrival
+   summaries go in `engine`; `biff watch` goes in `cli`.
+6. Build the codex adapter next: it is the second adapter with real Python
+   code, and it settles the contract's signatures.
+
+The repo-root `plugin/` directory (the shipped Claude Code plugin) does not
+move; this migration only reorganizes `src/biff/`.
 
 Moves carry no compatibility aliases: when a module moves, every caller
 changes in the same PR.
