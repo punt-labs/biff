@@ -3,10 +3,18 @@
 ifneq ($(filter environment%,$(origin SRC)),)
 override undefine SRC
 endif
+.DEFAULT_GOAL := help
 SRC ?= src/biff/
 OO_BASE ?=
 COUPLING_BASE ?=
 SUPPRESSION_BASE ?=
+DESIGN_BASE ?= origin/main
+override export DESIGN_BASE := $(value DESIGN_BASE)
+
+.PHONY: design-shadow
+
+design-shadow: ## Report advisory design changes; never part of check
+	uv run oo-ratchet design "$(SRC)" --shadow-check "$${DESIGN_BASE}"
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -65,8 +73,8 @@ require-full-ratchet-source:
 	@test "$(abspath $(SRC))" = "$(abspath src/biff/)" || { \
 		echo "Baseline update requires SRC=src/biff/" >&2; exit 1; }
 
-report: ## Full quality report — not yet adopted (no-op)
-	@echo "$@: full quality report not yet adopted in this repo."
+report: ## Advisory design diagnostics (non-failing)
+	-uv run oo-ratchet design "$(SRC)"
 
 PROBCLI ?= $(HOME)/Applications/ProB/probcli
 PROB_SETSIZE ?= 2
