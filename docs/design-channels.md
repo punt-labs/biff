@@ -225,9 +225,13 @@ minutes), so held kinds can become eligible at different times. At most one
 `loop.call_later` exists, set for the earliest moment any held kind is
 eligible. When it fires it sends every held kind whose window is open, with
 current state, and arms a new one only if a kind is still held, for that
-kind's own opening. Each firing sends a held kind, or times out and re-arms that kind once; a
-second timeout ends the chain, so it cannot recur indefinitely: with nothing held, no timer exists. It is part of delivering held
-arrivals, not a periodic job. Later arrivals in a window only raise the state
+kind's own opening. Each firing has one of three outcomes per held kind: it
+sends that kind; it finds the kind no longer owed (the user read the mail, the
+invite expired) and drops it without sending; or the send times out, and that
+kind is re-armed once. A second timeout drops that kind only: other held kinds
+keep their own openings, and the one timer is re-armed for the earliest of
+them. With nothing held, no timer exists, so it cannot recur indefinitely. It
+is part of delivering held arrivals, not a periodic job. Later arrivals in a window only raise the state
 the pending timer will send.
 
 **Reconnect catch-up.** Mail wakes, wall pokes and talk frames reach the server
@@ -408,9 +412,10 @@ Checks:
    `pollOn`.
 7. **No scheduled work.** Every operation other than the liveness check and
    the deferred send is enabled only by an arrival, a reconnect, a tool call
-   or `pollOn`; the deferred send is enabled only while an event is held, and a
-   firing either sends a held kind, or times out and re-arms that kind once;
-   a second timeout ends the chain.
+   or `pollOn`; the deferred send is enabled only while an event is held. For
+   each held kind a firing sends it, drops it because nothing is owed any
+   more, or times out and re-arms it once; a second timeout drops that kind
+   alone, and the timer exists only while some kind is still held.
 
 `/z-spec:check`, `/z-spec:test` and a zero-GAP `/z-spec:audit` on
 `notification.tex` gate the channel-events PR, per CLAUDE.md.
