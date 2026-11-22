@@ -76,34 +76,29 @@ def _read_hook_input() -> dict[str, object]:
     Uses ``select`` + ``os.read`` to avoid blocking forever when the
     caller does not close the stdin pipe.  Never calls
     ``sys.stdin.read()`` which blocks until EOF.
-
-    Strategy: wait up to 100ms for initial data, then read available
-    bytes in chunks with a 50ms inter-chunk timeout.  Stops as soon
-    as no more data arrives — does not require EOF.
     """
     try:
-        fd = sys.stdin.fileno()
         # Wait up to 100ms for initial data.
-        if not select.select([fd], [], [], 0.1)[0]:
+        if not select.select([fd := sys.stdin.fileno()], [], [], 0.1)[0]:
             return {}
         # Read available data in chunks (50ms inter-chunk timeout).
         chunks: list[bytes] = []
-        while True:
-            chunk = os.read(fd, 65536)
-            if not chunk:  # EOF
-                break
+        while chunk := os.read(fd, 65536):
             chunks.append(chunk)
             if not select.select([fd], [], [], 0.05)[0]:
                 break
-        raw = b"".join(chunks).decode()
-        if not raw.strip():
+        if not (raw := b"".join(chunks).decode()).strip():
             return {}
         data = json.loads(raw)
         if isinstance(data, dict):
             return cast("dict[str, object]", data)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        pass
+    except (OSError, ValueError):
+        logger.error("hook_input_read_failed")
         return {}
-    except (json.JSONDecodeError, OSError, ValueError):
-        return {}
+    logger.warning("hook_input_malformed")
+    return {}
 
 
 def _emit(output: dict[str, object]) -> None:
