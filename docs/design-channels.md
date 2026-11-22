@@ -120,17 +120,18 @@ credential (PL-228). So event content carries nothing free-form:
 
 - **No bodies.** Never a message, wall or talk body.
 - **Senders and addresses only if they are addresses.** A sender or address
-  is included only when it fully matches the `user:tty` address character set.
-  The tty part uses the existing `ID_RE` in `session_routing.py`; the user
-  part needs a new constant beside it, the GitHub login rule
-  (`[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})`). Anything else is replaced by
-  `a teammate`. Cleaning for display
+  is included only when its user and tty parts each fully match the
+  identifier rule biff already enforces for addresses, `ID_RE` in
+  `session_routing.py` (letters, digits, `_` and `-`, up to
+  `MAX_ID_LENGTH`). That covers GitHub logins and agent handles alike.
+  Anything else is replaced by `a teammate`. Cleaning for display
   (`sanitized_sender`, `terminal_safe`) is not enough: it bounds length and
   strips terminal controls but leaves printable instructions intact.
 - **Fixed templates.** All other text is the literal templates above.
 
 `meta` keys use only letters, digits and underscores (Claude Code drops other
-keys silently); `meta` values follow the same address rule.
+keys silently). `meta` values are closed: `kind` is one of `mail`, `wall`,
+`talk_invite`, `talk_message`; `count` is a decimal integer; no other keys.
 
 ### 3a. `/mesg off` silences the channel
 
