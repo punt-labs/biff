@@ -28,9 +28,10 @@ presence, plans), reached through two entry points that any harness can use:
 the `biff` CLI and the `biff mcp` server. With NATS, both receive arrivals by
 push: the always-on inbox, wall and talk subscriptions and the wake poke
 (DES-062). With no relay configured, biff connects to the public demo NATS
-relay (`config.py`), so users always get push. The local filesystem relay is
-a test harness: it is selected only by an explicit empty relay URL, which no
-documentation or plugin uses.
+relay (DES-037). The local filesystem relay (`relay: url: ""`) is a supported
+single-machine relay: JSONL inboxes under `/tmp/biff/<repo>/`, no network, no
+shared credentials. It has no push of its own, so it gets a filesystem watch
+(section 6).
 
 **Plugins** adapt biff to one harness each. Each owns its harness's last mile,
 the step that gets an arrival in front of the model:
@@ -254,8 +255,10 @@ was called, or the user started polling.
 | Stale talk-invite expiry | Removed; an invite's age is checked when invites are read or answered |
 | Unread-count backstop recompute | Removed; push is the detection path, and an explicit read recomputes the count |
 
-The local filesystem relay has no push and keeps its poll. It is a test
-harness that no user runs, so the rule does not reach it.
+The local filesystem relay has no push; today a timer is its only way to see
+an arrival. It replaces the timer with a filesystem watch on its inbox and
+session files, so arrivals reach the summarizer the same way NATS pushes do.
+The watch mechanism is confirmed in that unit's first test.
 
 Tool-description changes and `tools/list_changed` stay as they are; they are
 display, not delivery (DES-038).
@@ -377,7 +380,7 @@ worktree after ratification and ends tested and mergeable.
 |------|------|------|-------------|-------|
 | 0 | Prove: in channel mode `serve_loop` registers biff as a channel; the model answers a check event; whether a SessionStart hook can see Claude Code's launch flags | scratch branch only | Gates wave 1 | PL-1348 |
 | 1 | Channel mode for the Claude Code plugin: `plugin.json` env, capability, `serve_channel_stdio()`, startup record | `server/entrypoints.py`, `__main__.py` `mcp` command, `plugin.json`, `pyproject.toml` pin | After wave 0 | PL-1349 |
-| 1 | No background work except liveness | `server/tools/_descriptions.py` poller | Before PL-1350 | PL-1367 |
+| 1 | No background work except liveness; local relay file watch | `server/tools/_descriptions.py` poller, `relay.py` `LocalRelay` | Before PL-1350 | PL-1367 |
 | 1 | Formal model | `docs/notification.tex` | Before PL-1350 | PL-1351 |
 | 1 | Arrival summaries (biff) and channel events (plugin): content rules, last-sent record, rate limit, instructions | new `server/arrivals.py`, new `server/channel_emitter.py`, the relay push handler, `instructions` text | After PL-1349, PL-1351, PL-1367 | PL-1350 |
 | 1 | Start-up warning | `src/biff/hook.py` | After wave 0 | PL-1368 |
