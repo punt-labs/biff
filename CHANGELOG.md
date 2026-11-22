@@ -15,6 +15,12 @@
 - Upgrade the dev dependency to `punt-oo-ratchet==0.4.0`, retaining existing
   gate policies and baselines.
 
+### Fixed
+
+- Bump punt-observe to 0.1.1: diagnostic logs now mask bare bearer
+  credentials and home-directory prefixes, and URL query redaction keeps
+  prose punctuation.
+
 ## [1.24.2] - 2026-11-22
 
 ### Fixed
