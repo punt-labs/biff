@@ -12,9 +12,9 @@ from pathlib import Path
 from mcp.server.subscriptions import InMemorySubscriptionBus as NotificationBus
 
 from biff.models import BiffConfig
-from biff.nats_relay import NatsRelay
 from biff.plugins.contract import PluginRegistry
-from biff.relay import DormantRelay, LocalRelay, Relay
+from biff.relay import Relay
+from biff.relay_select import select_relay
 from biff.server.activity import ActivityTracker
 from biff.server.display_queue import DisplayQueue
 from biff.session_routing import SessionRouting
@@ -159,18 +159,7 @@ def create_state(
     """
     owns_relay = relay is None
     if relay is None:
-        if dormant:
-            relay = DormantRelay()
-        elif config.relay_url:
-            relay = NatsRelay(
-                url=config.relay_url,
-                auth=config.relay_auth,
-                tls_handshake_first=config.relay_tls_handshake_first,
-                name=f"biff-{config.repo_name}-{config.user}",
-                repo_name=config.repo_name,
-            )
-        else:
-            relay = LocalRelay(data_dir=data_dir)
+        relay = select_relay(config, data_dir, dormant=dormant)
     # Loader mirrors this fallback: ``get_repo_common_root == ""`` -> ``repo_root``.
     # A ``None`` from a test that never threaded the common root routes markers
     # through the shared ``hints/default`` bucket via ``Path("")``, matching the

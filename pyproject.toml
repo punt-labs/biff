@@ -250,6 +250,7 @@ adapters = [
     "biff.markers",
     "biff.nats_relay",
     "biff.relay",
+    "biff.relay_select",
     "biff.repl_readline",
     "biff.server.mcp_protocol",
     "biff.session_handle",
