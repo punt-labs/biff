@@ -98,9 +98,17 @@ def test_shadow_is_a_pr_report_not_a_gate() -> None:
     ("status", "output"),
     [(0, "neutral\n"), (0, ""), (2, "FAIL: invalid reference\n")],
 )
+@pytest.mark.parametrize(
+    "base",
+    [
+        "origin/other-base",
+        "origin/`printf${IFS}injected`",
+        "origin/$(printf${IFS}injected)",
+    ],
+)
 @pytest.mark.asyncio
 async def test_shadow_publishes_success_empty_and_error_reports(
-    tmp_path: Path, status: int, output: str
+    tmp_path: Path, status: int, output: str, base: str
 ) -> None:
     uv = tmp_path / "uv"
     uv.write_text(
@@ -115,7 +123,7 @@ async def test_shadow_publishes_success_empty_and_error_reports(
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "GITHUB_STEP_SUMMARY": str(summary),
-        "DESIGN_BASE": "origin/other-base",
+        "DESIGN_BASE": base,
         "ARGV_LOG": str(argv_log),
         "SHADOW_OUTPUT": output,
         "SHADOW_STATUS": str(status),
@@ -138,7 +146,7 @@ async def test_shadow_publishes_success_empty_and_error_reports(
     stdout, stderr = await process.communicate()
     assert process.returncode == 0, stderr.decode()
     assert argv_log.read_text().strip() == (
-        "run oo-ratchet design src/biff/ --shadow-check origin/other-base"
+        f"run oo-ratchet design src/biff/ --shadow-check {base}"
     )
     report = summary.read_text()
     assert report.startswith(f"Earlier step\n### {STEP}")
