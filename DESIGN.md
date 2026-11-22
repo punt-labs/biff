@@ -8504,7 +8504,9 @@ other tools' support cannot be built without it; the contract is derived from
 Claude Code's code and `research/harness-compatibility.md`. Designing `biffd`'s
 `daemon` and `client` packages now: deferred to `biffd`'s own design.
 
-**Migration.** Add the checker and baseline; add the contract and move the
-Claude Code modules into `plugins/claude_code/`; move one package per PR after
-that, each lowering the count. New modules go in their target package from
+**Migration.** Add the checker and baseline; move the Claude Code modules into
+`plugins/claude_code/` as a behavior-neutral step; add the contract together
+with the Claude Code adapter and its callers (`biff enable` and `biff doctor`
+through `Installer`), never as an unused interface; move one package per PR
+after that, each lowering the count. New modules go in their target package from
 the start.

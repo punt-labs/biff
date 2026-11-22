@@ -237,17 +237,24 @@ Lux's order, applied to biff:
 1. Ratify this document as a DES entry.
 2. Add the layer checker with today's 25 violations as its baseline, so
    nothing new slips in.
-3. Add `plugins/contract.py` and the registry, and move the Claude Code
-   modules into `plugins/claude_code/` behind it. This removes the five
-   Claude Code imports from the engine and server and the three from
-   `service`, and it is the contract the other adapters build on.
-4. Move one package per PR after that. Each PR moves its modules into the
+3. Move the Claude Code modules into `plugins/claude_code/`. This is a
+   behavior-neutral move; it removes no imports by itself.
+4. Add `plugins/contract.py` together with the Claude Code adapter and its
+   callers: `biff enable` and `biff doctor` go through `Installer`, and the
+   registry is built by `cli`. The contract lands with callers, never as an
+   unused interface. Shared result types are not duplicated: the contract
+   reuses one definition each for install outcomes and doctor checks, and the
+   arrival summary type lives in `engine` so the engine can produce it. This
+   removes the three `service` → Claude Code imports; the engine and server
+   imports (status-line file, launch) follow as `DeliverySink` and
+   `SessionStart` gain their callers.
+5. Move one package per PR after that. Each PR moves its modules into the
    package directory, fixes the imports it can, and lowers the count. Fix the
    `commands` → `server` imports early, because the channel work touches them.
-5. Create new modules in their target package from the start. The channel
+6. Create new modules in their target package from the start. The channel
    sender and start-up warning go in `plugins/claude_code/`; the arrival
    summaries go in `engine`; `biff watch` goes in `cli`.
-6. Build the codex adapter next: it is the second adapter with real Python
+7. Build the codex adapter next: it is the second adapter with real Python
    code, and it settles the contract's signatures.
 
 The repo-root `plugin/` directory (the shipped Claude Code plugin) does not
