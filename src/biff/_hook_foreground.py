@@ -14,7 +14,7 @@ class ForegroundHook:
 
     @staticmethod
     def invoke() -> None:
-        """Run the raw entry for the detached path, which logs its own outcome."""
+        """Run the hook entry point; callers own outcome logging."""
         _dispatch()
 
     @classmethod
