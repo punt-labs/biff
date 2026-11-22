@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Bump punt-observe to 0.1.1 (log masking fixes)
+
 ## [1.24.2] - 2026-11-22
 
 ### Fixed
