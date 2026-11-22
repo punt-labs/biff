@@ -148,9 +148,12 @@ standard does not design `biffd`. It keeps today's code shaped so that
 extracting `biffd` moves the engine into a new process instead of rewriting
 the code around it:
 
-1. **Entry points reach the engine only through `commands`.** `server`,
-   `cli` and each `plugins/<tool>` adapter call command objects, not relay or
-   talk-state internals. Under
+1. **Entry points reach the engine only through `commands`, after startup.**
+   `server`, `cli` and each `plugins/<tool>` adapter call command objects, not
+   relay or talk-state internals. The one exception is process startup: the
+   entry point that starts a process (`cli`, or a tool's own console script)
+   reads configuration, constructs the relay and passes it the delivery sinks.
+   Under
    `biffd` those calls become IPC requests; the callers do not change.
    Measured on `968e4c5`: 41 direct engine imports in 24 entry-point modules,
    counted as a separate, non-gating number until `biffd`'s design decides
@@ -174,8 +177,11 @@ and `cli` may import `client` instead of `engine`.
 Ask these in order and stop at the first yes:
 
 1. Does it exist only because of one AI tool? It goes in that tool's adapter,
-   `plugins/<tool>/`. If biff itself needs to call it, add or extend an
-   interface in `plugins/contract.py` and call it through the registry.
+   `plugins/<tool>/`. If biff itself needs to call it, there are two routes.
+   Installing, checking or session-start work: add or extend an interface in
+   `plugins/contract.py` and call it through the registry. Delivering an
+   arrival: implement `engine`'s `DeliverySink`; `cli` hands it to the engine
+   at startup.
 2. Does it install, enable, diagnose or uninstall biff, the same for every
    tool? `service`.
 3. Is it a biff operation a user or agent can invoke? A command object in

@@ -8486,7 +8486,8 @@ script (Claude Code's `biff-hook`) lives in its adapter and needs no registry.
 Python adapters are distinct from each
 tool's shipped plugin (the repo-root `plugin/` directory for Claude Code).
 Four rules keep a future `biffd` daemon (PL-225) an extraction rather than a
-rewrite: entry points reach the engine only through `commands`,
+rewrite: after process startup, entry points reach the engine only through
+`commands`,
 arrivals leave through `DeliverySink`, `wire` types stay plain data, and the
 engine holds no per-tool state.
 
