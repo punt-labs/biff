@@ -187,6 +187,14 @@ This is the same ratchet Lux uses (`lux/tools/layer_contract.py`,
 `.layer-baseline.json`). The checker belongs in the shared `punt-oo-ratchet`
 package so both projects run the same tool.
 
+`punt-oo-ratchet` 0.4.0 already checks layers in its advisory `design` gate,
+which reads `[tool.oo-ratchet.layers]` in `pyproject.toml`. Biff's current
+config there sorts modules into four fixed layers (`entry`, `adapters`,
+`application`, `domain`) and never fails a build. The gating checker extends
+that same layer code to accept this standard's package names and import table;
+when it ships, biff's `[tool.oo-ratchet.layers]` is rewritten to the packages
+above and becomes the single layer configuration.
+
 ## Where biff stands today
 
 Measured on `main` at `968e4c5`, 2026-11-22: 115 modules, 25 imports that
