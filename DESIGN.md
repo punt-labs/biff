@@ -8447,33 +8447,43 @@ existing started/completed records and uvicorn stderr routing.
 
 ## DES-087: Channels Are the Primary Delivery Path; Polling Stays as Backup
 
-**Status.** Proposed, awaiting operator ratification. Full design, evidence
-and plan: `docs/design-channels.md`.
+**Status.** Proposed, awaiting operator ratification. Full design, evidence,
+reviews and plan: `docs/design-channels.md`.
 
-**Decision.** In the Claude Code plugin, `biff mcp --channels` advertises
-`experimental["claude/channel"]`, serves stdio in the handshake protocol era
-only, and sends a summary-only `notifications/claude/channel` event when mail
-count rises, a new wall is posted, or talk activity arrives. Every existing
-path (tool descriptions, the `unread-nudge` hook, the `/biff:read` cron, the
-status line) keeps running for every arrival. Events detected before the
-client session is captured are owed and flushed, never dropped.
+**Decision.** When the Claude Code plugin sets `BIFF_CHANNEL_MODE=1` in the
+server's environment, `biff mcp` reads and removes the variable, advertises
+`experimental["claude/channel"]`, and serves stdio on the SDK's
+handshake-only loop through its own runner, `serve_channel_stdio()`. A single
+`ChannelEmitter`, called only from the poller tick, sends a summary-only
+`notifications/claude/channel` event for new mail (by inbox sequence
+number), a new wall, a new talk invite, or a new message in an accepted
+talk. It keeps a last-sent record per kind, advanced only after a send
+completes, so nothing is dropped at startup, while muted or while rate
+limited, and nothing stale is sent. Events are rate limited, carry no bodies,
+label senders as claimed, and never tell the model to accept a talk. Every
+existing path (tool descriptions, the `unread-nudge` hook, the `/biff:read`
+cron, the status line) keeps running for every arrival.
 
 **Why both paths.** Claude Code 2.1.330 declares no channel capability and
-does not acknowledge channel events, so the server cannot know whether its
-channel reached the model. The backup is the only path for sessions launched
-without the channel flag.
+acknowledges no event, and the SDK reports no failed send except a timeout.
+The server cannot know whether its channel reached the model.
 
 **Why handshake-only.** Claude Code opens with a 2026-07-28 `server/discover`
-probe and does not register a 2026-07-28 server as a channel. Main answers
-the probe (DES-080), so it would never register. Refusing the probe makes
-Claude Code fall back to `initialize`, which is how the spike registered.
-Non-channel clients keep the dual-era loop.
+probe and does not register a 2026-07-28 server as a channel. The dual-era
+loop answers the probe and then refuses `initialize`; the handshake-only loop
+refuses the probe and accepts `initialize`.
 
-**Alternatives.** Channel only; detect-and-throttle; a user-set
-`MCP_PROTOCOL_NEGOTIATION=legacy`; disabling 2026-07-28 globally; bodies in
-event content; a `BIFF_CHANNELS` environment switch. Each is rejected in the
-design document.
+**Why an environment variable.** An older binary rejects an unknown flag and
+exits, which would leave a user whose plugin updated first with no biff
+server at all. An unknown variable is ignored.
+
+**Alternatives.** Channel only; detect-and-throttle; a `--channels` flag; a
+user-set `MCP_PROTOCOL_NEGOTIATION=legacy`; disabling 2026-07-28 globally;
+emitting from description changes; owed flags flushed during `initialize`;
+count-based mail detection; bodies in event content; invite events that say
+to accept; no rate limit. Each is rejected in the design document.
 
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
-**Amends.** DES-080, for Claude Code plugin sessions only. DES-063's `.envrc`
-deviation gains a guard test.
+**Amends.** DES-080, for Claude Code plugin sessions only; DES-061's rule
+that a failed send clears the stored session, for channel mode. DES-063's
+`.envrc` deviation gains a guard test.
