@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Unexpected failures in `biff hook git` now leave one durable `hook_cli_failed`
+  ERROR record with the exception class and Biff code location, without payload
+  or exception message text, before preserving the failing exit.
+
 - Malformed hook stdin (invalid JSON, non-object JSON, or invalid UTF-8) now
   logs one `hook_input_malformed` WARNING without payload or exception text.
   Stdin read faults log at ERROR.

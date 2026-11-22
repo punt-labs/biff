@@ -8407,3 +8407,23 @@ exception classes, never logins, repository names, checkout paths, payloads,
 exception text, or tracebacks. Caplog and durable-file tests cover the outcomes,
 symlink accounting, retry episodes, and HTTP lifecycle forwarding. The module
 boundaries keep the OO and coupling ratchets green without waivers.
+
+## DES-085: Durable Git Hook CLI Failures
+
+**Decision.** The root Typer group uses `HookAwareCli` to record unexpected
+exceptions when the selected command is `hook`, then re-raises the original
+exception. The fixed `hook_cli_failed` reason covers the hook CLI invocation,
+including root callback setup after command selection; it does not assert that
+a handler ran. The record contains only the exception class and the innermost
+Biff module/function/line, using `ForegroundHook.failure_location`.
+Click usage errors, intentional exits, and aborts remain unlogged.
+
+**Alternatives.** The lightweight `biff-hook` foreground boundary does not run
+for the `biff hook git` commands deployed by `biff enable`. Wrapping each Git
+handler duplicates outcome policy. A root command boundary retains CLI faults
+without changing handler code or the deployed shell hooks' fail-open behavior.
+
+**Outcome.** Unexpected Git hook CLI failures leave one private durable ERROR
+without payload, exception message, or traceback. Non-hook commands retain their
+existing diagnostics. Unit tests cover propagation and intentional exits;
+durable-file tests exercise each deployed Git command and disabled-repo silence.

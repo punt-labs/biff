@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 import biff.commands.talk as talk_commands
 from biff import commands
 from biff._cli_runtime import CliInvocation
+from biff._hook_cli import HookAwareCli
 from biff.cli_context import CliContext
 from biff.cli_session import cli_session, cli_session_host
 from biff.commands import CommandResult
@@ -48,7 +49,6 @@ from biff.commands.session import SessionVerbs
 from biff.config import find_git_root
 from biff.doctor import installed_plugin_version
 from biff.formatting import format_talk_end, format_talk_line
-from biff.hook import hook_app
 from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
 from biff.server.entrypoints import McpServerOptions
@@ -106,8 +106,7 @@ def _suppress_nats_noise() -> None:
     _install_eof_received_filter()
 
 
-app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
-app.add_typer(hook_app, name="hook")
+app = HookAwareCli.create_app()
 app.command()(McpServerOptions.serve)
 app.command()(McpServerOptions.mcp)
 session_app = typer.Typer(help="Create, list, select and end named CLI sessions.")
