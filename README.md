@@ -405,6 +405,8 @@ peers:
 
 The `peers:` key makes `/who`, `/write` and `/finger` reach sessions in other repos. `orgs` finds repos with active sessions; `repos` lists repos that are always visible. Both are optional.
 
+Mail is kept per repo, and `read` drains the mailbox of the repo you run it in. So `/write user` (no tty) delivers to the repo where that user has a session: yours if they have one here, otherwise their most recently used repo among those visible. A user with no session in any visible repo gets it in your repo's mailbox.
+
 Put per-user relay credentials (a token, NKeys seed or credentials file path) in the gitignored `.punt-labs/biff/config.local.yaml`, never in the committed file. See [Installing](docs/INSTALLING.md) for the schema, [relay configuration](docs/INSTALLING.md#relay-configuration) to run your own relay, and [environment-variable relay overrides](docs/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd) for the five `BIFF_RELAY_*` variables used in CI and containers.
 
 What the two setup commands change:
