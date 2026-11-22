@@ -8467,3 +8467,44 @@ Logging from unconditional cleanup would incorrectly report crashes as completed
 `stdio MCP shutdown outcome=completed` record without paths or payloads.
 Exceptions continue to propagate without a completed outcome. HTTP retains its
 existing started/completed records and uvicorn stderr routing.
+
+## DES-088: Package Structure — Layers, a Plugin Contract, and Room for biffd
+
+**Status.** Ratified by the operator, 2026-11-22. Full standard:
+`docs/package-structure.md`.
+
+**Decision.** `src/biff/` is organized into layered packages, bottom up:
+`kernel`, `wire`, `engine`, `render`, `commands`, `server`, `plugins`
+(the contract), `service`, `plugins/<tool>` (one Python adapter per AI tool),
+and `cli`. A package imports only from the packages below it. Code that exists
+for one AI tool lives in that tool's adapter, reached through
+`plugins/contract.py` (`Installer`, `DeliverySink`, `SessionStart`) and a
+registry that `cli` fills at startup. Python adapters are distinct from each
+tool's shipped plugin (the repo-root `plugin/` directory for Claude Code).
+Four rules keep a future `biffd` daemon (PL-225) an extraction rather than a
+rewrite: entry points reach the engine through `commands` and the contract,
+arrivals leave through `DeliverySink`, `wire` types stay plain data, and the
+engine holds no per-tool state.
+
+**Enforcement.** A layer checker runs in `make check` against a baseline of
+known violations that only shrinks, as in Lux (`lux/tools/layer_contract.py`).
+On `968e4c5` the baseline is 25 violating imports; direct engine imports from
+entry points (41) are reported separately and do not gate.
+
+**Why.** Biff serves Claude Code, Devin, opencode, codex and pi. About a tenth
+of its lines exist only for Claude Code and sit beside the shared engine;
+`biffd` (R-D.1 to R-D.8) needs the engine separable from its entry points.
+Lux's platform package standard (`target.md`) is the org precedent.
+
+**Alternatives.** No per-tool package, following Lux, which treats its plugin
+as a distribution channel: rejected because biff carries real per-tool Python
+code (Claude Code hooks and installers, codex config and queue delivery). An
+interface written only when a second adapter exists: rejected because the
+other tools' support cannot be built without it; the contract is derived from
+Claude Code's code and `research/harness-compatibility.md`. Designing `biffd`'s
+`daemon` and `client` packages now: deferred to `biffd`'s own design.
+
+**Migration.** Add the checker and baseline; add the contract and move the
+Claude Code modules into `plugins/claude_code/`; move one package per PR after
+that, each lowering the count. New modules go in their target package from
+the start.

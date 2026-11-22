@@ -1,6 +1,6 @@
 # Biff Package Structure
 
-Status: proposed standard, awaiting operator ratification.
+Status: ratified 2026-11-22 (DES-088).
 
 This document says where code goes in `src/biff/`, which packages may import
 which, and how biff moves from today's layout to this one. It follows the
