@@ -201,6 +201,64 @@ class TestForwardReport:
 
 
 class TestResolveWriteTarget:
+    def test_bare_user_routes_to_recipients_repo(self) -> None:
+        # A bare write from repo-a must reach the mailbox of repo-b, where
+        # the recipient reads; repo-a's mailbox is one they never drain.
+        sessions = [UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-b")]
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b"}
+        ).resolve(sessions, "eric", None)
+        assert not target.forwarded
+        assert target.relay_key == "eric"
+        assert target.target_repo == "repo-b"
+
+    def test_bare_user_stays_local_when_recipient_is_local(self) -> None:
+        sessions = [
+            UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-a"),
+            UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
+        ]
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b"}
+        ).resolve(sessions, "eric", None)
+        assert target.target_repo is None
+
+    def test_bare_unknown_user_stays_local(self) -> None:
+        # Offline mail to a user with no session anywhere keeps the local
+        # mailbox, as before.
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b"}
+        ).resolve([], "eric", None)
+        assert target.target_repo is None
+        assert target.relay_key == "eric"
+
+    def test_no_live_session_picks_most_recent_repo(self) -> None:
+        # A CLI user is rarely live (each command attaches and exits), so
+        # the repo they used last is the one they will read next.
+        now = datetime.now(UTC)
+        sessions = [
+            UserSession(
+                user="eric",
+                tty="aa",
+                tty_name="tty1",
+                repo="repo-b",
+                last_active=now - timedelta(hours=5),
+                last_tool_at=now - timedelta(hours=5),
+            ),
+            UserSession(
+                user="eric",
+                tty="bb",
+                tty_name="tty2",
+                repo="repo-c",
+                last_active=now - timedelta(minutes=10),
+                last_tool_at=now - timedelta(minutes=10),
+            ),
+        ]
+        router = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b", "repo-c"}
+        )
+        assert router.resolve(sessions, "eric", None).target_repo == "repo-c"
+        assert router.resolve(sessions, "eric", "tty9").target_repo == "repo-c"
+
     def test_forward_routes_to_recipients_repo(self) -> None:
         # The recipient restarted into repo-b; a mailbox forward sent from
         # repo-a must be published to repo-b, where they poll.
@@ -354,6 +412,15 @@ class TestWriteToEndedNamedSession:
                 repo="repo-b",
             )
         )
+
+    async def test_bare_write_finds_recipients_repo(self, tmp_path: Path) -> None:
+        relay = WtmpRelay(tmp_path)
+        await self._ended_qa_session(relay)
+        target = await WriteRouter(
+            local_repo="repo-c", visible_repos=frozenset({"repo-a", "repo-b", "repo-c"})
+        ).find(relay, "eric", None)
+        assert not target.forwarded
+        assert target.target_repo == "repo-a"
 
     async def test_target_is_ended_sessions_repo(self, tmp_path: Path) -> None:
         relay = WtmpRelay(tmp_path)

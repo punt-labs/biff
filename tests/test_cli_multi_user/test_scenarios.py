@@ -199,3 +199,45 @@ class TestMesg:
         await commands.mesg(eric, "off")
         result = await commands.finger(kai, "@eric")
         assert "messages: off" in result.text.lower()
+
+
+class TestCrossRepoMail:
+    """Scenario: a bare write reaches a recipient working in a peer repo."""
+
+    @pytest.mark.anyio()
+    async def test_bare_write_lands_where_recipient_reads(
+        self, nats_server: str, tmp_path: Path
+    ) -> None:
+        """Kai writes from one repo; eric, present only in a peer, reads it."""
+        from contextlib import AsyncExitStack
+        from unittest.mock import patch
+
+        from biff.cli_session import cli_session
+        from biff.config import ResolvedConfig
+        from biff.models import BiffConfig
+
+        def resolved(user: str, repo: str, peers: tuple[str, ...]) -> ResolvedConfig:
+            return ResolvedConfig(
+                config=BiffConfig(
+                    user=user, repo_name=repo, relay_url=nats_server, peers=peers
+                ),
+                data_dir=tmp_path / user,
+                repo_root=tmp_path / repo,
+                repo_common_root=tmp_path / repo,
+            )
+
+        async with AsyncExitStack() as stack:
+            sessions: list[CliContext] = []
+            for config in (
+                resolved("eric", "_test-cli-peer", ()),
+                resolved("kai", "_test-cli-multi", ("_test-cli-peer",)),
+            ):
+                stack.enter_context(
+                    patch("biff.cli_session.load_cli_config", return_value=config)
+                )
+                sessions.append(await stack.enter_async_context(cli_session()))
+            eric, kai = sessions
+            sent = await commands.write(kai, "@eric", "role ARN is ready")
+            assert not sent.error
+            result = await commands.read(eric)
+        assert "role ARN is ready" in result.text

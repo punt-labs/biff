@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A bare `biff write user` is published to the mailbox of the repo where the
+  recipient is present (the sender's repo when they are there), not always the
+  sender's repo, which a recipient working elsewhere never read. With no live
+  session, the forward and the bare write pick the repo where the recipient most recently
+  ran a command rather than the first by name (DES-084). A CLI command on a
+  named session now counts as activity, as an MCP tool call does.
+
 ## [1.24.0] - 2026-11-21
 
 ### Added

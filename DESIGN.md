@@ -8338,6 +8338,40 @@ timestamp from overriding a later real event.
 
 ---
 
+## DES-084: A Bare `user` Write Goes to the Repo Where the Recipient Reads
+
+**Date:** 2026-11-22
+**Status:** SETTLED
+**Topic:** Which repo mailbox a bare-`user` write targets.
+**Related:** DES-077 (the forward's repo choice this reuses), DES-082, DES-030.
+
+**Context.** A bare `biff write devin` published to the sender's own repo
+mailbox. The AWS agent, working in `punt-labs/aws`, sent `devin` a role ARN
+that landed in `biff.punt-labs__aws.inbox.devin`; `devin` reads from
+`punt-labs/punt-labs` and polled `biff read` for 40 minutes without seeing it.
+DES-077 already chose a forwarded write's repo from where the recipient is
+present; the bare write, the commoner case, never did. A second gap: with no
+live session the choice fell to the first repo by name. A CLI user is live
+only while a command runs, so that picked `punt-labs/biff` over the repo
+`devin` had used minutes earlier.
+
+**Decision.** `WriteRouter.find()` fetches the visible sessions for every
+write. `Presence.mailbox_repo()` picks one repo for the bare write and the
+DES-077 forward alike: the sender's repo when the recipient is present there, otherwise a repo
+where they are live, otherwise one where they have any session. Among
+candidates outside the local repo, the latest `last_tool_at` wins, ties by
+name. A recipient with no session in any visible repo keeps the sender's
+mailbox, so offline mail still works.
+
+**Alternatives.** (1) **Read every visible repo's mailbox on `read`.** Many
+repos, many fetches per poll, and a user reading in two repos would race.
+(2) **Publish to every repo the user is in.** The user reads it once per repo.
+
+**Outcome.** A bare write reaches the recipient's next `read` in the repo they
+work in. The MCP and CLI `write` share `WriteRouter`, so both change.
+
+---
+
 ## DES-083: Durable Outcomes and Bounded Connection Diagnostics
 
 **Decision.** Keep operational diagnostics in the private `punt-observe`

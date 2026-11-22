@@ -245,10 +245,9 @@ class SessionHost:
         await self._write_row(record)
 
     async def _write_row(self, record: CliSessionRecord) -> None:
-        """Write the relay row for *record*, keeping the row's other fields."""
-        key = self._key(record)
+        """Write *record*'s relay row; an attach is a command, so activity."""
         now = datetime.now(UTC)
-        row = await self.relay.get_session(key) or UserSession(
+        row = await self.relay.get_session(self._key(record)) or UserSession(
             user=record.user,
             tty=self._routing(record).routing_id,
             display_name=self.config.display_name,
@@ -265,6 +264,7 @@ class SessionHost:
                     "hostname": self.hostname,
                     "pwd": self.pwd,
                     "last_active": now,
+                    "last_tool_at": now,
                 }
             )
         )
