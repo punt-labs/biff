@@ -87,7 +87,11 @@ low-level server's lifespan. That reaches into FastMCP internals
 (`_lifespan_manager`, `_mcp_server`), so `pyproject.toml` pins FastMCP's
 minor version, and an integration test drives the real `biff mcp` entry
 point through lifespan startup, session capture, probe refusal and
-`initialize`.
+`initialize`. The runner must keep FastMCP middleware in the path (session
+capture depends on it) and close the write stream itself on exit: the SDK's
+handshake-only loop does not, unlike the dual-era loop. The handshake-only
+loop also does not refuse a 2026-07-28 request sent after `initialize`; the
+runner refuses it, matching the dual-era loop's behaviour.
 
 **Startup record.** The server logs the negotiated `protocolVersion` and
 whether channel mode is on. `biff doctor` reports it.
@@ -279,6 +283,7 @@ separate fix.
 | Risk | Mitigation |
 |------|------------|
 | A future Claude Code drops the fallback to `initialize`; with a handshake-only loop it could not connect at all, not just lose the channel | Startup record and `biff doctor` report the negotiated version; the end-to-end tier runs against each new Claude Code release |
+| Another client that speaks only 2026-07-28 is started with `BIFF_CHANNEL_MODE` and cannot connect | A test asserts the variable is set only in `plugin.json`'s `tty` server `env` |
 | FastMCP changes the internals the channel runner uses | Pinned FastMCP minor version; integration test through the real entry point |
 | Channel mode on by default widens exposure: every session launched with the channel reads mail on its own, where today only cron users do | Summary-only content, no auto-accept, rate limit (decision 3) |
 | Channels stay a research preview and change shape | All existing paths keep working; channel mode can be turned off by removing one `env` entry |
@@ -331,7 +336,7 @@ per CLAUDE.md.
 | Tier | What it proves |
 |------|----------------|
 | Unit | Event content and `meta` per kind; no body text; sender rule; each wall and invite key emitted once; own wall not emitted; mail detection by sequence (flat count and flapping count cases); rate limit and coalescing; last-sent record unchanged on timeout, mesg off, closed window, before initialization |
-| Integration (raw stdio through the real `biff mcp` entry point) | With `BIFF_CHANNEL_MODE=1`: probe refused with -32601, then `initialize` succeeds with the capability, the variable is gone from the server's environment, and a relay arrival produces a `notifications/claude/channel` frame only after `notifications/initialized`. Without it: probe answered, capability absent |
+| Integration (raw stdio through the real `biff mcp` entry point) | With `BIFF_CHANNEL_MODE=1`: probe refused with -32601, then `initialize` succeeds with the capability, the variable is gone from the server's environment, and a relay arrival produces a `notifications/claude/channel` frame only after `notifications/initialized`; the session is captured and a later change sends `tools/list_changed`; a 2026-07-28 request after `initialize` is refused; the server exits cleanly when stdin closes. Without it: probe answered with `supportedVersions ["2026-07-28"]`, capability absent |
 | End to end (tmux, real `claude`, local NATS) | A wall, a `write` and a talk invite each reach an idle session as a channel event within 10 seconds; with channel mode off the same three still arrive through the backup |
 
 The tmux harness is the spike's `harness.sh`, rewritten for current config
