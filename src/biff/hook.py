@@ -76,6 +76,10 @@ def _read_hook_input() -> dict[str, object]:
     Uses ``select`` + ``os.read`` to avoid blocking forever when the
     caller does not close the stdin pipe.  Never calls
     ``sys.stdin.read()`` which blocks until EOF.
+
+    Strategy: wait up to 100ms for initial data, then read available
+    bytes in chunks with a 50ms inter-chunk timeout.  Stops as soon
+    as no more data arrives — does not require EOF.
     """
     try:
         # Wait up to 100ms for initial data.
