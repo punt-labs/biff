@@ -8218,7 +8218,7 @@ repo selection, live-holder precedence, and failed-delivery reporting.
 [`punt-oo-ratchet`](https://github.com/punt-labs/python-oo-ratchet) package
 enforces OO metrics, coupling/cohesion, and suppression counts.
 
-**Decision.** Pin the PyPI release to 0.3.0 in the uv dev dependency group
+**Decision.** Pin the PyPI release to 0.4.0 in the uv dev dependency group
 and lock it in `uv.lock`.
 Seed and track all three baselines for `src/biff/`. CI compares PRs with their
 merge base and checks pushes to `main` against its pre-push tip so a push

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Report-only design ratchet with explicit responsibility layers for every
+  current Python module. `make design-shadow` compares against `origin/main`
+  (override `DESIGN_BASE`), and PR CI appends the advisory verdict to the job
+  summary even after a gate fails. `make report` includes a non-failing full
+  design scan. Neither report gates `make check` or CI.
+
+### Changed
+
+- Upgrade the dev dependency to `punt-oo-ratchet==0.4.0`, retaining existing
+  gate policies and baselines.
+
 ## [1.24.2] - 2026-11-22
 
 ### Fixed
