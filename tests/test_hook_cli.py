@@ -8,7 +8,7 @@ from unittest.mock import patch
 import click
 import pytest
 
-from biff._hook_cli import HookAwareCli
+from biff.plugins.claude_code._hook_cli import HookAwareCli
 
 
 def test_unexpected_hook_fault(caplog: pytest.LogCaptureFixture) -> None:
@@ -27,7 +27,8 @@ def test_unexpected_hook_fault(caplog: pytest.LogCaptureFixture) -> None:
     record = caplog.records[0]
     assert record.levelno == logging.ERROR
     assert record.getMessage().startswith(
-        "hook_cli_failed error=RuntimeError at biff._hook_cli.invoke:"
+        "hook_cli_failed error=RuntimeError at "
+        "biff.plugins.claude_code._hook_cli.invoke:"
     )
     assert record.getMessage().rsplit(":", 1)[1].isdigit()
     assert record.exc_info is None

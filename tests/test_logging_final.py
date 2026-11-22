@@ -46,7 +46,7 @@ def test_git_hook_fault_is_durable(
     marker.touch()
     monkeypatch.chdir(private_repo)
     error = RuntimeError("secret-payload")
-    with patch(f"biff.hook.{handler}", side_effect=error):
+    with patch(f"biff.plugins.claude_code.hook.{handler}", side_effect=error):
         result = CliRunner().invoke(app, ["hook", "git", event, *args], input="")
     assert result.exit_code != 0
     assert result.exception is error
@@ -54,9 +54,10 @@ def test_git_hook_fault_is_durable(
     records = durable_log.read_text().splitlines()
     assert len(records) == 1
     assert (
-        "[ERROR] biff._hook_cli: hook_cli_failed error=RuntimeError at " in records[0]
+        "[ERROR] biff.plugins.claude_code._hook_cli: "
+        "hook_cli_failed error=RuntimeError at " in records[0]
     )
-    assert f"biff.hook.git_{event.replace('-', '_')}:" in records[0]
+    assert f"biff.plugins.claude_code.hook.git_{event.replace('-', '_')}:" in records[0]
     assert "secret-payload" not in records[0]
     assert durable_log.stat().st_mode & 0o777 == 0o600
 

@@ -31,7 +31,7 @@ def test_full_report_includes_non_gating_design_scan() -> None:
     [
         ("biff", "entry"),
         ("biff.__main__", "entry"),
-        ("biff._hook_runtime", "entry"),
+        ("biff.plugins.claude_code._hook_runtime", "entry"),
         ("biff.server.entrypoints", "entry"),
         ("biff.server.caller_policy", "entry"),
         ("biff.caller_identity", "domain"),

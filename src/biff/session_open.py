@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from biff.models import BiffConfig, UnreadSummary
+from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.relay import Relay
 from biff.session_handle import SessionHandleStore
 from biff.session_registry import register_session, write_marker
 from biff.session_routing import SessionRouting
-from biff.unread_file import write_unread_file
 
 
 @dataclass(frozen=True, slots=True)

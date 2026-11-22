@@ -40,7 +40,6 @@ if TYPE_CHECKING:
 import biff.commands.talk as talk_commands
 from biff import commands
 from biff._cli_runtime import CliInvocation
-from biff._hook_cli import HookAwareCli
 from biff.cli_context import CliContext
 from biff.cli_session import cli_session, cli_session_host
 from biff.commands import CommandResult
@@ -50,6 +49,7 @@ from biff.config import find_git_root
 from biff.doctor import installed_plugin_version
 from biff.formatting import format_talk_end, format_talk_line
 from biff.nats_relay import NatsRelay
+from biff.plugins.claude_code._hook_cli import HookAwareCli
 from biff.repl_display import ReplDisplay
 from biff.server.entrypoints import McpServerOptions
 from biff.talk_latch import TalkNotifyLatch
@@ -1341,7 +1341,7 @@ def version() -> None:
 @app.command("install-statusline")
 def install_statusline() -> None:
     """Install biff into Claude Code's status bar."""
-    from biff.statusline import install as do_install
+    from biff.plugins.claude_code.statusline import install as do_install
 
     result = do_install()
     print(result.message)
@@ -1352,7 +1352,7 @@ def install_statusline() -> None:
 @app.command("uninstall-statusline")
 def uninstall_statusline() -> None:
     """Remove biff from Claude Code's status bar."""
-    from biff.statusline import uninstall as do_uninstall
+    from biff.plugins.claude_code.statusline import uninstall as do_uninstall
 
     result = do_uninstall()
     print(result.message)
@@ -1539,7 +1539,7 @@ def uninstall_cmd() -> None:
 @app.command()
 def statusline() -> None:
     """Output status bar text (called by Claude Code)."""
-    from biff.statusline import run_statusline
+    from biff.plugins.claude_code.statusline import run_statusline
 
     print(run_statusline())
 

@@ -54,7 +54,7 @@ docs = ["mkdocs>=1.6.1", "mkdocstrings[python]>=1.0.8"]
 
 [project.scripts]
 biff = "biff.__main__:app"
-biff-hook = "biff._hook_runtime:main"
+biff-hook = "biff.plugins.claude_code._hook_runtime:main"
 
 [project.urls]
 Homepage = "https://github.com/punt-labs/biff"
@@ -122,7 +122,7 @@ ignore = [
 "src/biff/cli_session.py" = ["T20"]
 "src/biff/installer.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/doctor.py" = ["T20", "FBT", "S603", "PLC0415"]
-"src/biff/statusline.py" = ["S602", "T20"]
+"src/biff/plugins/claude_code/statusline.py" = ["S602", "T20"]
 "src/biff/server/tools/wall.py" = ["FBT"]
 "src/biff/mcp_server.py" = ["T20", "FBT"]
 "spike/list_changed_server.py" = ["S101", "T20", "PLW0603", "F811"]
@@ -193,16 +193,18 @@ entry = [
     "biff",
     "biff.__main__",
     "biff._cli_runtime",
-    "biff._hook_cli",
-    "biff._hook_dispatch",
-    "biff._hook_entry",
-    "biff._hook_foreground",
-    "biff._hook_runtime",
+    "biff.plugins.claude_code._hook_cli",
+    "biff.plugins.claude_code._hook_dispatch",
+    "biff.plugins.claude_code._hook_entry",
+    "biff.plugins.claude_code._hook_foreground",
+    "biff.plugins.claude_code._hook_runtime",
     "biff.dispatch",
     "biff.doctor",
-    "biff.hook",
+    "biff.plugins.claude_code.hook",
     "biff.prob_gate",
-    "biff.statusline",
+    "biff.plugins",
+    "biff.plugins.claude_code",
+    "biff.plugins.claude_code.statusline",
     "biff.server",
     "biff.server.app",
     "biff.server.entrypoints",
@@ -231,8 +233,8 @@ adapters = [
     "biff._stdlib",
     "biff.caller_stamp",
     "biff.ci_workflow",
-    "biff.claude_md",
-    "biff.claude_permissions",
+    "biff.plugins.claude_code.claude_md",
+    "biff.plugins.claude_code.claude_permissions",
     "biff.cli_session_lock",
     "biff.cli_session_pointer",
     "biff.cli_session_store",
@@ -252,7 +254,7 @@ adapters = [
     "biff.session_handle",
     "biff.session_lock",
     "biff.unread",
-    "biff.unread_file",
+    "biff.plugins.claude_code.unread_file",
     "biff.usage",
     "biff.user_scope",
     "biff.wtmp_reader",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.claude_md import ClaudeMdImport
+from biff.plugins.claude_code.claude_md import ClaudeMdImport
 from biff.user_scope import USER_IMPORT_LINE, UserScope
 
 if TYPE_CHECKING:

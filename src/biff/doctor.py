@@ -17,7 +17,7 @@ from typing import cast
 
 from biff.config import find_git_root, is_enabled, resolve_relay_config
 from biff.models import RelayAuth
-from biff.statusline import SETTINGS_PATH
+from biff.plugins.claude_code.statusline import SETTINGS_PATH
 
 PLUGIN_ID = "biff@punt-labs"
 COMMANDS_DIR = Path.home() / ".claude" / "commands"
@@ -363,7 +363,7 @@ def _check_ci_workflow() -> CheckResult:
 
 def _check_statusline() -> CheckResult:
     """Check status line is configured (informational)."""
-    from biff.statusline import read_settings
+    from biff.plugins.claude_code.statusline import read_settings
 
     try:
         settings = read_settings(SETTINGS_PATH)

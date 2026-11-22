@@ -78,8 +78,8 @@ def _failing_biff_hook_on_path(bin_dir: Path, *, home: Path) -> dict[str, str]:
     stub.write_text(
         f"#!{sys.executable}\n"
         "from unittest.mock import patch\n"
-        "from biff._hook_runtime import main\n"
-        "with patch('biff.hook.handle_session_end',\n"
+        "from biff.plugins.claude_code._hook_runtime import main\n"
+        "with patch('biff.plugins.claude_code.hook.handle_session_end',\n"
         "           side_effect=OSError('stub boom')):\n"
         "    main()\n"
     )
@@ -165,7 +165,7 @@ class TestSessionEndObservability:
         assert "Starting session cleanup: pid=" in diagnostics
         assert "Session cleanup failed: pid=" in diagnostics
         assert "error=OSError" in diagnostics
-        assert "at biff._hook_entry._cc_session_end:" in diagnostics
+        assert "at biff.plugins.claude_code._hook_entry._cc_session_end:" in diagnostics
         assert "stub boom" not in diagnostics
         assert not (home / ".punt-labs" / "biff" / "hook-errors.log").exists()
 

@@ -7,8 +7,13 @@ from datetime import UTC, datetime, timedelta
 from biff.models import UserSession
 from biff.server.tools._presence import Presence
 
-_NOW = datetime.now(UTC)
-_STALE = _NOW - timedelta(hours=3)
+
+def _now() -> datetime:
+    """Return the current time, read fresh so a slow suite never ages it."""
+    return datetime.now(UTC)
+
+
+_STALE = _now() - timedelta(hours=3)
 
 
 def _session(repo: str, last_active: datetime, user: str = "eric") -> UserSession:
@@ -23,16 +28,16 @@ def _session(repo: str, last_active: datetime, user: str = "eric") -> UserSessio
 
 class TestPresence:
     def test_absent_user_is_falsy_with_no_repo(self) -> None:
-        presence = Presence.of([_session("repo-b", _NOW, user="kai")], "eric")
+        presence = Presence.of([_session("repo-b", _now(), user="kai")], "eric")
         assert not presence
         assert presence.mailbox_repo("repo-a") == ""
 
     def test_local_repo_wins(self) -> None:
-        sessions = [_session("repo-b", _NOW), _session("repo-a", _NOW)]
+        sessions = [_session("repo-b", _now()), _session("repo-a", _now())]
         assert Presence.of(sessions, "eric").mailbox_repo("repo-a") == "repo-a"
 
     def test_live_repo_beats_stale_local_repo(self) -> None:
-        sessions = [_session("repo-a", _STALE), _session("repo-b", _NOW)]
+        sessions = [_session("repo-a", _STALE), _session("repo-b", _now())]
         assert Presence.of(sessions, "eric").mailbox_repo("repo-a") == "repo-b"
 
     def test_most_recently_active_wins_when_none_live(self) -> None:
@@ -48,13 +53,13 @@ class TestPresence:
 
     def test_latest_tool_call_beats_fresher_heartbeat(self) -> None:
         idle = UserSession(
-            user="eric", tty="b", repo="repo-b", last_active=_NOW, last_tool_at=_STALE
+            user="eric", tty="b", repo="repo-b", last_active=_now(), last_tool_at=_STALE
         )
         used = UserSession(
             user="eric",
             tty="c",
             repo="repo-c",
-            last_active=_NOW - timedelta(seconds=30),
-            last_tool_at=_NOW - timedelta(minutes=1),
+            last_active=_now() - timedelta(seconds=30),
+            last_tool_at=_now() - timedelta(minutes=1),
         )
         assert Presence.of([idle, used], "eric").mailbox_repo("repo-a") == "repo-c"

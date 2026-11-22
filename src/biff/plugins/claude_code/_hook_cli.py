@@ -8,8 +8,8 @@ import click
 import typer
 from typer.core import TyperGroup
 
-from biff._hook_foreground import ForegroundHook
-from biff.hook import hook_app
+from biff.plugins.claude_code._hook_foreground import ForegroundHook
+from biff.plugins.claude_code.hook import hook_app
 
 logger = logging.getLogger(__name__)
 

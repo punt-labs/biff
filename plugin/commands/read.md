@@ -118,7 +118,7 @@ supplemented by a best-effort statusline peek.
    - **Mesg off is a distinct, literal shape, not a number.** When this
      session has run `/mesg off`, the segment renders the bare letter
      `(n)` — plain text, unconditionally, regardless of the real count
-     (`_biff_segment` in `src/biff/statusline.py`; `SessionUnread.biff_enabled`
+     (`_biff_segment` in `src/biff/plugins/claude_code/statusline.py`; `SessionUnread.biff_enabled`
      in `src/biff/unread.py`). The count is deliberately hidden, not zero —
      do not coerce it to `0`. Doing so would silently stop mail delivery to a
      mesg-off session, which would otherwise be the *only* remaining delivery
