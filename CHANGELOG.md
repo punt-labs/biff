@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.24.2] - 2026-11-22
+
 ### Fixed
 
 - Clean stdio MCP shutdown now leaves one durable INFO
