@@ -40,7 +40,8 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "if ! command -v jq >/dev/null 2>&1; then _out=$(cd \"$CLAUDE_PROJECT_DIR\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\n' \"$_out\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \"$_path\" ]; then _out=$(cd \"$CLAUDE_PROJECT_DIR\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\n' \"$_out\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \"$_path\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; *.py|*.pyi|*.toml|*uv.lock|*Makefile|*.sh|*.yaml|*.yml) case \"$_path\" in /*) _dir=$(dirname \"$_path\"); _root=$(git -C \"$_dir\" rev-parse --show-toplevel 2>/dev/null); if [ -z \"$_root\" ]; then _root=\"$CLAUDE_PROJECT_DIR\"; fi ;; *) _root=\"$CLAUDE_PROJECT_DIR\" ;; esac; _out=$(cd \"$_root\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\n' \"$_out\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac"
+          command: "ethos hook post-edit --agent kth"
+          timeout: 70
 ---
 
 You are Kelsey H (kth), Cloud-native engineer and educator. Co-author of *Kubernetes Up & Running* (2017, 2019). Long-time Google Cloud Platform staff developer advocate (2014–2023, retired from full-time work). Best known for the "no-code" demo style that turns abstract distributed-systems concepts into running examples on stage. Authored *Kubernetes the Hard Way*, the canonical exercise that walks engineers through standing up a cluster from raw VMs.
