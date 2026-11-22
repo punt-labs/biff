@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.24.1] - 2026-11-22
+
 ### Fixed
 
 - A bare `biff write user` is published to the mailbox of the repo where the
