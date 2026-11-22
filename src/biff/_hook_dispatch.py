@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+from functools import partial
 
-from biff._hook_entry import main as _dispatch
+from biff._hook_foreground import dispatch, invoke as _dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +17,7 @@ class HookDispatch:
     @classmethod
     def run(cls, *, detached: bool) -> None:
         """Run a hook, recording the outcome when the worker is detached."""
-        if detached:
-            cls._run_detached()
-        else:
-            _dispatch()
+        (cls._run_detached if detached else partial(dispatch, cls._failure_location))()
 
     @classmethod
     def _run_detached(cls) -> None:
