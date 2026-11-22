@@ -19,17 +19,15 @@ model), writing five artifacts:
   deploying them in a not-yet-enabled clone is a safe no-op until the marker
   lands (§2.11).
 - ``.claude/settings.json`` allow rules for biff's MCP tools and commands --
-  the operator's opt-in, repo-level only
-  (:mod:`biff.plugins.claude_code.claude_permissions`).
+  the operator's opt-in, repo-level only (:mod:`.claude_permissions`).
 - ``.punt-labs/biff/CLAUDE.md`` plus the ``@.punt-labs/biff/CLAUDE.md`` import
   in the repo ``CLAUDE.md`` -- the agent guide.  ``enable`` is the sole path that
   deposits a guide (``tool-enable-disable.md`` §2.5/§2.6); ``install`` never does.
 
 ``disable`` removes the marker, hooks, CI workflow, allow rules and the import
-line.  The
-deposited guide is left dormant (§2.9).  ``enable``/``disable`` invoke git only
-read-only (``git rev-parse`` to resolve the hooks directory); they never create
-commits or stage files -- the user commits the tracked marker + CI workflow via
+line.  The deposited guide is left dormant (§2.9).  ``enable``/``disable`` invoke
+git only read-only (``git rev-parse`` to resolve the hooks directory); they never
+create commits or stage files -- the user commits the tracked marker + CI workflow via
 a PR like any repo change, while the local hooks are activated per-clone (each
 contributor runs ``biff enable`` or the superset ``biff install`` once in their
 clone).  Claude Code's session/tool hooks are registered globally by the
@@ -42,14 +40,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self, final
 
+import biff.plugins.claude_code.claude_permissions as perms
 from biff._enablement_artifacts import CheckoutArtifacts
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
 from biff.git_hooks import deploy_git_hooks, remove_git_hooks, resolve_hooks_dir
 from biff.plugins.claude_code.claude_md import UNCLOSED_FENCE, ClaudeMdImport
-from biff.plugins.claude_code.claude_permissions import (
-    PermissionChange,
-    ProjectPermissions,
-)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -87,7 +82,7 @@ class EnablementChange:
     ci_workflow_changed: bool
     git_hooks_changed: tuple[str, ...]
     git_hooks_resolved: bool
-    permissions: PermissionChange = field(default_factory=PermissionChange)
+    permissions: perms.PermissionChange = field(default_factory=perms.PermissionChange)
 
     @property
     def failed(self) -> bool:
@@ -170,9 +165,9 @@ class RepoEnablement:
                 ci_workflow_changed=False,
                 git_hooks_changed=(),
                 git_hooks_resolved=True,
-                permissions=PermissionChange(error=UNCLOSED_FENCE),
+                permissions=perms.PermissionChange(error=UNCLOSED_FENCE),
             )
-        permissions = ProjectPermissions(self._root).grant()
+        permissions = perms.ProjectPermissions(self._root).grant()
         if permissions.error:
             return EnablementChange(
                 ci_workflow_changed=False,
@@ -185,7 +180,7 @@ class RepoEnablement:
             hooks_changed = tuple(deploy_git_hooks(self._root))
             changes = self._enable_artifacts()
         except BaseException:
-            ProjectPermissions(self._root).revoke(permissions.changed)
+            perms.ProjectPermissions(self._root).revoke(permissions.changed)
             raise
         CheckoutArtifacts.report(
             "enable",
@@ -218,10 +213,9 @@ class RepoEnablement:
         """
         resolved = resolve_hooks_dir(self._root) is not None
         marker_changed = self._remove_marker()
-        permissions = ProjectPermissions(self._root).revoke()
+        permissions = perms.ProjectPermissions(self._root).revoke()
         hooks_changed = tuple(remove_git_hooks(self._root))
         ci_changed = remove_ci_workflow(self._root)
-        import_changed = self._guide_import().prune()
         CheckoutArtifacts.report(
             "disable",
             {
@@ -229,7 +223,7 @@ class RepoEnablement:
                 "workflow": ci_changed,
                 "hooks": bool(hooks_changed),
                 "permissions": bool(permissions.changed),
-                "guide_import": import_changed,
+                "guide_import": self._guide_import().prune(),
             },
         )
         return EnablementChange(
