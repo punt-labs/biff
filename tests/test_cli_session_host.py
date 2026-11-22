@@ -212,6 +212,19 @@ class TestAttach:
         assert attached.record.state == "live"
         assert [m.body for m in await host.relay.fetch(key)] == ["while you were out"]
 
+    async def test_attach_marks_the_command_as_activity(self, tmp_path: Path) -> None:
+        host = _host(tmp_path)
+        record = await host.create("alpha")
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        row = await host.relay.get_session(key)
+        assert row is not None
+        stale = datetime.now(UTC) - timedelta(hours=1)
+        await host.relay.update_session(row.model_copy(update={"last_tool_at": stale}))
+        await host.resolve("alpha")
+        attached = await host.relay.get_session(key)
+        assert attached is not None
+        assert attached.last_tool_at > stale + timedelta(minutes=59)
+
 
 class TestEnd:
     async def test_end_drains_unread_mail_into_the_user_mailbox(
