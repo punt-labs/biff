@@ -9,7 +9,8 @@ from fastmcp.tools.function_tool import FunctionTool
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
+from tests._state import create_state
 
 _TEST_REPO = "_test-server"
 

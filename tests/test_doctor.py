@@ -10,16 +10,15 @@ import pytest
 
 from biff.doctor import (
     BIFF_COMMANDS,
+    Diagnostics,
     _check_biff_file,
     _check_gh_cli,
     _check_git_hooks,
     _check_plugin_installed,
     _check_relay,
     _check_user_commands,
-    _print_check,
     _resolve_relay_config,
     _test_nats_connection,
-    check_environment,
 )
 from biff.models import RelayAuth
 from biff.plugins.contract import CheckResult, PluginRegistry
@@ -303,15 +302,15 @@ class TestNatsConnectionAuthRedaction:
 
 class TestPrintCheck:
     def test_passed_symbol(self, capsys: object) -> None:
-        _print_check(CheckResult("test", True, "ok"))
+        Diagnostics._print(CheckResult("test", True, "ok"))
         assert "\u2713" in capsys.readouterr().out  # type: ignore[attr-defined]
 
     def test_failed_required_symbol(self, capsys: object) -> None:
-        _print_check(CheckResult("test", False, "bad", required=True))
+        Diagnostics._print(CheckResult("test", False, "bad", required=True))
         assert "\u2717" in capsys.readouterr().out  # type: ignore[attr-defined]
 
     def test_failed_optional_symbol(self, capsys: object) -> None:
-        _print_check(CheckResult("test", False, "skip", required=False))
+        Diagnostics._print(CheckResult("test", False, "skip", required=False))
         assert "\u25cb" in capsys.readouterr().out  # type: ignore[attr-defined]
 
 
@@ -337,7 +336,7 @@ class TestCheckEnvironment:
         for mock in [mock_gh, mock_ucmds, mock_biff]:
             mock.return_value = CheckResult("test", True, "ok", required=False)  # type: ignore[attr-defined]
 
-        assert check_environment(PluginRegistry()) == 0
+        assert Diagnostics(PluginRegistry()).run() == 0
 
     @patch("biff.doctor._check_biff_file")
     @patch("biff.doctor._check_relay")
@@ -357,7 +356,7 @@ class TestCheckEnvironment:
         for mock in [mock_gh, mock_ucmds, mock_biff]:
             mock.return_value = CheckResult("test", True, "ok", required=False)  # type: ignore[attr-defined]
 
-        assert check_environment(PluginRegistry()) == 1
+        assert Diagnostics(PluginRegistry()).run() == 1
 
     @patch("biff.doctor._check_biff_file")
     @patch("biff.doctor._check_relay")
@@ -377,4 +376,4 @@ class TestCheckEnvironment:
         for mock in [mock_gh, mock_ucmds, mock_biff]:
             mock.return_value = CheckResult("test", False, "missing", required=False)  # type: ignore[attr-defined]
 
-        assert check_environment(PluginRegistry()) == 0
+        assert Diagnostics(PluginRegistry()).run() == 0

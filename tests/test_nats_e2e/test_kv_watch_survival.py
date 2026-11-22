@@ -15,7 +15,7 @@ import pytest
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.server.app import _run_kv_watch
-from biff.server.state import create_state
+from tests._state import create_state
 
 pytestmark = pytest.mark.nats_local
 

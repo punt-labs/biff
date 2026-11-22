@@ -19,9 +19,9 @@ from biff.plugins.claude_code.statusline import UNREAD_DIR
 from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
 from biff.server.entrypoints import McpServerOptions
-from biff.server.state import create_state
 from biff.server.transport_runtime import McpLifecycleHandler
 from biff.testing.caller import StampedClient
+from tests._state import create_state
 
 
 def test_factory_creates_an_unbound_state_with_the_unread_directory(

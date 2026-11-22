@@ -1485,9 +1485,9 @@ def install_cmd() -> None:
 @app.command()
 def doctor() -> None:
     """Check biff installation health."""
-    from biff.doctor import check_environment
+    from biff.doctor import Diagnostics
 
-    code = check_environment(CliInvocation.plugin_registry())
+    code = Diagnostics(CliInvocation.plugin_registry()).run()
     if code != 0:
         raise typer.Exit(code=code)
 

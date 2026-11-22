@@ -7,20 +7,19 @@ the registered closure, verifying it reads/writes state correctly.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastmcp.tools.function_tool import FunctionTool
 
-from biff._cli_runtime import CliInvocation
 from biff._formatting import TABLE_WIDTH, visible_width
 from biff.chunking import chunk_message
 from biff.formatting import _NO_PRINTABLE_TEXT
 from biff.models import PLAN_MAX_LENGTH, BiffConfig, Message, UserSession
 from biff.server.app import create_server
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
+from tests._state import create_state
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -44,12 +43,6 @@ async def _get_tool_fn(state: ServerState, tool_name: str):
     assert tool is not None
     assert isinstance(tool, FunctionTool)
     return tool.fn
-
-
-def _enabling_state(config: BiffConfig, tmp_path: Path, repo: Path) -> ServerState:
-    """A state whose ``biff`` tool has the installers ``cli`` registers."""
-    state = create_state(config, tmp_path / "data", repo_root=repo)
-    return replace(state, plugins=CliInvocation.plugin_registry())
 
 
 class TestBiffToggleTool:
@@ -138,7 +131,7 @@ class TestBiffEnableToggleTool:
         from biff.git_hooks import GIT_HOOKS
 
         repo = _git_init(tmp_path / "repo")
-        state = _enabling_state(config, tmp_path, repo)
+        state = create_state(config, tmp_path / "data", repo_root=repo)
         fn = await _get_tool_fn(state, "biff")
 
         result = await fn(action="enable")
@@ -153,7 +146,7 @@ class TestBiffEnableToggleTool:
         self, config: BiffConfig, tmp_path: Path
     ) -> None:
         repo = _git_init(tmp_path / "repo")
-        state = _enabling_state(config, tmp_path, repo)
+        state = create_state(config, tmp_path / "data", repo_root=repo)
         fn = await _get_tool_fn(state, "biff")
 
         await fn(action="enable")
@@ -178,7 +171,7 @@ class TestBiffEnableToggleTool:
 
         repo = tmp_path / "not-a-repo"  # exists in state but never `git init`ed
         repo.mkdir()
-        state = _enabling_state(config, tmp_path, repo)
+        state = create_state(config, tmp_path / "data", repo_root=repo)
         fn = await _get_tool_fn(state, "biff")
 
         result = await fn(action="enable")
@@ -202,7 +195,7 @@ class TestBiffEnableToggleTool:
         mcp_repo.mkdir()
         cli_repo.mkdir()
 
-        state = _enabling_state(config, tmp_path, mcp_repo)
+        state = create_state(config, tmp_path / "data", repo_root=mcp_repo)
         fn = await _get_tool_fn(state, "biff")
         mcp_result = await fn(action="enable")
 
@@ -227,7 +220,7 @@ class TestBiffEnableToggleTool:
         cli_repo = _git_init(tmp_path / "cli_repo")
 
         # MCP surface.
-        state = _enabling_state(config, tmp_path, mcp_repo)
+        state = create_state(config, tmp_path / "data", repo_root=mcp_repo)
         fn = await _get_tool_fn(state, "biff")
         await fn(action="enable")
 

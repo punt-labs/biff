@@ -19,9 +19,9 @@ from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
-from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
 from biff.testing.caller import StampedClient
+from tests._state import create_state
 
 pytestmark = pytest.mark.nats_local
 

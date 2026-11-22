@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from biff.caller_identity import CallerIdentity
 from biff.config import ResolvedConfig, is_enabled
@@ -22,12 +22,12 @@ class McpLaunch:
     def state(self) -> ServerState:
         """Create initially unbound resources; the lifespan establishes presence."""
         resolved = self._resolved
-        state = create_state(
+        return create_state(
             resolved.config,
             resolved.data_dir,
             unread_dir=UNREAD_DIR,
             dormant=not is_enabled(resolved.repo_root),
             repo_root=resolved.repo_root,
             repo_common_root=resolved.repo_common_root,
+            plugins=self.plugins,
         )
-        return replace(state, plugins=self.plugins)

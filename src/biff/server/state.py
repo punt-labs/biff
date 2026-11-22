@@ -37,6 +37,9 @@ class ServerState:
     # ``None`` inputs to ``repo_root`` (matching the loader's fallback), so the
     # field's runtime type is always ``Path`` and every reader is unconditional.
     repo_common_root: Path
+    # The installers the ``biff`` enable/disable tool runs.  Required: an empty
+    # registry silently skips every tool's permissions, so ``cli`` builds it.
+    plugins: PluginRegistry
     activity: ActivityTracker = field(default_factory=ActivityTracker)
     display_queue: DisplayQueue = field(default_factory=DisplayQueue)
     tool_events: NotificationBus = field(default_factory=NotificationBus, compare=False)
@@ -60,8 +63,6 @@ class ServerState:
     # Directory the unread status file lives in; ``bind`` resolves the
     # per-session file name inside it once the session is known.
     unread_dir: Path | None = None
-    # The installers `biff` enable/disable calls; `cli` builds it at startup.
-    plugins: PluginRegistry = field(default_factory=PluginRegistry, compare=False)
 
     def __post_init__(self) -> None:
         """Compose the shared ephemeral talk state from this server's identity.
@@ -130,6 +131,7 @@ def create_state(
     config: BiffConfig,
     data_dir: Path,
     *,
+    plugins: PluginRegistry,
     relay: Relay | None = None,
     unread_path: Path | None = None,
     unread_dir: Path | None = None,
@@ -187,4 +189,5 @@ def create_state(
         dormant=dormant,
         repo_root=repo_root,
         org_repos=org_repos or frozenset(),
+        plugins=plugins,
     )

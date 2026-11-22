@@ -27,8 +27,8 @@ from biff.logging_config import configure_logging
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.plugins.claude_code.claude_md import ClaudeMdImport
-from biff.server.state import create_state
 from biff.server.transport_runtime import McpLifecycleHandler
+from tests._state import create_state
 
 runner = CliRunner()
 

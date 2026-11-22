@@ -10,8 +10,8 @@ from mcp.types import TextContent
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
-from biff.server.state import create_state
 from biff.testing.caller import StampedClient, caller_for
+from tests._state import create_state
 
 
 async def _who(tmp_path: Path, launched_by: str) -> str:

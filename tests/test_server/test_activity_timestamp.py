@@ -12,8 +12,8 @@ from pathlib import Path
 
 from biff.formatting import WHO_SPECS, format_finger, format_who
 from biff.models import BiffConfig
-from biff.server.state import create_state
 from biff.server.tools._session import update_current_session
+from tests._state import create_state
 
 _TEST_REPO = "_test-activity-timestamp"
 

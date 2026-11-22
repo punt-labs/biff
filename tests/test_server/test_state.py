@@ -9,7 +9,7 @@ import pytest
 from biff.models import BiffConfig, RelayAuth
 from biff.nats_relay import NatsRelay
 from biff.relay import DormantRelay, LocalRelay
-from biff.server.state import create_state
+from tests._state import create_state
 
 _TEST_REPO = "_test-server"
 

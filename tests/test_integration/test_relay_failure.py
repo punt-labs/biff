@@ -13,8 +13,8 @@ from mcp.shared.exceptions import MCPError
 from biff.caller_identity import CallerIdentity
 from biff.models import BiffConfig, RelayConnectError
 from biff.server.app import create_server
-from biff.server.state import create_state
 from biff.testing.caller import DEFAULT_CALLER, StampedClient
+from tests._state import create_state
 
 
 @pytest.mark.parametrize("declared", [False, True])

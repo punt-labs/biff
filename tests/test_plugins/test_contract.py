@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from biff.doctor import check_environment
+from biff.doctor import Diagnostics
 from biff.enablement import RepoEnablement
 from biff.plugins.contract import (
     CheckResult,
@@ -157,7 +157,7 @@ class TestDoctorThroughRegistry:
             [],
             checks=(CheckResult(name="Tool check", passed=True, message="fine"),),
         )
-        check_environment(_registry(tool))
+        Diagnostics(_registry(tool)).run()
         out = capsys.readouterr().out
         assert out.index("Tool check: fine") > out.index("CI workflow")
 
@@ -165,4 +165,4 @@ class TestDoctorThroughRegistry:
         tool = _Tool(
             "a", [], checks=(CheckResult(name="Tool", passed=False, message="bad"),)
         )
-        assert check_environment(_registry(tool)) == 1
+        assert Diagnostics(_registry(tool)).run() == 1

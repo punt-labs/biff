@@ -16,9 +16,10 @@ from mcp.server.session import ServerSession
 
 from biff.models import BiffConfig, Message
 from biff.server.app import create_server
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import refresh_read_messages
+from tests._state import create_state
 
 _TEST_REPO = "_test-server"
 _KAI_SESSION = "kai:tty1"

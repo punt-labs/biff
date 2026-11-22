@@ -11,6 +11,7 @@ import asyncio
 import json
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -356,46 +357,51 @@ def _check_ci_workflow() -> CheckResult:
 # Aggregator -----------------------------------------------------------------
 
 
-def _print_check(check: CheckResult) -> None:
-    """Print a single check result with the appropriate symbol."""
-    if check.passed:
-        symbol = "\u2713"  # ✓
-    elif check.required:
-        symbol = "\u2717"  # ✗
-    else:
-        symbol = "\u25cb"  # ○
-    print(f"  {symbol} {check.name}: {check.message}")
+@dataclass(frozen=True, slots=True)
+class Diagnostics:
+    """Run every diagnostic and report them: biff's, then each registered tool's."""
 
+    _plugins: PluginRegistry
 
-def check_environment(plugins: PluginRegistry) -> int:
-    """Run all diagnostics. Returns 0 if all required pass, 1 otherwise.
+    def run(self) -> int:
+        """Print all diagnostics.  Returns 0 if all required pass, 1 otherwise."""
+        from importlib.metadata import version
 
-    Each registered tool's installer adds its own checks after biff's.
-    """
-    from importlib.metadata import version
+        print(f"punt-biff {version('punt-biff')}")
+        print()
 
-    print(f"punt-biff {version('punt-biff')}")
-    print()
+        checks = self._checks()
+        for check in checks:
+            self._print(check)
 
-    checks = [
-        _check_gh_cli(),
-        _check_plugin_installed(),
-        _check_user_commands(),
-        _check_relay(),
-        _check_biff_file(),
-        _check_enabled(),
-        _check_git_hooks(),
-        _check_ci_workflow(),
-        *(c for i in plugins.installers() for c in i.check()),
-    ]
+        required_failures = [c for c in checks if c.required and not c.passed]
+        if required_failures:
+            count = len(required_failures)
+            print(f"\n{count} required check(s) failed.")
+            return 1
+        print("\nAll required checks passed.")
+        return 0
 
-    for check in checks:
-        _print_check(check)
+    def _checks(self) -> list[CheckResult]:
+        return [
+            _check_gh_cli(),
+            _check_plugin_installed(),
+            _check_user_commands(),
+            _check_relay(),
+            _check_biff_file(),
+            _check_enabled(),
+            _check_git_hooks(),
+            _check_ci_workflow(),
+            *(c for i in self._plugins.installers() for c in i.check()),
+        ]
 
-    required_failures = [c for c in checks if c.required and not c.passed]
-    if required_failures:
-        count = len(required_failures)
-        print(f"\n{count} required check(s) failed.")
-        return 1
-    print("\nAll required checks passed.")
-    return 0
+    @staticmethod
+    def _print(check: CheckResult) -> None:
+        """Print a single check result with the appropriate symbol."""
+        if check.passed:
+            symbol = "\u2713"  # ✓
+        elif check.required:
+            symbol = "\u2717"  # ✗
+        else:
+            symbol = "\u25cb"  # ○
+        print(f"  {symbol} {check.name}: {check.message}")

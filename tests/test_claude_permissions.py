@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from biff.plugins.claude_code import claude_permissions
 from biff.plugins.claude_code.claude_permissions import (
     BIFF_RULES,
     ProjectPermissions,
@@ -332,7 +331,7 @@ class TestHardening:
         outside = tmp_path / "outside"
         outside.mkdir()
         moved = tmp_path / "moved"
-        real_read = claude_permissions._read
+        real_read = ProjectPermissions._read
 
         def swap_then_read(dir_fd: int) -> tuple[dict[str, object], int]:
             if not moved.exists():
@@ -340,7 +339,7 @@ class TestHardening:
                 (repo / ".claude").symlink_to(outside, target_is_directory=True)
             return real_read(dir_fd)
 
-        monkeypatch.setattr(claude_permissions, "_read", swap_then_read)
+        monkeypatch.setattr(ProjectPermissions, "_read", staticmethod(swap_then_read))
         change = ProjectPermissions(repo).grant()
         assert change.changed == _ALL
         assert list(outside.iterdir()) == []

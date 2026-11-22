@@ -7,6 +7,7 @@ from pathlib import Path
 
 from biff.models import BiffConfig, UnreadSummary
 from biff.plugins.claude_code.unread_file import write_unread_file
+from biff.plugins.contract import PluginRegistry
 from biff.relay import Relay
 from biff.session_handle import SessionHandleStore
 from biff.session_registry import register_session, write_marker
@@ -93,7 +94,11 @@ async def open_session_from_payload(
         start=Path(cwd) if isinstance(cwd, str) and cwd else None,
     )
     config = resolved.config
-    state = create_state(config, resolved.data_dir, tty=routing.routing_id)
+    # A session-start hook only registers a session; it never enables biff, so
+    # no tool's installer is needed.
+    state = create_state(
+        config, resolved.data_dir, tty=routing.routing_id, plugins=PluginRegistry()
+    )
     data_root = biff_data_dir()
     try:
         return await SessionOpener(

@@ -11,13 +11,13 @@ import typer
 
 from biff._cli_runtime import McpInvocation
 from biff.config import RELAY_URL_UNSET, load_mcp_config
-from biff.plugins.contract import PluginRegistry
 from biff.server.transport_runtime import McpLifecycleHandler, McpServerBuilder
 from biff.usage import McpUsageMiddleware
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
+    from biff.plugins.contract import PluginRegistry
     from biff.server.state import ServerState
 
 logger = logging.getLogger(__name__)
@@ -67,13 +67,13 @@ class McpServerOptions:
         ).create_server()
 
     def _observed_server(self, ctx: typer.Context) -> FastMCP[ServerState]:
-        if (invocation := ctx.find_object(McpInvocation)) is not None:
-            server = self.create_server(
-                invocation.plugins, default_user=invocation.user
-            )
-            server.add_middleware(McpUsageMiddleware(invocation.usage))
-            return server
-        return self.create_server(PluginRegistry())
+        invocation = ctx.find_object(McpInvocation)
+        if invocation is None:
+            msg = "the root CLI callback did not register an MCP invocation"
+            raise RuntimeError(msg)
+        server = self.create_server(invocation.plugins, default_user=invocation.user)
+        server.add_middleware(McpUsageMiddleware(invocation.usage))
+        return server
 
     @classmethod
     def serve(

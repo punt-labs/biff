@@ -6,8 +6,8 @@ from pathlib import Path
 
 from biff._stdlib import enabled_marker_path
 from biff.models import BiffConfig
-from biff.server.state import create_state
 from biff.server.tools._activity import _DISABLED_NOTICE, track_activity
+from tests._state import create_state
 
 
 class TestTrackActivity:

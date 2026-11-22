@@ -11,9 +11,10 @@ from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig, Message
 from biff.server.app import create_server
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
 from biff.session_routing import SessionRouting
 from biff.testing.caller import StampedClient, caller_for
+from tests._state import create_state
 
 
 @pytest.fixture
