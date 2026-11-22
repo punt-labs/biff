@@ -8,6 +8,10 @@
   logs one `hook_input_malformed` WARNING without payload or exception text.
   Stdin read faults log at ERROR.
 
+- Unexpected foreground hook failures now leave one durable
+  `hook_foreground_failed` ERROR record with the exception class and code
+  location, without payload or exception message text.
+
 ## [1.24.1] - 2026-11-22
 
 ### Fixed
