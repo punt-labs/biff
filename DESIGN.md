@@ -8480,9 +8480,14 @@ open. Polling, including the `unread-nudge` hook, stays dormant until the
 user starts it.
 
 Biff does no background or scheduled work except connection liveness
-(keepalive and wedge detection). The poller's wall-countdown, invite-expiry
-and unread-backstop jobs are removed: each value is computed when read, and
-push is the detection path.
+(keepalive and wedge detection) and the deferred send of one arrival the rate
+limit held back: a single `call_later` armed by that arrival, fired once, never
+recurring. The poller's wall-countdown, invite-expiry and unread-backstop jobs
+are removed: each value is computed when read, push is the detection path, and
+a relay reconnect (`NatsRelay._on_reconnect`) re-runs the summarizer to catch
+mail that core NATS did not replay. Mail is ordered by `inbox_high_water`
+(never used as a count), talk arrivals by monotonic `TalkState` counters, and
+the doctor acknowledgement travels over the relay, not a local file.
 
 **Why the plugin turns channels on.** Registering as a channel needs the
 handshake-only loop, which only Claude Code needs; making it the default for

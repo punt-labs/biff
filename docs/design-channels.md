@@ -19,7 +19,8 @@ apply are folded in below.
 5. `biff doctor`, run on demand, checks whether the channel reaches each
    running session and names the fix.
 6. Biff does no background or scheduled work except connection liveness
-   checks. Polling stays dormant until the user runs `/biff:read Xm`.
+   checks and the deferred send of an arrival it held back. Polling stays
+   dormant until the user runs `/biff:read Xm`.
 
 ## Biff and its plugins
 
@@ -129,20 +130,39 @@ description change, and it reads typed state, never description text:
 
 | Kind | New when | Summary | `meta` |
 |------|----------|---------|--------|
-| `mail` | The inbox's last delivered sequence number rises | `N new biff message(s). Call read_messages to read them.` | `kind=mail`, `count=N` |
+| `mail` | `inbox_high_water(session_key)` exceeds the last-sent mark and unread mail exists | `N new biff message(s). Call read_messages to read them.` | `kind=mail`, `count=N` |
 | `wall` | A wall key `(posted_at, from_user, from_tty)` not seen before, not posted by this session | `New biff wall, claimed from <sender>. Call wall to see it.` | `kind=wall` |
-| `talk_invite` | An invite `session_key` not seen before (moving from queued to pending is not new) | `<sender> asked to talk (unverified). Tell the user; do not accept without their approval.` | `kind=talk_invite` |
-| `talk_message` | The queued count of a talk the user accepted rises, counted after the DES-046 partner-key check | `New talk message from your talk partner. Call talk_read.` | `kind=talk_message` |
+| `talk_invite` | `TalkState.invite_arrivals` exceeds the last-sent mark and an invite is still queued or pending | `<sender> asked to talk (unverified). Tell the user; do not accept without their approval.` | `kind=talk_invite` |
+| `talk_message` | `TalkState.message_arrivals` exceeds the last-sent mark and a partner message is still queued, counted after the DES-046 partner-key check | `New talk message from your talk partner. Call talk_read.` | `kind=talk_message` |
 
-Mail uses a sequence number, not the unread count, because the count can stay
-flat (two read, two arrive) or flap (a stale fetch after a read). A new
-`Relay` method, `inbox_high_water(session_key)`, returns a number that rises
-with every message delivered to the session's tty and user inboxes: on NATS
-the stream sequence of the last message on each inbox subject, read with a
-last-message-by-subject lookup that creates no consumer (DES-015 holds); on
-the local relay the number of message lines ever appended to the two inbox
-files. Mail summaries name no senders (DES-015). Each wall key and invite key
-is summarized at most once per server process.
+Mail is detected by a sequence number, not by the unread count, because the
+count can stay flat (two read, two arrive) or flap (a stale fetch after a
+read). A new `Relay` method, `inbox_high_water(session_key)`, returns an
+integer used only for ordering, never as a count: the sender asks whether it
+is greater than the last-sent mark, and takes `N` from the unread count
+(`get_unread_summary`, a `stream_info` read that creates no consumer;
+DES-015 holds) at send time. On NATS it is the larger of the stream sequences
+of the last message on the tty and user inbox subjects, read with a
+last-message-by-subject lookup. The stream is shared by every inbox and repo
+(DES-016), so sequences have gaps; gaps do not matter to an ordering test. A
+read deletes the message (`WORK_QUEUE`; `NatsRelay.fetch` acks it), so the
+lookup can fall or return nothing; the last-sent mark never falls, and the
+next arrival takes a higher stream sequence than any earlier one, so it still
+exceeds the mark. On the local relay it is the number of message lines in the
+two inbox files; `LocalRelay` marks messages read in place and never removes
+lines, so it only rises. Mail summaries name no senders (DES-015). Each wall
+key is summarized at most once per server process.
+
+Talk frames get the same treatment. `TalkState.receive()` is the one place a
+frame is accepted, so it increments two monotonic integers there:
+`invite_arrivals` and `message_arrivals`. They are never decremented by
+`talk_read` draining the queue, by an invite moving from queued to pending, or
+by overflow. An invite's `session_key` is not an arrival identity: a peer
+session that invites again reuses its key (`TalkState._publish` sends
+`from_key` = the sender's session key on every frame). The sender compares each
+integer with its last-sent mark and also requires the thing it describes to
+still exist (an invite queued or pending, a partner message queued), so a
+drained queue never produces a stale event.
 
 **Content rules**, for every summary whatever plugin carries it. Summaries
 enter a model's context as an instruction-capable prompt, and anyone holding
@@ -188,9 +208,33 @@ that record and non-empty, an event is owed.
 |-----------|--------|
 | Client not yet initialized | Nothing sent; sent when `notifications/initialized` arrives |
 | `/mesg off` | Nothing sent; sent when `/mesg on` runs |
-| Rate window closed | Nothing sent; one one-shot timer, armed only while an event is held, sends it when the window opens, with current values |
-| Send timed out (`_NOTIFY_SEND_TIMEOUT`) | Record unchanged; retried on the next arrival or by the same one-shot timer |
+| Rate window closed | Nothing sent; the held arrival arms one deferred send (below), which sends when the window opens, with current values |
+| Send timed out (`_NOTIFY_SEND_TIMEOUT`) | Record unchanged; the deferred send is re-armed once; after that the next arrival, tool call or reconnect retries |
+| Relay reconnected | The sender runs once on the reconnect and sends anything owed (below) |
 | Mail read, wall cleared, invite withdrawn before the send | Nothing owed; a late send never describes the past |
+
+**Deferred send.** The rate limit holds an event back only because an arrival
+produced it. That arrival's delivery call arms one `loop.call_later` for the
+moment the window opens. It fires once, sends current state, and is not
+re-armed unless that send times out (once, as above). It is part of delivering
+that arrival, not a periodic job: with no arrival pending, no timer exists.
+Later arrivals in the window only raise the current state the one timer will
+send.
+
+**Reconnect catch-up.** Mail wakes, wall pokes and talk frames reach the server
+over core NATS, which does not replay anything published while the connection
+was down. `_reconcile_always_on_sub` (`server/tools/_descriptions.py`) only
+re-subscribes when `connection_generation` changed; an in-place nats-py
+reconnect keeps the generation and advances `_reconnect_epoch` in
+`NatsRelay._on_reconnect`. Removing the unread backstop would leave mail that
+arrived during that gap unannounced. So the pair `(connection_generation,
+_reconnect_epoch)` is the trigger: `NatsRelay` gains
+`add_reconnect_listener(callback)`, called from `_on_reconnect` and after a
+fresh dial, and the channel sender registers the summarizer as the callback.
+It then reads durable state (`inbox_high_water`, the unread count, `get_wall`)
+and sends whatever is owed. This is a reaction to a connectivity event, not a
+loop. Talk frames are core NATS only and are not durable; one lost during the
+gap is not recovered, as today.
 
 In channel mode a timed-out send keeps the stdio session. Today
 `_notify_standalone` clears the stored session on any failure and only a tool
@@ -225,9 +269,15 @@ this user's running biff sessions in the current repo and sends each a
 `channel_check` request over the relay. A session's server then sends one
 channel event with a fresh 128-bit token (`kind=channel_check`, content
 `biff channel check. Call channel_ack with token <token>. Do not reply to the
-user.`). The new `channel_ack(token)` tool compares in constant time; a match
-writes `channel_checked_at` to the per-session unread file (DES-011a). Doctor
-waits up to 30 seconds and reports each session `channel live` or
+user.`). The request carries a one-time reply subject (a fresh NATS inbox name created
+by the doctor, which subscribes to it). The new `channel_ack(token)` tool
+compares in constant time; on a match the target's server publishes
+`{session_key, token}` to that reply subject. The acknowledgement travels over
+the relay, not through a file, because the target session may run on another
+machine and its per-session unread file (`SessionRouting.unread_path`, DES-011a)
+is local to it. On the local relay, which is single-machine by definition, the
+server also writes `channel_checked_at` to that unread file and doctor reads it
+there. Doctor waits up to 30 seconds and reports each session `channel live` or
 `channel not confirmed`, and for the latter prints the gate checks above plus
 the server-side ones (biff server connected and not in
 `disabledMcpjsonServers`; a handshake-era `protocolVersion` in the startup
@@ -244,21 +294,30 @@ while polling is on: the unread file carries `polling: true` while a poll
 interval is set. Bare `/biff:read` checks now, in any session.
 
 **No background work except liveness (biff).** The server runs no periodic or
-scheduled work except connection liveness: NATS keepalive and wedge detection
-(DES-041, DES-042). Everything else runs because a relay push arrived, a tool
-was called, or the user started polling.
+scheduled work except two things: connection liveness (NATS keepalive and
+wedge detection, DES-041, DES-042) and the deferred send of one arrival the
+rate limit held back (section 3), a single `call_later` armed by that arrival,
+fired once, never recurring. Everything else runs because a relay push or
+reconnect arrived, a tool was called, or the user started polling.
 
 | Periodic job today | Under this design |
 |--------------------|-------------------|
 | Wedge detection | Kept: it is the liveness check |
 | Wall countdown re-render | Removed; remaining time is computed when a wall is read or displayed |
 | Stale talk-invite expiry | Removed; an invite's age is checked when invites are read or answered |
-| Unread-count backstop recompute | Removed; push is the detection path, and an explicit read recomputes the count |
+| Unread-count backstop recompute | Removed; push is the detection path, the reconnect catch-up covers the gap in core NATS delivery, and an explicit read recomputes the count |
 
 The local filesystem relay has no push; today a timer is its only way to see
-an arrival. It replaces the timer with a filesystem watch on its inbox and
-session files, so arrivals reach the summarizer the same way NATS pushes do.
-The watch mechanism is confirmed in that unit's first test.
+an arrival. It replaces the timer with a filesystem watch on its data directory, filtered
+to the inbox files (`inbox-<user>.jsonl`, `inbox-<user>-<tty>.jsonl`), the
+session file (`sessions.json`) and the wall file (`wall.json`). The wall is
+its own file: `LocalRelay.set_wall` writes it with `atomic_write` and
+`get_wall` reads and expires it, so a watch limited to inboxes and sessions
+would never announce a wall. A change to any watched file runs the summarizer,
+so arrivals reach it the same way NATS pushes do. The watch is on the
+directory, not on single files, because `atomic_write` replaces the file's
+inode. The watch mechanism is confirmed in that unit's first test, which also
+posts a wall.
 
 Tool-description changes and `tools/list_changed` stay as they are; they are
 display, not delivery (DES-038).
@@ -282,8 +341,16 @@ are what the design relies on.
 2. Submit biff to Anthropic's official channel plugin list.
 3. Solo users without an org launch with the development flag.
 
-This repo's `.envrc` deviation (DES-063) gets a test that fails when any of
-the telemetry variables is exported.
+This repo's `.envrc` deviation (DES-063) gets a test that parses `.envrc` and
+fails on any active line that exports `DISABLE_TELEMETRY`,
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DO_NOT_TRACK` or
+`DISABLE_GROWTHBOOK`, or runs `unset CLAUDE_CODE_ENABLE_TELEMETRY` (the third
+line DES-063 commented out). The current `.envrc` (lines 52-55) has all three
+of DES-063's lines active again since #468, so the same change comments them
+out. The start-up hook cannot check the unset: an unset variable looks the
+same as one a user never set, and warning everyone would be wrong. That case
+is caught by the `.envrc` test for this repo and by `biff doctor`'s round
+trip for any other.
 
 ## Risks
 
@@ -302,7 +369,8 @@ the telemetry variables is exported.
 
 `docs/notification.tex` gains a channel component: `EventKind ::= kMail |
 kWall | kTalkInvite | kTalkMsg`; per kind, the current state and the
-last-sent record; `mesgOn`; `initialized`; rate-window state; and `pollOn`.
+last-sent record; `mesgOn`; `initialized`; rate-window state; a `reconnected`
+event that re-runs the sender; and `pollOn`.
 "Owed" is derived: current newer than last-sent and non-empty. It shares the
 existing session-capture operations and adds no parallel capture path.
 
@@ -322,8 +390,9 @@ Checks:
 6. **Poll only on request.** The nudge and cron pull are enabled only when
    `pollOn`.
 7. **No scheduled work.** Every operation other than the liveness check and
-   the rate-window timer is enabled only by an arrival, a tool call or
-   `pollOn`.
+   the deferred send is enabled only by an arrival, a reconnect, a tool call
+   or `pollOn`; the deferred send is enabled only while an event is held and
+   fires at most once per hold.
 
 `/z-spec:check`, `/z-spec:test` and a zero-GAP `/z-spec:audit` on
 `notification.tex` gate the channel-events PR, per CLAUDE.md.
@@ -332,7 +401,7 @@ Checks:
 
 | Tier | What it proves |
 |------|----------------|
-| Unit | Summaries per kind (content, `meta`, no body text, sender rule, each wall and invite key once, own wall not summarized, mail by sequence with flat and flapping counts); rate limit and coalescing; last-sent record unchanged on timeout, mesg off, closed window, before initialization; start-up warning text per closed gate and silence when all visible gates are open; `channel_check` rate limit, token, `channel_ack`; nudge hook only with `polling: true`; no timer other than liveness and the rate-window timer |
+| Unit | Summaries per kind (content, `meta`, no body text, sender rule, each wall and invite key once, own wall not summarized, mail by sequence with flat and flapping counts); rate limit and coalescing; last-sent record unchanged on timeout, mesg off, closed window, before initialization; start-up warning text per closed gate and silence when all visible gates are open; `channel_check` rate limit, token, `channel_ack`; nudge hook only with `polling: true`; no timer other than liveness and the deferred send, which is armed only with a held arrival; mail by sequence with gaps, with a read in between and with other inboxes advancing the stream; a repeat invite from one session key is announced; a message after `talk_read` drained the queue is announced; reconnect catch-up announces mail that arrived while disconnected; a local-relay wall is announced; `channel_ack` publishes the acknowledgement on the reply subject |
 | Integration (raw stdio through the real `biff mcp` entry point) | With `BIFF_CHANNEL_MODE=1`: probe refused with -32601; `initialize` succeeds with the capability; the variable is gone from the server's environment; no channel frame before `notifications/initialized`; a relay arrival produces a `notifications/claude/channel` frame; a relayed `channel_check` produces one check frame and `channel_ack` writes the field; a 2026-07-28 request after `initialize` is refused. Without it: probe answered with `supportedVersions ["2026-07-28"]`, capability absent, no channel frames |
 | End to end (tmux, real `claude`, local NATS) | Launched with the channel flag: no start-up warning; `biff doctor` reports `channel live`; a wall, a `write` and a talk invite each reach an idle session as a channel event within 10 seconds, with no cron running. Launched without it: the start-up warning appears (if the hook can see the flag) and doctor names the launch-flag gate; after `/biff:read 2m` the same three arrive by polling |
 
@@ -380,12 +449,12 @@ worktree after ratification and ends tested and mergeable.
 |------|------|------|-------------|-------|
 | 0 | Prove: in channel mode `serve_loop` registers biff as a channel; the model answers a check event; whether a SessionStart hook can see Claude Code's launch flags | scratch branch only | Gates wave 1 | PL-1348 |
 | 1 | Channel mode for the Claude Code plugin: `plugin.json` env, capability, `serve_channel_stdio()`, startup record | `server/entrypoints.py`, `__main__.py` `mcp` command, `plugin.json`, `pyproject.toml` pin | After wave 0 | PL-1349 |
-| 1 | No background work except liveness; local relay file watch | `server/tools/_descriptions.py` poller, `relay.py` `LocalRelay` | Before PL-1350 | PL-1367 |
+| 1 | No background work except liveness; local relay file watch (inboxes, sessions, wall); reconnect catch-up hook | `server/tools/_descriptions.py` poller, `relay.py` `LocalRelay`, `nats_relay.py` `add_reconnect_listener` | Before PL-1350 | PL-1367 |
 | 1 | Formal model | `docs/notification.tex` | Before PL-1350 | PL-1351 |
-| 1 | Arrival summaries (biff) and channel events (plugin): content rules, last-sent record, rate limit, instructions | new `server/arrivals.py`, new `server/channel_emitter.py`, the relay push handler, `instructions` text | After PL-1349, PL-1351, PL-1367 | PL-1350 |
+| 1 | Arrival summaries (biff) and channel events (plugin): content rules, last-sent record, rate limit, deferred send, instructions | new `server/arrivals.py`, new `server/channel_emitter.py`, the relay push handler, `talk_state.py` arrival counters, `Relay.inbox_high_water`, `instructions` text | After PL-1349, PL-1351, PL-1367 | PL-1350 |
 | 1 | Start-up warning | `src/biff/hook.py` | After wave 0 | PL-1368 |
-| 1 | On-demand channel check: relayed `channel_check`, token, `channel_ack` | new `server/tools/channel_ack.py`, the relay request handler, `unread.py` | After PL-1349 | PL-1365 |
-| 1 | `biff doctor`: end-to-end check and gates; docs; `.envrc` guard | `doctor.py`, README, `docs/INSTALLING.md`, `.envrc`, its test | After PL-1365 | PL-1353 |
+| 1 | On-demand channel check: relayed `channel_check`, token, `channel_ack` | new `server/tools/channel_ack.py`, the relay request handler, reply-subject publish, `unread.py` (local relay only) | After PL-1349 | PL-1365 |
+| 1 | `biff doctor`: end-to-end check and gates; docs; `.envrc` guard | `doctor.py`, README, `docs/INSTALLING.md`, `.envrc` (comment out the three DES-063 lines), its test | After PL-1365 | PL-1353 |
 | 1 | Polling as the exception: nudge hook only while polling is on; poll fixes | `plugin/hooks/unread-nudge.sh`, `unread.py` `polling` field, per issue | Any time | PL-1337, PL-1338, PL-1339, PL-1341 |
 | 1 | End-to-end tier | `tests/` tier and harness | Passes after the units above | PL-1352 |
 | 2 | Allowlist and official list submission | docs | After release candidate | PL-1354 |
