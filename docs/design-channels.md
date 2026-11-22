@@ -21,6 +21,9 @@ apply are folded in below.
    starts it.
 5. Channel events carry summaries only, never tell the model to accept a talk,
    and are rate limited.
+6. Biff does no background or scheduled work except connection liveness
+   checks. Everything else happens because something arrived or the user
+   asked. Polling stays dormant until the user runs `/biff:read Xm`.
 
 ## Problem
 
@@ -133,8 +136,10 @@ When no gate can be opened, doctor says to poll with `/biff:read 2m`.
 
 ### 3. Events
 
-A `ChannelEmitter`, called only from the poller's tick (`_active_tick` in
-`server/tools/_descriptions.py`), reads typed state, never description text:
+A `ChannelEmitter` runs when the relay pushes a change: the always-on inbox,
+wall and talk subscriptions and the wake poke (DES-062). It is never called
+from a timer, a tool handler or a description change, and it reads typed
+state, never description text:
 
 | Kind | New when | Content | `meta` |
 |------|----------|---------|--------|
@@ -189,15 +194,15 @@ one forged write every 100 ms would cost one model turn every 100 ms.
 ### 4. Nothing dropped, nothing stale
 
 The emitter keeps, per kind, the last state it sent, and advances it only
-after a send completes. Each tick, if current state is newer than that record
-and non-empty, an event is owed.
+after a send completes. Whenever it runs, if current state is newer than that
+record and non-empty, an event is owed.
 
 | Situation | Effect |
 |-----------|--------|
-| Client not yet initialized | Nothing sent; sent on the first tick after `notifications/initialized` |
-| `/mesg off` | Nothing sent; sent after mesg comes back on |
-| Rate window closed | Nothing sent; sent when the window opens, with current values |
-| Send timed out (`_NOTIFY_SEND_TIMEOUT`) | Record unchanged; retried next tick |
+| Client not yet initialized | Nothing sent; sent when `notifications/initialized` arrives |
+| `/mesg off` | Nothing sent; sent when `/mesg on` runs |
+| Rate window closed | Nothing sent; one one-shot timer, armed only while an event is held, sends it when the window opens, with current values |
+| Send timed out (`_NOTIFY_SEND_TIMEOUT`) | Record unchanged; retried on the next arrival or by the same one-shot timer |
 | Mail read, wall cleared, invite withdrawn before the send | Nothing owed; a late send never describes the past |
 
 A timed-out send keeps the stdio session. Today `_notify_standalone` clears
@@ -226,6 +231,24 @@ while a poll interval is set. Bare `/biff:read` checks now, in any session.
 
 Tool-description changes and `tools/list_changed` stay as they are; they are
 display, not delivery (DES-038).
+
+### 6a. No background work except liveness
+
+The server runs no periodic or scheduled work except connection liveness:
+NATS keepalive and wedge detection (DES-041, DES-042). Everything else runs
+because a relay push arrived, a tool was called, or the user started polling.
+Today's poller does four periodic jobs; this design changes three of them:
+
+| Periodic job today | Under this design |
+|--------------------|-------------------|
+| Wedge detection | Kept: it is the liveness check |
+| Wall countdown re-render | Removed; the remaining time is computed when a wall is read or displayed |
+| Stale talk-invite expiry | Removed; an invite's age is checked when invites are read or answered |
+| Unread-count backstop recompute | Removed; the push subscriptions and the wake poke are the detection path, and an explicit read recomputes the count |
+
+The local (filesystem) relay has no push, so a timer is its only way to see
+an arrival. It replaces the timer with a filesystem watch on its inbox files,
+to be confirmed in that unit's first test.
 
 Poll defects stay in scope for the users who need it: PL-1337 (output hook
 hides talk, plan and wall replies), PL-1338 (stuck talk invite), PL-1339
@@ -279,6 +302,9 @@ Checks:
 5. **Reachability.** From every reachable state with something owed, a state
    with nothing owed is reachable, assuming sends eventually succeed.
 6. **Poll only on request.** The nudge and cron pull are enabled only when
+   `pollOn`.
+7. **No scheduled work.** Every operation other than the liveness check and
+   the rate-window timer is enabled only by an arrival, a tool call or
    `pollOn`.
 
 `/z-spec:check`, `/z-spec:test` and a zero-GAP `/z-spec:audit` on
@@ -336,7 +362,8 @@ worktree after ratification and ends tested and mergeable.
 | 1 | Channels on by default: capability, `serve_channel_stdio()`, startup record | `server/entrypoints.py`, `__main__.py` `mcp` command, `pyproject.toml` pin | After wave 0 | PL-1349 |
 | 1 | Channel check: relayed `channel_check` request, token, `channel_ack`, `channel_checked_at` field | new `server/tools/channel_ack.py`, the relay request handler, `unread.py` | After PL-1349 | PL-1365 |
 | 1 | Formal model | `docs/notification.tex` | Before channel events | PL-1351 |
-| 1 | Channel events: emitter, detection, content rules, last-sent record, rate limit, instructions | new `server/channel_emitter.py`, one call in `_active_tick`, `instructions` text | After PL-1349 and PL-1351 | PL-1350 |
+| 1 | Channel events: emitter, detection, content rules, last-sent record, rate limit, instructions | new `server/channel_emitter.py`, one call in the relay push handler, `instructions` text | After PL-1349 and PL-1351 | PL-1350 |
+| 1 | No background work: remove the wall-countdown, invite-expiry and backstop jobs; local relay watches its files | `server/tools/_descriptions.py` poller, local relay | Before PL-1350 | PL-1367 |
 | 1 | Polling as the exception: nudge hook only while polling is on; poll fixes | `plugin/hooks/unread-nudge.sh`, `unread.py` `polling` field, per issue | Any time | PL-1337, PL-1338, PL-1339, PL-1341 |
 | 1 | End-to-end tier | `tests/` tier and harness | Passes after the units above | PL-1352 |
 | 1 | `biff doctor`: send the check to each running session, wait, report, gate checks; docs; `.envrc` guard | `doctor.py`, README, `docs/INSTALLING.md`, `.envrc`, its test | Any time | PL-1353 |

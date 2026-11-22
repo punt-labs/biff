@@ -8456,7 +8456,7 @@ Channels, always. `biff mcp` on stdio always advertises
 through its own runner, `serve_channel_stdio()`, and sends summary-only
 `notifications/claude/channel` events. There is no switch, mode or setting.
 
-A `ChannelEmitter`, called only from the poller tick, sends an event for new
+A `ChannelEmitter`, run when the relay pushes a change, sends an event for new
 mail (by inbox sequence number), a new wall, a new talk invite, or a new
 message in an accepted talk. It keeps a last-sent record per kind, advanced
 only after a send completes, so nothing is dropped at startup, while muted or
@@ -8472,7 +8472,12 @@ naming the gate to open. Nothing runs at session start, and the check never
 changes delivery.
 
 A user who cannot get channels polls with `/biff:read 2m`. Polling, including
-the `unread-nudge` hook, runs only when the user starts it.
+the `unread-nudge` hook, stays dormant until the user starts it.
+
+Biff does no background or scheduled work except connection liveness
+(keepalive and wedge detection). The poller's wall-countdown, invite-expiry
+and unread-backstop jobs are removed: each value is computed when read, and
+push is the detection path.
 
 **Why the check.** Claude Code 2.1.330 declares no channel capability and
 acknowledges no event. Only a round trip through the model shows the channel
@@ -8499,4 +8504,6 @@ no rate limit. Each is rejected in the design document.
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
 **Amends.** DES-080, for stdio; DES-061's rule that a failed send clears the
 stored session, for stdio; DES-038's always-on `unread-nudge` hook, now on
-only while polling. DES-063's `.envrc` deviation gains a guard test.
+only while polling; DES-062's unread backstop and the poller's wall-countdown
+and invite-expiry jobs, removed. DES-063's `.envrc` deviation gains a guard
+test.
