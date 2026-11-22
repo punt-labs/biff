@@ -223,6 +223,58 @@ def bound_server(active_server: ActiveServer) -> ActiveServer:
     return active_server
 
 
+def test_stdio_eof_records_completed_shutdown(active_server: ActiveServer) -> None:
+    """Closing stdin after the MCP handshake exits cleanly with one stop record."""
+    proc, home, stderr_lines = active_server
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+    responses: queue.Queue[str | None] = queue.Queue()
+
+    def pump_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            responses.put(line)
+        responses.put(None)
+
+    def response(request_id: int) -> dict[str, object]:
+        deadline = time.monotonic() + _STARTUP_TIMEOUT
+        while time.monotonic() < deadline:
+            line = responses.get(timeout=max(deadline - time.monotonic(), 0))
+            assert line is not None, "server closed stdout before responding"
+            message: dict[str, object] = json.loads(line)
+            if message.get("id") == request_id:
+                assert "error" not in message, message
+                return message
+        raise AssertionError(f"no response to request {request_id}")
+
+    threading.Thread(target=pump_stdout, daemon=True).start()
+    proc.stdin.write(json.dumps(_BIND_MESSAGES[0]) + "\n")
+    proc.stdin.flush()
+    assert "result" in response(1)
+    proc.stdin.write(json.dumps(_BIND_MESSAGES[1]) + "\n")
+    proc.stdin.write(
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n"
+    )
+    proc.stdin.flush()
+    result = response(2)["result"]
+    assert isinstance(result, dict)
+    assert result["tools"]
+
+    proc.stdin.close()
+    assert proc.wait(timeout=_STARTUP_TIMEOUT) == 0, _drain_stderr(stderr_lines)
+    log = home / ".punt-labs" / "biff" / "logs" / "biff.log"
+    completed = [
+        line
+        for line in log.read_text().splitlines()
+        if "stdio MCP shutdown outcome=completed" in line
+    ]
+    assert len(completed) == 1
+    assert completed[0].endswith(
+        "[INFO] biff.server.transport_runtime: stdio MCP shutdown outcome=completed"
+    )
+    assert log.stat().st_mode & 0o777 == 0o600
+
+
 @pytest.mark.parametrize(
     "sig", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP], ids=lambda s: s.name
 )
