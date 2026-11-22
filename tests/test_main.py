@@ -27,7 +27,7 @@ from biff.doctor import installed_plugin_version
 from biff.logging_config import configure_logging
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
-from biff.server.transport_runtime import HttpLifecycleHandler
+from biff.server.transport_runtime import McpLifecycleHandler
 
 runner = CliRunner()
 
@@ -206,7 +206,7 @@ class TestServeCommand:
             transport="http",
             host="127.0.0.1",
             port=8419,
-            uvicorn_config={"log_config": HttpLifecycleHandler.configuration()},
+            uvicorn_config={"log_config": McpLifecycleHandler.configuration()},
         )
 
     @patch("biff.server.transport_runtime.create_server")
@@ -229,7 +229,7 @@ class TestServeCommand:
             transport="http",
             host="192.168.1.1",
             port=9000,
-            uvicorn_config={"log_config": HttpLifecycleHandler.configuration()},
+            uvicorn_config={"log_config": McpLifecycleHandler.configuration()},
         )
 
     @patch("biff.server.transport_runtime.create_server")

@@ -20,7 +20,8 @@ from biff.__main__ import app
 from biff.enablement import RepoEnablement
 from biff.logging_config import configure_logging
 from biff.nats_relay import NatsRelay
-from biff.server.transport_runtime import HttpLifecycleHandler
+from biff.server.entrypoints import McpServerOptions
+from biff.server.transport_runtime import McpLifecycleHandler
 
 
 @pytest.mark.parametrize(
@@ -230,11 +231,40 @@ def test_cli_outcomes_reach_durable_file(
     assert "private" not in text
 
 
+def test_stdio_shutdown_is_durable(durable_log: Path) -> None:
+    """A normal return records one fixed stop outcome, even without tool calls."""
+    with patch.object(McpServerOptions, "_observed_server") as observed:
+        result = CliRunner().invoke(app, ["mcp", "--user", "private-user"])
+    assert result.exit_code == 0
+    observed.return_value.run.assert_called_once_with(transport="stdio")
+    lines = durable_log.read_text().splitlines()
+    stop = [line for line in lines if "shutdown outcome=" in line]
+    assert len(stop) == 1
+    assert stop[0].endswith(
+        "[INFO] biff.server.transport_runtime: stdio MCP shutdown outcome=completed"
+    )
+    assert "private" not in durable_log.read_text()
+    assert durable_log.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("error", [RuntimeError("private-payload"), SystemExit(3)])
+def test_stdio_failure_does_not_report_completion(
+    durable_log: Path, error: BaseException
+) -> None:
+    """Crashes and abnormal exits propagate without a false success record."""
+    with patch.object(McpServerOptions, "_observed_server") as observed:
+        observed.return_value.run.side_effect = error
+        result = CliRunner().invoke(app, ["mcp", "--user", "private-user"])
+    assert result.exit_code != 0
+    assert result.exception is error
+    assert "shutdown outcome=completed" not in durable_log.read_text()
+
+
 def test_http_forwarder_copies_only_fixed_events(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="biff.server.transport_runtime")
-    handler = HttpLifecycleHandler()
+    handler = McpLifecycleHandler()
     for msg in ("Shutting down", "Finished server process [%d]", "private-repo %s", ""):
         handler.emit(
             logging.LogRecord(
@@ -261,7 +291,7 @@ async def test_uvicorn_graceful_shutdown_is_durable(
 ) -> None:
     config = uvicorn.Config(
         FastMCP("private-repo").http_app(),
-        log_config=HttpLifecycleHandler.configuration(),
+        log_config=McpLifecycleHandler.configuration(),
         timeout_graceful_shutdown=1,
         ws="websockets-sansio",
     )
