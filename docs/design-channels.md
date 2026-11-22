@@ -87,6 +87,8 @@ explicit at the one launch site that needs it.
 ### 2. Two paths, always both
 
 For every arrival the server runs both paths. Neither waits for the other.
+The one exception is `/mesg off`, which silences the channel the same way it
+silences the nudge (section 3a).
 
 | Path | Reaches the model when | Unchanged? |
 |------|------------------------|------------|
@@ -112,12 +114,30 @@ One event per state change, never per poll tick.
 | Talk invite arrives | `<sender> wants to talk. Call talk_read, then talk <address> to accept.` | `kind=talk_invite` |
 | Talk message arrives in a connected talk | `New talk message from <sender>. Call talk_read.` | `kind=talk_message` |
 
-Content never carries a message or wall body. Channel content enters the
-model's context as an instruction-capable prompt; a body is remote-controlled
-text from any holder of the relay credential (PL-228). Sender names pass
-through `sanitized_sender` and `terminal_safe`, as the status line does.
+Channel content enters the model's context as an instruction-capable prompt,
+and every relay field is remote-controlled by any holder of the relay
+credential (PL-228). So event content carries nothing free-form:
+
+- **No bodies.** Never a message, wall or talk body.
+- **Senders and addresses only if they are addresses.** A sender or address
+  is included only when it fully matches the `user:tty` address character set.
+  The tty part uses the existing `ID_RE` in `session_routing.py`; the user
+  part needs a new constant beside it, the GitHub login rule
+  (`[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})`). Anything else is replaced by
+  `a teammate`. Cleaning for display
+  (`sanitized_sender`, `terminal_safe`) is not enough: it bounds length and
+  strips terminal controls but leaves printable instructions intact.
+- **Fixed templates.** All other text is the literal templates above.
+
 `meta` keys use only letters, digits and underscores (Claude Code drops other
-keys silently).
+keys silently); `meta` values follow the same address rule.
+
+### 3a. `/mesg off` silences the channel
+
+A session with `/mesg off` (`biff_enabled` false) gets no channel events, the
+same as the `unread-nudge` hook, which already stays silent while muted. Mail
+still arrives through an explicit `/biff:read`, which ignores mesg. Turning
+mesg back on emits one coalesced event per kind for anything still unread.
 
 ### 4. No event dropped at startup
 
