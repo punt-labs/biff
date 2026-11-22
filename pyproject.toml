@@ -296,7 +296,6 @@ application = [
     "biff.server.tools._write_target",
 ]
 domain = [
-    "biff.plugins.contract",
     "biff._formatting",
     "biff.caller_identity",
     "biff.chunking",

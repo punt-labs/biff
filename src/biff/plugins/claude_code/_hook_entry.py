@@ -144,10 +144,10 @@ def _cc_post_pr() -> None:
 
 
 def _cc_pre_compact() -> None:
-    from biff.plugins.claude_code.hook import _emit, _hook_context, handle_pre_compact  # noqa: PLC0415
+    from biff.plugins.claude_code import hook  # noqa: PLC0415
 
-    result = handle_pre_compact()
-    _emit(_hook_context("PreCompact", result))
+    result = hook.handle_pre_compact()
+    hook._emit(hook._hook_context("PreCompact", result))
 
 
 _CC_HANDLERS: dict[str, Callable[[], None]] = {
