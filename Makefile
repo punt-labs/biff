@@ -3,6 +3,7 @@
 ifneq ($(filter environment%,$(origin SRC)),)
 override undefine SRC
 endif
+.DEFAULT_GOAL := help
 SRC ?= src/biff/
 OO_BASE ?=
 COUPLING_BASE ?=

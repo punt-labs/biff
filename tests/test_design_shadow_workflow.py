@@ -153,3 +153,18 @@ async def test_shadow_publishes_success_empty_and_error_reports(
     assert report == "Earlier step\n" + stdout.decode()
     assert report.endswith("```\n")
     assert output in report
+
+
+@pytest.mark.asyncio
+async def test_bare_make_still_lists_targets() -> None:
+    process = await asyncio.create_subprocess_exec(
+        "make",
+        "-n",
+        cwd=ROOT,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    assert process.returncode == 0, stderr.decode()
+    assert "oo-ratchet design" not in stdout.decode()
+    assert "grep -E" in stdout.decode()
