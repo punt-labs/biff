@@ -12,7 +12,13 @@ _STALE = _NOW - timedelta(hours=3)
 
 
 def _session(repo: str, last_active: datetime, user: str = "eric") -> UserSession:
-    return UserSession(user=user, tty=repo[-1], repo=repo, last_active=last_active)
+    return UserSession(
+        user=user,
+        tty=repo[-1],
+        repo=repo,
+        last_active=last_active,
+        last_tool_at=last_active,
+    )
 
 
 class TestPresence:
@@ -39,3 +45,16 @@ class TestPresence:
     def test_tie_goes_to_first_repo_by_name(self) -> None:
         sessions = [_session("repo-c", _STALE), _session("repo-b", _STALE)]
         assert Presence.of(sessions, "eric").mailbox_repo("repo-a") == "repo-b"
+
+    def test_latest_tool_call_beats_fresher_heartbeat(self) -> None:
+        idle = UserSession(
+            user="eric", tty="b", repo="repo-b", last_active=_NOW, last_tool_at=_STALE
+        )
+        used = UserSession(
+            user="eric",
+            tty="c",
+            repo="repo-c",
+            last_active=_NOW - timedelta(seconds=30),
+            last_tool_at=_NOW - timedelta(minutes=1),
+        )
+        assert Presence.of([idle, used], "eric").mailbox_repo("repo-a") == "repo-c"

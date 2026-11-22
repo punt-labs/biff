@@ -8359,7 +8359,7 @@ only while a command runs, so that picked `punt-labs/biff` over the repo
 write. `Presence.mailbox_repo()` picks one repo for the bare write and the
 DES-077 forward alike: the sender's repo when the recipient is present there, otherwise a repo
 where they are live, otherwise one where they have any session. Among
-candidates outside the local repo, the most recently active wins, ties by
+candidates outside the local repo, the latest `last_tool_at` wins, ties by
 name. A recipient with no session in any visible repo keeps the sender's
 mailbox, so offline mail still works.
 

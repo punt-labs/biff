@@ -32,13 +32,13 @@ class Presence:
         where they run, so prefer repos with a live session; with none
         live, any repo they are present in (a dormant session revives and
         drains it).  *local_repo* wins among the candidates; otherwise the
-        most recently active, so a CLI user, live only while a command
-        runs, gets mail where they last worked.  Ties go to the first repo
-        by name.  ``""`` means the user is present nowhere.
+        one with the latest real tool call (``last_tool_at``, not the
+        heartbeat), so mail goes where they last worked.  Ties go to the
+        first repo by name.  ``""`` means the user is present nowhere.
         """
         live = live_sessions(self._sessions) or self._sessions
         candidates = sorted(live, key=lambda s: s.repo)
         if any(s.repo == local_repo for s in candidates):
             return local_repo
-        latest = max(candidates, key=lambda s: s.last_active, default=None)
+        latest = max(candidates, key=lambda s: s.last_tool_at, default=None)
         return latest.repo if latest else ""

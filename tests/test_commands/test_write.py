@@ -242,6 +242,7 @@ class TestResolveWriteTarget:
                 tty_name="tty1",
                 repo="repo-b",
                 last_active=now - timedelta(hours=5),
+                last_tool_at=now - timedelta(hours=5),
             ),
             UserSession(
                 user="eric",
@@ -249,6 +250,7 @@ class TestResolveWriteTarget:
                 tty_name="tty2",
                 repo="repo-c",
                 last_active=now - timedelta(minutes=10),
+                last_tool_at=now - timedelta(minutes=10),
             ),
         ]
         router = WriteRouter(
