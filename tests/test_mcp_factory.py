@@ -18,7 +18,7 @@ from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
 from biff.server.entrypoints import McpServerOptions
 from biff.server.state import create_state
-from biff.server.transport_runtime import HttpLifecycleHandler
+from biff.server.transport_runtime import McpLifecycleHandler
 from biff.statusline import UNREAD_DIR
 from biff.testing.caller import StampedClient
 
@@ -162,7 +162,7 @@ def test_session_setup_logs_no_identity(
                 transport="http",
                 host="127.0.0.1",
                 port=8419,
-                uvicorn_config={"log_config": HttpLifecycleHandler.configuration()},
+                uvicorn_config={"log_config": McpLifecycleHandler.configuration()},
             )
 
     messages = [r.getMessage() for r in caplog.records if r.name.startswith("biff")]

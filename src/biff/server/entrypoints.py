@@ -11,7 +11,7 @@ import typer
 
 from biff._cli_runtime import McpInvocation
 from biff.config import RELAY_URL_UNSET, load_mcp_config
-from biff.server.transport_runtime import HttpLifecycleHandler, McpServerBuilder
+from biff.server.transport_runtime import McpLifecycleHandler, McpServerBuilder
 from biff.usage import McpUsageMiddleware
 
 if TYPE_CHECKING:
@@ -83,7 +83,7 @@ class McpServerOptions:
         server = cls(user, data_dir, relay_url, prefix, "http")._observed_server(ctx)
         logger.info("Starting Biff MCP server (HTTP): port=%d", port)
         typer.echo(f"Starting biff MCP server on http://{host}:{port}")
-        http = {"log_config": HttpLifecycleHandler.configuration()}
+        http = {"log_config": McpLifecycleHandler.configuration()}
         server.run(transport="http", host=host, port=port, uvicorn_config=http)
 
     @classmethod
@@ -97,5 +97,5 @@ class McpServerOptions:
     ) -> None:
         """Start the biff MCP server (stdio transport)."""
         server = cls(user, data_dir, relay_url, prefix)._observed_server(ctx)
-        logger.info("Starting Biff MCP server (stdio)")
-        server.run(transport="stdio")
+        with McpLifecycleHandler.stdio():
+            server.run(transport="stdio")

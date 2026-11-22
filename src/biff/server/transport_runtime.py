@@ -1,8 +1,11 @@
-"""Caller-aware MCP construction and private HTTP transport diagnostics."""
+"""Caller-aware MCP construction and private transport diagnostics."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Generator
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -22,6 +25,7 @@ _logger = logging.getLogger(__name__)
 _EVENTS = {
     "Shutting down": "HTTP MCP shutdown outcome=started",
     "Finished server process [%d]": "HTTP MCP shutdown outcome=completed",
+    "stdio transport returned": "stdio MCP shutdown outcome=completed",
 }
 
 
@@ -41,8 +45,16 @@ class McpServerBuilder:
         return create_server(launch.state(), default_caller=launch.caller)
 
 
-class HttpLifecycleHandler(logging.Handler):
-    """Leave uvicorn's stderr routing intact; copy no uvicorn record content."""
+class McpLifecycleHandler(logging.Handler):
+    """Translate transport events without copying paths or payloads."""
+
+    @classmethod
+    @contextmanager
+    def stdio(cls) -> Generator[None]:
+        """Report completion through the event allowlist only on normal return."""
+        _logger.info("Starting Biff MCP server (stdio)")
+        yield
+        cls().emit(logging.makeLogRecord({"msg": "stdio transport returned"}))
 
     def emit(self, record: logging.LogRecord) -> None:
         """Translate allowlisted event templates, never their arguments."""
@@ -52,17 +64,7 @@ class HttpLifecycleHandler(logging.Handler):
     @classmethod
     def configuration(cls) -> dict[str, object]:
         """Extend uvicorn's configuration without replacing biff's root sinks."""
-        return {
-            **LOGGING_CONFIG,
-            "handlers": {
-                **LOGGING_CONFIG["handlers"],
-                "biff_lifecycle": {"()": cls},
-            },
-            "loggers": {
-                **LOGGING_CONFIG["loggers"],
-                "uvicorn.error": {
-                    "handlers": ["biff_lifecycle"],
-                    "level": "INFO",
-                },
-            },
-        }
+        config = deepcopy(LOGGING_CONFIG)
+        config["handlers"]["biff"] = {"()": cls}
+        config["loggers"]["uvicorn.error"] = {"handlers": ["biff"], "level": "INFO"}
+        return config

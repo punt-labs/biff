@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Clean stdio MCP shutdown now leaves one durable INFO
+  `stdio MCP shutdown outcome=completed` record, without paths or payloads.
+  Failed runs do not report a completed shutdown.
+
 - Unexpected failures in `biff hook git` now leave one durable `hook_cli_failed`
   ERROR record with the exception class and Biff code location, without payload
   or exception message text, before preserving the failing exit.

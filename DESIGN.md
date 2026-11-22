@@ -8427,3 +8427,20 @@ without changing handler code or the deployed shell hooks' fail-open behavior.
 without payload, exception message, or traceback. Non-hook commands retain their
 existing diagnostics. Unit tests cover propagation and intentional exits;
 durable-file tests exercise each deployed Git command and disabled-repo silence.
+
+## DES-086: Stdio MCP Completion Uses the Transport Event Allowlist
+
+**Decision.** Generalize the HTTP lifecycle handler to `McpLifecycleHandler`.
+Its stdio context reports a fixed internal transport-return event through the
+same allowlist and durable logger used for uvicorn shutdown events. Emit it only
+after `server.run(transport="stdio")` returns normally, not from a `finally`
+block. No exception handling, signal behavior, or relay cleanup changes.
+
+**Alternatives.** Relay disconnect does not establish MCP transport completion.
+A second stop logger in the CLI would duplicate transport outcome policy.
+Logging from unconditional cleanup would incorrectly report crashes as completed.
+
+**Outcome.** Closing stdio cleanly produces one INFO
+`stdio MCP shutdown outcome=completed` record without paths or payloads.
+Exceptions continue to propagate without a completed outcome. HTTP retains its
+existing started/completed records and uvicorn stderr routing.
