@@ -23,6 +23,53 @@ from biff.nats_relay import NatsRelay
 from biff.server.transport_runtime import HttpLifecycleHandler
 
 
+@pytest.mark.parametrize(
+    ("event", "handler", "args"),
+    [
+        ("post-commit", "handle_post_commit", []),
+        ("post-checkout", "handle_post_checkout", ["old", "new", "1"]),
+        ("pre-push", "handle_pre_push", ["origin"]),
+    ],
+)
+def test_git_hook_fault_is_durable(
+    event: str,
+    handler: str,
+    args: list[str],
+    private_repo: Path,
+    durable_log: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The full CLI logs one private ERROR for each deployed Git hook crash."""
+    marker = private_repo / ".punt-labs/biff/enabled"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    monkeypatch.chdir(private_repo)
+    error = RuntimeError("secret-payload")
+    with patch(f"biff.hook.{handler}", side_effect=error):
+        result = CliRunner().invoke(app, ["hook", "git", event, *args], input="")
+    assert result.exit_code != 0
+    assert result.exception is error
+    assert result.stdout == ""
+    records = durable_log.read_text().splitlines()
+    assert len(records) == 1
+    assert (
+        "[ERROR] biff._hook_cli: hook_cli_failed error=RuntimeError at " in records[0]
+    )
+    assert f"biff.hook.git_{event.replace('-', '_')}:" in records[0]
+    assert "secret-payload" not in records[0]
+    assert durable_log.stat().st_mode & 0o777 == 0o600
+
+
+def test_git_hook_disabled_is_silent(
+    private_repo: Path, durable_log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A disabled repository remains a successful no-op with no log record."""
+    monkeypatch.chdir(private_repo)
+    result = CliRunner().invoke(app, ["hook", "git", "post-commit"])
+    assert result.exit_code == 0
+    assert durable_log.read_text() == ""
+
+
 @pytest.fixture
 def private_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "private-repository"
