@@ -49,3 +49,18 @@ jobs:
           make check-oo check-coupling check-suppressions \
             OO_BASE="${BASE_ARGS} --allow-no-improvement" \
             COUPLING_BASE="${BASE_ARGS}" SUPPRESSION_BASE="${BASE_ARGS}"
+
+      # Advisory only: retain the verdict or input error even after a gate
+      # fails, without letting a reporting failure gate this job.
+      - name: Design ratchet (shadow, report only)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          DESIGN_BASE: origin/${{ github.base_ref }}
+        run: |
+          {
+            echo '### Design ratchet (shadow, report only)'
+            echo '```text'
+            make design-shadow 2>&1 || true
+            echo '```'
+          } | tee -a "${GITHUB_STEP_SUMMARY}"

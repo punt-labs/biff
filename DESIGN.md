@@ -8218,7 +8218,7 @@ repo selection, live-holder precedence, and failed-delivery reporting.
 [`punt-oo-ratchet`](https://github.com/punt-labs/python-oo-ratchet) package
 enforces OO metrics, coupling/cohesion, and suppression counts.
 
-**Decision.** Pin the PyPI release to 0.3.0 in the uv dev dependency group
+**Decision.** Pin the PyPI release to 0.4.0 in the uv dev dependency group
 and lock it in `uv.lock`.
 Seed and track all three baselines for `src/biff/`. CI compares PRs with their
 merge base and checks pushes to `main` against its pre-push tip so a push
@@ -8236,6 +8236,29 @@ baselines using `make update-oo update-coupling update-suppressions`.
 code-only module sizes and excludes exceptions, enums, and dataclasses from
 the class count. The default fan-out limit increases from 7 to 10, retaining
 the CLI limit of 15. Suppression waivers stop applying once merged.
+
+**0.4.0 design shadow.** Declare responsibility layers for all current modules:
+entry for CLI, hooks and MCP boundaries; adapters for concrete filesystem,
+process and NATS integrations; application for command and session orchestration;
+domain for values, policies and pure transformations. Package location alone
+does not determine responsibility: `server.tools._presence` is a domain routing
+policy, while `talk_state` publishes through NATS and belongs to application.
+`CallerPolicy` reads process environment and raises transport/CLI errors, so
+it stays at entry rather than becoming a domain value like `CallerIdentity`.
+
+The alternative, layering whole packages without exceptions, would misclassify
+these boundaries. Existing layer-import and domain-I/O findings remain visible;
+they are not hidden by changing a module's declared responsibility.
+
+`make design-shadow` passes `DESIGN_BASE` (default `origin/main`) to the published
+CLI, which computes the merge-base internally. PR CI appends its output to the
+job summary even after an earlier gate fails. The reporting step, its verdict
+and input errors never gate CI. The previously empty `make report` now runs a
+non-failing full design scan; neither report is part of `make check`.
+OO, coupling and suppression gates retain their policies and baselines.
+The outcome is an advisory architecture inventory and comparison, not a new
+design gate. Unmatched future modules remain advisory `unlayered-module`
+findings until a maintainer assigns their responsibility.
 
 ---
 
@@ -8518,3 +8541,51 @@ failed send clears the stored session, in channel mode; DES-038's always-on
 `unread-nudge` hook, now on only while polling; DES-062's unread backstop and
 the poller's wall-countdown and invite-expiry jobs, removed. DES-063's
 `.envrc` deviation gains a guard test.
+
+## DES-088: Package Structure — Layers, a Plugin Contract, and Room for biffd
+
+**Status.** Ratified by the operator, 2026-11-22. Full standard:
+`docs/package-structure.md`.
+
+**Decision.** `src/biff/` is organized into layered packages, bottom up:
+`kernel`, `wire`, `engine`, `render`, `commands`, `server`, `plugins`
+(the contract), `service`, `plugins/<tool>` (one Python adapter per AI tool),
+and `cli`. A package imports only from the packages below it. Code that exists
+for one AI tool lives in that tool's adapter, reached through
+`plugins/contract.py` (`Installer`, `SessionStart`) and a registry that `cli`
+fills at startup and hands to `service`. `DeliverySink` and the arrival summary
+live in `engine`, which calls them; `cli` passes each adapter's sink to the
+engine at startup, so the engine never imports `plugins`. A tool's own console
+script (Claude Code's `biff-hook`) lives in its adapter and needs no registry.
+Python adapters are distinct from each
+tool's shipped plugin (the repo-root `plugin/` directory for Claude Code).
+Four rules keep a future `biffd` daemon (PL-225) an extraction rather than a
+rewrite: after process startup, entry points reach the engine only through
+`commands`,
+arrivals leave through `DeliverySink`, `wire` types stay plain data, and the
+engine holds no per-tool state.
+
+**Enforcement.** A layer checker runs in `make check` against a baseline of
+known violations that only shrinks, as in Lux (`lux/tools/layer_contract.py`).
+On `968e4c5` the baseline is 25 violating imports; direct engine imports from
+entry points (41) are reported separately and do not gate.
+
+**Why.** Biff serves Claude Code, Devin, opencode, codex and pi. About a tenth
+of its lines exist only for Claude Code and sit beside the shared engine;
+`biffd` (R-D.1 to R-D.8) needs the engine separable from its entry points.
+Lux's platform package standard (`target.md`) is the org precedent.
+
+**Alternatives.** No per-tool package, following Lux, which treats its plugin
+as a distribution channel: rejected because biff carries real per-tool Python
+code (Claude Code hooks and installers, codex config and queue delivery). An
+interface written only when a second adapter exists: rejected because the
+other tools' support cannot be built without it; the contract is derived from
+Claude Code's code and `research/harness-compatibility.md`. Designing `biffd`'s
+`daemon` and `client` packages now: deferred to `biffd`'s own design.
+
+**Migration.** Add the checker and baseline; move the Claude Code modules into
+`plugins/claude_code/` as a behavior-neutral step; add the contract together
+with the Claude Code adapter and its callers (`biff enable` and `biff doctor`
+through `Installer`), never as an unused interface; move one package per PR
+after that, each lowering the count. New modules go in their target package from
+the start.
