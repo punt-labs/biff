@@ -446,7 +446,7 @@ ownership keeps parallel units from colliding.
 |------|------|------|-------------|-------|
 | 0 | Prove `serve_loop` registers main as a channel and the model answers a self-test event with a tool call: throwaway build, tmux, one event | scratch branch only | Gates all of wave 1 | PL-1348 |
 | 1 | Channel mode: environment switch, capability, `serve_channel_stdio()`, startup record, `plugin.json` `env` | `server/entrypoints.py`, `__main__.py` `mcp` command, `plugin.json`, `pyproject.toml` pin | Any time after wave 0 | PL-1349 |
-| 1 | Delivery mode and self-test: token, `channel_ack`, `delivery` in the unread file, SessionStart poll start, nudge and `/biff:read` honoring the mode, interval removed from user docs | new `server/tools/channel_ack.py`, `unread.py`, `hook.py`, `plugin/hooks/unread-nudge.sh`, `plugin/commands/read.md`, `instructions` text | After PL-1349 | new |
+| 1 | Delivery mode and self-test: token, `channel_ack`, `delivery` in the unread file, SessionStart poll start, nudge and `/biff:read` honoring the mode, interval removed from user docs | new `server/tools/channel_ack.py`, `unread.py`, `hook.py`, `plugin/hooks/unread-nudge.sh`, `plugin/commands/read.md`, `instructions` text | After PL-1349 | PL-1365 |
 | 1 | Formal model | `docs/notification.tex` | Before the channel-events unit | PL-1351 |
 | 1 | Channel events: `ChannelEmitter`, detection, content rules, last-sent record, rate limit | new `server/channel_emitter.py`, one call in `_active_tick` | After PL-1349, the mode unit and PL-1351 | PL-1350 |
 | 1 | End-to-end tier | `tests/` tier and harness | Written in parallel; passes after the units above | PL-1352 |
