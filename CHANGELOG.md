@@ -12,7 +12,7 @@
 
 ### Changed
 
-- Replace generated agents' per-edit `make check` hooks with advisory DES-085
+- Replace generated agents' per-edit `make check` hooks with advisory Ethos DES-085
   file checks, blocking commit checks, and the full gate at handoff.
 - Upgrade the dev dependency to `punt-oo-ratchet==0.4.0`, retaining existing
   gate policies and baselines.

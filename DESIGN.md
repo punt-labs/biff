@@ -8467,3 +8467,31 @@ Logging from unconditional cleanup would incorrectly report crashes as completed
 `stdio MCP shutdown outcome=completed` record without paths or payloads.
 Exceptions continue to propagate without a completed outcome. HTTP retains its
 existing started/completed records and uvicorn stderr routing.
+
+## DES-087: Advisory Agent Edit Checks and Blocking Delivery Gates
+
+**Decision.** Adopt Ethos DES-085 (the upstream agent-check design, not Biff
+DES-085) through the project-default `biff` check set. Regenerate agent files
+with Ethos rather than editing generated hooks. Ruff lint/format and ShellCheck
+provide advisory file-local edit feedback within 10 seconds per check.
+Staged Python and shell files receive blocking lint/format checks; source and
+baseline changes trigger the existing project-aware OO, coupling, and suppression
+ratchets. Changes to the embedded Devin hook run `make lint` at commit so its
+extracted shell command also receives ShellCheck validation. Ethos rejects
+matched staged paths with unstaged changes before running commit checks.
+
+The full `make check` remains blocking at handoff, with a five-minute budget.
+Markdownlint stays there because the Node installation depends on nvm and its
+availability on the harness hook PATH is not established.
+
+**Alternatives.** Running the full gate after every edit blocks intentional
+multi-file intermediate states and repeatedly pays repository-wide test costs.
+File-local type checks do not replace project-wide mypy/pyright. Passing the
+JSON hook file directly to ShellCheck would not check its embedded command.
+
+**Outcome.** The old inline hook measured 69.532 seconds median across three
+runs; the advisory hook measured 0.027 seconds across five cache-cleared runs
+on the same Python file. The full gate measured 68.145 seconds and remains a
+delivery requirement. Generated hooks invoke `ethos hook post-edit` with a
+70-second harness timeout. Git and harness integration still require the new
+Ethos binary and installed hook shims; policy files alone do not install them.

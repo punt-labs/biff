@@ -41,6 +41,13 @@ checks:
     run: [shellcheck, "{files}"]
     on_fail: block
     timeout: 30s
+  - name: shellcheck-embedded-commit
+    stage: commit
+    files: ["devin-plugin/hooks.json"]
+    adapter: make
+    target: lint
+    on_fail: block
+    timeout: 30s
   - name: oo-ratchet
     stage: commit
     files: ["src/**/*.py", ".oo-baseline.json", "Makefile", "pyproject.toml", "uv.lock"]
