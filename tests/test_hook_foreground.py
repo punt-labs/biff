@@ -23,7 +23,7 @@ def test_foreground_failure(caplog: pytest.LogCaptureFixture) -> None:
     record = caplog.records[0]
     assert record.levelno == logging.ERROR
     assert record.getMessage().startswith(
-        "hook_foreground_failed error=RuntimeError at biff._hook_foreground.dispatch:"
+        "hook_foreground_failed error=RuntimeError at biff._hook_foreground.invoke:"
     )
     assert record.getMessage().rsplit(":", 1)[1].isdigit()
     assert "secret-payload" not in caplog.text
@@ -54,8 +54,11 @@ def test_detached_failure_unchanged(caplog: pytest.LogCaptureFixture) -> None:
     """Detached cleanup keeps its existing records without a foreground duplicate."""
     with (
         caplog.at_level(logging.INFO),
-        patch("biff._hook_dispatch._dispatch", side_effect=RuntimeError("secret")),
-        patch("biff._hook_foreground._dispatch") as foreground,
+        patch(
+            "biff._hook_foreground.ForegroundHook.invoke",
+            side_effect=RuntimeError("secret"),
+        ),
+        patch("biff._hook_foreground.ForegroundHook.run") as foreground,
         pytest.raises(RuntimeError),
     ):
         HookDispatch.run(detached=True)
