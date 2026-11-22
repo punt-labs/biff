@@ -17,7 +17,7 @@ Biff gives a software team, and the coding agents working with it, the Unix comm
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/7fb42c8/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/ad40c21/install.sh | sh
 ```
 
 Restart Claude Code twice. Biff is off in every repo until you turn it on, so in your repo run:
@@ -33,13 +33,13 @@ Then type `/who` to see your team.
 To install the biff CLI and MCP server without the Claude Code plugin (for another AI coding tool such as Codex or Cursor, a plain terminal, or an organization that blocks plugins), pass `--no-plugin`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/7fb42c8/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/ad40c21/install.sh | sh -s -- --no-plugin
 ```
 
 The `BIFF_NO_PLUGIN=1` environment variable does the same, for contexts that cannot pass arguments through the pipe:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/7fb42c8/install.sh | BIFF_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/ad40c21/install.sh | BIFF_NO_PLUGIN=1 sh
 ```
 
 The installer also skips the plugin when `claude` or `git` is missing. Without the plugin it still installs the `biff` command, adds it to your PATH and runs the health check. To add the plugin later, run these two commands:
@@ -94,7 +94,7 @@ biff doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/7fb42c8/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/ad40c21/install.sh -o install.sh
 ```
 
 ```bash
