@@ -14,7 +14,7 @@ from mcp.server.subscriptions import InMemorySubscriptionBus as NotificationBus
 from biff.models import BiffConfig
 from biff.plugins.contract import PluginRegistry
 from biff.relay import Relay
-from biff.relay_select import select_relay
+from biff.relay_select import RelaySelector
 from biff.server.activity import ActivityTracker
 from biff.server.display_queue import DisplayQueue
 from biff.session_routing import SessionRouting
@@ -159,7 +159,7 @@ def create_state(
     """
     owns_relay = relay is None
     if relay is None:
-        relay = select_relay(config, data_dir, dormant=dormant)
+        relay = RelaySelector(config, data_dir).select(dormant=dormant)
     # Loader mirrors this fallback: ``get_repo_common_root == ""`` -> ``repo_root``.
     # A ``None`` from a test that never threaded the common root routes markers
     # through the shared ``hints/default`` bucket via ``Path("")``, matching the

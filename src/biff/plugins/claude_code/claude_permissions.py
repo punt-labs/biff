@@ -93,12 +93,13 @@ class ProjectPermissions:
 
     def grant(self) -> PermissionChange:
         """Append each missing biff rule and drop legacy ones; return the added."""
-        return self._update(BIFF_RULES, add=True, strip=_LEGACY_RULES)
+        return self._update(self._root, BIFF_RULES, add=True, strip=_LEGACY_RULES)
 
     def revoke(self, rules: Iterable[str] | None = None) -> PermissionChange:
         """Remove *rules* (default: every biff and legacy rule); return them."""
         if rules is None:
             return self._update(
+                self._root,
                 {
                     tier: (*owned, *_LEGACY_RULES.get(tier, ()))
                     for tier, owned in BIFF_RULES.items()
@@ -107,6 +108,7 @@ class ProjectPermissions:
             )
         selected = set(rules)
         return self._update(
+            self._root,
             {
                 tier: tuple(r for r in owned if r in selected)
                 for tier, owned in BIFF_RULES.items()
@@ -114,15 +116,16 @@ class ProjectPermissions:
             add=False,
         )
 
+    @staticmethod
     def _update(
-        self,
+        root: Path,
         rules: dict[str, tuple[str, ...]],
         *,
         add: bool,
         strip: dict[str, tuple[str, ...]] | None = None,
     ) -> PermissionChange:
         """Apply the grant or revoke under the lock, reporting any refusal."""
-        if self._root.resolve() == Path.home().resolve():
+        if root.resolve() == Path.home().resolve():
             return PermissionChange(
                 error="the repo is the home directory, whose .claude/"
                 "settings.json is user-global"
@@ -130,7 +133,7 @@ class ProjectPermissions:
         if not any(rules.values()):
             return PermissionChange()
         try:
-            root_fd = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
             try:
                 dir_fd = ProjectPermissions._open_claude_dir(root_fd, create=add)
                 if dir_fd is None:

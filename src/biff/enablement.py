@@ -26,10 +26,9 @@ model), writing five artifacts:
   deposits a guide (``tool-enable-disable.md`` §2.5/§2.6); ``install`` never does.
 
 ``disable`` removes the marker, hooks, CI workflow, allow rules and the import
-line.  The
-deposited guide is left dormant (§2.9).  ``enable``/``disable`` invoke git only
-read-only (``git rev-parse`` to resolve the hooks directory); they never create
-commits or stage files -- the user commits the tracked marker + CI workflow via
+line.  The deposited guide is left dormant (§2.9).  ``enable``/``disable`` invoke
+git only read-only (``git rev-parse`` to resolve the hooks directory); they never
+create commits or stage files -- the user commits the tracked marker + CI workflow via
 a PR like any repo change, while the local hooks are activated per-clone (each
 contributor runs ``biff enable`` or the superset ``biff install`` once in their
 clone).  Claude Code's session/tool hooks are registered globally by the

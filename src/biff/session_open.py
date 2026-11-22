@@ -77,7 +77,7 @@ async def open_session_from_payload(
     """
     from biff._stdlib import biff_data_dir  # noqa: PLC0415
     from biff.config import RELAY_URL_UNSET, load_mcp_config  # noqa: PLC0415
-    from biff.relay_select import select_relay  # noqa: PLC0415
+    from biff.relay_select import RelaySelector  # noqa: PLC0415
     from biff.session_routing import SessionIdError  # noqa: PLC0415
 
     raw = data.get("session_id")
@@ -94,7 +94,7 @@ async def open_session_from_payload(
         start=Path(cwd) if isinstance(cwd, str) and cwd else None,
     )
     config = resolved.config
-    relay = select_relay(config, resolved.data_dir, dormant=False)
+    relay = RelaySelector(config, resolved.data_dir).select(dormant=False)
     data_root = biff_data_dir()
     try:
         return await SessionOpener(
