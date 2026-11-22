@@ -27,6 +27,7 @@ from biff.logging_config import configure_logging
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.plugins.claude_code.claude_md import ClaudeMdImport
+from biff.server.state import create_state
 from biff.server.transport_runtime import McpLifecycleHandler
 
 runner = CliRunner()
@@ -45,6 +46,11 @@ def _git_init_repo(repo: Path) -> Path:
         capture_output=True,
     )
     return repo
+
+
+_STATE = create_state(
+    BiffConfig(user="kai", repo_name="myrepo"), Path("/tmp"), dormant=True
+)
 
 
 _RESOLVED = ResolvedConfig(
@@ -190,7 +196,7 @@ class TestServeCommand:
     """``biff serve`` is HTTP-only; ``biff mcp`` is stdio-only."""
 
     @patch("biff.server.transport_runtime.create_server")
-    @patch("biff.server.launch.create_state")
+    @patch("biff.server.launch.create_state", return_value=_STATE)
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_http_default(
         self,
@@ -210,7 +216,7 @@ class TestServeCommand:
         )
 
     @patch("biff.server.transport_runtime.create_server")
-    @patch("biff.server.launch.create_state")
+    @patch("biff.server.launch.create_state", return_value=_STATE)
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_custom_host_port(
         self,
@@ -233,7 +239,7 @@ class TestServeCommand:
         )
 
     @patch("biff.server.transport_runtime.create_server")
-    @patch("biff.server.launch.create_state")
+    @patch("biff.server.launch.create_state", return_value=_STATE)
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_passes_user_override(
         self,
@@ -252,7 +258,7 @@ class TestMcpCommand:
     """``biff mcp`` starts the MCP server with stdio transport."""
 
     @patch("biff.server.transport_runtime.create_server")
-    @patch("biff.server.launch.create_state")
+    @patch("biff.server.launch.create_state", return_value=_STATE)
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_stdio_transport(
         self,
@@ -267,7 +273,7 @@ class TestMcpCommand:
         mock_mcp.run.assert_called_once_with(transport="stdio")
 
     @patch("biff.server.transport_runtime.create_server")
-    @patch("biff.server.launch.create_state")
+    @patch("biff.server.launch.create_state", return_value=_STATE)
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_passes_data_dir_override(
         self,
@@ -281,7 +287,7 @@ class TestMcpCommand:
         assert call_kwargs["data_dir_override"] == Path("/custom/dir")
 
     @patch("biff.server.transport_runtime.create_server")
-    @patch("biff.server.launch.create_state")
+    @patch("biff.server.launch.create_state", return_value=_STATE)
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_passes_prefix(
         self,
@@ -295,7 +301,7 @@ class TestMcpCommand:
         assert call_kwargs["prefix"] == Path("/var/spool")
 
     @patch("biff.server.transport_runtime.create_server")
-    @patch("biff.server.launch.create_state")
+    @patch("biff.server.launch.create_state", return_value=_STATE)
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_no_user_delegates_to_config(
         self,

@@ -13,6 +13,7 @@ from mcp.server.subscriptions import InMemorySubscriptionBus as NotificationBus
 
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
+from biff.plugins.contract import PluginRegistry
 from biff.relay import DormantRelay, LocalRelay, Relay
 from biff.server.activity import ActivityTracker
 from biff.server.display_queue import DisplayQueue
@@ -59,6 +60,8 @@ class ServerState:
     # Directory the unread status file lives in; ``bind`` resolves the
     # per-session file name inside it once the session is known.
     unread_dir: Path | None = None
+    # The installers `biff` enable/disable calls; `cli` builds it at startup.
+    plugins: PluginRegistry = field(default_factory=PluginRegistry, compare=False)
 
     def __post_init__(self) -> None:
         """Compose the shared ephemeral talk state from this server's identity.

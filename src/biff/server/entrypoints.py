@@ -11,6 +11,7 @@ import typer
 
 from biff._cli_runtime import McpInvocation
 from biff.config import RELAY_URL_UNSET, load_mcp_config
+from biff.plugins.contract import PluginRegistry
 from biff.server.transport_runtime import McpLifecycleHandler, McpServerBuilder
 from biff.usage import McpUsageMiddleware
 
@@ -48,7 +49,9 @@ class McpServerOptions:
     prefix: Path
     transport: Literal["stdio", "http"] = "stdio"
 
-    def create_server(self, *, default_user: str | None = None) -> FastMCP[ServerState]:
+    def create_server(
+        self, plugins: PluginRegistry, *, default_user: str | None = None
+    ) -> FastMCP[ServerState]:
         """Resolve configuration and build an unbound MCP server."""
         resolved = load_mcp_config(
             user_override=self.user or default_user,
@@ -59,14 +62,18 @@ class McpServerOptions:
             prefix=self.prefix,
         )
 
-        return McpServerBuilder(resolved, self.user, self.transport).create_server()
+        return McpServerBuilder(
+            resolved, self.user, self.transport, plugins
+        ).create_server()
 
     def _observed_server(self, ctx: typer.Context) -> FastMCP[ServerState]:
         if (invocation := ctx.find_object(McpInvocation)) is not None:
-            server = self.create_server(default_user=invocation.user)
+            server = self.create_server(
+                invocation.plugins, default_user=invocation.user
+            )
             server.add_middleware(McpUsageMiddleware(invocation.usage))
             return server
-        return self.create_server()
+        return self.create_server(PluginRegistry())
 
     @classmethod
     def serve(

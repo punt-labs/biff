@@ -1388,7 +1388,7 @@ def enable(
     from biff.enablement import RepoEnablement
     from biff.git_hooks import HOOKS_DIR_UNRESOLVED_NOTICE
 
-    change = RepoEnablement(repo_root).enable()
+    change = RepoEnablement(repo_root, CliInvocation.plugin_registry()).enable()
     if not change.git_hooks_resolved:
         # Fail loud, not silent: enable wrote nothing (the marker included), so
         # do NOT claim success. Emit the same NOTICE the install path uses and
@@ -1429,7 +1429,7 @@ def disable(
 
     from biff.enablement import RepoEnablement
 
-    change = RepoEnablement(repo_root).disable()
+    change = RepoEnablement(repo_root, CliInvocation.plugin_registry()).disable()
     if change.ci_workflow_changed:
         print("CI workflow removed: biff-notify.yml")
     if change.git_hooks_changed:
@@ -1487,7 +1487,7 @@ def doctor() -> None:
     """Check biff installation health."""
     from biff.doctor import check_environment
 
-    code = check_environment()
+    code = check_environment(CliInvocation.plugin_registry())
     if code != 0:
         raise typer.Exit(code=code)
 

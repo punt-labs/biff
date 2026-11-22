@@ -29,7 +29,7 @@
     },
     "src/biff/doctor.py": {
       "noqa": 2,
-      "pyright_ignore": 2,
+      "pyright_ignore": 1,
       "per_file_ignores": 4
     },
     "src/biff/git_hooks.py": {
@@ -52,6 +52,9 @@
     },
     "src/biff/plugins/claude_code/hook.py": {
       "noqa": 22
+    },
+    "src/biff/plugins/claude_code/installer.py": {
+      "pyright_ignore": 1
     },
     "src/biff/plugins/claude_code/statusline.py": {
       "noqa": 2,
@@ -135,5 +138,5 @@
       "per_file_ignores": 4
     }
   },
-  "updated_at": "2026-11-22T22:37:46Z"
+  "updated_at": "2026-11-22T23:04:18Z"
 }

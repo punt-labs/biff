@@ -60,7 +60,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "Error: not in a git repository."
 
         if action == "enable":
-            change = RepoEnablement(repo_root).enable()
+            change = RepoEnablement(repo_root, state.plugins).enable()
             if not change.git_hooks_resolved:
                 # Fail loud, identical to the CLI `biff enable` surface: enable
                 # wrote nothing (marker included), so never claim success.
@@ -68,4 +68,5 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
                 return HOOKS_DIR_UNRESOLVED_NOTICE
             return "\n".join(change.enable_report())
-        return "\n".join(RepoEnablement(repo_root).disable().disable_report())
+        change = RepoEnablement(repo_root, state.plugins).disable()
+        return "\n".join(change.disable_report())

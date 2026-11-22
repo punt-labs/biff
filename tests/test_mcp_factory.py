@@ -12,6 +12,7 @@ import typer
 from typer.testing import CliRunner
 
 from biff.__main__ import app
+from biff._cli_runtime import CliInvocation
 from biff.caller_identity import CallerIdentity
 from biff.models import BiffConfig
 from biff.plugins.claude_code.statusline import UNREAD_DIR
@@ -29,11 +30,20 @@ def test_factory_creates_an_unbound_state_with_the_unread_directory(
     with patch("biff.server.transport_runtime.create_server") as server:
         McpServerOptions(
             user="rmh", data_dir=tmp_path, relay_url="", prefix=tmp_path
-        ).create_server()
+        ).create_server(CliInvocation.plugin_registry())
     state = server.call_args.args[0]
     assert state.is_bound is False
     assert state.unread_dir == UNREAD_DIR
     assert state.unread_path is None
+
+
+def test_factory_hands_the_cli_registry_to_the_server_state(tmp_path: Path) -> None:
+    registry = CliInvocation.plugin_registry()
+    with patch("biff.server.transport_runtime.create_server") as server:
+        McpServerOptions(
+            user="rmh", data_dir=tmp_path, relay_url="", prefix=tmp_path
+        ).create_server(registry)
+    assert server.call_args.args[0].plugins is registry
 
 
 def test_removed_pin_flags_are_rejected() -> None:
@@ -53,7 +63,7 @@ def test_default_caller_uses_startup_session_and_explicit_user(
             data_dir=tmp_path,
             relay_url="",
             prefix=tmp_path,
-        ).create_server()
+        ).create_server(CliInvocation.plugin_registry())
     assert server.call_args.kwargs["default_caller"] == CallerIdentity(
         "startup-session", "devin"
     )
@@ -70,7 +80,7 @@ def test_default_caller_requires_valid_startup_session(
             data_dir=tmp_path,
             relay_url="",
             prefix=tmp_path,
-        ).create_server()
+        ).create_server(CliInvocation.plugin_registry())
 
 
 def test_default_caller_has_no_new_flag() -> None:
@@ -96,7 +106,7 @@ def test_only_explicit_stdio_user_enables_default_caller(
             prefix=tmp_path,
             transport="stdio" if transport == "stdio" else "http",
         )
-        options.create_server()
+        options.create_server(CliInvocation.plugin_registry())
     assert server.call_args.kwargs["default_caller"] is None
 
 
@@ -105,9 +115,9 @@ def test_explicit_user_gets_fresh_session_without_environment(tmp_path: Path) ->
         options = McpServerOptions(
             user="devin", data_dir=tmp_path, relay_url="", prefix=tmp_path
         )
-        options.create_server()
+        options.create_server(CliInvocation.plugin_registry())
         first = server.call_args.kwargs["default_caller"]
-        options.create_server()
+        options.create_server(CliInvocation.plugin_registry())
         second = server.call_args.kwargs["default_caller"]
     assert isinstance(first, CallerIdentity) and isinstance(second, CallerIdentity)
     assert first.agent_id == second.agent_id == "devin"
@@ -118,7 +128,7 @@ def test_inferred_default_user_does_not_enable_unstamped_calls(tmp_path: Path) -
     with patch("biff.server.transport_runtime.create_server") as server:
         McpServerOptions(
             user=None, data_dir=tmp_path, relay_url="", prefix=tmp_path
-        ).create_server(default_user="devin")
+        ).create_server(CliInvocation.plugin_registry(), default_user="devin")
     assert server.call_args.kwargs["default_caller"] is None
 
 

@@ -39,20 +39,17 @@ touch them.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from biff._enablement_artifacts import CheckoutArtifacts
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
 from biff.git_hooks import deploy_git_hooks, remove_git_hooks, resolve_hooks_dir
-from biff.plugins.claude_code.claude_md import UNCLOSED_FENCE, ClaudeMdImport
-from biff.plugins.claude_code.claude_permissions import (
-    PermissionChange,
-    ProjectPermissions,
-)
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from biff.plugins.contract import Installer, PermissionChange, PluginRegistry
 
 __all__ = ["DISABLED_MESSAGE", "ENABLED_MESSAGE", "EnablementChange", "RepoEnablement"]
 
@@ -69,8 +66,6 @@ DISABLED_MESSAGE = (
     "Claude Code for changes to take effect."
 )
 
-_REPO_IMPORT_LINE = "@.punt-labs/biff/CLAUDE.md"
-
 
 @dataclass(frozen=True, slots=True)
 class EnablementChange:
@@ -81,32 +76,28 @@ class EnablementChange:
     an *empty* ``git_hooks_changed`` -- "already current" (resolved, nothing to
     do) from "could not deploy anything" -- so ``enable`` never reports success
     while silently deploying zero hooks.  ``permissions`` reports the
-    ``.claude/settings.json`` allow rules added or removed, or why not.
+    allow rules each registered tool's installer added or removed, or why not.
     """
 
     ci_workflow_changed: bool
     git_hooks_changed: tuple[str, ...]
     git_hooks_resolved: bool
-    permissions: PermissionChange = field(default_factory=PermissionChange)
+    permissions: tuple[PermissionChange, ...] = ()
 
     @property
     def failed(self) -> bool:
         """Whether the run must be reported as a failure (non-zero exit)."""
-        return bool(self.permissions.error)
+        return any(c.error for c in self.permissions)
 
     def enable_report(self) -> list[str]:
         """Return the permission lines and closing line for an ``enable`` run."""
         if self.failed:
-            fix = (
-                "Close the code fence in CLAUDE.md"
-                if self.permissions.error == UNCLOSED_FENCE
-                else "Fix .claude/settings.json"
-            )
+            fix = next(c.fix for c in self.permissions if c.error)
             return [
-                *self.permissions.lines("added to"),
+                *self._lines("added to"),
                 f"biff not enabled; nothing was written. {fix} and rerun biff enable.",
             ]
-        return [*self.permissions.lines("added to"), ENABLED_MESSAGE]
+        return [*self._lines("added to"), ENABLED_MESSAGE]
 
     def disable_report(self) -> list[str]:
         """Return the permission lines and closing line for a ``disable`` run."""
@@ -116,7 +107,10 @@ class EnablementChange:
                 "biff disabled, but its allow rules are still in "
                 ".claude/settings.json. Fix the file and rerun biff disable."
             )
-        return [*self.permissions.lines("removed from"), closing]
+        return [*self._lines("removed from"), closing]
+
+    def _lines(self, verb: str) -> list[str]:
+        return [line for c in self.permissions for line in c.lines(verb)]
 
 
 @final
@@ -130,14 +124,16 @@ class RepoEnablement:
     any other repo change; the local git hooks are per-clone machinery.
     """
 
-    __slots__ = ("_root",)
+    __slots__ = ("_plugins", "_root")
 
     _root: Path
+    _plugins: PluginRegistry
 
-    def __new__(cls, repo_root: Path) -> Self:
-        """Create an enablement manager for the repository."""
+    def __new__(cls, repo_root: Path, plugins: PluginRegistry) -> Self:
+        """Create an enablement manager; *plugins* holds each tool's installer."""
         self = super().__new__(cls)
         self._root = repo_root
+        self._plugins = plugins
         return self
 
     def enable(self) -> EnablementChange:
@@ -155,9 +151,10 @@ class RepoEnablement:
            and the repo cleanly OFF. (``deploy_ci_workflow`` returning ``False``
            is a no-op "already current", not a failure -- real failures raise.)
            The allow rules granted first are revoked again before re-raising.
-        3. **Permissions refused.** The ``.claude/settings.json`` grant runs
-           first; if it is refused (malformed file, symlink, home directory)
-           nothing else is written and the change reports ``failed``.
+        3. **Permissions refused.** Each tool's grant runs first; if one is
+           refused (malformed file, symlink, home directory) the earlier
+           grants are revoked, nothing else is written, and the change
+           reports ``failed``.
         """
         if resolve_hooks_dir(self._root) is None:
             return EnablementChange(
@@ -165,34 +162,28 @@ class RepoEnablement:
                 git_hooks_changed=(),
                 git_hooks_resolved=False,
             )
-        if self._guide_import().append_would_be_fenced():
+        grants, refusals = self._grant_all()
+        if refusals:
             return EnablementChange(
                 ci_workflow_changed=False,
                 git_hooks_changed=(),
                 git_hooks_resolved=True,
-                permissions=PermissionChange(error=UNCLOSED_FENCE),
+                permissions=refusals,
             )
-        permissions = ProjectPermissions(self._root).grant()
-        if permissions.error:
-            return EnablementChange(
-                ci_workflow_changed=False,
-                git_hooks_changed=(),
-                git_hooks_resolved=True,
-                permissions=permissions,
-            )
+        permissions = tuple(c for _, c in grants)
         try:
             ci_changed = deploy_ci_workflow(self._root)
             hooks_changed = tuple(deploy_git_hooks(self._root))
             changes = self._enable_artifacts()
         except BaseException:
-            ProjectPermissions(self._root).revoke(permissions.changed)
+            self._revoke(grants)
             raise
         CheckoutArtifacts.report(
             "enable",
             {
                 "workflow": ci_changed,
                 "hooks": bool(hooks_changed),
-                "permissions": bool(permissions.changed),
+                "permissions": any(c.changed for c in permissions),
                 **changes,
             },
         )
@@ -218,17 +209,18 @@ class RepoEnablement:
         """
         resolved = resolve_hooks_dir(self._root) is not None
         marker_changed = self._remove_marker()
-        permissions = ProjectPermissions(self._root).revoke()
+        installers = self._plugins.installers()
+        permissions = tuple(i.revoke(self._root) for i in installers)
         hooks_changed = tuple(remove_git_hooks(self._root))
         ci_changed = remove_ci_workflow(self._root)
-        import_changed = self._guide_import().prune()
+        import_changed = sum(i.unregister_guide(self._root) for i in installers) > 0
         CheckoutArtifacts.report(
             "disable",
             {
                 "marker": marker_changed,
                 "workflow": ci_changed,
                 "hooks": bool(hooks_changed),
-                "permissions": bool(permissions.changed),
+                "permissions": any(c.changed for c in permissions),
                 "guide_import": import_changed,
             },
         )
@@ -243,7 +235,11 @@ class RepoEnablement:
         artifacts = CheckoutArtifacts(self._root)
         return {
             "guide": artifacts.deposit_guide(),
-            "guide_import": self._guide_import().register(),
+            # sum, not any: every installer registers, none is short-circuited.
+            "guide_import": sum(
+                i.register_guide(self._root) for i in self._plugins.installers()
+            )
+            > 0,
             "ignore": artifacts.ignore_locks(),
             "marker": artifacts.write_marker(),
         }
@@ -251,5 +247,29 @@ class RepoEnablement:
     def _remove_marker(self) -> bool:
         return CheckoutArtifacts(self._root).remove_marker()
 
-    def _guide_import(self) -> ClaudeMdImport:
-        return ClaudeMdImport(self._root / "CLAUDE.md", _REPO_IMPORT_LINE)
+    def _grant_all(
+        self,
+    ) -> tuple[list[tuple[Installer, PermissionChange]], tuple[PermissionChange, ...]]:
+        """Preflight, then grant, every tool; return the grants or the refusals.
+
+        A refusal at either step writes nothing further and revokes the grants
+        already made.
+        """
+        installers = self._plugins.installers()
+        refusals = tuple(
+            c for c in (i.preflight(self._root) for i in installers) if c.error
+        )
+        grants: list[tuple[Installer, PermissionChange]] = []
+        if refusals:
+            return grants, refusals
+        for installer in installers:
+            granted = installer.grant(self._root)
+            if granted.error:
+                self._revoke(grants)
+                return [], (granted,)
+            grants.append((installer, granted))
+        return grants, ()
+
+    def _revoke(self, grants: list[tuple[Installer, PermissionChange]]) -> None:
+        for installer, granted in grants:
+            installer.revoke(self._root, granted.changed)

@@ -18,14 +18,15 @@ import json
 import os
 import secrets
 import stat
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, cast, final
+
+from biff.plugins.contract import PermissionChange
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["BIFF_RULES", "PermissionChange", "ProjectPermissions"]
+__all__ = ["BIFF_RULES", "ProjectPermissions"]
 
 # Broad allow per surface with exact ask carve-outs (permissions.md §6): ask
 # beats allow, so the machine- and repo-mutating verbs keep prompting while new
@@ -64,25 +65,6 @@ _NEW_FILE_MODE: Final = 0o644
 _SETTINGS: Final = "settings.json"
 _LOCK: Final = ".settings.json.punt-import.lock"
 _NOFOLLOW: Final = os.O_NOFOLLOW | os.O_CLOEXEC
-
-
-@dataclass(frozen=True, slots=True)
-class PermissionChange:
-    """What a grant or revoke did to the project's ``.claude/settings.json``.
-
-    ``changed`` lists the rules added (grant) or removed (revoke); an empty
-    tuple with no ``error`` means the file already matched. ``error`` explains
-    why the file was left untouched.
-    """
-
-    changed: tuple[str, ...] = ()
-    error: str = ""
-
-    def lines(self, verb: str) -> list[str]:
-        """Return one report line per changed rule, the refusal, or none."""
-        if self.error:
-            return [f"Permissions not changed: {self.error}"]
-        return [f"Permission {verb} .claude/settings.json: {r}" for r in self.changed]
 
 
 @final

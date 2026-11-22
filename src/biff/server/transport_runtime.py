@@ -19,6 +19,7 @@ from biff.server.launch import McpLaunch
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
+    from biff.plugins.contract import PluginRegistry
     from biff.server.state import ServerState
 
 _logger = logging.getLogger(__name__)
@@ -36,11 +37,14 @@ class McpServerBuilder:
     _resolved: ResolvedConfig
     _user: str | None
     _transport: str
+    _plugins: PluginRegistry
 
     def create_server(self) -> FastMCP[ServerState]:
         """Create unbound resources with the transport's default caller policy."""
         launch = McpLaunch(
-            self._resolved, CallerPolicy.for_launch(self._user, self._transport)
+            self._resolved,
+            CallerPolicy.for_launch(self._user, self._transport),
+            self._plugins,
         )
         return create_server(launch.state(), default_caller=launch.caller)
 

@@ -12,9 +12,9 @@ import pytest
 from biff.plugins.claude_code import claude_permissions
 from biff.plugins.claude_code.claude_permissions import (
     BIFF_RULES,
-    PermissionChange,
     ProjectPermissions,
 )
+from biff.plugins.contract import PermissionChange
 
 
 def _settings(root: Path) -> Path:
@@ -143,12 +143,6 @@ class TestGrant:
         change = ProjectPermissions(tmp_path).grant()
         assert "home directory" in change.error
         assert not (tmp_path / ".claude").exists()
-
-    def test_lines_report_each_rule(self, tmp_path: Path) -> None:
-        lines = ProjectPermissions(tmp_path).grant().lines("added to")
-        assert lines == [
-            f"Permission added to .claude/settings.json: {rule}" for rule in _ALL
-        ]
 
     def test_each_surface_is_allowed_broadly(self) -> None:
         assert _ALLOW == ("Bash(biff:*)", "mcp__plugin_biff_tty__*", "Skill(biff:*)")

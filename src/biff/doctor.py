@@ -11,13 +11,15 @@ import asyncio
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from biff.config import find_git_root, is_enabled, resolve_relay_config
 from biff.models import RelayAuth
-from biff.plugins.claude_code.statusline import SETTINGS_PATH
+from biff.plugins.contract import CheckResult
+
+if TYPE_CHECKING:
+    from biff.plugins.contract import PluginRegistry
 
 PLUGIN_ID = "biff@punt-labs"
 COMMANDS_DIR = Path.home() / ".claude" / "commands"
@@ -33,16 +35,6 @@ BIFF_COMMANDS = (
     "who.md",
     "write.md",
 )
-
-
-@dataclass(frozen=True)
-class CheckResult:
-    """Outcome of a single diagnostic check."""
-
-    name: str
-    passed: bool
-    message: str
-    required: bool = True
 
 
 # Individual checks ----------------------------------------------------------
@@ -361,32 +353,6 @@ def _check_ci_workflow() -> CheckResult:
     )
 
 
-def _check_statusline() -> CheckResult:
-    """Check status line is configured (informational)."""
-    from biff.plugins.claude_code.statusline import read_settings
-
-    try:
-        settings = read_settings(SETTINGS_PATH)
-    except (json.JSONDecodeError, OSError):
-        return CheckResult(
-            "Status line",
-            False,
-            "could not read settings.json",
-            required=False,
-        )
-    status_line = settings.get("statusLine")
-    if isinstance(status_line, dict):
-        cmd = status_line.get("command")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        if isinstance(cmd, str) and "biff statusline" in cmd:
-            return CheckResult("Status line", True, "configured", required=False)
-    return CheckResult(
-        "Status line",
-        False,
-        "not configured (restart Claude Code to auto-install)",
-        required=False,
-    )
-
-
 # Aggregator -----------------------------------------------------------------
 
 
@@ -401,8 +367,11 @@ def _print_check(check: CheckResult) -> None:
     print(f"  {symbol} {check.name}: {check.message}")
 
 
-def check_environment() -> int:
-    """Run all diagnostics. Returns 0 if all required pass, 1 otherwise."""
+def check_environment(plugins: PluginRegistry) -> int:
+    """Run all diagnostics. Returns 0 if all required pass, 1 otherwise.
+
+    Each registered tool's installer adds its own checks after biff's.
+    """
     from importlib.metadata import version
 
     print(f"punt-biff {version('punt-biff')}")
@@ -417,7 +386,7 @@ def check_environment() -> int:
         _check_enabled(),
         _check_git_hooks(),
         _check_ci_workflow(),
-        _check_statusline(),
+        *(c for i in plugins.installers() for c in i.check()),
     ]
 
     for check in checks:
