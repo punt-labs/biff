@@ -8495,7 +8495,6 @@ on the same Python file. The full gate measured 68.145 seconds and remains a
 delivery requirement. Generated hooks invoke `ethos hook post-edit` with a
 70-second harness timeout. Git and harness integration still require the new
 Ethos binary and installed hook shims; policy files alone do not install them.
-||||||| 968e4c5
 
 ## DES-088: Package Structure — Layers, a Plugin Contract, and Room for biffd
 
