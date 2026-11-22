@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Malformed hook stdin (invalid JSON, non-object JSON, or invalid UTF-8) now
+  logs one `hook_input_malformed` WARNING without payload or exception text.
+  Stdin read faults log at ERROR.
+
 ## [1.24.1] - 2026-11-22
 
 ### Fixed
