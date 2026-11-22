@@ -19,7 +19,8 @@ model), writing five artifacts:
   deploying them in a not-yet-enabled clone is a safe no-op until the marker
   lands (§2.11).
 - ``.claude/settings.json`` allow rules for biff's MCP tools and commands --
-  the operator's opt-in, repo-level only (:mod:`biff.claude_permissions`).
+  the operator's opt-in, repo-level only
+  (:mod:`biff.plugins.claude_code.claude_permissions`).
 - ``.punt-labs/biff/CLAUDE.md`` plus the ``@.punt-labs/biff/CLAUDE.md`` import
   in the repo ``CLAUDE.md`` -- the agent guide.  ``enable`` is the sole path that
   deposits a guide (``tool-enable-disable.md`` §2.5/§2.6); ``install`` never does.
@@ -43,9 +44,12 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff._enablement_artifacts import CheckoutArtifacts
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
-from biff.claude_md import UNCLOSED_FENCE, ClaudeMdImport
-from biff.claude_permissions import PermissionChange, ProjectPermissions
 from biff.git_hooks import deploy_git_hooks, remove_git_hooks, resolve_hooks_dir
+from biff.plugins.claude_code.claude_md import UNCLOSED_FENCE, ClaudeMdImport
+from biff.plugins.claude_code.claude_permissions import (
+    PermissionChange,
+    ProjectPermissions,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path

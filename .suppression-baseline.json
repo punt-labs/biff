@@ -1,21 +1,19 @@
 {
   "total": 204,
   "by_category": {
-    "noqa": 131,
+    "noqa": 127,
     "type_ignore": 10,
     "pylint_disable": 0,
-    "pyright_ignore": 32,
-    "per_file_ignores": 31
+    "pyright_ignore": 31,
+    "file_level": 1,
+    "per_file_ignores": 35
   },
   "by_file": {
     "src/biff/__main__.py": {
-      "noqa": 6,
+      "noqa": 4,
       "type_ignore": 1,
       "pyright_ignore": 3,
       "per_file_ignores": 3
-    },
-    "src/biff/_hook_entry.py": {
-      "noqa": 14
     },
     "src/biff/_stdlib.py": {
       "noqa": 5
@@ -37,9 +35,6 @@
     "src/biff/git_hooks.py": {
       "noqa": 2
     },
-    "src/biff/hook.py": {
-      "noqa": 22
-    },
     "src/biff/identity.py": {
       "noqa": 2
     },
@@ -49,13 +44,25 @@
     },
     "src/biff/nats_relay.py": {
       "noqa": 5,
-      "pyright_ignore": 13
+      "pyright_ignore": 12
+    },
+    "src/biff/plugins/claude_code/_hook_entry.py": {
+      "noqa": 14,
+      "file_level": 1
+    },
+    "src/biff/plugins/claude_code/hook.py": {
+      "noqa": 22
+    },
+    "src/biff/plugins/claude_code/statusline.py": {
+      "noqa": 2,
+      "type_ignore": 3,
+      "per_file_ignores": 2
     },
     "src/biff/prob_gate.py": {
       "noqa": 7
     },
     "src/biff/relay.py": {
-      "noqa": 24
+      "noqa": 22
     },
     "src/biff/repl_readline.py": {
       "noqa": 1
@@ -65,8 +72,11 @@
       "type_ignore": 5,
       "pyright_ignore": 8
     },
+    "src/biff/server/entrypoints.py": {
+      "noqa": 1
+    },
     "src/biff/server/tools/_descriptions.py": {
-      "noqa": 13,
+      "noqa": 12,
       "pyright_ignore": 5
     },
     "src/biff/server/tools/biff_relay.py": {
@@ -94,11 +104,6 @@
     "src/biff/session_registry.py": {
       "noqa": 1
     },
-    "src/biff/statusline.py": {
-      "noqa": 2,
-      "type_ignore": 3,
-      "per_file_ignores": 2
-    },
     "src/biff/testing/caller.py": {
       "pyright_ignore": 1
     },
@@ -107,6 +112,12 @@
     },
     "src/biff/tty.py": {
       "noqa": 1
+    },
+    "tools/check_python_docs.py": {
+      "per_file_ignores": 3
+    },
+    "tests/test_python_docs.py": {
+      "per_file_ignores": 1
     },
     "tests/*": {
       "per_file_ignores": 10
@@ -124,5 +135,5 @@
       "per_file_ignores": 4
     }
   },
-  "updated_at": "2026-11-19T00:39:17Z"
+  "updated_at": "2026-11-22T22:04:50Z"
 }

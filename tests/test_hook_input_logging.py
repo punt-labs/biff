@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from biff._hook_entry import _cc_session_start
-from biff.hook import _read_hook_input
+from biff.plugins.claude_code._hook_entry import _cc_session_start
+from biff.plugins.claude_code.hook import _read_hook_input
 
 
 @pytest.mark.parametrize(
@@ -25,8 +25,10 @@ def test_malformed_session_start(
     with (
         os.fdopen(read_fd) as stdin,
         patch("sys.stdin", stdin),
-        patch("biff.hook._open_session") as open_session,
-        patch("biff.hook.handle_session_start", return_value="context"),
+        patch("biff.plugins.claude_code.hook._open_session") as open_session,
+        patch(
+            "biff.plugins.claude_code.hook.handle_session_start", return_value="context"
+        ),
     ):
         _cc_session_start()
     open_session.assert_called_once_with({})

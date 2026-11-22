@@ -16,9 +16,9 @@ import pytest
 
 from biff.cli_context import CliContext
 from biff.commands.plan import plan
-from biff.hook import handle_pre_tool_use, handle_session_start
 from biff.markers import has_plan_marker, write_plan_marker
 from biff.models import BiffConfig
+from biff.plugins.claude_code.hook import handle_pre_tool_use, handle_session_start
 from biff.relay import LocalRelay
 
 
@@ -216,7 +216,7 @@ class TestUnresolvedRootDoesNotWedge:
     def test_empty_root_allows_rather_than_denies(self, tmp_path: Path) -> None:
         with (
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
-            patch("biff.hook._repo_common_root", return_value=""),
+            patch("biff.plugins.claude_code.hook._repo_common_root", return_value=""),
         ):
             result = handle_pre_tool_use({"session_id": "sid", "cwd": "/not/a/repo"})
 
@@ -353,7 +353,7 @@ class TestSkippedSharedPlanIsDiagnosable:
             from biff._stdlib import get_repo_common_root
 
             write_plan_marker(get_repo_common_root(str(repo)), None, "cli plan")
-            with caplog.at_level("INFO", logger="biff.hook"):
+            with caplog.at_level("INFO", logger="biff.plugins.claude_code.hook"):
                 result = handle_pre_tool_use(
                     {"session_id": "skewed-session", "cwd": str(repo)}
                 )
@@ -370,7 +370,7 @@ class TestSkippedSharedPlanIsDiagnosable:
         repo = _make_repo(tmp_path / "repo")
         with (
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
-            caplog.at_level("INFO", logger="biff.hook"),
+            caplog.at_level("INFO", logger="biff.plugins.claude_code.hook"),
         ):
             handle_pre_tool_use({"session_id": "s", "cwd": str(repo)})
         assert not any("shared" in r.getMessage() for r in caplog.records)

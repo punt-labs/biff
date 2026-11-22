@@ -5,7 +5,7 @@ nats, pydantic, fastmcp, typer, server, commands — ~4.7s of module
 load before a single line of handler code runs.
 
 This module is the dispatcher for ``biff-hook``, which imports only
-``biff.hook`` (typer + stdlib) and dispatches directly to handler
+``biff.plugins.claude_code.hook`` (typer + stdlib) and dispatches directly to handler
 functions.  Hook handlers use lazy imports from ``biff._stdlib``
 (stdlib-only) and ``biff.markers`` (stdlib-only), avoiding the full
 dependency tree entirely.
@@ -14,7 +14,7 @@ Import cost: ~0.2s (typer) vs ~4.7s (full CLI).
 """
 
 # pyright: reportPrivateUsage=false
-# This module is an internal companion to biff.hook — cross-module
+# This module is an internal companion to biff.plugins.claude_code.hook — cross-module
 # access to _-prefixed helpers is intentional, not a violation.
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def main() -> None:
     args = sys.argv[1:]
     if len(args) < 2:
         # Fall back to full typer CLI for help, errors, etc.
-        from biff.hook import hook_app  # noqa: PLC0415
+        from biff.plugins.claude_code.hook import hook_app  # noqa: PLC0415
 
         hook_app()
         return
@@ -48,7 +48,7 @@ def main() -> None:
 
 
 def _cc_session_start() -> None:
-    from biff.hook import (  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import (  # noqa: PLC0415
         _emit,
         _hook_context,
         _open_session,
@@ -62,7 +62,7 @@ def _cc_session_start() -> None:
 
 
 def _cc_session_resume() -> None:
-    from biff.hook import (  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import (  # noqa: PLC0415
         _emit,
         _hook_context,
         _open_session,
@@ -76,18 +76,18 @@ def _cc_session_resume() -> None:
 
 
 def _cc_session_end() -> None:
-    from biff.hook import handle_session_end  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import handle_session_end  # noqa: PLC0415
 
     handle_session_end()
 
 
 def _cc_pre_tool_use() -> None:
-    from biff.hook import _emit, _read_hook_input, handle_pre_tool_use  # noqa: PLC0415
+    from biff.plugins.claude_code import hook  # noqa: PLC0415
 
-    data = _read_hook_input()
-    result = handle_pre_tool_use(data)
+    data = hook._read_hook_input()
+    result = hook.handle_pre_tool_use(data)
     if result is not None:
-        _emit(result)
+        hook._emit(result)
 
 
 def _cc_pre_tool_stamp() -> None:
@@ -99,7 +99,7 @@ def _cc_pre_tool_stamp() -> None:
         main_agent_id,
         stamp_failure,
     )
-    from biff.hook import _emit, _read_hook_input  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import _emit, _read_hook_input  # noqa: PLC0415
 
     data = _read_hook_input()
     try:
@@ -114,7 +114,7 @@ def _cc_pre_tool_stamp() -> None:
 
 
 def _cc_post_bash() -> None:
-    from biff.hook import (  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import (  # noqa: PLC0415
         _emit,
         _post_tool_use_context,
         _read_hook_input,
@@ -130,7 +130,7 @@ def _cc_post_bash() -> None:
 
 
 def _cc_post_pr() -> None:
-    from biff.hook import (  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import (  # noqa: PLC0415
         _emit,
         _post_tool_use_context,
         _read_hook_input,
@@ -144,7 +144,7 @@ def _cc_post_pr() -> None:
 
 
 def _cc_pre_compact() -> None:
-    from biff.hook import _emit, _hook_context, handle_pre_compact  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import _emit, _hook_context, handle_pre_compact  # noqa: PLC0415
 
     result = handle_pre_compact()
     _emit(_hook_context("PreCompact", result))
@@ -175,7 +175,7 @@ def _dispatch_cc(event: str) -> None:
         sys.exit(f"Unknown claude-code event: {event}")
 
     # Gate: skip if biff not enabled in this repo.
-    from biff.hook import _is_biff_enabled  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import _is_biff_enabled  # noqa: PLC0415
 
     if event not in UNGATED_CC_EVENTS and not _is_biff_enabled():
         return
@@ -188,7 +188,7 @@ def _dispatch_cc(event: str) -> None:
 
 def _dispatch_git(event: str, extra: list[str]) -> None:
     """Dispatch git lifecycle hooks."""
-    from biff.hook import (  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import (  # noqa: PLC0415
         _is_biff_enabled,
         _read_pre_push_refs,
         handle_post_checkout,

@@ -46,7 +46,7 @@ companion).
 | `src/biff/server/tools/_session.py` | Comment only (`_session.py:37`, "the companion TTY name going unset"). Reword to "an empty tty_name". |
 | `src/biff/server/activity.py` | False positive ("Companion to the frozen ServerState"). No change. |
 | `src/biff/talk_state.py` | False positive (same phrase, line 79). No change. |
-| `src/biff/_hook_entry.py` | False positive ("internal companion to biff.hook", line 17). No change. |
+| `src/biff/plugins/claude_code/_hook_entry.py` | False positive ("internal companion to biff.plugins.claude_code.hook", line 17). No change. |
 
 Also removed because it becomes dead: `format_read_dual` in
 `src/biff/formatting.py` (`:798`, listed in `__all__` at `:45`). Its only

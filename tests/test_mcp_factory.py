@@ -14,12 +14,12 @@ from typer.testing import CliRunner
 from biff.__main__ import app
 from biff.caller_identity import CallerIdentity
 from biff.models import BiffConfig
+from biff.plugins.claude_code.statusline import UNREAD_DIR
 from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
 from biff.server.entrypoints import McpServerOptions
 from biff.server.state import create_state
 from biff.server.transport_runtime import McpLifecycleHandler
-from biff.statusline import UNREAD_DIR
 from biff.testing.caller import StampedClient
 
 

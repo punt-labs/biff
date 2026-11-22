@@ -9,8 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from biff import claude_permissions
-from biff.claude_permissions import BIFF_RULES, PermissionChange, ProjectPermissions
+from biff.plugins.claude_code import claude_permissions
+from biff.plugins.claude_code.claude_permissions import (
+    BIFF_RULES,
+    PermissionChange,
+    ProjectPermissions,
+)
 
 
 def _settings(root: Path) -> Path:

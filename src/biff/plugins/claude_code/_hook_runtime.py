@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from punt_observe.logging import LoggingSetupError, Role
 
-from biff._hook_dispatch import HookDispatch
 from biff.logging_config import configure_logging
+from biff.plugins.claude_code._hook_dispatch import HookDispatch
 
 
 @dataclass(frozen=True, slots=True)

@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from biff.hook import (
+from biff.plugins.claude_code.hook import (
     _detect_collisions,
     _expand_branch_plan,
     _has_active_session,
@@ -45,7 +45,10 @@ def _hint_mocks(tmp_path: Path):
     """Context manager stack mocking Path.home and repo-common-root."""
     return (
         patch("pathlib.Path.home", return_value=tmp_path),
-        patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
+        patch(
+            "biff.plugins.claude_code.hook._repo_common_root",
+            return_value=_FAKE_WORKTREE,
+        ),
     )
 
 
@@ -166,7 +169,7 @@ class TestHandlePostPr:
         assert "/wall" in result
         assert '" 10m' in result
 
-    @patch("biff.hook._is_lux_enabled", return_value=False)
+    @patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=False)
     @patch("biff.markers.read_wall_marker", return_value=None)
     def test_create_pr_plugin_prefix(self, _wall: object, _lux: object) -> None:
         data: dict[str, object] = {
@@ -178,7 +181,7 @@ class TestHandlePostPr:
         assert result is not None
         assert "Created PR #42" in result
 
-    @patch("biff.hook._is_lux_enabled", return_value=False)
+    @patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=False)
     @patch("biff.markers.read_wall_marker", return_value=None)
     def test_create_pr_response_as_dict(self, _wall: object, _lux: object) -> None:
         """tool_response may arrive as dict instead of JSON string."""
@@ -191,7 +194,7 @@ class TestHandlePostPr:
         assert result is not None
         assert "Created PR #42" in result
 
-    @patch("biff.hook._is_lux_enabled", return_value=False)
+    @patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=False)
     @patch("biff.markers.read_wall_marker", return_value=None)
     def test_merge_pr_with_title(self, _wall: object, _lux: object) -> None:
         data: dict[str, object] = {
@@ -204,7 +207,7 @@ class TestHandlePostPr:
         assert "Merged PR #42" in result
         assert "feat: hook dispatcher" in result
 
-    @patch("biff.hook._is_lux_enabled", return_value=False)
+    @patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=False)
     @patch("biff.markers.read_wall_marker", return_value=None)
     def test_merge_pr_pull_number_field(self, _wall: object, _lux: object) -> None:
         """Both pullNumber and pull_number field names are accepted."""
@@ -288,7 +291,7 @@ class TestHandlePostPr:
         }
         with (
             patch("biff.markers.read_wall_marker", return_value="deploy freeze"),
-            patch("biff.hook._is_lux_enabled", return_value=False),
+            patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=False),
         ):
             result = handle_post_pr(data)
         assert result is None
@@ -302,7 +305,7 @@ class TestHandlePostPr:
         }
         with (
             patch("biff.markers.read_wall_marker", return_value="deploy freeze"),
-            patch("biff.hook._is_lux_enabled", return_value=True),
+            patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=True),
         ):
             result = handle_post_pr(data)
         assert result is not None
@@ -330,24 +333,29 @@ class TestHandleSessionStart:
     """SessionStart(startup) handler — branch detection and nudges."""
 
     def test_includes_tty_nudge(self) -> None:
-        with patch("biff.hook._get_git_branch", return_value=""):
+        with patch("biff.plugins.claude_code.hook._get_git_branch", return_value=""):
             result = handle_session_start()
         assert "/tty" in result
 
     def test_includes_read_nudge(self) -> None:
-        with patch("biff.hook._get_git_branch", return_value=""):
+        with patch("biff.plugins.claude_code.hook._get_git_branch", return_value=""):
             result = handle_session_start()
         assert "/read" in result
 
     def test_branch_included_in_plan_nudge(self) -> None:
-        with patch("biff.hook._get_git_branch", return_value="feature/auth"):
+        with patch(
+            "biff.plugins.claude_code.hook._get_git_branch", return_value="feature/auth"
+        ):
             result = handle_session_start()
         assert "→ feature/auth" in result
         assert 'source="auto"' in result
 
     def test_bead_branch_expanded(self) -> None:
         with (
-            patch("biff.hook._get_git_branch", return_value="jmf/biff-ka4"),
+            patch(
+                "biff.plugins.claude_code.hook._get_git_branch",
+                return_value="jmf/biff-ka4",
+            ),
             patch(
                 "biff._stdlib.expand_bead_id",
                 return_value="biff-ka4: post-checkout hook",
@@ -357,18 +365,23 @@ class TestHandleSessionStart:
         assert "→ biff-ka4: post-checkout hook" in result
 
     def test_no_branch_still_returns_context(self) -> None:
-        with patch("biff.hook._get_git_branch", return_value=""):
+        with patch("biff.plugins.claude_code.hook._get_git_branch", return_value=""):
             result = handle_session_start()
         assert "Biff session starting" in result
         assert "/plan" in result
 
     def test_main_branch_included(self) -> None:
-        with patch("biff.hook._get_git_branch", return_value="main"):
+        with patch(
+            "biff.plugins.claude_code.hook._get_git_branch", return_value="main"
+        ):
             result = handle_session_start()
         assert "→ main" in result
 
     def test_quotes_in_branch_escaped(self) -> None:
-        with patch("biff.hook._get_git_branch", return_value='feature/"quotes"'):
+        with patch(
+            "biff.plugins.claude_code.hook._get_git_branch",
+            return_value='feature/"quotes"',
+        ):
             result = handle_session_start()
         assert r"\"quotes\"" in result
         assert 'source="auto"' in result
@@ -384,7 +397,7 @@ class TestHandleSessionStart:
         with (
             m_home,
             m_wt,
-            patch("biff.hook._get_git_branch", return_value="main"),
+            patch("biff.plugins.claude_code.hook._get_git_branch", return_value="main"),
         ):
             write_wall_marker(_FAKE_WORKTREE, "deploy freeze", future)
             result = handle_session_start()
@@ -396,7 +409,7 @@ class TestHandleSessionStart:
         with (
             m_home,
             m_wt,
-            patch("biff.hook._get_git_branch", return_value="main"),
+            patch("biff.plugins.claude_code.hook._get_git_branch", return_value="main"),
         ):
             result = handle_session_start()
         assert "Active wall" not in result
@@ -421,7 +434,7 @@ class TestOpenSessionFromHook:
     """SessionStart opens the engine session from the payload's session_id."""
 
     def test_opens_with_the_payload(self) -> None:
-        from biff.hook import _open_session
+        from biff.plugins.claude_code.hook import _open_session
 
         opened: list[dict[str, object]] = []
 
@@ -436,7 +449,7 @@ class TestOpenSessionFromHook:
 
     def test_open_failure_is_swallowed(self) -> None:
         """A registration failure must not break session startup."""
-        from biff.hook import _open_session
+        from biff.plugins.claude_code.hook import _open_session
 
         async def _boom(data: dict[str, object], **_kw: object) -> str | None:
             raise OSError("relay unreachable")
@@ -445,7 +458,7 @@ class TestOpenSessionFromHook:
             _open_session({"session_id": "sid-1"})  # must not raise
 
     def test_open_failure_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
-        from biff.hook import _open_session
+        from biff.plugins.claude_code.hook import _open_session
 
         async def _boom(data: dict[str, object], **_kw: object) -> str | None:
             raise OSError("relay unreachable")
@@ -460,23 +473,23 @@ class TestResolveIdentity:
     """_resolve_identity prefers agent_id over session_id (design §3b)."""
 
     def test_agent_id_preferred_over_session_id(self) -> None:
-        from biff.hook import _resolve_identity
+        from biff.plugins.claude_code.hook import _resolve_identity
 
         result = _resolve_identity({"agent_id": "agent-1", "session_id": "leader-sid"})
         assert result == "agent-1"
 
     def test_falls_back_to_session_id(self) -> None:
-        from biff.hook import _resolve_identity
+        from biff.plugins.claude_code.hook import _resolve_identity
 
         assert _resolve_identity({"session_id": "leader-sid"}) == "leader-sid"
 
     def test_neither_present_returns_none(self) -> None:
-        from biff.hook import _resolve_identity
+        from biff.plugins.claude_code.hook import _resolve_identity
 
         assert _resolve_identity({}) is None
 
     def test_empty_agent_id_falls_back(self) -> None:
-        from biff.hook import _resolve_identity
+        from biff.plugins.claude_code.hook import _resolve_identity
 
         result = _resolve_identity({"agent_id": "", "session_id": "leader-sid"})
         assert result == "leader-sid"
@@ -501,14 +514,14 @@ class TestHandlePreCompact:
 
     def test_without_plan_marker(self) -> None:
         """When no plan marker, returns generic compaction message."""
-        with patch("biff.hook._repo_common_root", return_value=""):
+        with patch("biff.plugins.claude_code.hook._repo_common_root", return_value=""):
             result = handle_pre_compact({"session_id": "sid-1"})
         assert "resumed after compaction" in result
         assert "/read" in result
 
     def test_no_data_returns_generic_message(self) -> None:
         """Called with no payload at all (defensive default) still works."""
-        with patch("biff.hook._repo_common_root", return_value=""):
+        with patch("biff.plugins.claude_code.hook._repo_common_root", return_value=""):
             result = handle_pre_compact()
         assert "resumed after compaction" in result
 
@@ -749,7 +762,10 @@ class TestHandlePostCheckout:
     def test_branch_checkout_writes_hint(self, tmp_path: Path) -> None:
         home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
-            patch("biff.hook._get_git_branch", return_value="feature/auth"),
+            patch(
+                "biff.plugins.claude_code.hook._get_git_branch",
+                return_value="feature/auth",
+            ),
             home_mock,
             wt_mock,
         ):
@@ -769,7 +785,10 @@ class TestHandlePostCheckout:
     def test_bead_branch_expanded(self, tmp_path: Path) -> None:
         home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
-            patch("biff.hook._get_git_branch", return_value="jmf/biff-ka4"),
+            patch(
+                "biff.plugins.claude_code.hook._get_git_branch",
+                return_value="jmf/biff-ka4",
+            ),
             patch(
                 "biff._stdlib.expand_bead_id",
                 return_value="biff-ka4: post-checkout hook",
@@ -785,7 +804,7 @@ class TestHandlePostCheckout:
     def test_main_branch_writes_empty_hint(self, tmp_path: Path) -> None:
         home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
-            patch("biff.hook._get_git_branch", return_value="main"),
+            patch("biff.plugins.claude_code.hook._get_git_branch", return_value="main"),
             home_mock,
             wt_mock,
         ):
@@ -798,7 +817,9 @@ class TestHandlePostCheckout:
     def test_master_branch_writes_empty_hint(self, tmp_path: Path) -> None:
         home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
-            patch("biff.hook._get_git_branch", return_value="master"),
+            patch(
+                "biff.plugins.claude_code.hook._get_git_branch", return_value="master"
+            ),
             home_mock,
             wt_mock,
         ):
@@ -807,7 +828,7 @@ class TestHandlePostCheckout:
         assert result is None
 
     def test_no_branch_returns_none(self) -> None:
-        with patch("biff.hook._get_git_branch", return_value=""):
+        with patch("biff.plugins.claude_code.hook._get_git_branch", return_value=""):
             assert handle_post_checkout("1") is None
 
 
@@ -886,7 +907,7 @@ class TestHandlePostCommit:
         home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
             patch(
-                "biff.hook._get_commit_subject",
+                "biff.plugins.claude_code.hook._get_commit_subject",
                 return_value="feat: auto-assign TTY",
             ),
             home_mock,
@@ -899,7 +920,9 @@ class TestHandlePostCommit:
         assert hint == "✓ feat: auto-assign TTY"
 
     def test_empty_subject_returns_none(self) -> None:
-        with patch("biff.hook._get_commit_subject", return_value=""):
+        with patch(
+            "biff.plugins.claude_code.hook._get_commit_subject", return_value=""
+        ):
             assert handle_post_commit() is None
 
     def test_hint_picked_up_by_check(self, tmp_path: Path) -> None:
@@ -907,7 +930,7 @@ class TestHandlePostCommit:
         home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
             patch(
-                "biff.hook._get_commit_subject",
+                "biff.plugins.claude_code.hook._get_commit_subject",
                 return_value="fix: status bar height",
             ),
             home_mock,
@@ -1027,7 +1050,7 @@ class TestWorktreeIsolation:
         # Read from worktree B — should see nothing
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.hook._repo_common_root", return_value=wt_b),
+            patch("biff.plugins.claude_code.hook._repo_common_root", return_value=wt_b),
         ):
             result = check_plan_hint()
 
@@ -1038,7 +1061,10 @@ class TestWorktreeIsolation:
         """Two sessions in the same worktree share hints (by design)."""
         home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
-            patch("biff.hook._get_git_branch", return_value="feature/auth"),
+            patch(
+                "biff.plugins.claude_code.hook._get_git_branch",
+                return_value="feature/auth",
+            ),
             home_mock,
             wt_mock,
         ):
@@ -1066,7 +1092,7 @@ def _collision_mocks(
     fake_root = repo_root or tmp_path / "my-repo"
     return (
         patch("pathlib.Path.home", return_value=tmp_path),
-        patch("biff.hook._repo_common_root", return_value=worktree),
+        patch("biff.plugins.claude_code.hook._repo_common_root", return_value=worktree),
         patch("biff._stdlib.find_git_root", return_value=fake_root),
         patch("biff._stdlib.get_repo_slug", return_value=repo_slug),
     )
@@ -1169,7 +1195,7 @@ class TestDetectCollisions:
         fake_root.mkdir()
         m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
         with (
-            patch("biff.hook._get_git_branch", return_value="main"),
+            patch("biff.plugins.claude_code.hook._get_git_branch", return_value="main"),
             m_home,
             m_wt,
             m_git,
@@ -1189,7 +1215,7 @@ class TestDetectCollisions:
         fake_root.mkdir()
         m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
         with (
-            patch("biff.hook._get_git_branch", return_value="main"),
+            patch("biff.plugins.claude_code.hook._get_git_branch", return_value="main"),
             m_home,
             m_wt,
             m_git,
@@ -1209,8 +1235,11 @@ def _gate_mocks(*, plan: bool):
     exercised (the liveness check is tested separately).
     """
     return (
-        patch("biff.hook._has_active_session", return_value=True),
-        patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
+        patch("biff.plugins.claude_code.hook._has_active_session", return_value=True),
+        patch(
+            "biff.plugins.claude_code.hook._repo_common_root",
+            return_value=_FAKE_WORKTREE,
+        ),
         patch("biff.markers.has_plan_marker", return_value=plan),
     )
 
@@ -1258,7 +1287,9 @@ class TestHasActiveSession:
 
     def test_pre_tool_use_returns_none_without_active_session(self) -> None:
         """handle_pre_tool_use returns None when no MCP server is running."""
-        with patch("biff.hook._has_active_session", return_value=False):
+        with patch(
+            "biff.plugins.claude_code.hook._has_active_session", return_value=False
+        ):
             result = handle_pre_tool_use({})
         assert result is None
 
@@ -1334,8 +1365,13 @@ class TestHandlePreToolUse:
             return identity == other_identity
 
         with (
-            patch("biff.hook._has_active_session", return_value=True),
-            patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
+            patch(
+                "biff.plugins.claude_code.hook._has_active_session", return_value=True
+            ),
+            patch(
+                "biff.plugins.claude_code.hook._repo_common_root",
+                return_value=_FAKE_WORKTREE,
+            ),
             patch(
                 "biff.markers.has_plan_marker", side_effect=_plan_by_identity
             ) as mock_has,
@@ -1377,8 +1413,13 @@ class TestHandlePreToolUse:
             return identity == my_session
 
         with (
-            patch("biff.hook._has_active_session", return_value=True),
-            patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
+            patch(
+                "biff.plugins.claude_code.hook._has_active_session", return_value=True
+            ),
+            patch(
+                "biff.plugins.claude_code.hook._repo_common_root",
+                return_value=_FAKE_WORKTREE,
+            ),
             patch("biff.markers.has_plan_marker", side_effect=_plan_by_identity),
         ):
             result = handle_pre_tool_use(
@@ -1401,12 +1442,17 @@ class TestPreToolUseFailsClosed:
     def test_marker_read_error_emits_deny(self) -> None:
         emitted: list[dict[str, object]] = []
         with (
-            patch("biff.hook._is_biff_enabled", return_value=True),
-            patch("biff.hook._read_hook_input", return_value={}),
-            patch("biff.hook._has_active_session", return_value=True),
-            patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
+            patch("biff.plugins.claude_code.hook._is_biff_enabled", return_value=True),
+            patch("biff.plugins.claude_code.hook._read_hook_input", return_value={}),
+            patch(
+                "biff.plugins.claude_code.hook._has_active_session", return_value=True
+            ),
+            patch(
+                "biff.plugins.claude_code.hook._repo_common_root",
+                return_value=_FAKE_WORKTREE,
+            ),
             patch("biff.markers.has_plan_marker", side_effect=OSError("boom")),
-            patch("biff.hook._emit", side_effect=emitted.append),
+            patch("biff.plugins.claude_code.hook._emit", side_effect=emitted.append),
         ):
             cc_pre_tool_use()
         assert len(emitted) == 1
@@ -1449,7 +1495,9 @@ class TestZSpecPlanConsistency:
         with m_home, m_wt:
             write_plan_marker(_FAKE_WORKTREE, "sid-1", "stale plan")
             assert has_plan_marker(_FAKE_WORKTREE, "sid-1")
-            with patch("biff.hook._get_git_branch", return_value="main"):
+            with patch(
+                "biff.plugins.claude_code.hook._get_git_branch", return_value="main"
+            ):
                 handle_session_start({"session_id": "sid-1"})
             assert not has_plan_marker(_FAKE_WORKTREE, "sid-1")
 
@@ -1468,7 +1516,9 @@ class TestZSpecPlanConsistency:
         m_home, m_wt = _hint_mocks(tmp_path)
         with m_home, m_wt:
             write_plan_marker(_FAKE_WORKTREE, "sid-sibling", "sibling's plan")
-            with patch("biff.hook._get_git_branch", return_value="main"):
+            with patch(
+                "biff.plugins.claude_code.hook._get_git_branch", return_value="main"
+            ):
                 handle_session_start({"session_id": "sid-new"})
             assert has_plan_marker(_FAKE_WORKTREE, "sid-sibling")
 
@@ -1536,8 +1586,8 @@ class TestZSpecSessionEndCleanup:
 def _lux_mocks(*, beads: bool = True, lux: bool = True):
     """Patch beads + lux detection for consumer hook tests."""
     return (
-        patch("biff.hook._has_beads", return_value=beads),
-        patch("biff.hook._is_lux_enabled", return_value=lux),
+        patch("biff.plugins.claude_code.hook._has_beads", return_value=beads),
+        patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=lux),
     )
 
 
@@ -1651,7 +1701,7 @@ class TestLuxPrDashboard:
         }
         with (
             patch("biff.markers.read_wall_marker", return_value=None),
-            patch("biff.hook._is_lux_enabled", return_value=True),
+            patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=True),
         ):
             result = handle_post_pr(data)
         assert result is not None
@@ -1666,7 +1716,7 @@ class TestLuxPrDashboard:
         }
         with (
             patch("biff.markers.read_wall_marker", return_value=None),
-            patch("biff.hook._is_lux_enabled", return_value=False),
+            patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=False),
         ):
             result = handle_post_pr(data)
         assert result is not None
@@ -1681,7 +1731,7 @@ class TestLuxPrDashboard:
         }
         with (
             patch("biff.markers.read_wall_marker", return_value=None),
-            patch("biff.hook._is_lux_enabled", return_value=True),
+            patch("biff.plugins.claude_code.hook._is_lux_enabled", return_value=True),
         ):
             result = handle_post_pr(data)
         assert result is not None
@@ -1697,7 +1747,7 @@ class TestIsLuxEnabled:
         lux_dir.mkdir()
         (lux_dir / "lux.md").write_text('---\ndisplay: "y"\n---\n')
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is True
 
@@ -1707,21 +1757,21 @@ class TestIsLuxEnabled:
         lux_dir.mkdir()
         (lux_dir / "lux.md").write_text('---\ndisplay: "n"\n---\n')
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
     def test_lux_no_config_file(self, tmp_path: Path) -> None:
         """No .punt-labs/lux.md means lux is off."""
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
     def test_lux_config_is_directory(self, tmp_path: Path) -> None:
         (tmp_path / ".punt-labs" / "lux.md").mkdir(parents=True)
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
@@ -1731,7 +1781,7 @@ class TestIsLuxEnabled:
         lux_dir.mkdir()
         (lux_dir / "lux.md").write_text('display: "y"\n')
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
@@ -1741,7 +1791,7 @@ class TestIsLuxEnabled:
         lux_dir.mkdir()
         (lux_dir / "lux.md").write_text('---\ndisplay: "y"\n')
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
@@ -1751,7 +1801,7 @@ class TestIsLuxEnabled:
         lux_dir.mkdir()
         (lux_dir / "lux.md").write_text("---\ndisplay: y\n---\n")
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is True
 
@@ -1761,14 +1811,14 @@ class TestIsLuxEnabled:
         lux_dir.mkdir()
         (lux_dir / "lux.md").write_text("---\ndisplay: 'y'\n---\n")
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is True
 
     def test_lux_no_git_root(self) -> None:
         """No git root means lux is off."""
         with patch("biff._stdlib.find_git_root", return_value=None):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
@@ -1778,7 +1828,7 @@ class TestIsLuxEnabled:
         lux_dir.mkdir()
         (lux_dir / "lux.md").write_text(content)
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
@@ -1790,7 +1840,7 @@ class TestIsLuxEnabled:
             patch("biff._stdlib.find_git_root", return_value=tmp_path),
             patch.object(Path, "read_text", side_effect=OSError("unreadable")),
         ):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
@@ -1806,7 +1856,7 @@ class TestIsLuxEnabled:
             lux_dir.mkdir()
             (lux_dir / "lux.md").write_text(f'---\ndisplay: "{canonical}"\n---\n')
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
-            from biff.hook import _is_lux_enabled
+            from biff.plugins.claude_code.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
@@ -1908,7 +1958,7 @@ class TestPreToolStampDispatch:
     ) -> None:
         import io
 
-        from biff import _hook_entry
+        from biff.plugins.claude_code import _hook_entry
 
         payload = {
             "session_id": "sess-1",
@@ -1917,7 +1967,9 @@ class TestPreToolStampDispatch:
             "tool_input": {"message": "hi"},
         }
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
-        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        monkeypatch.setattr(
+            "biff.plugins.claude_code.hook._read_hook_input", lambda: payload
+        )
         _hook_entry._cc_pre_tool_stamp()
         out = json.loads(capsys.readouterr().out)
         updated = out["hookSpecificOutput"]["updatedInput"]
@@ -1936,14 +1988,16 @@ class TestPreToolStampDispatch:
         capsys: pytest.CaptureFixture[str],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        from biff import _hook_entry
+        from biff.plugins.claude_code import _hook_entry
 
         payload: dict[str, object] = {
             "tool_name": "mcp__plugin_biff_tty__who",
             "tool_input": {"message": "private-message"},
             **identity,
         }
-        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        monkeypatch.setattr(
+            "biff.plugins.claude_code.hook._read_hook_input", lambda: payload
+        )
         with patch("biff.caller_stamp.main_agent_id", return_value=None):
             _hook_entry._cc_pre_tool_stamp()
         spec = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
@@ -1958,7 +2012,7 @@ class TestPreToolStampDispatch:
         assert "private" not in caplog.text
 
     def test_runs_even_when_biff_is_not_enabled_in_the_repo(self) -> None:
-        from biff import _hook_entry
+        from biff.plugins.claude_code import _hook_entry
 
         assert "pre-tool-stamp" in _hook_entry.UNGATED_CC_EVENTS
 
@@ -1968,7 +2022,7 @@ class TestPreToolStampDispatch:
         capsys: pytest.CaptureFixture[str],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        from biff import _hook_entry
+        from biff.plugins.claude_code import _hook_entry
 
         def _boom(_env: object) -> str | None:
             raise RuntimeError("psutil exploded")
@@ -1979,7 +2033,9 @@ class TestPreToolStampDispatch:
             "tool_name": "mcp__plugin_biff_tty__who",
             "tool_input": {},
         }
-        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        monkeypatch.setattr(
+            "biff.plugins.claude_code.hook._read_hook_input", lambda: payload
+        )
         _hook_entry._cc_pre_tool_stamp()
         spec = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
         assert spec["permissionDecision"] == "deny"
@@ -1992,7 +2048,7 @@ class TestPreToolStampDispatch:
     def test_a_stamper_crash_on_another_tool_leaves_it_untouched(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from biff import _hook_entry
+        from biff.plugins.claude_code import _hook_entry
 
         def _boom(_env: object) -> str | None:
             raise RuntimeError("psutil exploded")
@@ -2003,6 +2059,8 @@ class TestPreToolStampDispatch:
             "tool_name": "mcp__other__x",
             "tool_input": {},
         }
-        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        monkeypatch.setattr(
+            "biff.plugins.claude_code.hook._read_hook_input", lambda: payload
+        )
         _hook_entry._cc_pre_tool_stamp()
         assert capsys.readouterr().out == ""

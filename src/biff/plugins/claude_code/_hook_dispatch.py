@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 
-from biff._hook_foreground import ForegroundHook
+from biff.plugins.claude_code._hook_foreground import ForegroundHook
 
 logger = logging.getLogger(__name__)
 

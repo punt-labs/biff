@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from biff.claude_md import ClaudeMdImport
+from biff.plugins.claude_code.claude_md import ClaudeMdImport
 
 if TYPE_CHECKING:
     from pathlib import Path

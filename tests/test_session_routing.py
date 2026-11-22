@@ -83,7 +83,7 @@ def test_statusline_reads_the_file_the_server_writes(tmp_path: Path) -> None:
     import json
     from unittest.mock import patch
 
-    from biff.statusline import run_statusline
+    from biff.plugins.claude_code.statusline import run_statusline
 
     sid = "7f3c9a-4b2e"
     unread_dir = tmp_path / "unread"
@@ -93,7 +93,8 @@ def test_statusline_reads_the_file_the_server_writes(tmp_path: Path) -> None:
         json.dumps({"user": "kai", "count": 4, "tty_name": "tty1", "display_items": []})
     )
     with patch(
-        "biff.statusline.sys.stdin", io.StringIO(json.dumps({"session_id": sid}))
+        "biff.plugins.claude_code.statusline.sys.stdin",
+        io.StringIO(json.dumps({"session_id": sid})),
     ):
         result = run_statusline(tmp_path / "stash.json", unread_dir)
     assert "kai:tty1(4)" in result
