@@ -58,8 +58,9 @@ class DisplayQueue:
 
     All methods are synchronous — asyncio is single-threaded so no
     locking is needed.  Nothing ticks it: :meth:`advance_if_due` runs
-    whenever the status file is written, so rotation and expiry are
-    computed when the queue is read, never on a timer.
+    whenever the status file is written, and the poller arms one one-shot wake
+    for the earliest :meth:`seconds_until_expiry` so an expired wall is
+    purged and re-rendered on time.
 
     *clock* defaults to :func:`time.monotonic` but can be injected
     for deterministic testing (no ``time.sleep`` needed).
@@ -105,12 +106,9 @@ class DisplayQueue:
         (clear all wall items).  Resets the slot timer so the
         newly-current item gets a full display period.
         """
-        i = 0
-        while i < len(self._items):
+        for i in reversed(range(len(self._items))):
             if self._items[i].kind == kind:
                 self._remove_at(i)
-            else:
-                i += 1
         if self._items:
             self._slot_start = self._clock()
 
@@ -173,8 +171,8 @@ class DisplayQueue:
         Negative once an item is past its expiry and not yet purged; does not
         purge, so a caller can tell that an item is due.
         """
-        due = [i.expires_at for i in self._items if i.expires_at is not None]
-        return min(due) - self._clock() if due else None
+        left = [i.expires_at - self._clock() for i in self._items if i.expires_at]
+        return min(left, default=None)
 
     def snapshot(self) -> list[DisplayItem]:
         """Return a shallow copy of the queue with expired items removed."""
@@ -184,13 +182,10 @@ class DisplayQueue:
     def _purge_expired(self) -> None:
         """Remove items whose ``expires_at`` is in the past."""
         now = self._clock()
-        i = 0
-        while i < len(self._items):
-            item = self._items[i]
-            if item.expires_at is not None and now >= item.expires_at:
+        for i in reversed(range(len(self._items))):
+            expires = self._items[i].expires_at
+            if expires is not None and now >= expires:
                 self._remove_at(i)
-            else:
-                i += 1
 
     def _remove_at(self, index: int) -> None:
         """Remove the item at *index* and fix the current index invariant.

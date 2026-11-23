@@ -191,7 +191,7 @@ class TestNoTimers:
             await _stop(task)
         assert spy.delays
         assert {round(d) for d in spy.delays} == {
-            round(_descriptions.WATCH_LIVENESS_INTERVAL)
+            round(_descriptions._WATCH_LIVENESS_INTERVAL)
         }
 
     async def test_nats_poller_schedules_only_the_liveness_reconcile(
@@ -209,7 +209,7 @@ class TestNoTimers:
             await _stop(task)
         assert spy.delays
         assert {round(d) for d in spy.delays} == {
-            round(_descriptions.SUB_RECONCILE_INTERVAL)
+            round(_descriptions._SUB_RECONCILE_INTERVAL)
         }
 
     async def test_a_displayed_wall_arms_one_deadline_wake_and_clearing_it_ends_it(
@@ -237,7 +237,7 @@ class TestNoTimers:
             state.wake.wake()  # re-arm the wait; nothing is displayed now
             await _idle(task, lambda: True, spins=200)
             assert {round(d) for d in spy.delays} == {
-                round(_descriptions.WATCH_LIVENESS_INTERVAL)
+                round(_descriptions._WATCH_LIVENESS_INTERVAL)
             }
         finally:
             await _stop(task)
@@ -253,6 +253,20 @@ def _wall_for(seconds: float) -> WallPost:
     )
 
 
+def _server_task_names() -> set[str]:
+    """Names of the running coroutine tasks defined under ``biff/server``."""
+    names: set[str] = set()
+    for task in asyncio.all_tasks():
+        coro = task.get_coro()
+        if (
+            inspect.iscoroutine(coro)
+            and "/biff/server/" in coro.cr_code.co_filename
+            and not task.done()
+        ):
+            names.add(coro.__name__)
+    return names
+
+
 class TestLiveSessionTimers:
     """Driving the real session startup, the only recurring work is liveness."""
 
@@ -261,7 +275,7 @@ class TestLiveSessionTimers:
     ) -> None:
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess")
-        monkeypatch.setattr(_descriptions, "WATCH_LIVENESS_INTERVAL", 0.3)
+        monkeypatch.setattr(_descriptions, "_WATCH_LIVENESS_INTERVAL", 0.3)
         monkeypatch.setitem(app._heartbeat_loop.__kwdefaults__ or {}, "interval", 0.3)
         state = create_state(
             BiffConfig(user="kai", repo_name=_REPO),
@@ -279,13 +293,7 @@ class TestLiveSessionTimers:
             end = loop.time() + 2.5
             while loop.time() < end:
                 await asyncio.sleep(0)
-            background = {
-                task.get_coro().__name__
-                for task in asyncio.all_tasks()
-                if inspect.iscoroutine(task.get_coro())
-                and "/biff/server/" in task.get_coro().cr_code.co_filename
-                and not task.done()
-            }
+            background = _server_task_names()
         # No sentinel reaper (it ran every 2s) and no other loop.
         assert background == {"poll_inbox", "_heartbeat_loop"}
         # Whatever recurs is the 0.3s liveness check and heartbeat; the MCP

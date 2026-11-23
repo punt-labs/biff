@@ -45,6 +45,17 @@ class InviteExpiry:
             if clock - invite.arrived < self._ttl
         }
 
+    def seconds_left(
+        self,
+        invites: Mapping[str, PendingInvite],
+        queue: Iterable[QueuedNotification],
+        clock: float,
+    ) -> float | None:
+        """Seconds until the oldest held invite reaches its TTL, or ``None``."""
+        arrivals = [i.arrived for i in invites.values()]
+        arrivals += [q.arrived for q in queue if q.notif.is_invite]
+        return min(arrivals) + self._ttl - clock if arrivals else None
+
     def queued(
         self, queue: Iterable[QueuedNotification], clock: float
     ) -> deque[QueuedNotification]:

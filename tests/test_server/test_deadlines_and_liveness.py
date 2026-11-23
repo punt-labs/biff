@@ -258,7 +258,7 @@ class TestTickFailure:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        monkeypatch.setattr(_descriptions, "WATCH_LIVENESS_INTERVAL", 0.2)
+        monkeypatch.setattr(_descriptions, "_WATCH_LIVENESS_INTERVAL", 0.2)
         real = state.relay.get_unread_summary
         calls = 0
 
@@ -283,3 +283,42 @@ class TestTickFailure:
             if r.levelno == logging.WARNING and "tick" in r.getMessage()
         ]
         assert len(warnings) == 2  # onset once, recovery once
+
+
+class TestSentinelReapIsEventDriven:
+    async def test_a_new_sentinel_wakes_the_poller_and_is_reaped(
+        self, state: ServerState, tmp_path: Path
+    ) -> None:
+        sentinels = tmp_path / "sentinels"
+        reaped: list[list[str]] = []
+
+        async def reap() -> None:
+            reaped.append(sorted(p.name for p in sentinels.glob("*")))
+
+        mcp = create_server(state)
+        task = asyncio.create_task(
+            poll_inbox(mcp, state, reap=reap, watch_dirs=(sentinels,))
+        )
+        try:
+            await _until(lambda: bool(reaped), "reaped at startup")
+            (sentinels / "remove-kai-tty9").write_text("kai:tty9")
+            await _until(
+                lambda: any("remove-kai-tty9" in seen for seen in reaped),
+                "reaped on the sentinel's arrival",
+            )
+        finally:
+            await _stop(task)
+
+    async def test_a_failing_reap_is_logged_and_does_not_end_the_poller(
+        self, state: ServerState, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        async def reap() -> None:
+            msg = "boom"
+            raise OSError(msg)
+
+        mcp = create_server(state)
+        with caplog.at_level(logging.WARNING, logger=_descriptions.logger.name):
+            task = asyncio.create_task(poll_inbox(mcp, state, reap=reap))
+            await _until(lambda: bool(caplog.records), "the failure was logged")
+            assert not task.done()
+            await _stop(task)

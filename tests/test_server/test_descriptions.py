@@ -954,12 +954,12 @@ class TestPollInbox:
         only the reconcile step — which runs after ``_sleep_or_wake``
         returns — can rebind them. With no live SUB, no poke can ever
         arrive to end that wait, so reconcile never runs and the SUBs
-        stay stranded permanently. ``SUB_RECONCILE_INTERVAL`` (shrunk here
+        stay stranded permanently. ``_SUB_RECONCILE_INTERVAL`` (shrunk here
         for test speed) is the liveness check that breaks this: it bounds
         the wait, so reconcile still gets scheduled with zero poke traffic.
         """
         monkeypatch.setattr(
-            _descriptions, "SUB_RECONCILE_INTERVAL", self._FAST_INTERVAL
+            _descriptions, "_SUB_RECONCILE_INTERVAL", self._FAST_INTERVAL
         )
         nc = AsyncMock()
         subscribe_calls = 0
@@ -1019,7 +1019,7 @@ class TestPollInbox:
         case where a rebind DOES force one.
         """
         monkeypatch.setattr(
-            _descriptions, "SUB_RECONCILE_INTERVAL", self._FAST_INTERVAL
+            _descriptions, "_SUB_RECONCILE_INTERVAL", self._FAST_INTERVAL
         )
         nc = AsyncMock()
 
@@ -1078,7 +1078,7 @@ class TestPollInbox:
         forever, not just delayed.
         """
         monkeypatch.setattr(
-            _descriptions, "SUB_RECONCILE_INTERVAL", self._FAST_INTERVAL
+            _descriptions, "_SUB_RECONCILE_INTERVAL", self._FAST_INTERVAL
         )
         nc = AsyncMock()
         subscribe_calls = 0

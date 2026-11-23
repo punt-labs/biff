@@ -219,6 +219,7 @@ prefixes = [
     "caller_stamp",
     "config",
     "ethos_team",
+    "directory_kqueue",
     "identity",
     "invite_expiry",
     "local_watch",

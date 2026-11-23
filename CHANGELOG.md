@@ -23,16 +23,21 @@
 
 ### Changed
 
-- The biff server runs no timer except connection liveness (DES-087). The
-  poller no longer ticks every 2 seconds: the wall countdown re-render, stale
-  talk-invite expiry and the unread-count backstop are removed. A wall's
-  remaining time and an invite's age are computed when read, the status file
-  rotates its display queue when it is written, and an explicit read
-  recomputes the unread count. The local relay replaces its fixed poll with a
-  filesystem watch on its data directory (`watchdog`, a new dependency); the
-  NATS poller keeps one 5-second check that rebinds its subscriptions after a
-  client replacement. `set_poll_interval` now only records the cadence
-  `/biff:read` schedules; the server runs no timer for it.
+- The biff server runs no cadence except connection liveness (DES-087). The
+  poller no longer ticks every 2 seconds, and the 2-second sentinel reaper is
+  gone: sentinels are reaped at start and whenever the poller wakes, and a
+  watch on the sentinel directory wakes it. The wall countdown re-render,
+  stale talk-invite expiry and unread-count backstop are removed. What remains
+  are three wakes on one signal: a 5-second NATS subscription check, a
+  60-second local-relay watch check that rebuilds a watch that died (and logs
+  it), and a one-shot wake at the earliest expiry of a displayed wall or talk
+  invite, so both clear on their own. The local relay replaces its fixed poll
+  with a filesystem watch (`watchdog`, a new dependency; on macOS also a
+  kqueue on the directory, which uses a fixed number of descriptors however
+  many mailboxes exist). Mailboxes are now written by rename. A failing poller
+  pass logs a warning and is retried on the liveness wake. `set_poll_interval`
+  now only records the cadence `/biff:read` schedules; the server runs no timer
+  for it.
 - **Behavior change: the local relay is the default.** A repo with no relay
   configured now uses the local filesystem relay (no network, no shared
   credentials) instead of connecting to the public demo relay

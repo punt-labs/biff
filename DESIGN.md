@@ -8516,8 +8516,18 @@ record unchanged because mesg is off or the client is not initialised, or
 times out (re-armed once; a second timeout drops that kind alone). A send that
 empties the held set cancels the timer (`docs/notification.tex`, Channel
 Delivery). The poller's wall-countdown, invite-expiry and unread-backstop jobs
-are removed: each value is computed when read, push is the detection path, and
-a relay reconnect (`NatsRelay._on_reconnect`) re-runs the summarizer to catch
+and the 2-second sentinel reaper are removed. Operator ruling (2026-11-23): the
+server may keep exactly (a) connection liveness, being the NATS 5-second
+subscription check, the local relay's 60-second watch check (which verifies the
+watch's emitters and directory inode and rebuilds it, logging onset and
+recovery) and the session heartbeat (60 seconds, which also carries the
+throttled org-repo refresh and keeps the session alive in the relay), and (b)
+one-shot deadline wakes armed only while something with an expiry is displayed:
+the earliest displayed wall `expires_at` and the earliest held talk invite
+arrival plus its TTL, so an expired wall or invite clears with no other event.
+No other cadence is allowed. Shutdown sentinels are reaped at start and on every
+poller wake, and a watch on the sentinel directory wakes it. Push is the
+detection path for arrivals, and a relay reconnect (`NatsRelay._on_reconnect`) re-runs the summarizer to catch
 mail that core NATS did not replay. Mail is ordered by `inbox_high_water`
 (never used as a count), talk arrivals by monotonic `TalkState` counters, and
 the doctor acknowledgement travels over the relay, not a local file.
