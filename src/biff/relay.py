@@ -24,13 +24,15 @@ over a NATS server for networked deployments.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import os
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import IO, Protocol
 
 from pydantic import ValidationError
 
@@ -99,7 +101,7 @@ def atomic_write(path: Path, content: str) -> None:
     is cleaned up and the original file is left untouched.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
         tmp.write_text(content)
         tmp.replace(path)
@@ -403,6 +405,17 @@ class LocalRelay:
         """The directory this relay keeps its files in."""
         return self._data_dir
 
+    def _lock(self) -> IO[str]:
+        """Return the directory's lock file, held (``flock``) until it is closed.
+
+        Every read-modify-write of a mailbox or the sessions file runs under it,
+        so another process cannot replace the file with an older snapshot.
+        """
+        self._ensure_dir(self._data_dir)
+        lock = (self._data_dir / ".lock").open("a")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return lock
+
     @staticmethod
     def _ensure_dir(data_dir: Path) -> None:
         """Create *data_dir* 0700, tightening it if it already exists.
@@ -465,7 +478,6 @@ class LocalRelay:
         broadcast mailbox — no session lookup, persists offline.
         """
         self._validate_user(message.from_user)
-        self._ensure_dir(self._data_dir)
         if ":" in message.to_user:
             # Targeted delivery -- TTY inbox
             self._validate_user(message.to_user.split(":")[0])
@@ -474,11 +486,12 @@ class LocalRelay:
             # Broadcast -- single user mailbox, no session lookup
             self._validate_user(message.to_user)
             path = self._user_inbox_path(message.to_user)
-        if any(m.id == message.id for m in self._read_inbox_file(path)):
-            return  # same id twice is one message, as JetStream dedups it
-        with path.open("a") as f:
-            f.write(message.model_dump_json() + "\n")
-        path.chmod(0o600)
+        with self._lock():
+            if any(m.id == message.id for m in self._read_inbox_file(path)):
+                return  # same id twice is one message, as JetStream dedups it
+            with path.open("a") as f:
+                f.write(message.model_dump_json() + "\n")
+            path.chmod(0o600)
 
     async def fetch(self, session_key: str) -> list[Message]:
         """Get unread messages for a session, oldest first."""
@@ -506,17 +519,17 @@ class LocalRelay:
         """Mark messages as read in the user's broadcast mailbox."""
         self._mark_read(self._user_inbox_path(user), ids)
 
-    @staticmethod
-    def _mark_read(path: Path, ids: Sequence[uuid.UUID]) -> None:
+    def _mark_read(self, path: Path, ids: Sequence[uuid.UUID]) -> None:
         """Rewrite the inbox at *path* with the messages *ids* marked read."""
         wanted = set(ids)
-        messages = LocalRelay._read_inbox_file(path)
-        updated = [
-            m.model_copy(update={"read": True}) if m.id in wanted and not m.read else m
-            for m in messages
-        ]
-        if updated != messages:
-            LocalRelay._write_inbox_file(path, updated)
+        with self._lock():
+            messages = self._read_inbox_file(path)
+            updated = [
+                m.model_copy(update={"read": True}) if m.id in wanted else m
+                for m in messages
+            ]
+            if updated != messages:
+                self._write_inbox_file(path, updated)
 
     async def get_user_unread_count(self, user: str) -> int:
         """Count unread messages in the user's broadcast mailbox."""
@@ -529,9 +542,10 @@ class LocalRelay:
         self._validate_user(session.user)
         key = build_session_key(session.user, session.tty)
         self._validate_session_key(key)
-        sessions = self._read_sessions()
-        sessions[key] = session
-        self._write_sessions(sessions)
+        with self._lock():
+            sessions = self._read_sessions()
+            sessions[key] = session
+            self._write_sessions(sessions)
 
     def _is_expired(self, session: UserSession) -> bool:
         """Check if a session has exceeded the idle TTL."""
@@ -573,22 +587,23 @@ class LocalRelay:
         session survives unchanged.
         """
         self._validate_session_key(session_key)
-        sessions = self._read_sessions()
-        existing = sessions.get(session_key)
-        if existing is None:
-            # A session vanishing under a running heartbeat loop is
-            # anomalous (expired, deleted, or never created) -- warn once
-            # per key, not on every tick, since the loop runs on a fixed
-            # interval for the lifetime of the process.
-            if session_key not in self._heartbeat_missing_warned:
-                self._heartbeat_missing_warned.add(session_key)
-                logger.warning("Heartbeat found no session; skipping")
-            return
-        self._heartbeat_missing_warned.discard(session_key)
-        sessions[session_key] = existing.model_copy(
-            update={"last_active": datetime.now(UTC)}
-        )
-        self._write_sessions(sessions)
+        with self._lock():
+            sessions = self._read_sessions()
+            existing = sessions.get(session_key)
+            if existing is None:
+                # A session vanishing under a running heartbeat loop is
+                # anomalous (expired, deleted, or never created) -- warn once
+                # per key, not on every tick, since the loop runs on a fixed
+                # interval for the lifetime of the process.
+                if session_key not in self._heartbeat_missing_warned:
+                    self._heartbeat_missing_warned.add(session_key)
+                    logger.warning("Heartbeat found no session; skipping")
+                return
+            self._heartbeat_missing_warned.discard(session_key)
+            sessions[session_key] = existing.model_copy(
+                update={"last_active": datetime.now(UTC)}
+            )
+            self._write_sessions(sessions)
 
     async def get_sessions(self) -> list[UserSession]:
         """Get all sessions, reaping removals and filtering expired."""
@@ -742,8 +757,7 @@ class LocalRelay:
 
     async def release_tty_name(self, user: str, name: str) -> None:
         """Release a TTY name reservation by removing the lockfile."""
-        path = self._tty_lock_path(user, name)
-        path.unlink(missing_ok=True)
+        self._tty_lock_path(user, name).unlink(missing_ok=True)
 
     async def refresh_tty_reservation(
         self, user: str, name: str, session_key: str
@@ -762,9 +776,7 @@ class LocalRelay:
     async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
         """Return the session key that holds *name*, or ``None``."""
         path = self._tty_lock_path(user, name)
-        if path.exists():
-            return path.read_text()
-        return None
+        return path.read_text() if path.exists() else None
 
     async def list_reserved_names(self, user: str) -> list[str]:
         """List reserved TTY names for a user via glob on lockfiles.

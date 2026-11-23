@@ -48,8 +48,8 @@ async def wall(
             # A CI runner is another machine: the local relay reaches no one.
             raise ValueError(
                 "CI has no relay to post to: set the repository variable "
-                "BIFF_RELAY_URL (vars.BIFF_RELAY_URL) or commit a relay in "
-                ".punt-labs/biff/config.yaml"
+                "BIFF_RELAY_URL (vars.BIFF_RELAY_URL; a relay committed in "
+                "config.yaml also needs relay.allow_env_override: true)"
             )
         post = WallPost(
             text=message[:512],

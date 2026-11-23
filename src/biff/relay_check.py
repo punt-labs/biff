@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from biff.config import resolve_relay_config
+from biff.config import load_yaml_config
 from biff.plugins.contract import CheckResult
-from biff.relay_config import RelayLocation
+from biff.relay_config import RelayFile, RelayLocation
 
 
 class LocalRelayCheck:
@@ -62,13 +62,22 @@ class LocalRelayCheck:
         another machine, so the notification would reach no one.
         """
         workflow = repo_root / ".github" / "workflows" / "biff-notify.yml"
-        if resolve_relay_config(repo_root)[0] is not None or not workflow.is_file():
+        committed = RelayFile.parse("config.yaml", load_yaml_config(repo_root))
+        if committed.chooses() and committed.kind() != "local":
+            return None  # CI reads the committed relay, nothing of yours
+        if not workflow.is_file():
             return None
         return (
-            "biff-notify.yml is installed but this repo uses the local relay, so "
-            "CI notifications reach no one: set the repository variable "
-            "BIFF_RELAY_URL (vars.BIFF_RELAY_URL), or commit a relay in "
-            ".punt-labs/biff/config.yaml"
+            "biff-notify.yml is installed but the committed config chooses no "
+            "network relay, so CI would use the local relay and reach no one: "
+            "commit a demo or nats relay in .punt-labs/biff/config.yaml, or set "
+            "the repository variable BIFF_RELAY_URL (vars.BIFF_RELAY_URL)"
+            + (
+                " and relay.allow_env_override: true (a committed relay ignores "
+                "the variable otherwise)"
+                if committed.chooses()
+                else ""
+            )
         )
 
     @staticmethod

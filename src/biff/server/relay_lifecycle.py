@@ -29,7 +29,10 @@ class RelayLifecycle:
         """Allow MCP discovery even when initial session registration fails."""
         try:
             yield
-        except (RelayConnectError, TimeoutError):
+        except (RelayConnectError, TimeoutError, MCPError):
+            # An MCPError here is attach's report of a registration failure
+            # (it names the path of an unusable file); the first tool call
+            # attaches again and returns it to the client.
             logger.warning("Relay connection failed during startup")
 
     @staticmethod

@@ -111,3 +111,30 @@ async def test_mcp_client_sees_the_path_not_internal_server_error(
     logged = [r for r in caplog.records if str(blocked) in r.getMessage()]
     assert logged
     assert logged[0].exc_info is not None
+
+
+async def test_an_unusable_directory_does_not_stop_eager_startup(
+    blocked: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A declared startup session that cannot register leaves discovery working.
+
+    The error is carried to the client on its first tool call instead.
+    """
+    from fastmcp.client.transports import FastMCPTransport
+
+    from biff.server.app import create_server
+    from biff.testing.caller import StampedClient, caller_for
+
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-startup")
+    state = create_state(
+        BiffConfig(user="kai", repo_name="_test-blocked-startup"),
+        blocked,
+        hostname="h",
+        pwd="/p",
+    )
+    async with StampedClient(
+        FastMCPTransport(create_server(state)), caller=caller_for("sess-startup")
+    ) as client:
+        assert await client.list_tools()
+        with pytest.raises(Exception, match=str(blocked)):
+            await client.call_tool("who", {})

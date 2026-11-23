@@ -317,6 +317,18 @@ def relay_section_to_write(
     return section
 
 
+def relay_layers_error(
+    shared: dict[str, object], local: dict[str, object]
+) -> str | None:
+    """Return why these config files would not resolve to a relay, or ``None``."""
+    layers = [("config.yaml", shared), ("config.local.yaml", local)]
+    try:
+        _relay_config().RelayLayers.of(layers).resolve()
+    except SystemExit as exc:
+        return str(exc)
+    return None
+
+
 def _owner_orgs(repo_root: Path) -> tuple[str, ...]:
     """Return the remote's owner as the default org scope (none without one)."""
     owner = get_repo_owner(repo_root)
@@ -484,15 +496,17 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
         # set together), reopening the #383 footgun.
         tls_handshake_first = False
 
-    if fired_auth and relay_url is None:
+    if fired_auth and relay_url in (None, _relay_config().DEMO_RELAY_URL):
         # An auth override with nothing to authenticate against would
-        # otherwise fall through to the local relay, which ignores it: a
-        # missing or misspelled BIFF_RELAY_URL would pass unnoticed.
+        # otherwise fall through to the local relay, which ignores it (a
+        # missing or misspelled BIFF_RELAY_URL would pass unnoticed), or to
+        # the public demo relay, which must never receive your credentials.
         (auth_var,) = fired_auth
         raise SystemExit(
-            f"{auth_var} is set but no relay URL is configured -- set "
+            f"{auth_var} is set but no private relay URL is configured -- set "
             "BIFF_RELAY_URL as well. An auth override with no relay URL "
-            "would otherwise be ignored by the local relay."
+            "would otherwise be ignored by the local relay or sent to the "
+            "public demo relay."
         )
 
     tls_override = _tls_env_override()

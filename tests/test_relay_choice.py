@@ -416,3 +416,53 @@ class TestLocalRelayLocation:
             resolved: ResolvedConfig = load_cli_config(start=repo)
         assert resolved.data_dir == RelayLocation.of(repo).path
         assert resolved.config.repo_name == "o__r"
+
+
+class TestDemoRelayNeverGetsEnvCredentials:
+    def test_env_token_with_a_committed_demo_relay_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: demo\n  allow_env_override: true\n")
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "private")
+        with pytest.raises(SystemExit, match="public demo relay"):
+            resolve_relay_config(repo)
+
+    def test_env_url_and_token_replace_the_demo_relay(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: demo\n  allow_env_override: true\n")
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://mine:4222")
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "private")
+        assert resolve_relay_config(repo) == (
+            "tls://mine:4222",
+            RelayAuth(token="private"),
+            False,
+        )
+
+
+class TestFilesystemRemotes:
+    """A path remote is identified by where it points, not by its text."""
+
+    def test_the_same_relative_remote_in_different_places_stays_apart(
+        self, tmp_path: Path
+    ) -> None:
+        one = _clone(tmp_path / "a" / "work", ("origin", "../upstream.git"))
+        two = _clone(tmp_path / "b" / "work", ("origin", "../upstream.git"))
+        assert RelayLocation.of(one).path != RelayLocation.of(two).path
+
+    def test_different_spellings_of_one_path_share(self, tmp_path: Path) -> None:
+        one = _clone(tmp_path / "a" / "work", ("origin", "../up.git"))
+        two = _clone(
+            tmp_path / "a" / "other", ("origin", str(tmp_path / "a" / "up.git"))
+        )
+        assert RelayLocation.of(one).path == RelayLocation.of(two).path
+
+    def test_file_urls_are_paths(self, tmp_path: Path) -> None:
+        one = _clone(tmp_path / "a", ("origin", f"file://{tmp_path}/up.git"))
+        two = _clone(tmp_path / "b", ("origin", f"{tmp_path}/up.git"))
+        assert RelayLocation.of(one).path == RelayLocation.of(two).path
+
+    def test_path_case_is_preserved(self, tmp_path: Path) -> None:
+        one = _clone(tmp_path / "a", ("origin", f"{tmp_path}/Up.git"))
+        two = _clone(tmp_path / "b", ("origin", f"{tmp_path}/up.git"))
+        assert RelayLocation.of(one).path != RelayLocation.of(two).path

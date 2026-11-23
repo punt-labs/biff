@@ -253,14 +253,16 @@ class RelayKey:
     _SCP = re.compile(r"(?:[^@/]+@)?(?P<host>[^:/@]+):(?P<path>[^/].*)")
 
     @classmethod
-    def of(cls, url: str) -> Self:
-        """Return the key for the git remote *url*.
+    def of(cls, url: str, base: Path | None = None) -> Self:
+        """Return the key for the git remote *url*, as seen from *base*.
 
         The key is built from the normalized identity (lowercase host and
         ``owner/repo``, no trailing ``/`` or ``.git``), so ssh and https forms
         of one remote agree and different identities never do.  A remote that
         is not ``host/owner/repo`` (a GitLab subgroup) is keyed by its
-        normalized URL.
+        normalized URL.  A filesystem remote (a path or ``file://`` URL, absolute
+        or relative to *base*) is identified by the absolute path it resolves
+        to, with its case preserved.
         """
         text = url.strip().rstrip("/").removesuffix(".git").rstrip("/").lower()
         match = (
@@ -268,8 +270,12 @@ class RelayKey:
             or cls._URL.fullmatch(text)
             or cls._SCP.fullmatch(text)
         )
-        if match is None:
-            return cls(f"remote-{cls._digest(text)}", "remote URL hash")
+        if match is None or text.startswith("file:"):
+            path = (base or Path()) / url.strip().removeprefix("file://")
+            resolved = path.expanduser().resolve()
+            return cls(
+                f"remote-{cls._digest(str(resolved))}", f"remote path {resolved}"
+            )
         where = f"{match['host']}/{match['path'].strip('/')}"
         parts = where.split("/")[1:]
         if len(parts) != 2 or not all(parts):
@@ -310,11 +316,8 @@ class RelayLocation:
         two different repos never do.
         """
         url = cls._remote_url(repo_root)
-        if url:
-            key = RelayKey.of(url)
-        else:
-            common = get_repo_common_root(str(repo_root)) or str(repo_root)
-            key = RelayKey.for_path(Path(common))
+        common = Path(get_repo_common_root(str(repo_root)) or repo_root)
+        key = RelayKey.of(url, common) if url else RelayKey.for_path(common)
         return cls(biff_data_dir() / "relay" / key.name, key.reason)
 
     @staticmethod

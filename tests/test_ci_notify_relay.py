@@ -110,3 +110,40 @@ class TestWallInCi:
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
         result = await wall(ctx, "", "", clear=False)
         assert not result.error
+
+
+class TestNotifyWarningReadsWhatCiReads:
+    """CI sees only the committed config.yaml, never your personal file or shell."""
+
+    def test_a_personal_relay_does_not_silence_the_warning(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(tmp_path)
+        _install_workflow(repo)
+        (repo / ".punt-labs" / "biff").mkdir(parents=True)
+        (repo / ".punt-labs" / "biff" / "config.local.yaml").write_text(
+            "relay:\n  type: nats\n  url: nats://mine:4222\n"
+        )
+        assert LocalRelayCheck.notify_warning(repo) is not None
+
+    def test_a_shell_override_does_not_silence_the_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _repo(tmp_path)
+        _install_workflow(repo)
+        monkeypatch.setenv("BIFF_RELAY_URL", "nats://mine:4222")
+        assert LocalRelayCheck.notify_warning(repo) is not None
+
+    def test_a_committed_local_relay_also_needs_allow_env_override(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: local\n")
+        _install_workflow(repo)
+        warning = LocalRelayCheck.notify_warning(repo)
+        assert warning is not None
+        assert "allow_env_override" in warning
+
+    def test_a_committed_demo_relay_is_deliverable(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: demo\n")
+        _install_workflow(repo)
+        assert LocalRelayCheck.notify_warning(repo) is None

@@ -13,6 +13,7 @@ from biff.config import (
     ensure_gitignore_yaml,
     load_yaml_config,
     load_yaml_local,
+    relay_layers_error,
     relay_section_to_write,
     write_yaml_config,
 )
@@ -85,8 +86,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         # Build a fresh relay section -- changing the relay invalidates prior
         # auth in the SAME file. A relay chosen in config.local.yaml wins over
         # config.yaml (per file, not key by key); clear it separately if needed.
-        existing = load_yaml_local(repo_root) if local else load_yaml_config(repo_root)
+        shared, personal = load_yaml_config(repo_root), load_yaml_local(repo_root)
+        existing = personal if local else shared
         existing["relay"] = section
+        if problem := relay_layers_error(shared, personal):
+            return f"Error: that relay would leave the config unusable: {problem}"
         write_yaml_config(repo_root, existing, local=local)
         # Keep config.local.yaml out of git once .punt-labs/biff/ exists.
         ensure_gitignore_yaml(repo_root)

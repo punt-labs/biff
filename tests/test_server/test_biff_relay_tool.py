@@ -94,3 +94,21 @@ class TestBiffRelayTool:
     async def test_bad_scheme_is_still_rejected(self, tmp_path: Path) -> None:
         fn = await _tool(tmp_path)
         assert "invalid relay URL scheme" in await fn(url="http://x")
+
+
+class TestBiffRelayKeepsTheConfigUsable:
+    async def test_a_switch_that_would_orphan_personal_credentials_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        shared = "relay:\n  type: nats\n  url: nats://team:4222\n"
+        personal = "relay:\n  auth:\n    token: mine\n"
+        (biff_dir / "config.yaml").write_text(shared)
+        (biff_dir / "config.local.yaml").write_text(personal)
+        fn = await _tool(tmp_path)
+        result = await fn(relay_type="local")
+        assert "Error" in result
+        assert "credentials" in result
+        assert (biff_dir / "config.yaml").read_text() == shared
+        assert (biff_dir / "config.local.yaml").read_text() == personal
