@@ -86,17 +86,41 @@ def test_layer_imports_match_the_des_088_table() -> None:
     assert actual == DES_088_IMPORTS
 
 
+def _misplaced_adapters(
+    declared: DeclaredLayers, adapters: list[str]
+) -> dict[str, str]:
+    """Adapters whose layer is not their own: the contract's, or a sibling's."""
+    found = {a: declared.layer(f"biff.plugins.{a}") for a in adapters}
+    return {a: str(layer) for a, layer in found.items() if layer != a}
+
+
 def test_every_plugin_adapter_has_its_own_layer() -> None:
-    """A new ``plugins/<tool>/`` must not fall into the contract layer."""
-    declared = DeclaredLayers(_layer_table())
+    """Each ``plugins/<tool>/`` is a layer named for the tool, shared with no one.
+
+    Falling into the contract layer would let ``service`` import it directly;
+    sharing a sibling's layer would let the two adapters import each other.
+    """
     adapters = [
         path.name
         for path in (SRC / "biff/plugins").iterdir()
         if (path / "__init__.py").is_file()
     ]
     assert adapters
-    shared = [a for a in adapters if declared.layer(f"biff.plugins.{a}") == "plugins"]
-    assert shared == []
+    assert _misplaced_adapters(DeclaredLayers(_layer_table()), adapters) == {}
+
+
+def test_adapters_sharing_or_missing_a_layer_are_caught() -> None:
+    table: dict[str, object] = {
+        "plugins": {"prefixes": ["plugins"], "imports": []},
+        "claude_code": {
+            "prefixes": ["plugins.claude_code", "plugins.codex"],
+            "imports": [],
+        },
+    }
+    misplaced = _misplaced_adapters(
+        DeclaredLayers(table), ["claude_code", "codex", "devin"]
+    )
+    assert misplaced == {"codex": "claude_code", "devin": "plugins"}
 
 
 def test_no_layer_may_import_the_test_helpers() -> None:
