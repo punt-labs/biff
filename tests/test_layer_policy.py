@@ -87,11 +87,23 @@ def test_layer_imports_match_the_des_088_table() -> None:
 
 
 def _misplaced_adapters(
-    declared: DeclaredLayers, adapters: list[str]
+    declared: DeclaredLayers, adapters: list[str], modules: list[str]
 ) -> dict[str, str]:
-    """Adapters whose layer is not their own: the contract's, or a sibling's."""
-    found = {a: declared.layer(f"biff.plugins.{a}") for a in adapters}
-    return {a: str(layer) for a, layer in found.items() if layer != a}
+    """Adapter modules whose layer is not the adapter's own.
+
+    Covers each adapter's root and every module under it, so a submodule a
+    sibling's longer prefix claims is caught even when the root is right.
+    """
+    names = [
+        *(f"biff.plugins.{a}" for a in adapters),
+        *(m for m in modules if m.startswith("biff.plugins.") and m.count(".") > 2),
+    ]
+    found = {
+        (name, name.split(".")[2]): declared.layer(name)
+        for name in names
+        if name.split(".")[2] in adapters
+    }
+    return {name: str(layer) for (name, tool), layer in found.items() if layer != tool}
 
 
 def test_every_plugin_adapter_has_its_own_layer() -> None:
@@ -106,21 +118,51 @@ def test_every_plugin_adapter_has_its_own_layer() -> None:
         if (path / "__init__.py").is_file()
     ]
     assert adapters
-    assert _misplaced_adapters(DeclaredLayers(_layer_table()), adapters) == {}
+    declared = DeclaredLayers(_layer_table())
+    assert _misplaced_adapters(declared, adapters, _modules()) == {}
 
 
 def test_adapters_sharing_or_missing_a_layer_are_caught() -> None:
     table: dict[str, object] = {
         "plugins": {"prefixes": ["plugins"], "imports": []},
         "claude_code": {
-            "prefixes": ["plugins.claude_code", "plugins.codex"],
+            "prefixes": [
+                "plugins.claude_code",
+                "plugins.codex",
+                "plugins.codex.sender",
+            ],
             "imports": [],
         },
+        "codex": {"prefixes": ["plugins.codex.reader"], "imports": []},
     }
     misplaced = _misplaced_adapters(
-        DeclaredLayers(table), ["claude_code", "codex", "devin"]
+        DeclaredLayers(table),
+        ["claude_code", "codex", "devin"],
+        ["biff.plugins.codex.sender", "biff.plugins.codex.reader"],
     )
-    assert misplaced == {"codex": "claude_code", "devin": "plugins"}
+    assert misplaced == {
+        "biff.plugins.codex": "claude_code",
+        "biff.plugins.devin": "plugins",
+        "biff.plugins.codex.sender": "claude_code",
+    }
+
+
+def test_a_submodule_claimed_by_a_siblings_prefix_is_caught() -> None:
+    """The adapter root is right; one submodule is claimed by another layer."""
+    table: dict[str, object] = {
+        "plugins": {"prefixes": ["plugins"], "imports": []},
+        "claude_code": {
+            "prefixes": ["plugins.claude_code", "plugins.codex.sender"],
+            "imports": [],
+        },
+        "codex": {"prefixes": ["plugins.codex"], "imports": []},
+    }
+    misplaced = _misplaced_adapters(
+        DeclaredLayers(table),
+        ["claude_code", "codex"],
+        ["biff.plugins.codex.sender"],
+    )
+    assert misplaced == {"biff.plugins.codex.sender": "claude_code"}
 
 
 def test_no_layer_may_import_the_test_helpers() -> None:
