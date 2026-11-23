@@ -1,0 +1,122 @@
+name: Nightly QA
+
+# Credential-free broader suites, the hosted demo relay, and real Claude
+# sessions, on upstream main only. Never on a PR: the agent job spends a
+# provider key, and the hosted job shares a connection-limited account.
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: biff-nightly
+  cancel-in-progress: false
+
+jobs:
+  local:
+    if: github.repository == 'punt-labs/biff' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PUNT_TELEMETRY: "off"
+      NATS_SERVER_VERSION: v2.12.2
+      NATS_SERVER_SHA256: db587fd8b36ac732a8434e748b026ef77ed9cb714a4e57bd010b1de93c2f3801
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install the pinned nats-server
+        run: |
+          archive="nats-server-${NATS_SERVER_VERSION}-linux-amd64"
+          curl -fsSLo "$RUNNER_TEMP/$archive.tar.gz" \
+            "https://github.com/nats-io/nats-server/releases/download/${NATS_SERVER_VERSION}/$archive.tar.gz"
+          echo "$NATS_SERVER_SHA256  $RUNNER_TEMP/$archive.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/$archive.tar.gz" -C "$RUNNER_TEMP"
+          printf '%s\n' "$RUNNER_TEMP/$archive" >> "$GITHUB_PATH"
+      - run: uv sync --frozen --extra dev
+      - name: Run subprocess, CLI multi-user and local NATS suites
+        run: make test-nightly
+      - name: List quarantines and reject expired entries
+        if: ${{ !cancelled() }}
+        run: make test-quarantine
+
+  hosted:
+    if: github.repository == 'punt-labs/biff' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PUNT_TELEMETRY: "off"
+      # The public demo relay; its credentials ship in the package.
+      BIFF_TEST_NATS_URL: tls://connect.ngs.global
+      BIFF_TEST_NATS_CREDS: src/biff/data/demo.creds
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --extra dev
+      - name: Run hosted NATS tests against the demo relay
+        run: make test-live
+
+  agent:
+    if: github.repository == 'punt-labs/biff' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PUNT_TELEMETRY: "off"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --extra dev
+      - name: Drive real Claude sessions through biff's MCP tools
+        # Each query is capped at two turns and $0.05 (tests/test_sdk/_client.py).
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || { echo 'Configure a scoped ANTHROPIC_API_KEY for Nightly QA'; exit 1; }
+          make test-agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  notify:
+    needs: [local, hosted, agent]
+    if: >-
+      ${{ always() && github.repository == 'punt-labs/biff' &&
+          github.ref == 'refs/heads/main' &&
+          (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          sparse-checkout: .punt-labs/biff
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Notify the biff team
+        env:
+          BIFF_RELAY_URL: ${{ vars.BIFF_RELAY_URL }}
+          BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
+          BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
+        run: >-
+          uvx --from punt-biff biff --user github-actions wall
+          "Nightly QA failed on biff — ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          --duration 24h

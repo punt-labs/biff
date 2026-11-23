@@ -1,12 +1,14 @@
 name: Hosted NATS E2E
 
-# Disabled from automatic CI — session-scoped NATS connections hang
-# on GitHub Actions (event loop / asyncio interaction).  Run locally:
-#   BIFF_TEST_NATS_URL=tls://connect.ngs.global \
-#   BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
-#   uv run pytest -m nats_hosted -v
+# Manual run of the hosted tier against the demo relay; Nightly QA runs
+# the same `make test-live` on main. Tick `stress` for the scale subset.
 on:
   workflow_dispatch:
+    inputs:
+      stress:
+        description: Also run the hosted stress subset
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,7 +28,13 @@ jobs:
       - run: uv sync --frozen --extra dev
 
       - name: Run hosted NATS tests (demo relay)
-        run: uv run pytest -m nats_hosted -v
+        run: make test-live
+        env:
+          BIFF_TEST_NATS_URL: "tls://connect.ngs.global"
+          BIFF_TEST_NATS_CREDS: "src/biff/data/demo.creds"
+      - name: Run hosted stress tests (demo relay)
+        if: ${{ inputs.stress }}
+        run: make test-stress
         env:
           BIFF_TEST_NATS_URL: "tls://connect.ngs.global"
           BIFF_TEST_NATS_CREDS: "src/biff/data/demo.creds"
