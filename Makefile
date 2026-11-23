@@ -32,6 +32,21 @@ smoke-release: ## Build a wheel and smoke-test it installed in a clean environme
 
 .PHONY: smoke-release
 
+test-wheel: smoke-release ## Run the installed CLI and MCP round-trip against a freshly built wheel
+
+# pytest-cov conflicts with beartype's import hooks, so drive coverage directly.
+coverage: ## Test line and branch coverage with an HTML report
+	uv run coverage run -m pytest
+	uv run coverage html
+	uv run coverage report
+
+coverage-ci: ## Test line and branch coverage with a CI XML report
+	uv run coverage run -m pytest
+	uv run coverage xml
+	uv run coverage report
+
+.PHONY: test-wheel coverage coverage-ci
+
 lint: check-comments check-docstrings ## Lint and format check (ruff + shellcheck)
 	uv run ruff check .
 	uv run ruff format --check .
