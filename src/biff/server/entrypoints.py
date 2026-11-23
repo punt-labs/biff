@@ -11,8 +11,8 @@ import typer
 
 from biff._cli_runtime import McpInvocation
 from biff.config import RELAY_URL_UNSET, load_mcp_config
+from biff.server.channel import take_channel_mode
 from biff.server.transport_runtime import McpLifecycleHandler, McpServerBuilder
-from biff.usage import McpUsageMiddleware
 
 if TYPE_CHECKING:
     from biff.server.channel_server import ChannelServer
@@ -64,7 +64,7 @@ class McpServerOptions:
             msg = "the root CLI callback did not register an MCP invocation"
             raise RuntimeError(msg)
         server = self.create_server(invocation.toggle, default_user=invocation.user)
-        server.add_middleware(McpUsageMiddleware(invocation.usage))
+        server.observe_usage(invocation.usage)
         return server
 
     @classmethod
@@ -93,5 +93,7 @@ class McpServerOptions:
         relay_url: _RelayUrl = None,
     ) -> None:
         """Start the biff MCP server (stdio transport)."""
+        # First, so the git subprocesses of the config load never inherit it.
+        on = take_channel_mode()
         with McpLifecycleHandler.stdio():
-            cls(user, data_dir, relay_url)._observed_server(ctx).run_stdio()
+            cls(user, data_dir, relay_url)._observed_server(ctx).run_stdio(channel=on)

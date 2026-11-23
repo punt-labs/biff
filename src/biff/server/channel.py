@@ -205,7 +205,7 @@ class ChannelLink:
     _stream: ObservedWriteStream | None
     _log: EpisodeLog
     _retry_after: float
-    _attached_at: float
+    _created_at: float
 
     def __new__(cls) -> Self:
         """Create a link with no stream attached."""
@@ -213,7 +213,7 @@ class ChannelLink:
         self._stream = None
         self._log = EpisodeLog(logger, _EXPECTED)
         self._retry_after = 0.0
-        self._attached_at = 0.0
+        self._created_at = time.monotonic()
         return self
 
     @property
@@ -224,7 +224,6 @@ class ChannelLink:
     def observe(self, write_stream: _Sink) -> ObservedWriteStream:
         """Attach *write_stream* and return it wrapped for the dispatcher."""
         self._stream = ObservedWriteStream(write_stream)
-        self._attached_at = time.monotonic()
         return self._stream
 
     def observe_reads(self, read_stream: _Source) -> ObservedReadStream:
@@ -270,8 +269,12 @@ class ChannelLink:
             raise ChannelUnavailableError(msg)
 
     def in_handshake_window(self) -> bool:
-        """Whether the client has had too little time to send ``initialize``."""
-        return time.monotonic() - self._attached_at < HANDSHAKE_WINDOW
+        """Whether the server started too recently to expect ``initialize`` yet.
+
+        Measured from when the link was created, which is before any startup
+        notification can run, attached stream or not.
+        """
+        return time.monotonic() - self._created_at < HANDSHAKE_WINDOW
 
     def ready(self) -> bool:
         """Whether a retry that nothing asked for may run now.

@@ -270,7 +270,7 @@ class TestMcpCommand:
         mock_server.return_value = mock_mcp
         result = runner.invoke(app, ["mcp", "--user", "kai"])
         assert result.exit_code == 0
-        mock_mcp.run_stdio.assert_called_once_with()
+        mock_mcp.run_stdio.assert_called_once_with(channel=False)
 
     @patch("biff.server.transport_runtime.create_server")
     @patch("biff.server.launch.create_state", return_value=_STATE)

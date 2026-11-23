@@ -9,8 +9,9 @@
   credentials) or `nats` (your own NATS server, with `relay.url`). A `relay`
   section with only `url` still means `nats`.
 - Channel mode for the Claude Code plugin (DES-087). `plugin.json` sets
-  `BIFF_CHANNEL_MODE=1` in the `tty` server's `env`; `biff mcp` reads it once
-  and removes it from its environment (a value other than `1` is logged). In
+  `BIFF_CHANNEL_MODE=1` in the `tty` server's `env`; `biff mcp` reads it first
+  thing, before any configuration load or subprocess, and removes it from its
+  environment (a value other than `1` is logged). In
   that mode the server advertises `experimental["claude/channel"]` and serves
   stdio on the handshake-only loop, so Claude Code registers it as a channel:
   the 2026-07-28 probe gets -32601, `initialize` succeeds, and a later

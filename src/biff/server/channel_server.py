@@ -16,9 +16,10 @@ from mcp.shared.exceptions import MCPError
 from mcp.shared.jsonrpc_dispatcher import JSONRPCDispatcher
 from mcp.types import INVALID_REQUEST, PROTOCOL_VERSION_META_KEY
 
-from biff.server.channel import CHANNEL_CAPABILITY, ChannelLink, take_channel_mode
+from biff.server.channel import CHANNEL_CAPABILITY, ChannelLink
 from biff.server.mcp_protocol import NotificationServer
 from biff.server.tools import _descriptions
+from biff.usage import McpUsageMiddleware
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
     from fastmcp import Context
     from mcp.shared.dispatcher import DispatchContext
     from mcp.shared.transport_context import TransportContext
+
+    from biff.usage import UsageCapture
 
 logger = logging.getLogger(__name__)
 
@@ -62,15 +65,19 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
         else:
             await _descriptions.handshake_delivery.capture_session(session)
 
-    def run_stdio(self) -> None:
+    def observe_usage(self, usage: UsageCapture) -> None:
+        """Record each tool call's usage through *usage*."""
+        self.add_middleware(McpUsageMiddleware(usage))
+
+    def run_stdio(self, *, channel: bool) -> None:
         """Serve stdio, as a channel when the plugin asked for it.
 
-        Reads ``BIFF_CHANNEL_MODE`` once and removes it from the environment.
-        Every other caller keeps FastMCP's dual-era stdio loop.
+        *channel* is the decision ``biff mcp`` took from
+        ``BIFF_CHANNEL_MODE`` before it loaded any configuration.  Every other
+        caller keeps FastMCP's dual-era stdio loop.
         """
-        channel_mode = take_channel_mode()
-        logger.info("MCP stdio: channel_mode=%s", "on" if channel_mode else "off")
-        if channel_mode:
+        logger.info("MCP stdio: channel_mode=%s", "on" if channel else "off")
+        if channel:
             anyio.run(self.serve_channel_stdio)
         else:
             self.run(transport="stdio")

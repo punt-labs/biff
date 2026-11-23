@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from anyio.abc import ObjectReceiveStream, ObjectSendStream
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
     from fastmcp import Context
+    from mcp.server.subscriptions import SubscriptionBus
     from mcp.shared.transport_context import TransportContext
 
 runner = CliRunner()
@@ -1079,3 +1080,77 @@ class TestNoSessionCapturedIsAFailureEpisode:
         assert "still failing" in messages[1]
         assert "recovered" in messages[2]
         assert not delivery._pending_notify
+
+
+class TestTheFlagDoesNotLeakIntoConfigLoadSubprocesses:
+    def test_a_subprocess_started_while_loading_config_does_not_see_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import subprocess
+        import sys
+
+        monkeypatch.setenv(CHANNEL_MODE_VARIABLE, "1")
+        seen: list[str] = []
+
+        def load_config(**_kwargs: object) -> MagicMock:
+            probe = "import os; print(os.environ.get('BIFF_CHANNEL_MODE'))"
+            out = subprocess.run(  # noqa: S603
+                [sys.executable, "-c", probe],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            seen.append(out.stdout.strip())
+            return MagicMock()
+
+        async def serve_channel(_self: ChannelServer[object]) -> None:
+            return None
+
+        with (
+            patch(
+                "biff.server.transport_runtime.create_server",
+                return_value=ChannelServer[object]("biff"),
+            ),
+            patch("biff.server.launch.create_state"),
+            patch("biff.server.entrypoints.load_mcp_config", side_effect=load_config),
+            patch.object(ChannelServer, "serve_channel_stdio", serve_channel),
+        ):
+            assert runner.invoke(app, _SERVER_ARGS).exit_code == 0
+
+        assert seen == ["None"]
+
+
+class TestACancelAtTheBusCheckpointKeepsTheDebt:
+    async def test_cancelling_notify_while_publishing_leaves_it_owed(self) -> None:
+        delivery = _descriptions.handshake_delivery
+        publishing = asyncio.Event()
+
+        class _HangingBus:
+            async def publish(self, event: object) -> None:
+                publishing.set()
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(
+            delivery.notify(cast("SubscriptionBus", _HangingBus()))
+        )
+        await publishing.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert delivery._pending_notify
+
+
+class TestAStartupNotifyBeforeTheStreamAttaches:
+    async def test_it_is_inside_the_handshake_window(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        delivery = _descriptions.handshake_delivery
+        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.0)
+        delivery.serve_single_connection(ChannelLink())
+        delivery._pending_notify = True
+        with caplog.at_level(logging.WARNING):
+            await delivery.flush_owed()
+
+        assert caplog.records == []
+        assert delivery._pending_notify

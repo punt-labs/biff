@@ -133,22 +133,26 @@ class _HandshakeDelivery:
         Args:
             bus: Server event bus, or None to send the handshake notification only.
         """
-        if bus is not None:
-            await ListChanged(_NOTIFY_SEND_TIMEOUT, None).publish(bus)
-
         from fastmcp.server.dependencies import get_context  # noqa: PLC0415
 
         try:
             ctx = get_context()
         except RuntimeError:
             ctx = None
+        legacy = (
+            ctx is None or ctx.session.protocol_version not in MODERN_PROTOCOL_VERSIONS
+        )
+        # Owe the change before the first await: a cancellation at the bus
+        # checkpoint must not leave a changed description with no debt.
+        self._pending_notify = self._pending_notify or legacy
+        if bus is not None:
+            await ListChanged(_NOTIFY_SEND_TIMEOUT, None).publish(bus)
 
         if ctx is None:
             async with self._lock:
                 await self._notify_standalone()
-        elif ctx.session.protocol_version not in MODERN_PROTOCOL_VERSIONS:
+        elif legacy:
             async with self._lock:
-                self._pending_notify = True
                 sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(
                     lambda: ctx.send_notification(ToolListChangedNotification())
                 )

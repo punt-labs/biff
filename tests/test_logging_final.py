@@ -238,7 +238,7 @@ def test_stdio_shutdown_is_durable(durable_log: Path) -> None:
     with patch.object(McpServerOptions, "_observed_server") as observed:
         result = CliRunner().invoke(app, ["mcp", "--user", "private-user"])
     assert result.exit_code == 0
-    observed.return_value.run_stdio.assert_called_once_with()
+    observed.return_value.run_stdio.assert_called_once_with(channel=False)
     lines = durable_log.read_text().splitlines()
     stop = [line for line in lines if "shutdown outcome=" in line]
     assert len(stop) == 1

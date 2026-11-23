@@ -8568,6 +8568,11 @@ stream (`ObservedReadStream`, which closes the link when client input ends).
 frame was handed to the stdout writer task, not that the client read it. It
 raises `ChannelUnavailableError` on a closed link.
 
+`biff mcp` takes `BIFF_CHANNEL_MODE` from the environment first thing, before
+the config load, so that load's git subprocesses never inherit it. A notify
+owes its debt before its first await, so a cancellation at the subscription-bus
+checkpoint or in the middle of the send leaves it owed.
+
 In channel mode `_HandshakeDelivery.serve_single_connection(link)` makes every
 tool-list send consult the link, in the standalone path and in the in-request
 path. A send that timed out, failed, or was dropped by the SDK keeps the stored
@@ -8591,8 +8596,9 @@ and one WARNING when the label next succeeds. Any other exception is a code bug:
 it logs at ERROR with its traceback, once per distinct type, and again at ERROR
 every 10 minutes while it lasts, whatever episodes are open. A channel-mode
 retry with no handshake session is a failure of the same kind, opened only after
-`HANDSHAKE_WINDOW` (30 s) from when the stream was attached, so the normal start-up
-order (a poller notify before `initialize`) logs nothing. The poller uses
+`HANDSHAKE_WINDOW` (30 s) from when the link was created (before any startup
+notification can run, attached stream or not), so the normal start-up order
+(a notify before the stream attaches or before `initialize`) logs nothing. The poller uses
 `RelayLog` (`EpisodeLog` with `RELAY_ERRORS`).
 
 What changes outside channel mode (HTTP, `--user` stdio, opencode, codex, the
