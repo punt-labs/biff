@@ -10,6 +10,7 @@ of bypassing them.
 
 from __future__ import annotations
 
+import os
 import shutil
 import socket
 import subprocess
@@ -64,9 +65,10 @@ def _find_free_port() -> int:
 class DockerRelay:
     """Builds and runs ``ghcr.io/punt-labs/biff-relay`` from this checkout.
 
-    Built fresh from ``docker/`` on every test session (never pulled from a
-    published tag), so this tier exercises whatever a PR actually changed
-    in ``docker/``, not what shipped in the last release.
+    Built fresh from ``docker/`` on every test session unless
+    ``BIFF_RELAY_IMAGE`` names a release image, so on a PR this tier
+    exercises whatever the PR changed in ``docker/``, not what shipped in
+    the last release.
     """
 
     __slots__ = ("_docker",)
@@ -79,7 +81,15 @@ class DockerRelay:
         return self
 
     def build(self) -> str:
-        """Build the image and return its tag."""
+        """Build the image and return its tag.
+
+        ``BIFF_RELAY_IMAGE`` names an already-built image instead: the release
+        workflow sets it to the exact candidate or published image so this
+        tier tests the artifact that ships, not a fresh build of ``docker/``.
+        """
+        prebuilt = os.environ.get("BIFF_RELAY_IMAGE")
+        if prebuilt:
+            return prebuilt
         subprocess.run(  # noqa: S603
             [self._docker, "build", "-t", _IMAGE_TAG, str(_DOCKER_DIR)],
             check=True,
