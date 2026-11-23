@@ -22,7 +22,6 @@ Talk is NATS-only.  LocalRelay and DormantRelay return an error message.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -265,14 +264,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not isinstance(state.relay, NatsRelay):
             return "Talk requires a NATS relay connection."
         await update_current_session(state)
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + float(timeout)
         # Block until there is new drainable traffic — queued frames or a
         # pending invite.  A bare open connection is not, by itself, activity,
         # so an active conversation with an empty queue keeps waiting for the
-        # partner's next frame instead of returning at once.
-        while not state.talk.has_pending_traffic and loop.time() < deadline:
-            await asyncio.sleep(0.25)
+        # partner's next frame instead of returning at once.  An arrival wakes
+        # the wait; nothing polls.
+        await state.talk.wait_for_traffic(float(timeout))
         drain = state.talk.drain_for_agent()
         published = await _publish_agent_auto_accept(state, drain)
         await refresh_talk(mcp, state)

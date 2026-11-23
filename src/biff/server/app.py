@@ -115,6 +115,8 @@ def _remove_active_markers(state: ServerState) -> None:
 # Throttling this call to a slower cadence shrinks its share of
 # that shared budget without touching the wedge-detection machinery itself.
 _ORG_REPOS_REFRESH_INTERVAL = 600.0  # seconds
+_POLLER_RESTART_DELAY = 1.0  # seconds, doubled per consecutive death, capped
+_POLLER_RESTART_CAP = 60.0
 
 # Bound each best-effort NATS teardown call independently of nats-py's own
 # per-request timeout.  nats-py reconnects forever on a lost connection
@@ -311,12 +313,6 @@ async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
         logger.warning("Failed to reap sentinel", exc_info=True)
         return False
     return True
-
-
-def _log_poller_exit(task: asyncio.Task[None]) -> None:
-    """Log a poller that ended with an exception; its failure is never silent."""
-    if not task.cancelled() and (exc := task.exception()) is not None:
-        logger.error("Poller task died", exc_info=exc)
 
 
 async def _refresh_org_repos(state: ServerState) -> None:
@@ -1251,6 +1247,42 @@ class _LiveSession:
         self.shutdown = asyncio.Event()
         self.attached = False
 
+    def _spawn_poller(
+        self, mcp: FastMCP[ServerState], state: ServerState, *, attempt: int
+    ) -> None:
+        """Start the poller; if it dies, log it and start another after a backoff.
+
+        The poller also reaps shutdown sentinels: it runs on every wake, and a
+        watch on the sentinel directory wakes it, so there is no reaper timer.
+        It outlives the requests that may start it, and nothing else would
+        restart it, so a death must not leave the markers silently stale.
+        """
+        shutdown = self.shutdown
+        poll = _descriptions.poll_inbox(
+            mcp,
+            state,
+            shutdown=shutdown,
+            reap=lambda: _reap_sentinels(state),
+            watch_dirs=(sentinel_dir(state.config.repo_name),),
+        )
+        task = asyncio.create_task(poll, context=Context())
+        self.reaper = task
+        self.tasks.append(task)
+
+        def restart() -> None:
+            if shutdown.is_set() or self.shutdown is not shutdown:
+                return  # shut down, or re-pointed to a new session
+            self._spawn_poller(mcp, state, attempt=attempt + 1)
+
+        def died(done: asyncio.Task[None]) -> None:
+            if done.cancelled() or (exc := done.exception()) is None:
+                return
+            delay = min(_POLLER_RESTART_DELAY * 2**attempt, _POLLER_RESTART_CAP)
+            logger.error("Poller task died; restarting in %.1fs", delay, exc_info=exc)
+            asyncio.get_running_loop().call_later(delay, restart)
+
+        task.add_done_callback(died)
+
     async def _register_and_start(
         self, mcp: FastMCP[ServerState], state: ServerState
     ) -> None:
@@ -1268,19 +1300,7 @@ class _LiveSession:
         await _append_login_event(state, final_name)
         await _close_orphaned_logins(state, sessions)
 
-        # The poller also reaps shutdown sentinels: it runs on every wake, and
-        # a watch on the sentinel directory wakes it, so there is no reaper timer.
-        poll = _descriptions.poll_inbox(
-            mcp,
-            state,
-            shutdown=self.shutdown,
-            reap=lambda: _reap_sentinels(state),
-            watch_dirs=(sentinel_dir(state.config.repo_name),),
-        )
-        # The poller outlives the requests that may start it.
-        self.reaper = asyncio.create_task(poll, context=Context())
-        self.reaper.add_done_callback(_log_poller_exit)
-        self.tasks.append(self.reaper)
+        self._spawn_poller(mcp, state, attempt=0)
         self.tasks.append(asyncio.create_task(_heartbeat_loop(state, self.shutdown)))
         self.tasks.append(asyncio.create_task(_kv_watcher_loop(state, self.shutdown)))
 

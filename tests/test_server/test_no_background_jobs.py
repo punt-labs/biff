@@ -300,4 +300,4 @@ class TestLiveSessionTimers:
         # transport's own one-shot request timeouts (10s, 5s, 3s) do not repeat.
         repeats = [d for d in spy.delays if d < 1]
         assert repeats
-        assert {round(d, 1) for d in repeats} == {0.3}
+        assert max(repeats) <= 0.31  # the remainder of a 0.3s interval

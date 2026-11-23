@@ -25,6 +25,25 @@ logger = logging.getLogger(__name__)
 _THREAD_HOOK_INSTALLED: list[bool] = [False]
 
 
+def _reset_dead_inotify_reader() -> None:
+    """On Linux, drop watchdog's shared inotify reader if its thread has died.
+
+    watchdog keeps one process-wide reader thread (``InotifyFD._instance``); if
+    it dies, every emitter stays alive and a rebuild would reuse the corpse.
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        from watchdog.observers import inotify_c  # noqa: PLC0415
+
+        reader = inotify_c.InotifyFD._instance
+        if reader is not None and not reader.is_alive():
+            inotify_c.InotifyFD._instance = None
+            logger.warning("Replaced a dead inotify reader thread")
+    except (ImportError, AttributeError):
+        logger.debug("Could not inspect the inotify reader", exc_info=True)
+
+
 def _log_thread_failures() -> None:
     """Send an uncaught exception in a watch thread to the logger, not stderr."""
     if _THREAD_HOOK_INSTALLED[0]:
@@ -76,14 +95,23 @@ class ArrivalHandler(FileSystemEventHandler):
 
     _loop: asyncio.AbstractEventLoop
     _on_change: Callable[[], None]
+    _canary: threading.Event | None
 
     def __new__(
-        cls, loop: asyncio.AbstractEventLoop, on_change: Callable[[], None]
+        cls,
+        loop: asyncio.AbstractEventLoop,
+        on_change: Callable[[], None],
+        canary: threading.Event | None = None,
     ) -> Self:
-        """Create a handler that calls *on_change* on *loop* for each arrival."""
+        """Create a handler that calls *on_change* on *loop* for each arrival.
+
+        *canary* is set when an event names the watch's canary entry, which is
+        how the liveness check proves events still arrive.
+        """
         self = super().__new__(cls)
         self._loop = loop
         self._on_change = on_change
+        self._canary = canary
         return self
 
     @classmethod
@@ -104,7 +132,9 @@ class ArrivalHandler(FileSystemEventHandler):
         )
 
     def on_any_event(self, event: FileSystemEvent) -> None:
-        """Wake the loop when *event* is an arrival."""
+        """Wake the loop when *event* is an arrival; note a canary event."""
+        if self._canary is not None and ".biff-canary" in os.fsdecode(event.src_path):
+            self._canary.set()
         if not self.is_arrival(event):
             return
         try:
@@ -119,7 +149,9 @@ class LocalWatch:
     Watches the relay's data directory, not its files, because
     ``atomic_write`` replaces a file's inode.  The OS reports each change, so
     no timer is involved (DES-087).  :meth:`start` and :meth:`stop` bracket the
-    watch, and the instance is also a context manager.
+    watch, :meth:`close` ends it for good (a later :meth:`start` does nothing,
+    so a start that finishes after a cancelled poller's cleanup tears nothing up
+    twice and leaks nothing), and the instance is also a context manager.
 
     Two watchers run on macOS: the OS file-event observer (FSEvents), which
     sees everything but reports another process's writes in batches seconds
@@ -127,22 +159,40 @@ class LocalWatch:
     Either waking the signal is enough and a second wake is free.  Descriptor
     use is constant in the number of files.
 
-    :meth:`is_healthy` says whether every watcher is still running and the
-    directory is the one that was watched; a directory removed and recreated
-    kills the kqueue thread and strands the observer on the old inode, and the
-    poller's liveness pass rebuilds the watch.
+    :meth:`unhealthy_reason` runs on the poller's liveness pass and names the
+    first thing wrong: a dead observer, emitter or kqueue thread, a directory
+    that was replaced (``st_dev``/``st_ino``), or a canary entry that no event
+    reported, which also catches an observer that is alive and deaf (a stalled
+    FSEvents stream, a dead process-wide inotify reader).
     """
 
     JOIN_SECONDS: ClassVar[float] = DirectoryKqueue.JOIN_SECONDS
+    CANARY_SECONDS: ClassVar[float] = 10.0
+    CANARY_NAME: ClassVar[str] = ".biff-canary"
 
-    __slots__ = ("_data_dir", "_inode", "_kqueue", "_loop", "_observer", "_on_change")
+    __slots__ = (
+        "_canary",
+        "_closed",
+        "_data_dir",
+        "_identity",
+        "_kqueue",
+        "_lock",
+        "_loop",
+        "_observer",
+        "_on_change",
+        "_stuck_kqueue",
+    )
 
     _data_dir: Path
     _on_change: Callable[[], None]
     _loop: asyncio.AbstractEventLoop
-    _inode: int
+    _identity: tuple[int, int]
     _observer: BaseObserver | None
     _kqueue: DirectoryKqueue | None
+    _stuck_kqueue: DirectoryKqueue | None
+    _canary: threading.Event
+    _lock: threading.RLock
+    _closed: bool
 
     def __new__(cls, data_dir: Path, on_change: Callable[[], None]) -> Self:
         """Create a stopped watch on *data_dir*; call it from the event loop."""
@@ -150,9 +200,13 @@ class LocalWatch:
         self._data_dir = data_dir
         self._on_change = on_change
         self._loop = asyncio.get_running_loop()
-        self._inode = -1
+        self._identity = (-1, -1)
         self._observer = None
         self._kqueue = None
+        self._stuck_kqueue = None
+        self._canary = threading.Event()
+        self._lock = threading.RLock()
+        self._closed = False
         return self
 
     @property
@@ -163,22 +217,36 @@ class LocalWatch:
     def start(self) -> None:
         """Start watching, creating the directory if it is missing.
 
-        A failure stops and joins whatever had already started, then raises.
+        Does nothing once :meth:`close` has run.  A failure stops and joins
+        whatever had already started, then raises the cause.
         """
-        _log_thread_failures()
-        try:
-            self._data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            self._inode = self._data_dir.stat().st_ino
-            handler = ArrivalHandler(self._loop, self._on_change)
-            observer = Observer()
-            observer.schedule(handler, str(self._data_dir), recursive=False)
-            self._observer = observer
-            observer.start()
-            if sys.platform == "darwin":
-                self._kqueue = DirectoryKqueue(self._data_dir, self._wake)
-        except BaseException:
-            self.stop()
-            raise
+        with self._lock:
+            if self._closed:
+                return
+            _log_thread_failures()
+            observer: BaseObserver | None = None
+            try:
+                self._data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                info = self._data_dir.stat()
+                self._identity = (info.st_dev, info.st_ino)
+                handler = ArrivalHandler(self._loop, self._on_change, self._canary)
+                observer = Observer()
+                observer.schedule(handler, str(self._data_dir), recursive=False)
+                observer.start()
+                self._observer = observer
+                if sys.platform == "darwin":
+                    self._start_kqueue()
+            except BaseException:
+                self._teardown(observer)
+                raise
+
+    def _start_kqueue(self) -> None:
+        stuck = self._stuck_kqueue
+        if stuck is not None and stuck.is_alive:
+            logger.warning("Not starting a second kqueue over one that will not stop")
+            return
+        self._stuck_kqueue = None
+        self._kqueue = DirectoryKqueue(self._data_dir, self._wake)
 
     def _wake(self) -> None:
         try:
@@ -186,32 +254,74 @@ class LocalWatch:
         except RuntimeError:
             logger.debug("Local relay watch fired after the event loop closed")
 
-    def is_healthy(self) -> bool:
-        """Whether every watcher runs and the directory is the one watched."""
-        observer = self._observer
-        if observer is None or not observer.is_alive():
-            return False
+    def unhealthy_reason(self, canary_timeout: float | None = None) -> str | None:
+        """Return what is wrong with the watch, or ``None`` if it is healthy.
+
+        Blocks for up to *canary_timeout* seconds while it proves an event can
+        still arrive end to end; call it on a worker thread.
+        """
+        reason = self._thread_reason(self._observer)
+        if reason is None:
+            reason = self._directory_reason()
+        if reason is None:
+            reason = self._canary_reason(canary_timeout or self.CANARY_SECONDS)
+        return reason
+
+    def _thread_reason(self, observer: BaseObserver | None) -> str | None:
+        if observer is None:
+            return "watch not started"
+        if not observer.is_alive():
+            return "observer thread dead"
         if not observer.emitters or not all(e.is_alive() for e in observer.emitters):
-            return False
+            return "emitter thread dead"
         if sys.platform == "darwin" and not (self._kqueue and self._kqueue.is_alive):
-            return False
+            return "kqueue thread dead"
+        return None
+
+    def _directory_reason(self) -> str | None:
         try:
-            return self._data_dir.stat().st_ino == self._inode
-        except OSError:
-            return False
+            info = self._data_dir.stat()
+        except OSError as exc:
+            return f"directory missing ({exc.strerror})"
+        if (info.st_dev, info.st_ino) != self._identity:
+            return "directory replaced (device or inode changed)"
+        return None
+
+    def _canary_reason(self, timeout: float) -> str | None:
+        canary = self._data_dir / self.CANARY_NAME
+        self._canary.clear()
+        try:
+            canary.write_text("")
+            seen = self._canary.wait(timeout)
+            canary.unlink(missing_ok=True)
+        except OSError as exc:
+            return f"canary entry could not be written ({exc.strerror})"
+        return None if seen else f"canary event not seen within {timeout:g}s"
 
     def stop(self) -> None:
-        """Stop watching; log a warning for any thread that will not end."""
+        """Stop watching (it can be started again)."""
+        with self._lock:
+            self._teardown(None)
+
+    def close(self) -> None:
+        """Stop watching for good; a later :meth:`start` does nothing."""
+        with self._lock:
+            self._closed = True
+            self._teardown(None)
+
+    def _teardown(self, started: BaseObserver | None) -> None:
         observer, self._observer = self._observer, None
         kqueue, self._kqueue = self._kqueue, None
-        if observer is not None:
-            if observer.is_alive():
-                observer.stop()
-            observer.join(timeout=self.JOIN_SECONDS)
-            if observer.is_alive():
-                logger.warning("Local relay watch observer did not stop")
+        for obs in (observer, started):
+            if obs is not None and obs.ident is not None:
+                obs.stop()
+                obs.join(timeout=self.JOIN_SECONDS)
+                if obs.is_alive():
+                    logger.warning("Local relay watch observer did not stop")
         if kqueue is not None and not kqueue.stop():
             logger.warning("Local relay kqueue thread did not stop")
+            self._stuck_kqueue = kqueue
+        _reset_dead_inotify_reader()
 
     def __enter__(self) -> Self:
         """Start watching."""
@@ -224,29 +334,32 @@ class LocalWatch:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        """Stop watching."""
-        self.stop()
+        """Stop watching for good."""
+        self.close()
 
 
 class WatchKeeper:
     """Keep a set of watches running, rebuilding any that has gone bad.
 
-    :meth:`start` and :meth:`check` block (they start and join threads); call
-    them with ``asyncio.to_thread``.  A watch that fails to start is logged at
-    ERROR with its path and exception once, and a recovery is logged once;
-    further failed retries stay quiet so the liveness pass does not repeat them.
+    :meth:`start` and :meth:`check` block (they start and join threads and wait
+    for a canary event); call them with ``asyncio.to_thread`` (:meth:`acheck`).
+    A watch that fails to start is logged at ERROR with its errno when it first
+    fails, at DEBUG for each retry, and at WARNING every ``REMINDER_EVERY``
+    failed attempts; a recovery is logged once.
     """
 
-    __slots__ = ("_failing", "_watches")
+    REMINDER_EVERY: ClassVar[int] = 10
+
+    __slots__ = ("_failures", "_watches")
 
     _watches: tuple[LocalWatch, ...]
-    _failing: set[Path]
+    _failures: dict[Path, int]
 
     def __new__(cls, watches: tuple[LocalWatch, ...]) -> Self:
         """Create a keeper over *watches*, none of them started yet."""
         self = super().__new__(cls)
         self._watches = watches
-        self._failing = set()
+        self._failures = {}
         return self
 
     @property
@@ -263,37 +376,51 @@ class WatchKeeper:
         """Rebuild each unhealthy watch; return whether any was rebuilt."""
         rebuilt = False
         for watch in self._watches:
-            if watch.is_healthy():
+            reason = watch.unhealthy_reason()
+            if reason is None:
                 continue
             path = watch.data_dir
-            first = path not in self._failing
-            if first:
-                logger.warning("Local relay watch on %s is not running", path)
+            if path not in self._failures:
+                logger.warning("Local relay watch on %s: %s; rebuilding", path, reason)
             self._build(watch)
-            if first and path not in self._failing:
+            if path not in self._failures:
                 logger.warning("Local relay watch on %s is running again", path)
             rebuilt = True
         return rebuilt
 
     async def acheck(self) -> bool:
-        """:meth:`check` on a worker thread; ``False`` at once with nothing to watch."""
+        """Run :meth:`check` on a worker thread; ``False`` with nothing to watch."""
         return bool(self._watches) and await asyncio.to_thread(self.check)
 
     def stop(self) -> None:
-        """Stop every watch."""
+        """Stop every watch for good."""
         for watch in self._watches:
-            watch.stop()
+            watch.close()
 
     def _build(self, watch: LocalWatch) -> None:
         path = watch.data_dir
-        watch.stop()
         try:
+            watch.stop()
             watch.start()
-        except Exception:
-            if path not in self._failing:
-                logger.exception("Local relay watch on %s failed to start", path)
-            self._failing.add(path)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._note_failure(path, exc)
         else:
-            if path in self._failing:
-                self._failing.discard(path)
-                logger.warning("Local relay watch on %s is running again", path)
+            self._failures.pop(path, None)
+
+    def _note_failure(self, path: Path, exc: BaseException) -> None:
+        attempts = self._failures[path] = self._failures.get(path, 0) + 1
+        code = exc.errno if isinstance(exc, OSError) else None
+        what = f"(errno {code}) {exc}"
+        if attempts == 1:
+            logger.error(
+                "Local relay watch on %s failed to start %s", path, what, exc_info=exc
+            )
+        elif attempts % self.REMINDER_EVERY == 0:
+            logger.warning(
+                "Local relay watch on %s still failing after %d tries %s",
+                path,
+                attempts,
+                what,
+            )
+        else:
+            logger.debug("Local relay watch on %s failed again %s", path, what)

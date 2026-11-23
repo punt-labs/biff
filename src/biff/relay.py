@@ -487,13 +487,18 @@ class LocalRelay:
             self._validate_user(message.to_user)
             path = self._user_inbox_path(message.to_user)
         with self._lock():
-            existing = self._read_inbox_file(path)
-            if any(m.id == message.id for m in existing):
+            if any(m.id == message.id for m in self._read_inbox_file(path)):
                 return  # same id twice is one message, as JetStream dedups it
             # Rewritten by rename, like every other change to a mailbox, so a
             # watch on the directory sees an arrival at once (an append to an
-            # existing file would not change the directory).
-            self._write_inbox_file(path, [*existing, message])
+            # existing file would not change the directory).  The old text is
+            # carried through as it is, so a line this version cannot parse is
+            # never dropped by a delivery.
+            old = path.read_text() if path.exists() else ""
+            if old and not old.endswith("\n"):
+                old += "\n"
+            atomic_write(path, old + message.model_dump_json() + "\n")
+            path.chmod(0o600)
 
     async def fetch(self, session_key: str) -> list[Message]:
         """Get unread messages for a session, oldest first."""
@@ -620,8 +625,19 @@ class LocalRelay:
         return await self.get_sessions()
 
     async def delete_session(self, session_key: str) -> None:
-        """Remove a session from storage."""
-        self.delete_session_sync(session_key)
+        """Remove a session from storage, under the directory lock."""
+        self._delete_session_locked(session_key)
+
+    def _delete_session_locked(self, session_key: str) -> None:
+        """Delete a session holding the directory lock.
+
+        The read-modify-write of ``sessions.json`` must not interleave with
+        another process's :meth:`update_session`, or the later rename loses its
+        update.  :meth:`delete_session_sync` stays lock-free for the signal
+        handler, which must not block.
+        """
+        with self._lock():
+            self.delete_session_sync(session_key)
 
     def delete_session_sync(self, session_key: str) -> None:
         """Remove a session from storage (sync, safe from signal handlers)."""
@@ -691,7 +707,7 @@ class LocalRelay:
             with routing_lock(session_key.partition(":")[2]) as acquired:
                 if not acquired:
                     continue
-                self.delete_session_sync(session_key)
+                self._delete_session_locked(session_key)
                 sentinel.unlink(missing_ok=True)
 
     # -- Session history (wtmp) --

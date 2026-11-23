@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import math
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -55,7 +56,6 @@ if TYPE_CHECKING:
     from mcp.server.session import ServerSession
     from mcp.server.subscriptions import SubscriptionBus
 
-    from biff.local_watch import WatchKeeper
     from biff.server.state import ServerState
 
 logger = logging.getLogger(__name__)
@@ -893,6 +893,7 @@ class _Seen:
     wall: tuple[str, str] = ("", "")
     talk: tuple[tuple[str, ...], int, str] = ((), -1, "")
     failed: bool = False  # the last pass raised; the liveness pass retries it
+    wall_expires: datetime | None = None  # the relay's wall, not the display item
 
     def timeout(self, liveness: float | None, deadline: float) -> float | None:
         """How long the poller may sleep: the nearer of liveness and deadline.
@@ -971,20 +972,31 @@ async def _active_tick(
 
     if due:
         state.display_queue.snapshot()  # purge what has expired
-    return _Seen(unread=last_count, wall=last_wall, talk=last_talk)
+    return _Seen(
+        unread=last_count,
+        wall=last_wall,
+        talk=last_talk,
+        wall_expires=current_wall.expires_at if current_wall else None,
+    )
 
 
-def _seconds_until_deadline(state: ServerState) -> float:
+def _seconds_until_deadline(state: ServerState, seen: _Seen) -> float:
     """Seconds until the earliest displayed expiry; infinite if nothing expires.
 
     A displayed wall and a held talk invite each end at a known time and
     nothing else would clear them, so the poller arms one one-shot wake for the
-    earliest (DES-087).  With nothing displayed there is no deadline and no timer.
+    earliest (DES-087).  A wall's deadline is the relay's own ``expires_at``
+    (what the last pass saw), not the display item's monotonic copy of it, so a
+    clock skew between the two cannot disarm the wake while the wall still
+    shows; a wall posted from this server and not yet seen falls back to the
+    display queue.  With nothing displayed there is no deadline and no timer.
     """
-    waits = (
-        state.display_queue.seconds_until_expiry(),
-        state.talk.seconds_until_invite_expiry(),
+    wall = (
+        (seen.wall_expires - datetime.now(UTC)).total_seconds()
+        if seen.wall_expires
+        else state.display_queue.seconds_until_expiry()
     )
+    waits = (wall, state.talk.seconds_until_invite_expiry())
     return min((w for w in waits if w is not None), default=math.inf)
 
 
@@ -1084,11 +1096,29 @@ class _AlwaysOnSubs:
                     await asyncio.shield(sub.handle.unsubscribe())
 
 
-def _liveness_interval(state: ServerState, keeper: WatchKeeper) -> float | None:
-    """Return the liveness wait: NATS subscriptions, a watch, or none."""
-    if _relay_pushes_inbox_notify(state):
-        return _SUB_RECONCILE_INTERVAL
-    return _WATCH_LIVENESS_INTERVAL if keeper.watching else None
+@dataclass
+class _Check:
+    """A liveness check that is due *every* seconds of elapsed time.
+
+    Tracked on the clock, not on the wait timing out, so a poller that is woken
+    all the time (other sessions' heartbeats, pushes) still runs it.
+    """
+
+    _every: float | None
+    _last: float = field(default_factory=time.monotonic)
+
+    def remaining(self) -> float | None:
+        """Seconds until it is due, or ``None`` if it never is."""
+        if self._every is None:
+            return None
+        return max(self._last + self._every - time.monotonic(), 0.0)
+
+    def due(self) -> bool:
+        """Whether it is due now; if so, restart its interval."""
+        if self._every is None or time.monotonic() - self._last < self._every:
+            return False
+        self._last = time.monotonic()
+        return True
 
 
 async def poll_inbox(
@@ -1140,18 +1170,27 @@ async def poll_inbox(
     gate = _InboxPokeGate()
     subs = _AlwaysOnSubs(state, gate)
     keeper = state.wake.watching(state.relay, *watch_dirs)
-    liveness = _liveness_interval(state, keeper)
+    # NATS: rebind subscriptions every few seconds.  A watch: prove it every
+    # minute.  Each is tracked on elapsed time, so steady wakes cannot starve it.
+    nats = _Check(
+        _SUB_RECONCILE_INTERVAL if _relay_pushes_inbox_notify(state) else None
+    )
+    watch = _Check(_WATCH_LIVENESS_INTERVAL if keeper.watching else None)
     try:
         await asyncio.to_thread(keeper.start)
         await subs.start()
         state.wake.wake()  # the first pass
         while shutdown is None or not shutdown.is_set():
-            timeout = seen.timeout(liveness, _seconds_until_deadline(state))
+            waits = [w for w in (nats.remaining(), watch.remaining()) if w is not None]
+            timeout = seen.timeout(
+                min(waits, default=None), _seconds_until_deadline(state, seen)
+            )
             outcome = await state.wake.wait(timeout=timeout, shutdown=shutdown)
             if outcome.is_shutdown:
                 return
-            rebuilt = False if outcome.is_arrival else await keeper.acheck()
-            due = _seconds_until_deadline(state) <= 0
+            nats.due()
+            rebuilt = await keeper.acheck() if watch.due() else False
+            due = _seconds_until_deadline(state, seen) <= 0
             wanted = (outcome.is_arrival, gate.pending, seen.failed, rebuilt, due)
             if any(wanted):
                 seen = await _safe_tick(mcp, state, seen, gate=gate, due=due)
@@ -1162,6 +1201,8 @@ async def poll_inbox(
             await subs.reconcile()
     finally:
         await subs.close()
+        # Close, don't just stop: a start still running on its worker thread
+        # sees the watch closed and tears itself down instead of leaking.
         with suppress(Exception, asyncio.CancelledError):
             await asyncio.shield(asyncio.to_thread(keeper.stop))
 

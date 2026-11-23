@@ -6,6 +6,7 @@ import logging
 import os
 import select
 import threading
+from contextlib import suppress
 from typing import TYPE_CHECKING, ClassVar, Self
 
 if TYPE_CHECKING:
@@ -35,20 +36,27 @@ class DirectoryKqueue:
     _thread: threading.Thread
 
     def __new__(cls, path: Path, notify: Callable[[], None]) -> Self:
-        """Start watching *path*, calling *notify* from the watch thread."""
+        """Start watching *path*, calling *notify* from the watch thread.
+
+        Each resource is opened inside the ``try``, so a failure closes exactly
+        what was opened and nothing leaks.
+        """
         self = super().__new__(cls)
-        directory = os.open(path, os.O_RDONLY)
-        read_end, write_end = os.pipe()
-        self._fds = (directory, read_end, write_end)
-        self._kq = select.kqueue()
+        opened: list[int] = []
+        queue: select.kqueue | None = None
         try:
+            directory = os.open(path, os.O_RDONLY)
+            opened.append(directory)
+            read_end, write_end = os.pipe()
+            opened += [read_end, write_end]
+            queue = select.kqueue()
             vnode = (
                 select.KQ_NOTE_WRITE
                 | select.KQ_NOTE_DELETE
                 | select.KQ_NOTE_RENAME
                 | select.KQ_NOTE_REVOKE
             )
-            self._kq.control(
+            queue.control(
                 [
                     select.kevent(
                         directory,
@@ -61,12 +69,18 @@ class DirectoryKqueue:
                 0,
                 0,
             )
+            self._fds = (directory, read_end, write_end)
+            self._kq = queue
             self._thread = threading.Thread(
                 target=self._run, args=(notify,), name="biff-watch-kqueue", daemon=True
             )
             self._thread.start()
         except BaseException:
-            self._release()
+            for fd in opened:
+                with suppress(OSError):
+                    os.close(fd)
+            if queue is not None:
+                queue.close()
             raise
         return self
 

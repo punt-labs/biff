@@ -15,10 +15,12 @@ as a BSD talk invite evaporates when the inviter leaves.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from collections import deque
+from contextlib import suppress
 from typing import TYPE_CHECKING, Protocol, Self, final, runtime_checkable
 
 from biff.invite_expiry import InviteExpiry
@@ -96,6 +98,7 @@ class TalkState:
     """
 
     __slots__ = (
+        "_arrival",
         "_my_key",
         "_my_tty",
         "_my_tty_name",
@@ -120,6 +123,7 @@ class TalkState:
     _partner_key: str
     _pending: dict[str, PendingInvite]
     _queue: deque[QueuedNotification]
+    _arrival: asyncio.Event
 
     def __new__(
         cls,
@@ -143,6 +147,7 @@ class TalkState:
         self._partner_key = session_key
         self._pending = {}
         self._queue = deque()
+        self._arrival = asyncio.Event()
         return self
 
     # -- Read-only state --
@@ -272,6 +277,22 @@ class TalkState:
         if len(self._queue) >= MAX_TALK_QUEUE:
             self._queue.popleft()  # ReceiveOverflow — drop-oldest
         self._queue.append(QueuedNotification(notif, time.monotonic()))
+        self._arrival.set()
+        return True
+
+    async def wait_for_traffic(self, timeout: float) -> bool:
+        """Wait up to *timeout* seconds for drainable traffic; return whether any.
+
+        Woken by an arrival (:meth:`receive` sets an event), never by a poll.
+        """
+        deadline = time.monotonic() + timeout
+        while not self.has_pending_traffic:
+            self._arrival.clear()
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._arrival.wait(), left)
         return True
 
     def _withdraw(self, inviter: str, withdraw_key: str) -> bool:
