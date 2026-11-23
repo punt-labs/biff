@@ -59,8 +59,8 @@ New features need tests at tiers 1-2 minimum; higher tiers for
 integration-critical paths.
 
 `uv run pytest` (default) runs tiers 1-2 only. Everything else needs an
-explicit `-m <marker>` — see TESTING.md's "Running tests" section for the
-full list and what each one requires locally.
+explicit `-m <marker>` or its `make test-*` target — see TESTING.md's
+"Select a suite" section for the full list and what each one requires.
 
 ### Test Fixtures by Tier
 
