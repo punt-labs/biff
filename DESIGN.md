@@ -8571,23 +8571,32 @@ raises `ChannelUnavailableError` on a closed link.
 In channel mode `_HandshakeDelivery.serve_single_connection(link)` makes every
 tool-list send consult the link, in the standalone path and in the in-request
 path. A send that timed out, failed, or was dropped by the SDK keeps the stored
-session and stays owed. The poller retries owed notifications at the start of
-each tick (`flush_owed`), backing off `CHANNEL_BACKOFF` (30 s) after a failure
-so a client that stopped reading does not stall every tick for the 3 s send
-timeout. When the poller naps (idle over 120 s) the retry runs every 30 s or on
-a wake: late, not lost. A failing send logs once per episode with its cause and
-traceback and once on recovery (`EpisodeLog`).
+session and stays owed. The poller retries owed notifications (`flush_owed`) on
+every iteration of its loop, outside the tick-work gate, backing off
+`CHANNEL_BACKOFF` (30 s) after a failure so a client that stopped reading does
+not stall every pass for the 3 s send timeout. An iteration runs every
+`poll_interval` seconds while active, every `nap_interval_for(poll_interval)`
+(15 times the interval) while napping, on every wake, and, with
+`poll_interval <= 0`, every 30 s fallback timeout: late, not lost.
+
+`EpisodeLog` keeps repeated failures readable without hiding a bug, because
+biff's log keeps INFO and above. A failure of a transport type (`TimeoutError`,
+`OSError`, the anyio closed/broken errors, `ChannelUnavailableError`) latches per
+(label, type): one WARNING with the cause and traceback when the episode opens,
+a WARNING every 10 minutes while it stays open, DEBUG in between, and one
+WARNING when the label next succeeds. Any other exception is a code bug and is
+logged at ERROR with its traceback, once per distinct type, whatever episodes
+are open.
 
 What changes outside channel mode (HTTP, `--user` stdio, opencode, codex, the
-CLI). The loop, the capabilities and the 2026-07-28 subscriptions are
-unchanged. A failed tool-list send still clears the stored session and sets the
-debt, but `ListChanged` now catches every exception, so a code bug in a
-notification cannot fail the refresh that triggered it (the refresh functions'
-documented contract). Its warning now carries the traceback and the cause. A
-failing poller tick now logs one WARNING per episode (`EpisodeLog`) instead of
-a DEBUG line per tick. A handshake session that cannot be read is now logged.
-`docs/notification.tex` is unchanged by this step; its send-failure
-transitions describe the default.
+CLI) is small: the loop, the capabilities and the 2026-07-28 subscriptions are
+unchanged, and a failed tool-list send still clears the stored session and sets
+the debt. A tool call cancelled in the middle of its in-request notification now
+leaves the debt owed (the flag is set before the send, as the standalone path
+already did). A failing poller tick also logs a WARNING (or an ERROR for a code
+bug) once per episode, besides its DEBUG traceback. A handshake session that
+cannot be read is logged. `docs/notification.tex` is unchanged by this step; its
+send-failure transitions describe the default.
 
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
 **Amends.** DES-080, for the Claude Code plugin only; DES-061's rule that a

@@ -9,10 +9,11 @@ that raises would prove nothing.  The wire behavior through the real
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 from collections.abc import AsyncGenerator, Callable, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from functools import partial
 from types import SimpleNamespace
@@ -53,8 +54,8 @@ from biff.server.channel_server import (
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
-    _active_tick,
     _InboxPokeGate,
+    poll_inbox,
     refresh_read_messages,
 )
 
@@ -64,6 +65,7 @@ if TYPE_CHECKING:
     from anyio import AsyncFile
     from anyio.abc import ObjectReceiveStream, ObjectSendStream
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+    from fastmcp import Context
     from mcp.shared.transport_context import TransportContext
 
 runner = CliRunner()
@@ -311,10 +313,11 @@ class TestSingleConnectionDelivery:
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
-        assert len(warnings) == 1
+        assert len(warnings) == 2
         assert "Tool list change (session kept)" in warnings[0].getMessage()
         assert "TimeoutError" in warnings[0].getMessage()
-        assert len(infos) == 1
+        assert "recovered" in warnings[1].getMessage()
+        assert infos == []
 
 
 class TestHandshakeOnly:
@@ -695,24 +698,6 @@ class TestOwedDebtIsRetried:
 
         session.send_tool_list_changed.assert_not_awaited()
 
-    async def test_the_next_poller_tick_delivers(self, state: ServerState) -> None:
-        delivery = _descriptions.handshake_delivery
-        self._single_connection()
-        session = self._flaky()
-        await delivery.capture_session(session)
-        await delivery.notify()
-
-        await _active_tick(
-            create_server(state),
-            state,
-            0,
-            ("", ""),
-            ((), 0, ""),
-            gate=_InboxPokeGate(backstop_interval=30.0),
-        )
-
-        assert not delivery._pending_notify
-
 
 class TestSessionCapture:
     """A capture that does not happen is not silent."""
@@ -855,8 +840,11 @@ def _state_with_counting_relay(state: ServerState) -> tuple[AsyncMock, AsyncMock
 
 
 class TestAFailingFlushDoesNotSkipTheTick:
-    async def test_the_rest_of_the_tick_runs_and_one_warning_is_logged(
-        self, state: ServerState, caplog: pytest.LogCaptureFixture
+    async def test_the_rest_of_the_iteration_runs_and_the_bug_is_logged_once(
+        self,
+        state: ServerState,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         delivery = _descriptions.handshake_delivery
         link = ChannelLink()
@@ -866,18 +854,21 @@ class TestAFailingFlushDoesNotSkipTheTick:
         broken.send_tool_list_changed = AsyncMock(side_effect=TypeError("bug"))
         await delivery.capture_session(broken)
         delivery._pending_notify = True
+        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.0)
         unread, wall = _state_with_counting_relay(state)
-        gate = _InboxPokeGate(backstop_interval=30.0)
 
         with caplog.at_level(logging.WARNING):
-            for _ in range(3):
-                await _descriptions._safe_tick(
-                    create_server(state), state, -1, ("x", "y"), ((), -1, ""), gate=gate
-                )
+            task = asyncio.create_task(
+                poll_inbox(create_server(state), state, interval=0.05)
+            )
+            await asyncio.sleep(0.4)
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
         assert unread.await_count >= 3
-        assert wall.await_count == 3
-        assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+        assert wall.await_count >= 3
+        assert [r.levelno for r in caplog.records] == [logging.ERROR]
 
     async def test_an_unexpected_tick_failure_is_a_latched_warning(
         self,
@@ -897,7 +888,7 @@ class TestAFailingFlushDoesNotSkipTheTick:
                     create_server(state), state, -1, ("x", "y"), ((), -1, ""), gate=gate
                 )
 
-        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+        assert [r.levelno for r in caplog.records] == [logging.ERROR]
 
 
 class TestRefreshNeverFailsTheCallersResult:
@@ -981,3 +972,57 @@ class TestTransportCrash:
             await ChannelServer[object]("biff").serve_channel_stdio()
 
         assert "channel stdio transport failed" in caplog.text
+
+
+class TestACancelledInRequestSendKeepsTheDebt:
+    async def test_cancelling_notify_mid_send_leaves_it_owed(self) -> None:
+        from fastmcp.server.context import _current_context
+
+        delivery = _descriptions.handshake_delivery
+        link = ChannelLink()
+        link.observe(anyio.create_memory_object_stream[SessionMessage](1)[0])
+        delivery.serve_single_connection(link)
+        sending = asyncio.Event()
+
+        class _HangingContext:
+            session = SimpleNamespace(protocol_version="2025-11-25")
+
+            async def send_notification(self, notification: object) -> None:
+                sending.set()
+                await asyncio.Event().wait()
+
+        context = contextvars.copy_context()
+        context.run(_current_context.set, cast("Context", _HangingContext()))
+        task = asyncio.create_task(delivery.notify(), context=context)
+        await sending.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert delivery._pending_notify
+
+
+class TestOwedDebtIsRetriedEveryPollerIteration:
+    async def test_a_cheap_nap_iteration_still_flushes(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        delivery = _descriptions.handshake_delivery
+        link = ChannelLink()
+        link.observe(anyio.create_memory_object_stream[SessionMessage](1)[0])
+        delivery.serve_single_connection(link)
+        session = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
+        session.send_tool_list_changed = AsyncMock()
+        await delivery.capture_session(session)
+        delivery._pending_notify = True
+        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.0)
+        state.activity.enter_nap()
+        state.activity.record_nap_poll()
+        task = asyncio.create_task(
+            poll_inbox(create_server(state), state, interval=0.05, nap_interval=3600.0)
+        )
+        await asyncio.sleep(0.3)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert not delivery._pending_notify

@@ -14,7 +14,7 @@ import anyio
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCNotification
 
-from biff.server.tool_list_send import EpisodeLog
+from biff.server.tool_list_send import TRANSPORT_ERRORS, EpisodeLog
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,10 @@ def take_channel_mode(
             "%s=%r is not 1; channel mode stays off", CHANNEL_MODE_VARIABLE, value
         )
     return value == "1"
+
+
+# Failures of a client that stopped listening; anything else is a bug.
+_EXPECTED = (ChannelUnavailableError, *TRANSPORT_ERRORS)
 
 
 class _Sink(Protocol):
@@ -205,7 +209,7 @@ class ChannelLink:
         """Create a link with no stream attached."""
         self = super().__new__(cls)
         self._stream = None
-        self._log = EpisodeLog(logger)
+        self._log = EpisodeLog(logger, _EXPECTED)
         self._retry_after = 0.0
         return self
 

@@ -34,7 +34,7 @@ from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.server.display_queue import DisplayItem
-from biff.server.tool_list_send import EpisodeLog, ListChanged
+from biff.server.tool_list_send import TRANSPORT_ERRORS, EpisodeLog, ListChanged
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
 from biff.talk_types import TalkNotification, TalkPhase
 from biff.tty import format_address
@@ -147,6 +147,7 @@ class _HandshakeDelivery:
                 await self._notify_standalone()
         elif ctx.session.protocol_version not in MODERN_PROTOCOL_VERSIONS:
             async with self._lock:
+                self._pending_notify = True
                 sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(
                     lambda: ctx.send_notification(ToolListChangedNotification())
                 )
@@ -222,8 +223,11 @@ def set_biff_enabled(*, enabled: bool) -> None:
 
 def _reset_session() -> None:
     """Reset process globals for test isolation."""
-    global handshake_delivery, _tty_name, _biff_enabled, _spoken_wall_key
-    handshake_delivery = _HandshakeDelivery()
+    global handshake_delivery, _tty_name, _biff_enabled, _spoken_wall_key, _tick_log
+    handshake_delivery, _tick_log = (
+        _HandshakeDelivery(),
+        EpisodeLog(logger, TRANSPORT_ERRORS),
+    )
     _tty_name = ""
     _biff_enabled = True
     _spoken_wall_key = ("", "")
@@ -931,7 +935,6 @@ async def _active_tick(
 
     Returns updated ``(count, wall_key, talk_signal)`` tracking state.
     """
-    await handshake_delivery.flush_owed()
     if _relay_pushes_inbox_notify(state):
         if gate.claim():
             ok = await refresh_read_messages(mcp, state)
@@ -979,7 +982,7 @@ async def _active_tick(
     return last_count, last_wall, last_talk
 
 
-_TICKS = EpisodeLog(logger)
+_tick_log = EpisodeLog(logger, TRANSPORT_ERRORS)
 
 
 async def _safe_tick(
@@ -997,9 +1000,9 @@ async def _safe_tick(
     on the next interval.  ``CancelledError`` is re-raised so shutdown
     propagates correctly.
 
-    A failing tick logs one WARNING when it starts failing and one INFO when
-    it recovers (``EpisodeLog``), not one line per ~2s tick; the relay's
-    ``_ConnectionHealth`` still logs a NATS wedge on its own.
+    A failing tick also logs through ``EpisodeLog``: one WARNING per episode
+    of a transport failure (an ERROR, once per type, for a code bug) and one
+    WARNING on recovery, besides the DEBUG traceback of every failed tick.
     """
     try:
         tick = await _active_tick(
@@ -1007,9 +1010,9 @@ async def _safe_tick(
         )
     except Exception as exc:
         logger.debug("Poller tick failed", exc_info=True)
-        _TICKS.failed("Poller tick", exc)
+        _tick_log.failed("Poller tick", exc)
         return last_count, last_wall, last_talk
-    _TICKS.recovered("Poller tick")
+    _tick_log.recovered("Poller tick")
     return tick
 
 
@@ -1215,6 +1218,9 @@ async def poll_inbox(
                     )
                     if tracker.napping:
                         tracker.record_nap_poll()
+
+            # Owed notifications retry every iteration, not only on tick work.
+            await handshake_delivery.flush_owed()
 
             # Keep the always-on SUBs bound to the live client — AFTER the
             # tick, not before. The tick's relay calls are what can trigger the

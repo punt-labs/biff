@@ -18,15 +18,16 @@
   send capability for the channel sender; it detects a closed stream, a dropped
   write and the end of client input. In channel mode a tool-list notification
   that timed out or was dropped keeps the stored session and stays owed, the
-  poller retries it each tick (backing off 30 s after a failure), and a failure
-  logs once with its cause. The server logs `channel_mode=on|off` at start, the
+  poller retries it on every loop iteration (backing off 30 s after a failure),
+  and a failure logs once per episode with its cause, again every 10 minutes
+  while it lasts, and once on recovery; a code bug logs at ERROR. The server logs `channel_mode=on|off` at start, the
   negotiated `protocolVersion`, malformed client input and transport crashes.
   FastMCP is pinned to `<4.3`.
 - Outside channel mode the loop, capabilities and subscriptions are unchanged.
-  A failed tool-list send still clears the stored session, but a bug in it can
-  no longer fail the tool call that triggered it, its warning carries the cause,
-  a failing poller tick logs one WARNING per episode instead of a DEBUG line per
-  tick, and a handshake session that cannot be read is logged.
+  A tool call cancelled during its in-request tool-list notification now leaves
+  the notification owed, a failing poller tick also logs a WARNING (an ERROR for
+  a code bug) once per episode, and a handshake session that cannot be read is
+  logged.
 - Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
   fails on any import that breaks the DES-088 package layers and is not in
   `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs
