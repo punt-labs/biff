@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 
 from biff._stdlib import display_repo_name
-from biff.config import extract_biff_fields
 from biff.formatting import LAST_SPECS, WHO_SPECS, format_last, format_who
 from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.server.tools._session import get_or_create_session
+from tests._config_fields import extract_biff_fields
 from tests._state import create_state
 
 

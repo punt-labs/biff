@@ -17,19 +17,17 @@ overridden)::
 
 from __future__ import annotations
 
-import hashlib
-import importlib.resources
 import logging
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import ModuleType
 from typing import cast
 
 import yaml
 
 from biff import identity
 from biff._stdlib import (
-    biff_data_dir,
     enabled_marker_path,
     find_git_root,
     get_repo_common_root,
@@ -55,10 +53,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
-
-DEMO_RELAY_URL = "tls://connect.ngs.global"
-_RELAY_TYPES = ("local", "demo", "nats")
-DEMO_CREDS_PATH = Path(str(importlib.resources.files("biff.data") / "demo.creds"))
 
 
 @dataclass(frozen=True)
@@ -219,93 +213,6 @@ def _extract_peers(
     return peers, orgs
 
 
-def _relay_section(raw: dict[str, object]) -> dict[str, object]:
-    """Return the ``relay`` mapping, or an empty one when absent."""
-    section: object = raw.get("relay")
-    return cast("dict[str, object]", section) if isinstance(section, dict) else {}
-
-
-def _relay_type(section: dict[str, object], *, has_url: bool) -> str:
-    """Return the validated relay type, inferring it from ``url`` when absent.
-
-    ``type`` wins over ``url``: config.local.yaml merges over config.yaml key
-    by key, so a personal ``type: local`` must beat a team-committed url.
-    """
-    declared = section.get("type", "nats" if has_url else "local")
-    if declared not in _RELAY_TYPES:
-        raise SystemExit(
-            f"Unknown relay type {declared!r} in relay section.\n"
-            f"Set type to one of: {', '.join(_RELAY_TYPES)}."
-        )
-    if declared == "nats" and not has_url:
-        raise SystemExit(
-            "relay type: nats requires relay.url (for example nats://host:4222)."
-        )
-    return str(declared)
-
-
-def _relay_auth(section: dict[str, object]) -> RelayAuth | None:
-    """Return the relay auth: at most one of token, nkeys_seed, user_credentials.
-
-    Flat keys and a nested ``auth:`` mapping are both accepted; a flat key
-    wins, and the nested mapping may spell the credentials file ``credentials``.
-    """
-    nested: object = section.get("auth")
-    auth = cast("dict[str, object]", nested) if isinstance(nested, dict) else {}
-    flat = {"user_credentials": auth.get("credentials"), **auth, **section}
-    present = {
-        key: value
-        for key in ("token", "nkeys_seed", "user_credentials")
-        if isinstance(value := flat.get(key), str) and value
-    }
-    if len(present) > 1:
-        raise SystemExit(
-            f"Conflicting auth in relay section: {', '.join(sorted(present))}\n"
-            "Set at most one of 'token', 'nkeys_seed', or 'user_credentials'."
-        )
-    return RelayAuth(**present) if present else None
-
-
-def _local_relay_dir(
-    repo_name: str, repo_common_root: Path, *, has_remote: bool
-) -> Path:
-    """Return the repo's local relay directory under ``~/.punt-labs/biff/relay``.
-
-    A repo with an ``origin`` remote is keyed by its sanitized ``owner/repo``
-    slug, so every clone of it on this machine shares one relay.  A repo
-    without one is keyed by its directory name plus a digest of its absolute
-    common root, so two unrelated repos that share a directory name do not.
-    """
-    key = repo_name
-    if not has_remote:
-        key += "-" + hashlib.sha256(str(repo_common_root).encode()).hexdigest()[:8]
-    return biff_data_dir() / "relay" / key
-
-
-def _extract_relay(
-    raw: dict[str, object],
-) -> tuple[str | None, RelayAuth | None, bool]:
-    """Extract relay URL, auth, and TLS handshake mode from the ``relay`` section.
-
-    ``relay.type`` is ``local`` (the default; a ``None`` URL), ``demo`` (the
-    bundled public relay) or ``nats`` (``relay.url``).  Without a type, a
-    non-empty ``relay.url`` means ``nats``.
-
-    Raises:
-        SystemExit: ``type`` is unknown, ``type: nats`` has no ``url``, or
-            the auth keys conflict.
-    """
-    section = _relay_section(raw)
-    url: object = section.get("url")
-    relay_url = url if isinstance(url, str) and url else None
-    relay_type = _relay_type(section, has_url=relay_url is not None)
-    if relay_type == "local":
-        return None, None, False
-    if relay_type == "demo":
-        relay_url = DEMO_RELAY_URL
-    return relay_url, _relay_auth(section), section.get("tls_handshake_first") is True
-
-
 def _extract_team(raw: dict[str, object]) -> tuple[str, ...]:
     """Extract team members from the ``team`` section."""
     team_section: object = raw.get("team")
@@ -330,23 +237,6 @@ def _extract_poll_interval(raw: dict[str, object]) -> float:
     if isinstance(value, (int, float)) and value >= 0:
         return float(value)
     return 2.0
-
-
-def extract_biff_fields(
-    raw: dict[str, object],
-) -> tuple[
-    tuple[str, ...],
-    str | None,
-    RelayAuth | None,
-    bool,
-    tuple[str, ...],
-    tuple[str, ...],
-]:
-    """Extract team, relay_url, relay_auth, relay_tls_handshake_first, peers, orgs."""
-    team = _extract_team(raw)
-    relay_url, relay_auth, tls_handshake_first = _extract_relay(raw)
-    peers, orgs = _extract_peers(raw)
-    return team, relay_url, relay_auth, tls_handshake_first, peers, orgs
 
 
 RELAY_URL_UNSET = object()
@@ -390,67 +280,83 @@ def _has_orgs_key(raw: dict[str, object]) -> bool:
     return isinstance(peers, dict) and "orgs" in peers
 
 
-def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
-    """Resolve config fields from YAML or zero-config.
+def _relay_config() -> ModuleType:
+    """Return the ``biff.relay_config`` module, imported on first use."""
+    from biff import relay_config  # noqa: PLC0415
 
-    Detection order:
+    return relay_config
 
-    1. ``.punt-labs/biff/config.yaml`` -- explicit mode.
-    2. Neither -- zero-config with derived defaults.
+
+def relay_section_to_write(
+    url: str, auth: str, relay_type: str
+) -> dict[str, object] | str:
+    """Return the ``relay`` mapping the ``biff_relay`` tool writes, or an error.
+
+    The type is always explicit; a URL alone means ``nats``.
     """
-    # Key explicit mode on file existence, not content truthiness.
-    # An empty or comment-only config.yaml should still mean "explicit
-    # mode" — not silently fall through to zero-config derivation.
-    shared_path = yaml_config_dir(repo_root) / "config.yaml"
-    if shared_path.exists():
-        yaml_shared = load_yaml_config(repo_root)
-        yaml_local = load_yaml_local(repo_root)
-        merged = merge_config(yaml_shared, yaml_local)
-        fields = extract_biff_fields(merged)
-        poll_interval = _extract_poll_interval(merged)
-        cf = _ConfigFields(*fields, poll_interval=poll_interval)
-        # Both read from yaml_shared alone, never the merged config -- see
-        # _ConfigFields.relay_committed for why.  The opt-in gate defaults
-        # closed: absent or any non-True value means no.
-        shared_relay = _relay_section(yaml_shared)
-        cf = replace(
-            cf,
-            relay_allow_env_override=shared_relay.get("allow_env_override") is True,
-            relay_committed=bool(shared_relay.keys() & {"url", "type"}),
+    types = _relay_config().RELAY_TYPES
+    kind = relay_type or ("nats" if url else "")
+    if kind not in types:
+        if not kind:
+            return "Error: give a url, or relay_type local, demo or nats."
+        return (
+            f"Error: unknown relay_type {kind!r}, expected one of {', '.join(types)}."
         )
-        # Derive orgs from remote only when the peers.orgs key is
-        # ABSENT from the merged config. An explicit empty list
-        # (peers.orgs: []) is honored — it means "no org discovery."
-        if not _has_orgs_key(merged):
-            owner = get_repo_owner(repo_root)
-            cf = replace(cf, orgs=(owner,) if owner else ())
-        return cf
+    if kind != "nats":
+        if url or auth:
+            return f"Error: relay_type {kind} takes no url or auth."
+        return {"type": kind}
+    if not url.startswith(("tls://", "nats://", "ws://", "wss://")):
+        return (
+            "Error: invalid relay URL scheme, "
+            "expected tls://, nats://, ws:// or wss://."
+        )
+    section: dict[str, object] = {"type": "nats", "url": url}
+    if auth:
+        section["auth"] = {"credentials": auth}
+    return section
 
-    # Zero-config: derive org from remote, use the local relay.
-    # Still read config.local.yaml — user may have set relay via
-    # biff_relay --local without a shared config.yaml.
-    yaml_local = load_yaml_local(repo_root)
-    if yaml_local:
-        fields = extract_biff_fields(yaml_local)
-        poll_interval = _extract_poll_interval(yaml_local)
-        cf = _ConfigFields(*fields, poll_interval=poll_interval)
-        # Derive owner only when peers.orgs key is absent.
-        if _has_orgs_key(yaml_local):
-            orgs = cf.orgs
-        else:
-            owner = get_repo_owner(repo_root)
-            orgs = (owner,) if owner else ()
-        # relay_url stays as resolved from config.local.yaml; None selects
-        # the local relay.
-        return replace(cf, orgs=orgs)
 
+def _owner_orgs(repo_root: Path) -> tuple[str, ...]:
+    """Return the remote's owner as the default org scope (none without one)."""
     owner = get_repo_owner(repo_root)
-    orgs = (owner,) if owner else ()
-    # relay_url stays unset: None selects the local relay.  It must stay
-    # unset (not resolved to a value here) so the env-override gate sees
-    # that this repo has committed no relay of its own
-    # (docs/relay-env-overrides.md Sec 0).
-    return _ConfigFields(orgs=orgs)
+    return (owner,) if owner else ()
+
+
+def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
+    """Resolve config fields from ``config.yaml`` and ``config.local.yaml``.
+
+    Either file may be absent: a user may have chosen a relay for themselves
+    alone, and a repo with neither file runs on derived defaults.
+    """
+    relay_config = _relay_config()
+    yaml_shared = load_yaml_config(repo_root)
+    yaml_local = load_yaml_local(repo_root)
+    merged = merge_config(yaml_shared, yaml_local)
+    relay = relay_config.resolve_relay(
+        [("config.yaml", yaml_shared), ("config.local.yaml", yaml_local)]
+    )
+    peers, orgs = _extract_peers(merged)
+    # Derive orgs from the remote only when the peers.orgs key is ABSENT from
+    # the merged config. An explicit empty list (peers.orgs: []) is honored:
+    # it means "no org discovery."
+    if not _has_orgs_key(merged):
+        orgs = _owner_orgs(repo_root)
+    shared_relay = relay_config.relay_section(yaml_shared)
+    # Both gates read yaml_shared alone, never the merged config -- see
+    # _ConfigFields.relay_committed for why.  The opt-in gate defaults closed:
+    # absent or any non-True value means no.
+    return _ConfigFields(
+        team=_extract_team(merged),
+        relay_url=relay.url,
+        relay_auth=relay.auth,
+        relay_tls_handshake_first=relay.tls_handshake_first,
+        peers=peers,
+        orgs=orgs,
+        poll_interval=_extract_poll_interval(merged),
+        relay_allow_env_override=shared_relay.get("allow_env_override") is True,
+        relay_committed=relay_config.relay_declared(yaml_shared),
+    )
 
 
 _TLS_TRUE_VALUES = frozenset({"1", "true", "yes"})
@@ -611,10 +517,11 @@ def _resolve_relay_fields(
     cf: _ConfigFields,
 ) -> tuple[str | None, RelayAuth | None, bool]:
     """Apply env overrides to resolved fields; a ``None`` URL is the local relay."""
+    relay_config = _relay_config()
     cf = _apply_env_relay_overrides(cf)
     relay_auth = cf.relay_auth
-    if cf.relay_url == DEMO_RELAY_URL and relay_auth is None:
-        relay_auth = RelayAuth(user_credentials=str(DEMO_CREDS_PATH))
+    if cf.relay_url == relay_config.DEMO_RELAY_URL and relay_auth is None:
+        relay_auth = RelayAuth(user_credentials=str(relay_config.DEMO_CREDS_PATH))
     return cf.relay_url, relay_auth, cf.relay_tls_handshake_first
 
 
@@ -662,6 +569,11 @@ class _BaseConfig:
     poll_interval: float
 
 
+def _override_url(override: object) -> str | None:
+    """Return the ``--relay-url`` value as a URL; empty means the local relay."""
+    return str(override) if override else None
+
+
 def _load_base_config(
     *,
     data_dir_override: Path | None,
@@ -698,8 +610,7 @@ def _load_base_config(
     # override points at (e.g. the demo relay, whose native-TLS
     # nats-server must never get it -- WRONG_VERSION_NUMBER).
     if relay_url_override is not RELAY_URL_UNSET:
-        override = str(relay_url_override) if relay_url_override else ""
-        relay_url = override or None
+        relay_url = _override_url(relay_url_override)
         relay_auth = None
         relay_tls_handshake_first = False
 
@@ -708,7 +619,7 @@ def _load_base_config(
     data_dir = (
         data_dir_override
         if data_dir_override is not None
-        else _local_relay_dir(repo_name, repo_common_root, has_remote=bool(repo_slug))
+        else _relay_config().local_relay_location(repo_root).path
     )
 
     return _BaseConfig(

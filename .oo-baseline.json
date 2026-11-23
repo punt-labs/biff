@@ -470,12 +470,12 @@
   "src/biff/config.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.64,
+    "avg_params": 1.62,
     "max_complexity": 13.0,
-    "avg_complexity": 3.93,
-    "module_size": 452.0,
+    "avg_complexity": 3.65,
+    "module_size": 406.0,
     "classes_per_module": 0.0,
-    "class_to_func_ratio": 0.097,
+    "class_to_func_ratio": 0.103,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -870,6 +870,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/relay_config.py": {
+    "method_ratio": 0.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.14,
+    "max_complexity": 18.0,
+    "avg_complexity": 5.21,
+    "module_size": 194.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 0.125,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/relay_select.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1172,10 +1185,10 @@
   "src/biff/server/tools/biff_relay.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.5,
-    "max_complexity": 8.0,
-    "avg_complexity": 4.5,
-    "module_size": 56.0,
+    "avg_params": 2.33,
+    "max_complexity": 6.0,
+    "avg_complexity": 3.0,
+    "module_size": 49.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
     "init_violations": 0.0,

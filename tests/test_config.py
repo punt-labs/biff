@@ -13,10 +13,8 @@ from biff._stdlib import _parse_repo_slug, biff_data_dir
 from biff.config import (
     _apply_env_relay_overrides,
     _ConfigFields,
-    _local_relay_dir,
     _resolve_relay_fields,
     _tls_env_override,
-    extract_biff_fields,
     find_git_root,
     get_repo_slug,
     load_cli_config,
@@ -26,6 +24,7 @@ from biff.config import (
 from biff.identity import GitHubIdentity
 from biff.models import RelayAuth
 
+from ._config_fields import extract_biff_fields
 from ._identity_fixtures import write_gitmodules_ethos
 
 _CONFIG_LOGGER = "biff.config"
@@ -195,20 +194,6 @@ class TestSanitizeRepoName:
         assert sanitize_repo_name("café") == "caf"
 
 
-class TestLocalRelayDir:
-    def test_remote_repo_is_keyed_by_its_name(self) -> None:
-        root = Path("/home/kai/projects/myapp")
-        path = _local_relay_dir("org__myapp", root, has_remote=True)
-        assert path == biff_data_dir() / "relay" / "org__myapp"
-
-    def test_repo_without_remote_gets_a_path_digest(self) -> None:
-        root = Path("/home/kai/projects/myapp")
-        path = _local_relay_dir("myapp", root, has_remote=False)
-        assert path.parent == biff_data_dir() / "relay"
-        assert path.name.startswith("myapp-")
-        assert len(path.name) == len("myapp-") + 8
-
-
 # -- extract_biff_fields (auth) --
 
 
@@ -296,14 +281,14 @@ class TestExtractRelayTlsHandshakeFirst:
         _, _, _, tls_handshake_first, _, _ = extract_biff_fields(raw)
         assert tls_handshake_first is False
 
-    def test_non_bool_value_ignored(self) -> None:
-        # Only a literal `True` opts in -- a stray string/int in the YAML
-        # (typo, wrong type) must not silently enable TLS handshake-first.
+    def test_non_bool_value_is_an_error(self) -> None:
+        # A stray string/int in the YAML (typo, wrong type) must not be
+        # silently read as "off".
         raw: dict[str, object] = {
             "relay": {"url": "tls://host", "tls_handshake_first": "true"}
         }
-        _, _, _, tls_handshake_first, _, _ = extract_biff_fields(raw)
-        assert tls_handshake_first is False
+        with pytest.raises(SystemExit, match="tls_handshake_first must be true"):
+            extract_biff_fields(raw)
 
 
 # -- load_mcp_config / load_cli_config --

@@ -52,8 +52,8 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from biff.config import DEMO_RELAY_URL
 from biff.nats_relay import NatsRelay
+from biff.relay_config import DEMO_RELAY_URL
 from biff.talk_types import TalkNotification
 
 if TYPE_CHECKING:

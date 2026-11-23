@@ -221,6 +221,7 @@ prefixes = [
     "identity",
     "nats_relay",
     "relay",
+    "relay_config",
     "relay_select",
     "session_handle",
     "session_open",

@@ -65,6 +65,7 @@
   "biff.plugins.contract": "plugins",
   "biff.prob_gate": "kernel",
   "biff.relay": "engine",
+  "biff.relay_config": "engine",
   "biff.relay_select": "engine",
   "biff.repl_display": "cli",
   "biff.repl_notify": "cli",
