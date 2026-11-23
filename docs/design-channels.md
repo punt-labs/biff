@@ -264,23 +264,55 @@ call restores it, so one stall would silence an idle session for good.
 
 ### 4. Start-up warning (Claude Code plugin)
 
-Biff's SessionStart hook already adds context to the session; the warning is
-built in `plugins/claude_code/` and returned through the `SessionStart`
-interface of the plugin contract (DES-088), which `src/biff/hook.py` calls. It checks every channel gate it can see without the model:
+Biff's SessionStart hook already adds context to the session. The warning is
+built in `plugins/claude_code/`, and `biff-hook` calls `StartupWarning` there
+directly (`package-structure.md`, "The plugin contract"); there is no
+`SessionStart` protocol yet, because this is its only caller. It checks every
+channel gate it can see without the model:
 
 | Gate | Check |
 |------|-------|
-| Feature flags | `DISABLE_TELEMETRY`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DO_NOT_TRACK`, `DISABLE_GROWTHBOOK` unset |
-| Org policy | Claude Code's managed settings allow channels and list biff in `allowedChannelPlugins` (Team and Enterprise) |
-| Launch flag | Claude Code was started with `--channels plugin:biff@punt-labs` or the development flag. Whether a hook can see this is unverified; wave 0 finds out |
+| Feature flags | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`, `DISABLE_TELEMETRY` (observed in DES-063) and `CLAUDE_CODE_DISABLE_FEATURE_FLAGS` not set to a true value |
+| Provider | `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY` unset: channels need Anthropic authentication |
+| Managed policy | The effective policy does not set `channelsEnabled` to a non-true value. An absent key is no finding. The first source with a policy key wins (macOS preference domain `com.anthropic.claudecode`, then the settings files in `/Library/Application Support/ClaudeCode`, `/etc/claude-code` or `C:\Program Files\ClaudeCode`, with `managed-settings.d/*.json`), or all of them merge with `managedSourcesBehavior: "merge"`. Server-managed settings and the Windows registry are not visible to a hook, so a local `channelsEnabled` that is not true is only a model-only note ("a server-managed policy may still allow channels"), never a user warning |
+| Launch flag and allowlist, judged together | Live only when the development flag lists biff (`plugin:biff@punt-labs`, or `plugin:biff-dev@...`), which bypasses `allowedChannelPlugins`; or `--channels` lists `plugin:biff@punt-labs` and the managed policy lists biff in `allowedChannelPlugins`. With `--channels`, a local allowlist that does not list biff (or no allowlist) is a model-only note, because a server-managed policy outranks every local source and a hook cannot see it. The user is warned only when the launch itself never names biff. A `-p` run ignores channels and only the model is told. The flags come from the argv of `CLAUDE_PID`, read with `psutil`, trusted only when that process is a live ancestor of the hook (the corroboration of `caller_stamp.py`). Otherwise the gate is unknown: the hook tells only the model that launch flags could not be checked |
 
-If any gate is closed, the hook tells both the user (as a visible message)
-and the model (as context):
+Two biff plugins in one session (the installed plugin and a `--plugin-dir`
+one) warn once. Each hook run tries to create one marker file in biff's state
+directory, keyed on `CLAUDE_PID`, `session_id`, `source` and the current minute;
+only the creator emits. Two runs that straddle a minute boundary may both warn,
+and markers are pruned after 10 minutes. A later compaction warns again because the key includes the current minute, not because of pruning. If
+the state directory cannot be used, the hook warns without a claim. If the warning
+code itself fails, the hook logs it and tells the model that biff could not check
+whether channels are live; a gate that crashes is reported to the model as unknown, and when a gate that knows also fires, the known warning wins and the unknown ones are left out of the text.
+
+Who sees what. Every SessionStart the plugin handles gives the model the
+warning in `additionalContext`, so it survives a resume, a clear and a
+compaction. The user sees a `systemMessage` only at `startup`, and only for gates
+that know (`notify_user`): an env opt-out, a cloud provider, or a launch that
+never names biff. Gates that depend on what a hook cannot see (server-managed
+policy, an unreadable launch state, a crashed gate, a `-p` run) tell only the
+model. A saved poll cadence does not silence the warning: a durable cron job can
+expire.
+
+When a gate knows channels are off, the text is:
 
 ```text
 biff: channels are not live in this session (<reason>). New messages will
-not arrive on their own. Run /biff:read 2m to poll. <fix for the reason>.
+not arrive on their own. If you are not already polling, run <command>. <fix>
 ```
+
+When only unknown gates fired, it is:
+
+```text
+biff: channels may not be live in this session (<reason>). If new messages
+do not arrive on their own, run <command>.
+```
+
+`<command>` is `/biff:read 2m`, or `/biff-dev:read-dev 2m` for the
+`--plugin-dir` plugin. `biff-hook` reads the top-level `name` of
+`$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` in Python; a missing or
+malformed manifest is logged at INFO and means `/biff:read 2m`.
 
 If every visible gate is open, it says nothing. The warning costs no model
 turn and changes nothing about delivery.
@@ -480,7 +512,7 @@ worktree after ratification and ends tested and mergeable.
 | 1 | No background work except liveness; local relay file watch (inboxes, sessions, wall); reconnect catch-up hook | `server/tools/_descriptions.py` poller, `relay.py` `LocalRelay`, `nats_relay.py` `add_reconnect_listener` | Before PL-1350 | PL-1367 |
 | 1 | Formal model | `docs/notification.tex` | Before PL-1350 | PL-1351 |
 | 1 | Arrival summaries (biff) and channel events (plugin): content rules, last-sent record, rate limit, deferred send, instructions | new `engine/arrivals.py` (summaries and the `DeliverySink` they are handed to), new `plugins/claude_code/channel_emitter.py` (the sender, a `DeliverySink`), the relay push handler, `talk_state.py` arrival counters, `Relay.inbox_high_water`, `instructions` text | After PL-1349, PL-1351, PL-1367 | PL-1350 |
-| 1 | Start-up warning | new `plugins/claude_code/` module, called through `SessionStart`; `src/biff/hook.py` | After wave 0 | PL-1368 |
+| 1 | Start-up warning | new `plugins/claude_code/` modules, called directly by `biff-hook`; `plugins/claude_code/hook.py` | After wave 0 | PL-1368 |
 | 1 | On-demand channel check: relayed `channel_check`, token, `channel_ack` | new `server/tools/channel_ack.py` (a thin MCP adapter over a `commands` object, registered only in channel mode), the relay request handler, reply-subject publish, `unread.py` (local relay only) | After PL-1349 | PL-1365 |
 | 1 | `biff doctor`: end-to-end check and gates; docs; `.envrc` guard | `doctor.py`, README, `docs/INSTALLING.md`, `.envrc` (comment out the three DES-063 lines), its test | After PL-1365 | PL-1353 |
 | 1 | Polling as the exception: nudge hook only while polling is on; poll fixes | `plugin/hooks/unread-nudge.sh`, `unread.py` `polling` field, per issue | Any time | PL-1337, PL-1338, PL-1339, PL-1341 |
