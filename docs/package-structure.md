@@ -31,7 +31,7 @@ From the bottom up:
 
 | Package | Holds | May import |
 |---------|-------|------------|
-| `kernel` | Small helpers with no biff dependencies: session ids, locks, chunking, logging setup, usage counters, NATS connection helpers | nothing in biff |
+| `kernel` | Small helpers with no biff dependencies: session ids, locks, chunking, logging setup, usage counters, NATS connection helpers; the bundled data files and the ProB gate script (`prob_gate`), which imports nothing from biff | nothing in biff |
 | `wire` | The data types biff passes around: messages, sessions, talk records, session routing, unread summaries | `kernel` |
 | `engine` | The relays (local and NATS), talk state, session registry, identity, configuration, tty names; the arrival summaries and the `DeliverySink` interface they are handed to | `kernel`, `wire` |
 | `render` | Text formatting that both the command line and the MCP server print: tables, `finger` output, message lists | `kernel`, `wire`, `engine` |
@@ -41,6 +41,10 @@ From the bottom up:
 | `service` | Install, enable, `biff doctor`, git hooks, the CI notification workflow, optional integrations such as vox | `kernel`, `wire`, `engine`, `render`, `plugins` |
 | `plugins/<tool>` | One Python adapter per AI tool: `claude_code`, `codex`, `opencode`, `pi`, `devin`. Each implements the parts of the contract its tool needs, and may own that tool's console script (Claude Code's `biff-hook`) | `kernel`, `wire`, `engine`, `render`, `commands`, `plugins`, `service`; never `server`, `cli` or another tool's adapter |
 | `cli` | The `biff` command, the interactive shell, command-line sessions; registers each tool's adapter at startup | every package above |
+
+`testing` (the test helpers in `biff.testing`) is outside this stack. It may
+import `kernel`, `wire`, `engine`, `render`, `commands` and `server`; no
+production layer may import it.
 
 `cli` sits on top because it starts every other piece, including `biff mcp`,
 and it is the one place that knows which adapters exist.
@@ -207,13 +211,35 @@ which lists the known violations:
   pull requests and against the previous commit on `main`.
 
 The layers are declared in `pyproject.toml` as `[tool.oo-ratchet.layers.<name>]`
-tables. Each has `prefixes` (module names relative to `biff`, the longest match
+tables. Each has `prefixes` (module names relative to `biff`; the longest match
 wins) and `imports` (the layers it may import). The gate fails closed: every
-module must belong to a layer, every layer must match a module, and widening a
-layer's `imports` fails the check unless that change lands alone with
-`--allow-config-change`. Until a package is moved into its directory, its
-modules are listed by name, so moving one means editing its prefix in the same
-PR.
+module except the package root must belong to a layer, and every layer must
+match a module. Prefixes are exact module names, never globs, so a new module
+fails as unassigned until someone places it. Until a package is moved into its
+directory its modules are listed by name, so moving one means editing its
+prefix in the same PR.
+
+The gate sees imports, not labels, so `tests/test_layer_policy.py` pins the
+policy itself:
+
+- `tests/layer_map.json` holds the layer of every module. Moving a module to
+  another layer changes which imports are violations without touching any
+  code, so it fails the test and is reviewed; regenerate the file in the same
+  change.
+- Each layer's `imports` must equal the table above.
+- Every `plugins/<tool>/` package needs its own layer. The `plugins` prefix
+  also matches its submodules, so a new adapter would otherwise land in the
+  contract layer; the test fails until the adapter gets a layer of its own.
+- Nothing may import the `testing` layer.
+
+Widening a layer's `imports`, or removing a violation by relabeling, is a policy
+change. Widening fails `--check` unless the change lands alone with
+`--allow-config-change`. In CI, a reviewer adds the pull request label
+`layers-policy-change`; the ratchet step then passes that flag. The label is
+read from the event payload and never reaches the shell as text. The main-branch
+check never passes it. Locally, `LAYERS_BASE` (and the other `*_BASE` variables)
+set in the environment is ignored; pass `LAYERS_BASE=...` on the `make` command
+line to use it. `make check-layers` always scans `src/biff`, whatever `SRC` is.
 
 The gate over-approximates on purpose. It counts imports inside functions and
 under `TYPE_CHECKING`, `from biff import X` as an import of every module
@@ -269,7 +295,7 @@ Lux's order, applied to biff:
 2. Add the layer checker with today's violations as its baseline, so
    nothing new slips in. Done: `make check-layers`.
 3. Move the Claude Code modules into `plugins/claude_code/`. This is a
-   behavior-neutral move; it removes no imports by itself.
+   behavior-neutral move; it removes no imports by itself. Done (#589).
 4. Add `plugins/contract.py` together with the Claude Code adapter and its
    callers: `biff enable` and `biff doctor` go through `Installer`, and the
    registry is built by `cli`. The contract lands with callers, never as an
@@ -278,7 +304,8 @@ Lux's order, applied to biff:
    arrival summary type lives in `engine` so the engine can produce it. This
    removes the three `service` → Claude Code imports; the engine and server
    imports (status-line file, launch) follow as `DeliverySink` and
-   `SessionStart` gain their callers.
+   `SessionStart` gain their callers. The contract and the `enable`/`doctor`
+   routing are done (#590); the engine and server imports remain.
 5. Move one package per PR after that. Each PR moves its modules into the
    package directory, fixes the imports it can, and lowers the count. Fix the
    `commands` → `server` imports early, because the channel work touches them.

@@ -8,9 +8,11 @@
   fails on any import that breaks the DES-088 package layers and is not in
   `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs
   in `make check` and the CI lint workflow. The layers are declared in
-  `pyproject.toml`, replacing the four fixed design layers.
-- Report-only design ratchet with explicit responsibility layers for every
-  current Python module. `make design-shadow` compares against `origin/main`
+  `pyproject.toml`, replacing the four fixed design layers. A reviewed policy
+  change in CI needs the `layers-policy-change` pull request label. The
+  `*_BASE` Makefile variables ignore the environment.
+- Report-only design ratchet that reads the declared DES-088 package layers
+  from `pyproject.toml`. `make design-shadow` compares against `origin/main`
   (override `DESIGN_BASE`), and PR CI appends the advisory verdict to the job
   summary even after a gate fails. `make report` includes a non-failing full
   design scan. Neither report gates `make check` or CI.
@@ -20,8 +22,9 @@
 - Replace generated agents' per-edit `make check` hooks with advisory Ethos DES-085
   file checks, blocking commit checks, and the full gate at handoff.
   Requires ethos 5.2.0 or later (`ethos hook post-edit`).
-- Upgrade the dev dependency to `punt-oo-ratchet==0.4.0`, retaining existing
-  gate policies and baselines.
+- Upgrade the dev dependency to `punt-oo-ratchet==0.5.0`, retaining existing
+  OO, coupling and suppression policies and baselines. The design check now
+  reads the declared layers instead of the four fixed ones.
 
 ### Fixed
 

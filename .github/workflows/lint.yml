@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # labeled/unlabeled re-run the ratchets when a reviewer adds or removes
+    # the layers-policy-change label.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -30,6 +33,7 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
+          LAYERS_POLICY_CHANGE: ${{ contains(github.event.pull_request.labels.*.name, 'layers-policy-change') }}
         run: |
           git fetch --no-tags origin "${BASE_REF}"
           BASE="$(git merge-base "origin/${BASE_REF}" HEAD)"
@@ -38,9 +42,14 @@ jobs:
           case "${HEAD_REF}" in
             release/*|post-release/*) OO_ARGS="${OO_ARGS} --allow-no-improvement" ;;
           esac
+          # A reviewed widening of a layer's imports lands alone, with this label.
+          LAYERS_ARGS="${BASE_ARGS}"
+          if [ "${LAYERS_POLICY_CHANGE}" = "true" ]; then
+            LAYERS_ARGS="${LAYERS_ARGS} --allow-config-change"
+          fi
           make check-oo check-coupling check-suppressions check-layers \
             OO_BASE="${OO_ARGS}" COUPLING_BASE="${BASE_ARGS}" \
-            SUPPRESSION_BASE="${BASE_ARGS}" LAYERS_BASE="${BASE_ARGS}"
+            SUPPRESSION_BASE="${BASE_ARGS}" LAYERS_BASE="${LAYERS_ARGS}"
       - name: Ratchets (main, post-merge tripwire)
         if: github.event_name == 'push'
         env:

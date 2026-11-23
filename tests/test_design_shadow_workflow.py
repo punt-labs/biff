@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import textwrap
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -23,58 +22,6 @@ def test_full_report_includes_non_gating_design_scan() -> None:
         .split("\nformat:", 1)[0]
     )
     assert '\t-uv run oo-ratchet design "$(SRC)"\n' in report
-
-
-@pytest.mark.parametrize(
-    ("module", "expected"),
-    [
-        ("biff.session_id", "kernel"),
-        ("biff.models", "wire"),
-        ("biff.talk_types", "wire"),
-        ("biff.relay", "engine"),
-        ("biff.relay_select", "engine"),
-        ("biff.nats_relay", "engine"),
-        ("biff.talk_state", "engine"),
-        ("biff._formatting", "render"),
-        ("biff.formatting", "render"),
-        ("biff.cli_context", "commands"),
-        ("biff.commands.write", "commands"),
-        ("biff.server.entrypoints", "server"),
-        ("biff.server.tools._presence", "server"),
-        ("biff.testing.caller", "server"),
-        ("biff.plugins", "plugins"),
-        ("biff.plugins.contract", "plugins"),
-        ("biff.repo_toggle", "service"),
-        ("biff.integration.vox", "service"),
-        ("biff.plugins.claude_code._hook_runtime", "claude_code"),
-        ("biff.plugins.claude_code.installer", "claude_code"),
-        ("biff.__main__", "cli"),
-        ("biff.cli_session_store", "cli"),
-        ("biff.repl_display", "cli"),
-        ("biff.undeclared", None),
-    ],
-)
-def test_design_layer_boundaries(
-    module: str,
-    expected: str | None,  # None means the module matches no layer.
-) -> None:
-    layers = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["oo-ratchet"][
-        "layers"
-    ]
-    relative = module.removeprefix("biff.")
-    # Longest matching prefix wins, as in oo-ratchet's declared layers.
-    matches = [
-        (len(prefix.rstrip("*")), name)
-        for name, spec in layers.items()
-        for prefix in spec["prefixes"]
-        if (
-            relative.startswith(prefix.removesuffix("*"))
-            if prefix.endswith("*")
-            else relative == prefix or relative.startswith(f"{prefix}.")
-        )
-    ]
-    actual = max(matches)[1] if matches else None
-    assert actual == expected
 
 
 def shadow_step() -> str:

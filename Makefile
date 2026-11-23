@@ -5,10 +5,12 @@ override undefine SRC
 endif
 .DEFAULT_GOAL := help
 SRC ?= src/biff/
-OO_BASE ?=
-COUPLING_BASE ?=
-SUPPRESSION_BASE ?=
-LAYERS_BASE ?=
+# Plain "=" so an environment value such as LAYERS_BASE=--allow-config-change
+# cannot waive a gate; only the command line or the CI step sets these.
+OO_BASE =
+COUPLING_BASE =
+SUPPRESSION_BASE =
+LAYERS_BASE =
 DESIGN_BASE ?= origin/main
 override export DESIGN_BASE := $(value DESIGN_BASE)
 
@@ -70,11 +72,12 @@ check-suppressions: ## Check for new lint and type suppressions
 update-suppressions: require-full-ratchet-source ## Update the suppression baseline for the full source tree
 	uv run oo-ratchet suppressions "$(SRC)" --update
 
+# The layer contract covers the biff package only, whatever SRC is.
 check-layers: ## Check package imports against the DES-088 layers
-	uv run oo-ratchet layers "$(SRC)" --check $(LAYERS_BASE)
+	uv run oo-ratchet layers src/biff --check $(LAYERS_BASE)
 
-update-layers: require-full-ratchet-source ## Shrink the layer baseline (adopts it on first run)
-	uv run oo-ratchet layers "$(SRC)" --update
+update-layers: ## Shrink the layer baseline (adopts it on first run)
+	uv run oo-ratchet layers src/biff --update
 
 require-full-ratchet-source:
 	@test "$(abspath $(SRC))" = "$(abspath src/biff/)" || { \

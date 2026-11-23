@@ -201,6 +201,7 @@ prefixes = [
     "data",
     "logging_config",
     "markers",
+    "prob_gate",
     "session_id",
     "session_lock",
     "usage",
@@ -240,8 +241,13 @@ prefixes = ["cli_context", "commands"]
 imports = ["kernel", "wire", "engine", "render"]
 
 [tool.oo-ratchet.layers.server]
-prefixes = ["server", "testing"]
+prefixes = ["server"]
 imports = ["kernel", "wire", "engine", "render", "commands"]
+
+# Test helpers: no production layer may import them.
+[tool.oo-ratchet.layers.testing]
+prefixes = ["testing"]
+imports = ["kernel", "wire", "engine", "render", "commands", "server"]
 
 [tool.oo-ratchet.layers.plugins]
 prefixes = ["plugins"]
@@ -255,7 +261,6 @@ prefixes = [
     "enablement",
     "git_hooks",
     "integration",
-    "prob_gate",
     "repo_toggle",
 ]
 imports = ["kernel", "wire", "engine", "render", "plugins"]
@@ -265,7 +270,21 @@ prefixes = ["plugins.claude_code"]
 imports = ["kernel", "wire", "engine", "render", "commands", "plugins", "service"]
 
 [tool.oo-ratchet.layers.cli]
-prefixes = ["__main__", "_cli_runtime", "cli_session*", "dispatch", "repl_*"]
+prefixes = [
+    "__main__",
+    "_cli_runtime",
+    "cli_session",
+    "cli_session_drain",
+    "cli_session_host",
+    "cli_session_lock",
+    "cli_session_pointer",
+    "cli_session_select",
+    "cli_session_store",
+    "dispatch",
+    "repl_display",
+    "repl_notify",
+    "repl_readline",
+]
 imports = [
     "kernel",
     "wire",
