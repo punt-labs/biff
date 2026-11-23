@@ -192,6 +192,14 @@ Section~\ref{sec:race} splits each into a read/decide step and a
 write step and uses $CriticalSite$ to track which sites currently have
 a write outstanding between the two.
 
+\begin{zed}
+  EventKind ::= kMail | kWall | kTalkInvite | kTalkMsg
+\end{zed}
+
+The four kinds of arrival the Claude~Code plugin turns into channel
+events (Section~\ref{sec:channel}): new mail, a wall posted by someone
+else, a talk invite, and a talk message from the partner.
+
 %%----------------------------------------------------------------------
 \section{Global Constants}
 %%----------------------------------------------------------------------
@@ -226,23 +234,26 @@ the smallest model in which a fresh invite (age $0$) and an expired one
 (age $1$) are distinct.
 
 \begin{zed}
-  [QSLOT, USLOT, ASLOT, PSLOT]
+  [QSLOT, USLOT, ASLOT, PSLOT, RSLOT]
 \end{zed}
 
 \begin{axdef}
   maxQueueSize : \nat \\
   maxUnreadCount : \nat \\
   maxInviteAge : \nat \\
-  maxPending : \nat
+  maxPending : \nat \\
+  rateLimit : \nat
   \where
   QSLOT \neq \emptyset \\
   USLOT \neq \emptyset \\
   ASLOT \neq \emptyset \\
   PSLOT \neq \emptyset \\
+  RSLOT \neq \emptyset \\
   maxQueueSize = \# QSLOT \\
   maxUnreadCount = \# USLOT \\
   maxInviteAge = \# ASLOT \\
-  maxPending = \# PSLOT
+  maxPending = \# PSLOT \\
+  rateLimit = \# RSLOT
 \end{axdef}
 
 Default descriptions and the idle marker are opaque constants:
@@ -329,7 +340,22 @@ the status bar, and the last notification outcome.
   inFlight : \power CriticalSite \\
   beltPnSnapshot : ZBOOL \\
   capPnSnapshot : ZBOOL \\
-  raceLost : ZBOOL
+  raceLost : ZBOOL \\
+  wallLive : ZBOOL \\
+  chanNewer : \power EventKind \\
+  chanHeld : \power EventKind \\
+  chanRetried : \power EventKind \\
+  kindClosed : \power EventKind \\
+  winSent : \nat \\
+  mesgOn : ZBOOL \\
+  chanInit : ZBOOL \\
+  timerArmed : ZBOOL \\
+  pollOn : ZBOOL \\
+  channelEnabled : ZBOOL \\
+  chanLost : ZBOOL \\
+  chanStale : ZBOOL \\
+  chanOverrate : ZBOOL \\
+  pollRogue : ZBOOL
   \where
   \dom queueKinds = \ran queueItems \\
   \dom queueTexts = \ran queueItems \\
@@ -358,7 +384,17 @@ the status bar, and the last notification outcome.
   staleWithdrawHit = zfalse \\
   notifyLost = zfalse \\
   \# inFlight \leq 1 \\
-  raceLost = zfalse
+  raceLost = zfalse \\
+  chanHeld \subseteq chanNewer \\
+  chanRetried \subseteq chanHeld \\
+  (timerArmed = ztrue \implies chanHeld \neq \emptyset) \\
+  (chanHeld \neq \emptyset \implies timerArmed = ztrue) \\
+  winSent \leq rateLimit \\
+  (channelEnabled = zfalse \implies chanNewer = \emptyset) \\
+  chanLost = zfalse \\
+  chanStale = zfalse \\
+  chanOverrate = zfalse \\
+  pollRogue = zfalse
 \end{schema}
 
 Key invariants: queue metadata maps have the same domain as the
@@ -484,7 +520,21 @@ factor at two rather than one per user.
   inFlight' = \emptyset \\
   beltPnSnapshot' = zfalse \\
   capPnSnapshot' = zfalse \\
-  raceLost' = zfalse
+  raceLost' = zfalse \\
+  wallLive' = zfalse \\
+  chanNewer' = \emptyset \\
+  chanHeld' = \emptyset \\
+  chanRetried' = \emptyset \\
+  kindClosed' = \emptyset \\
+  winSent' = 0 \\
+  mesgOn' = ztrue \\
+  chanInit' = zfalse \\
+  timerArmed' = zfalse \\
+  pollOn' = zfalse \\
+  chanLost' = zfalse \\
+  chanStale' = zfalse \\
+  chanOverrate' = zfalse \\
+  pollRogue' = zfalse
 \end{schema}
 
 The initial state has $session' = sessNone$ and
@@ -553,7 +603,22 @@ $CaptureSessionFlushOk$, and $CaptureSessionFlushFail$.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  chanInit' = zfalse \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 After $CaptureSession$, the system has $session = sessCaptured$
@@ -618,7 +683,22 @@ without requiring a fresh capture first.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Close Connection}
@@ -663,7 +743,22 @@ by itself invalidate it; only a failed \emph{send} does
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -733,7 +828,22 @@ handler.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \begin{schema}{LeaveToolContext}
@@ -772,7 +882,22 @@ handler.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 A tool handler is therefore modelled as $EnterToolContext$, followed by
@@ -852,7 +977,22 @@ $NotifyBeltSendFail$ are its two possible commits.
   notifyLost' = notifyLost \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 $NotifyBelt$ is the send-succeeds commit.  It always flushes---clearing
@@ -903,7 +1043,22 @@ that write happened.
   notifyLost' = notifyLost \\
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 $NotifyBeltSendFail$ is the corrected failure commit: the send raised
@@ -953,7 +1108,22 @@ written.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \begin{schema}{NotifyBeltSendFailUnrecorded}
@@ -993,7 +1163,22 @@ written.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Suspenders Path (No Tool Context), idealised}
@@ -1045,7 +1230,22 @@ actually has.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Total Notification}
@@ -1124,7 +1324,22 @@ tool context and a live NATS connection.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = ztrue \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Talk Start (Tool Handler)}
@@ -1171,7 +1386,22 @@ notifications.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{External Message Deliver (CLI)}
@@ -1220,7 +1450,22 @@ handles the receive-side effects.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -1293,7 +1538,24 @@ have a valid session when it fires the deferred notification.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  (channelEnabled = ztrue \implies
+  chanNewer' = chanNewer \cup \{ kWall \}) \\
+  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  wallLive' = ztrue \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{NATS Talk Callback}
@@ -1360,7 +1622,24 @@ session when it fires the deferred notification.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  (channelEnabled = ztrue \implies
+  chanNewer' = chanNewer \cup \{ kTalkMsg \}) \\
+  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  wallLive' = wallLive \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Message Push Callback}
@@ -1448,7 +1727,22 @@ Called after any state change that affects what the status bar shows.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Poll Tick (Background Poller)}
@@ -1500,7 +1794,22 @@ that is correctly recorded, and---kept as the now-dead root cause
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -1582,7 +1891,22 @@ send.  Nothing about the send's outcome is known yet.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 $PollTickNotifyOk$ commits a successful send: releases $siteSuspenders$
@@ -1647,7 +1971,22 @@ from being open concurrently regardless of site.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 $PollTickNotifyFail$ is the corrected failure commit: the send fails,
@@ -1693,7 +2032,22 @@ raised to record the debt.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 $PollTickNotifyFailUnrecorded$ is root cause~\#1 itself, kept as the
@@ -1740,7 +2094,22 @@ $staleWithdrawHit$ uses for the talk channel's reordering defect.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Recovery: a mid-session reconnect}
@@ -1794,7 +2163,22 @@ synchronous and atomic.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  chanInit' = zfalse \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Capture/Reconnect Flush}
@@ -1852,7 +2236,22 @@ system, the same function.
   barStale' = barStale \\
   beltPnSnapshot' = beltPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  chanInit' = zfalse \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 $CaptureSessionFlushOk$: the flush send succeeds, delivering whatever
@@ -1896,7 +2295,23 @@ stale-snapshot test as $NotifyBelt$'s.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   beltPnSnapshot' = beltPnSnapshot \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  capPnSnapshot' = capPnSnapshot \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 $CaptureSessionFlushFail$ is round~2's fix at this site: the flush send
@@ -1945,7 +2360,23 @@ defect, at a different site.
   barStale' = barStale \\
   beltPnSnapshot' = beltPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  capPnSnapshot' = capPnSnapshot \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \begin{schema}{CaptureSessionFlushFailUnrecorded}
@@ -1984,7 +2415,23 @@ defect, at a different site.
   barStale' = barStale \\
   beltPnSnapshot' = beltPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  capPnSnapshot' = capPnSnapshot \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 Root cause~\#1's second consequence, restated precisely now that the
@@ -2376,7 +2823,22 @@ This is the slow path---no MCP involvement.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -2433,7 +2895,23 @@ queue.  With a single wall item, the cursor stays at zero.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  currentIndex' = currentIndex \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \begin{schema}{AdvanceWall}
@@ -2477,7 +2955,22 @@ queue.  With a single wall item, the cursor stays at zero.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -2548,7 +3041,24 @@ the marker set once the count reaches zero.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  (channelEnabled = ztrue \implies
+  chanNewer' = chanNewer \cup \{ kMail \}) \\
+  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  wallLive' = wallLive \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \begin{schema}{ReadMail}
@@ -2587,7 +3097,22 @@ the marker set once the count reaches zero.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Talk Channel (invite, message, drain)}
@@ -2647,7 +3172,24 @@ $ReceiveOverflow$.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  (channelEnabled = ztrue \implies
+  chanNewer' = chanNewer \cup \{ kTalkInvite \}) \\
+  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  wallLive' = wallLive \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 The pending set is bounded by $maxPending$ ($\# PSLOT$), exactly as the
@@ -2709,7 +3251,24 @@ $talk.tex$, where a full queue drops its head before appending.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  (channelEnabled = ztrue \implies
+  chanNewer' = chanNewer \cup \{ kTalkInvite \}) \\
+  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  wallLive' = wallLive \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \begin{schema}{TalkMessageArrive}
@@ -2749,7 +3308,24 @@ $talk.tex$, where a full queue drops its head before appending.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  (channelEnabled = ztrue \implies
+  chanNewer' = chanNewer \cup \{ kTalkMsg \}) \\
+  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  wallLive' = wallLive \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 The defect (biff-9la, observed live).  The drain that ends a talk---the
@@ -2796,7 +3372,22 @@ and $talkConnected$, yet preserves $talkDesc$.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 The coupled defect.  A second, independent fault records an invite
@@ -2844,7 +3435,24 @@ session'').
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  (channelEnabled = ztrue \implies
+  chanNewer' = chanNewer \cup \{ kTalkInvite \}) \\
+  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  wallLive' = wallLive \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -3011,7 +3619,22 @@ marker stays, now backed only by the surviving invites.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Withdrawing a pending invite (ntWithdraw frame)}
@@ -3100,7 +3723,22 @@ returns to zero.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{A withdrawal that names the wrong session (WithdrawForeign)}
@@ -3156,7 +3794,22 @@ discard such a frame rather than acting on its user field alone.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{The withdrawal gap, as a dead operation (WithdrawStale)}
@@ -3224,7 +3877,26 @@ $MarkerConsistent$ and $HintNamesSession$.
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
   pendingNotify' = pendingNotify \\
-  notifyLost' = notifyLost
+  notifyLost' = notifyLost \\
+  inFlight' = inFlight \\
+  beltPnSnapshot' = beltPnSnapshot \\
+  capPnSnapshot' = capPnSnapshot \\
+  raceLost' = raceLost \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Expiring a pending invite (time-to-live)}
@@ -3275,7 +3947,22 @@ the description, not the activity.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 $ExpirePendingInvite$ then reaps an invite once its clock has reached the
@@ -3331,7 +4018,22 @@ zero.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 \subsection{Accepting an invite}
@@ -3381,7 +4083,22 @@ with the invariant.
   beltPnSnapshot' = beltPnSnapshot \\
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
-  staleWithdrawHit' = staleWithdrawHit
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -3492,6 +4209,670 @@ $TalkAccept$ is the ordinary progress transition; it is not
 required for the marker to clear, but without it the only exit from a
 pending invite is to remove it, and the handshake modelled in $talk.tex$
 could never complete.
+
+%%----------------------------------------------------------------------
+\section{Channel Delivery}
+\label{sec:channel}
+%%----------------------------------------------------------------------
+
+WIP intro.
+
+
+\subsection{Helper schemas}
+\label{sec:chanhelpers}
+
+$BaseUnchanged$ is $\Xi NotificationState$ restricted to the base
+components: it says that every component of the four state spaces above
+keeps its value, and says nothing about the channel components.  Every
+channel operation includes it, so that a channel operation cannot change
+anything the base operations own.  (The flat state schema has no sub-schemas
+for $\Xi$ to range over, so the equalities are written out once, here.)
+
+\begin{schema}{BaseUnchanged}
+  \Delta NotificationState
+  \where
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  pendingAge' = pendingAge \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
+  inFlight' = inFlight \\
+  beltPnSnapshot' = beltPnSnapshot \\
+  capPnSnapshot' = capPnSnapshot \\
+  raceLost' = raceLost
+\end{schema}
+
+$LiveKind$ is the ``non-empty'' half of owed: it holds when the thing a
+summary of kind $k?$ would describe still exists.  $OwedKind$ adds the
+``newer than last-sent'' half.
+
+\begin{schema}{LiveKind}
+  unreadCount : \nat \\
+  wallLive : ZBOOL \\
+  talkPending : USER \pfun SESSIONKEY \\
+  talkBare : \power USER \\
+  pendingAge : \nat \\
+  talkQueued : \nat \\
+  k? : EventKind
+  \where
+  (k? = kMail \land unreadCount > 0) \lor \\
+  (k? = kWall \land wallLive = ztrue) \lor \\
+  (k? = kTalkInvite \land \\
+  \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \land \\
+  \quad pendingAge < maxInviteAge) \lor \\
+  (k? = kTalkMsg \land talkQueued > 0)
+\end{schema}
+
+\begin{schema}{OwedKind}
+  LiveKind \\
+  chanNewer : \power EventKind
+  \where
+  k? \in chanNewer
+\end{schema}
+
+$WindowOpen$ is the rate limit: the kind's own 30-second window is open and
+fewer than $rateLimit$ events have been sent in the sliding ten-minute
+window.
+
+\begin{schema}{WindowOpen}
+  kindClosed : \power EventKind \\
+  winSent : \nat \\
+  k? : EventKind
+  \where
+  k? \notin kindClosed \\
+  winSent < rateLimit
+\end{schema}
+
+\subsection{The base side: arrival, expiry, reconnect}
+
+The arrival operations of Sections~\ref{sec:marker} and
+\ref{sec:receive} each gained one line, $chanNewer' = chanNewer \cup
+\{ k \}$, guarded by $channelEnabled = ztrue$; $WallPost$ sets
+$wallLive$ but not $chanNewer$, since a session's own wall is not
+summarised.  The three capture operations $CaptureSession$,
+$RecaptureSession$ and $CaptureSessionFlushBegin$ gained
+$chanInit' = zfalse$: a client that has just sent \texttt{initialize} has
+not yet sent \texttt{notifications/initialized}.  Nothing else about them
+changed, and there is no capture path beside them.
+
+$WallExpire$ is the one new base operation: the relay expires a wall, so a
+summary of it would describe the past.  $RelayReconnected$ is the
+reconnect catch-up: the listener reads durable state and marks as newer
+whichever of mail and wall exist.  Talk frames are core NATS only and are
+not recovered, so $reconn?$ never contains a talk kind.
+
+\begin{schema}{WallExpire}
+  \Delta NotificationState
+  \where
+  wallLive = ztrue \\
+  wallLive' = zfalse \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  pendingAge' = pendingAge \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
+  inFlight' = inFlight \\
+  beltPnSnapshot' = beltPnSnapshot \\
+  capPnSnapshot' = capPnSnapshot \\
+  raceLost' = raceLost \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{RelayReconnected}
+  BaseUnchanged \\
+  reconn? : \power EventKind
+  \where
+  natsConn = natsConnected \\
+  reconn? \subseteq \{ kMail, kWall \} \\
+  (kMail \in reconn? \implies unreadCount > 0) \\
+  (kWall \in reconn? \implies wallLive = ztrue) \\
+  (channelEnabled = ztrue \implies
+  chanNewer' = chanNewer \cup reconn?) \\
+  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  wallLive' = wallLive \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\subsection{The client and the user: initialised, mesg, polling}
+
+\begin{schema}{ClientInitialized}
+  BaseUnchanged
+  \where
+  session = sessCaptured \\
+  chanInit = zfalse \\
+  chanInit' = ztrue \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{MesgOff}
+  BaseUnchanged
+  \where
+  mesgOn = ztrue \\
+  mesgOn' = zfalse \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{MesgOn}
+  BaseUnchanged
+  \where
+  mesgOn = zfalse \\
+  mesgOn' = ztrue \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{PollStart}
+  BaseUnchanged
+  \where
+  pollOn = zfalse \\
+  pollOn' = ztrue \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{PollStop}
+  BaseUnchanged
+  \where
+  pollOn = ztrue \\
+  pollOn' = zfalse \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{PollPull}
+  BaseUnchanged
+  \where
+  pollOn = ztrue \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\subsection{Time passes}
+
+These two operations are the environment's clock, not work done by biff:
+the thirty-second window of one kind closing behind it, and the oldest of
+the events in the ten-minute window ageing out.  Nothing in biff is
+scheduled to run them.
+
+\begin{schema}{KindWindowElapse}
+  BaseUnchanged \\
+  k? : EventKind
+  \where
+  k? \in kindClosed \\
+  kindClosed' = kindClosed \setminus \{ k? \} \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{RateWindowAge}
+  BaseUnchanged
+  \where
+  winSent > 0 \\
+  winSent' = winSent - 1 \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\subsection{The sender}
+\label{sec:chansender}
+
+\begin{schema}{EmitChannel}
+  BaseUnchanged \\
+  OwedKind \\
+  WindowOpen
+  \where
+  chanInit = ztrue \\
+  mesgOn = ztrue \\
+  chanNewer' = chanNewer \setminus \{ k? \} \\
+  chanHeld' = chanHeld \setminus \{ k? \} \\
+  chanRetried' = chanRetried \setminus \{ k? \} \\
+  kindClosed' = kindClosed \cup \{ k? \} \\
+  winSent' = winSent + 1 \\
+  (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
+  (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
+  wallLive' = wallLive \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{EmitChannelTimeout}
+  BaseUnchanged \\
+  OwedKind \\
+  WindowOpen
+  \where
+  chanInit = ztrue \\
+  mesgOn = ztrue \\
+  (k? \notin chanRetried \implies \\
+  \quad chanHeld' = chanHeld \cup \{ k? \} \land \\
+  \quad chanRetried' = chanRetried \cup \{ k? \}) \\
+  (k? \in chanRetried \implies \\
+  \quad chanHeld' = chanHeld \setminus \{ k? \} \land \\
+  \quad chanRetried' = chanRetried \setminus \{ k? \}) \\
+  (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
+  (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{HoldChannel}
+  BaseUnchanged \\
+  OwedKind
+  \where
+  chanInit = ztrue \\
+  mesgOn = ztrue \\
+  (k? \in kindClosed \lor winSent = rateLimit) \\
+  k? \notin chanHeld \\
+  chanHeld' = chanHeld \cup \{ k? \} \\
+  timerArmed' = ztrue \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{TimerDrop}
+  BaseUnchanged \\
+  k? : EventKind
+  \where
+  timerArmed = ztrue \\
+  k? \in chanHeld \\
+  k? \notin kindClosed \\
+  winSent < rateLimit \\
+  \lnot ((k? = kMail \land unreadCount > 0) \lor \\
+  (k? = kWall \land wallLive = ztrue) \lor \\
+  (k? = kTalkInvite \land \\
+  \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \land \\
+  \quad pendingAge < maxInviteAge) \lor \\
+  (k? = kTalkMsg \land talkQueued > 0)) \\
+  chanHeld' = chanHeld \setminus \{ k? \} \\
+  chanRetried' = chanRetried \setminus \{ k? \} \\
+  (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
+  (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{TimerGated}
+  BaseUnchanged \\
+  k? : EventKind
+  \where
+  timerArmed = ztrue \\
+  k? \in chanHeld \\
+  k? \notin kindClosed \\
+  winSent < rateLimit \\
+  (chanInit = zfalse \lor mesgOn = zfalse) \\
+  chanHeld' = chanHeld \setminus \{ k? \} \\
+  chanRetried' = chanRetried \setminus \{ k? \} \\
+  (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
+  (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\subsection{Defective twins}
+\label{sec:chantwins}
+
+Each schema below is a plausible implementation of a sender and each breaks
+exactly one invariant, by setting the ghost that records the breach.  They
+are infeasible in the specification as it stands, because the invariant is
+part of $NotificationState$; deleting the invariant makes the twin
+feasible, and Section~\ref{sec:chanchecks} does so.
+
+\begin{schema}{EmitChannelUnrecorded}
+  BaseUnchanged \\
+  OwedKind \\
+  WindowOpen
+  \where
+  mesgOn = ztrue \\
+  chanNewer' = chanNewer \setminus \{ k? \} \\
+  chanHeld' = chanHeld \setminus \{ k? \} \\
+  chanRetried' = chanRetried \setminus \{ k? \} \\
+  kindClosed' = kindClosed \cup \{ k? \} \\
+  winSent' = winSent + 1 \\
+  (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
+  (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
+  (chanInit = zfalse \implies chanLost' = ztrue) \\
+  (chanInit = ztrue \implies chanLost' = chanLost) \\
+  wallLive' = wallLive \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{EmitChannelStale}
+  BaseUnchanged \\
+  WindowOpen
+  \where
+  chanInit = ztrue \\
+  mesgOn = ztrue \\
+  k? \in chanNewer \\
+  chanNewer' = chanNewer \setminus \{ k? \} \\
+  chanHeld' = chanHeld \setminus \{ k? \} \\
+  chanRetried' = chanRetried \setminus \{ k? \} \\
+  kindClosed' = kindClosed \cup \{ k? \} \\
+  winSent' = winSent + 1 \\
+  (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
+  (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
+  (\lnot ((k? = kMail \land unreadCount > 0) \lor \\
+  (k? = kWall \land wallLive = ztrue) \lor \\
+  (k? = kTalkInvite \land \\
+  \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \land \\
+  \quad pendingAge < maxInviteAge) \lor \\
+  (k? = kTalkMsg \land talkQueued > 0)) \implies chanStale' = ztrue) \\
+  (((k? = kMail \land unreadCount > 0) \lor \\
+  (k? = kWall \land wallLive = ztrue) \lor \\
+  (k? = kTalkInvite \land \\
+  \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \land \\
+  \quad pendingAge < maxInviteAge) \lor \\
+  (k? = kTalkMsg \land talkQueued > 0)) \implies chanStale' = chanStale) \\
+  wallLive' = wallLive \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{EmitChannelBurst}
+  BaseUnchanged \\
+  OwedKind
+  \where
+  chanInit = ztrue \\
+  mesgOn = ztrue \\
+  chanNewer' = chanNewer \setminus \{ k? \} \\
+  chanHeld' = chanHeld \setminus \{ k? \} \\
+  chanRetried' = chanRetried \setminus \{ k? \} \\
+  (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
+  (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
+  ((k? \in kindClosed \lor winSent = rateLimit) \implies
+  chanOverrate' = ztrue) \\
+  ((k? \notin kindClosed \land winSent < rateLimit) \implies
+  chanOverrate' = chanOverrate) \\
+  wallLive' = wallLive \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{EmitChannelNoCancel}
+  BaseUnchanged \\
+  OwedKind \\
+  WindowOpen
+  \where
+  chanInit = ztrue \\
+  mesgOn = ztrue \\
+  chanNewer' = chanNewer \setminus \{ k? \} \\
+  chanHeld' = chanHeld \setminus \{ k? \} \\
+  chanRetried' = chanRetried \setminus \{ k? \} \\
+  kindClosed' = kindClosed \cup \{ k? \} \\
+  winSent' = winSent + 1 \\
+  timerArmed' = timerArmed \\
+  wallLive' = wallLive \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{PollPullUnrequested}
+  BaseUnchanged
+  \where
+  pollOn = zfalse \\
+  pollRogue' = ztrue \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate
+\end{schema}
+
+\subsection{Checks}
+\label{sec:chanchecks}
+
+WIP checks.
+
 
 %%----------------------------------------------------------------------
 \section{System Properties}
