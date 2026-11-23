@@ -68,15 +68,14 @@ def __getattr__(name: str) -> object:
     ``biff._stdlib`` or ``biff.plugins.claude_code.hook``.
     """
     # Module re-exports (import the submodule itself).
-    submodules = {"commands"}
-    if name in submodules:
+    if name == "commands":
         mod = importlib.import_module(f"biff.{name}")
         globals()[name] = mod
         return mod
 
     # Attribute re-exports (import from a submodule).
     attrs: dict[str, tuple[str, str]] = {
-        "CliContext": ("biff.cli_session", "CliContext"),
+        "CliContext": ("biff.cli_context", "CliContext"),
         "CommandResult": ("biff.commands", "CommandResult"),
         "load_cli_config": ("biff.config", "load_cli_config"),
         "load_mcp_config": ("biff.config", "load_mcp_config"),
