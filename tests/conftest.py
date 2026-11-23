@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import socket
 import subprocess
@@ -38,6 +39,10 @@ def _confine_git_walk(  # pyright: ignore[reportUnusedFunction]
     starting directory itself, so a ceiling equal to the cwd is ignored.
     """
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    # A developer's global ``core.hooksPath`` would make every test repo share
+    # (and enable/disable tests rewrite) the real hooks directory.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
 
 
 @pytest.fixture(autouse=True)

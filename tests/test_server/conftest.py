@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from biff.models import BiffConfig
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
+from tests._state import create_state
 
 _TEST_REPO = "_test-server"
 

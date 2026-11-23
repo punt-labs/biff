@@ -10,20 +10,18 @@ import pytest
 
 from biff.doctor import (
     BIFF_COMMANDS,
-    CheckResult,
+    Diagnostics,
     _check_biff_file,
     _check_gh_cli,
     _check_git_hooks,
     _check_plugin_installed,
     _check_relay,
-    _check_statusline,
     _check_user_commands,
-    _print_check,
     _resolve_relay_config,
     _test_nats_connection,
-    check_environment,
 )
 from biff.models import RelayAuth
+from biff.plugins.contract import CheckResult, PluginRegistry
 
 # -- Individual checks -------------------------------------------------------
 
@@ -168,59 +166,6 @@ class TestCheckGitHooks:
         assert "skipped" in result.message
 
 
-class TestCheckStatusline:
-    def test_configured(self, tmp_path: Path) -> None:
-        settings = tmp_path / "settings.json"
-        settings.write_text(
-            json.dumps(
-                {
-                    "statusLine": {
-                        "type": "command",
-                        "command": "/path/to/biff statusline",
-                    }
-                }
-            )
-        )
-        with patch("biff.doctor.SETTINGS_PATH", settings):
-            result = _check_statusline()
-        assert result.passed
-        assert not result.required
-
-    def test_not_configured(self, tmp_path: Path) -> None:
-        settings = tmp_path / "settings.json"
-        settings.write_text(json.dumps({}))
-        with patch("biff.doctor.SETTINGS_PATH", settings):
-            result = _check_statusline()
-        assert not result.passed
-        assert not result.required
-
-    def test_corrupt_settings(self, tmp_path: Path) -> None:
-        settings = tmp_path / "settings.json"
-        settings.write_text("not valid json{{{")
-        with patch("biff.doctor.SETTINGS_PATH", settings):
-            result = _check_statusline()
-        assert not result.passed
-        assert not result.required
-        assert "could not read" in result.message
-
-    def test_configured_non_biff(self, tmp_path: Path) -> None:
-        settings = tmp_path / "settings.json"
-        settings.write_text(
-            json.dumps(
-                {
-                    "statusLine": {
-                        "type": "command",
-                        "command": "some-other-tool status",
-                    }
-                }
-            )
-        )
-        with patch("biff.doctor.SETTINGS_PATH", settings):
-            result = _check_statusline()
-        assert not result.passed
-        assert not result.required
-
-
 class TestResolveRelayConfig:
     @patch("biff.doctor.find_git_root", return_value=None)
     def test_defaults_to_demo_relay(self, _mock: object) -> None:
@@ -357,15 +302,15 @@ class TestNatsConnectionAuthRedaction:
 
 class TestPrintCheck:
     def test_passed_symbol(self, capsys: object) -> None:
-        _print_check(CheckResult("test", True, "ok"))
+        Diagnostics._print(CheckResult("test", True, "ok"))
         assert "\u2713" in capsys.readouterr().out  # type: ignore[attr-defined]
 
     def test_failed_required_symbol(self, capsys: object) -> None:
-        _print_check(CheckResult("test", False, "bad", required=True))
+        Diagnostics._print(CheckResult("test", False, "bad", required=True))
         assert "\u2717" in capsys.readouterr().out  # type: ignore[attr-defined]
 
     def test_failed_optional_symbol(self, capsys: object) -> None:
-        _print_check(CheckResult("test", False, "skip", required=False))
+        Diagnostics._print(CheckResult("test", False, "skip", required=False))
         assert "\u25cb" in capsys.readouterr().out  # type: ignore[attr-defined]
 
 
@@ -373,7 +318,6 @@ class TestPrintCheck:
 
 
 class TestCheckEnvironment:
-    @patch("biff.doctor._check_statusline")
     @patch("biff.doctor._check_biff_file")
     @patch("biff.doctor._check_relay")
     @patch("biff.doctor._check_user_commands")
@@ -386,16 +330,14 @@ class TestCheckEnvironment:
         mock_ucmds: object,
         mock_relay: object,
         mock_biff: object,
-        mock_sl: object,
     ) -> None:
         for mock in [mock_plugin, mock_relay]:
             mock.return_value = CheckResult("test", True, "ok")  # type: ignore[attr-defined]
-        for mock in [mock_gh, mock_ucmds, mock_biff, mock_sl]:
+        for mock in [mock_gh, mock_ucmds, mock_biff]:
             mock.return_value = CheckResult("test", True, "ok", required=False)  # type: ignore[attr-defined]
 
-        assert check_environment() == 0
+        assert Diagnostics(PluginRegistry()).run() == 0
 
-    @patch("biff.doctor._check_statusline")
     @patch("biff.doctor._check_biff_file")
     @patch("biff.doctor._check_relay")
     @patch("biff.doctor._check_user_commands")
@@ -408,16 +350,14 @@ class TestCheckEnvironment:
         mock_ucmds: object,
         mock_relay: object,
         mock_biff: object,
-        mock_sl: object,
     ) -> None:
         mock_plugin.return_value = CheckResult("plugin", False, "missing")  # type: ignore[attr-defined]
         mock_relay.return_value = CheckResult("test", True, "ok")  # type: ignore[attr-defined]
-        for mock in [mock_gh, mock_ucmds, mock_biff, mock_sl]:
+        for mock in [mock_gh, mock_ucmds, mock_biff]:
             mock.return_value = CheckResult("test", True, "ok", required=False)  # type: ignore[attr-defined]
 
-        assert check_environment() == 1
+        assert Diagnostics(PluginRegistry()).run() == 1
 
-    @patch("biff.doctor._check_statusline")
     @patch("biff.doctor._check_biff_file")
     @patch("biff.doctor._check_relay")
     @patch("biff.doctor._check_user_commands")
@@ -430,11 +370,10 @@ class TestCheckEnvironment:
         mock_ucmds: object,
         mock_relay: object,
         mock_biff: object,
-        mock_sl: object,
     ) -> None:
         for mock in [mock_plugin, mock_relay]:
             mock.return_value = CheckResult("test", True, "ok")  # type: ignore[attr-defined]
-        for mock in [mock_gh, mock_ucmds, mock_biff, mock_sl]:
+        for mock in [mock_gh, mock_ucmds, mock_biff]:
             mock.return_value = CheckResult("test", False, "missing", required=False)  # type: ignore[attr-defined]
 
-        assert check_environment() == 0
+        assert Diagnostics(PluginRegistry()).run() == 0

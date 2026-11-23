@@ -19,7 +19,7 @@ from biff.server.launch import McpLaunch
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
-    from biff.server.state import ServerState
+    from biff.server.state import RepoToggle, ServerState
 
 _logger = logging.getLogger(__name__)
 _EVENTS = {
@@ -36,11 +36,14 @@ class McpServerBuilder:
     _resolved: ResolvedConfig
     _user: str | None
     _transport: str
+    _toggle: RepoToggle
 
     def create_server(self) -> FastMCP[ServerState]:
         """Create unbound resources with the transport's default caller policy."""
         launch = McpLaunch(
-            self._resolved, CallerPolicy.for_launch(self._user, self._transport)
+            self._resolved,
+            CallerPolicy.for_launch(self._user, self._transport),
+            self._toggle,
         )
         return create_server(launch.state(), default_caller=launch.caller)
 

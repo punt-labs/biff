@@ -18,7 +18,8 @@ from biff.server.app import (
     _write_sentinel,
     create_server,
 )
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
+from tests._state import create_state
 
 
 @pytest.fixture

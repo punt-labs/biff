@@ -13,11 +13,14 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from biff.config import find_git_root, is_enabled, resolve_relay_config
 from biff.models import RelayAuth
-from biff.plugins.claude_code.statusline import SETTINGS_PATH
+from biff.plugins.contract import CheckResult
+
+if TYPE_CHECKING:
+    from biff.plugins.contract import PluginRegistry
 
 PLUGIN_ID = "biff@punt-labs"
 COMMANDS_DIR = Path.home() / ".claude" / "commands"
@@ -33,16 +36,6 @@ BIFF_COMMANDS = (
     "who.md",
     "write.md",
 )
-
-
-@dataclass(frozen=True)
-class CheckResult:
-    """Outcome of a single diagnostic check."""
-
-    name: str
-    passed: bool
-    message: str
-    required: bool = True
 
 
 # Individual checks ----------------------------------------------------------
@@ -361,72 +354,54 @@ def _check_ci_workflow() -> CheckResult:
     )
 
 
-def _check_statusline() -> CheckResult:
-    """Check status line is configured (informational)."""
-    from biff.plugins.claude_code.statusline import read_settings
-
-    try:
-        settings = read_settings(SETTINGS_PATH)
-    except (json.JSONDecodeError, OSError):
-        return CheckResult(
-            "Status line",
-            False,
-            "could not read settings.json",
-            required=False,
-        )
-    status_line = settings.get("statusLine")
-    if isinstance(status_line, dict):
-        cmd = status_line.get("command")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        if isinstance(cmd, str) and "biff statusline" in cmd:
-            return CheckResult("Status line", True, "configured", required=False)
-    return CheckResult(
-        "Status line",
-        False,
-        "not configured (restart Claude Code to auto-install)",
-        required=False,
-    )
-
-
 # Aggregator -----------------------------------------------------------------
 
 
-def _print_check(check: CheckResult) -> None:
-    """Print a single check result with the appropriate symbol."""
-    if check.passed:
-        symbol = "\u2713"  # ✓
-    elif check.required:
-        symbol = "\u2717"  # ✗
-    else:
-        symbol = "\u25cb"  # ○
-    print(f"  {symbol} {check.name}: {check.message}")
+@dataclass(frozen=True, slots=True)
+class Diagnostics:
+    """Run every diagnostic and report them: biff's, then each registered tool's."""
 
+    _plugins: PluginRegistry
 
-def check_environment() -> int:
-    """Run all diagnostics. Returns 0 if all required pass, 1 otherwise."""
-    from importlib.metadata import version
+    def run(self) -> int:
+        """Print all diagnostics.  Returns 0 if all required pass, 1 otherwise."""
+        from importlib.metadata import version
 
-    print(f"punt-biff {version('punt-biff')}")
-    print()
+        print(f"punt-biff {version('punt-biff')}")
+        print()
 
-    checks = [
-        _check_gh_cli(),
-        _check_plugin_installed(),
-        _check_user_commands(),
-        _check_relay(),
-        _check_biff_file(),
-        _check_enabled(),
-        _check_git_hooks(),
-        _check_ci_workflow(),
-        _check_statusline(),
-    ]
+        checks = self._checks()
+        for check in checks:
+            self._print(check)
 
-    for check in checks:
-        _print_check(check)
+        required_failures = [c for c in checks if c.required and not c.passed]
+        if required_failures:
+            count = len(required_failures)
+            print(f"\n{count} required check(s) failed.")
+            return 1
+        print("\nAll required checks passed.")
+        return 0
 
-    required_failures = [c for c in checks if c.required and not c.passed]
-    if required_failures:
-        count = len(required_failures)
-        print(f"\n{count} required check(s) failed.")
-        return 1
-    print("\nAll required checks passed.")
-    return 0
+    def _checks(self) -> list[CheckResult]:
+        return [
+            _check_gh_cli(),
+            _check_plugin_installed(),
+            _check_user_commands(),
+            _check_relay(),
+            _check_biff_file(),
+            _check_enabled(),
+            _check_git_hooks(),
+            _check_ci_workflow(),
+            *(c for i in self._plugins.installers() for c in i.check()),
+        ]
+
+    @staticmethod
+    def _print(check: CheckResult) -> None:
+        """Print a single check result with the appropriate symbol."""
+        if check.passed:
+            symbol = "\u2713"  # ✓
+        elif check.required:
+            symbol = "\u2717"  # ✗
+        else:
+            symbol = "\u25cb"  # ○
+        print(f"  {symbol} {check.name}: {check.message}")

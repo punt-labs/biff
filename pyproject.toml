@@ -235,6 +235,7 @@ adapters = [
     "biff.ci_workflow",
     "biff.plugins.claude_code.claude_md",
     "biff.plugins.claude_code.claude_permissions",
+    "biff.plugins.claude_code.installer",
     "biff.cli_session_lock",
     "biff.cli_session_pointer",
     "biff.cli_session_store",
@@ -249,6 +250,7 @@ adapters = [
     "biff.markers",
     "biff.nats_relay",
     "biff.relay",
+    "biff.relay_select",
     "biff.repl_readline",
     "biff.server.mcp_protocol",
     "biff.session_handle",
@@ -268,6 +270,7 @@ application = [
     "biff.cli_session_host",
     "biff.cli_session_select",
     "biff.enablement",
+    "biff.repo_toggle",
     "biff.session_open",
     "biff.session_registry",
     "biff.talk_state",
@@ -296,6 +299,7 @@ application = [
     "biff.server.tools._write_target",
 ]
 domain = [
+    "biff.plugins.contract",
     "biff._formatting",
     "biff.caller_identity",
     "biff.chunking",

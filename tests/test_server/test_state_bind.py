@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from biff.models import BiffConfig
-from biff.server.state import create_state
 from biff.session_routing import SessionRouting
+from tests._state import create_state
 
 
 def _state(tmp_path: Path):

@@ -1,7 +1,7 @@
 {
-  "total": 204,
+  "total": 203,
   "by_category": {
-    "noqa": 127,
+    "noqa": 126,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 31,
@@ -29,7 +29,7 @@
     },
     "src/biff/doctor.py": {
       "noqa": 2,
-      "pyright_ignore": 2,
+      "pyright_ignore": 1,
       "per_file_ignores": 4
     },
     "src/biff/git_hooks.py": {
@@ -52,6 +52,9 @@
     },
     "src/biff/plugins/claude_code/hook.py": {
       "noqa": 22
+    },
+    "src/biff/plugins/claude_code/installer.py": {
+      "pyright_ignore": 1
     },
     "src/biff/plugins/claude_code/statusline.py": {
       "noqa": 2,
@@ -81,9 +84,6 @@
     },
     "src/biff/server/tools/biff_relay.py": {
       "noqa": 2
-    },
-    "src/biff/server/tools/biff_toggle.py": {
-      "noqa": 1
     },
     "src/biff/server/tools/mesg.py": {
       "noqa": 1
@@ -135,5 +135,5 @@
       "per_file_ignores": 4
     }
   },
-  "updated_at": "2026-11-22T22:37:46Z"
+  "updated_at": "2026-11-23T00:15:50Z"
 }

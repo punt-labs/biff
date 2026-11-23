@@ -132,14 +132,6 @@ def _init_repo(path: Path, name: str | None) -> Path:
     return path
 
 
-@pytest.fixture
-def isolated_git(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hide host git config so only the repo-local config is visible."""
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
-    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
-
-
-@pytest.mark.usefixtures("isolated_git")
 class TestGitUserName:
     def test_returns_configured_name(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path / "repo", "J Freeman")

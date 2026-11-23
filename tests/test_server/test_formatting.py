@@ -572,15 +572,11 @@ class TestGitUserName:
     def test_reads_the_config_value(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
         assert git_user_name(self._repo(tmp_path, "jmf-pobox")) == "jmf-pobox"
 
     def test_provisioned_host_config_wins_over_author_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
         monkeypatch.setenv("GIT_AUTHOR_NAME", "claude")
         monkeypatch.setenv("GIT_COMMITTER_NAME", "claude")
         repo = self._repo(tmp_path, "jmf-pobox")
@@ -611,8 +607,6 @@ class TestGitUserName:
     ) -> None:
         # ``written`` is the config-file text; git's own quoting yields the
         # literal quotes that the reader must remove.
-        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
         repo = self._repo(tmp_path, None)
         (repo / ".git" / "config").write_text(f"[user]\n\tname = {written}\n")
         assert git_user_name(repo) == want
@@ -620,8 +614,6 @@ class TestGitUserName:
     def test_quoted_value_renders_unquoted_in_who(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
         repo = self._repo(tmp_path, None)
         (repo / ".git" / "config").write_text('[user]\n\tname = \\"jmf-pobox\\"\n')
         row = UserSession(
@@ -634,8 +626,6 @@ class TestGitUserName:
     def test_unset_is_empty(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
         assert git_user_name(self._repo(tmp_path, None)) == ""
 
     def test_unset_is_logged(
@@ -644,8 +634,6 @@ class TestGitUserName:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
         with caplog.at_level("DEBUG", logger="biff.identity"):
             git_user_name(self._repo(tmp_path, None))
         assert "user.name" in caplog.text

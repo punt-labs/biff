@@ -14,9 +14,9 @@ import pytest
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.server.app import create_server
-from biff.server.state import create_state
 from biff.server.tools._descriptions import TALK_BASE_DESCRIPTION, _talk_description
 from biff.talk_state import TalkState
+from tests._state import create_state
 
 _COMMANDS = Path(__file__).resolve().parents[2] / "plugin" / "commands"
 

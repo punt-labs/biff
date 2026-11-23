@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from biff.caller_identity import CallerIdentity
 from biff.config import ResolvedConfig, is_enabled
 from biff.plugins.claude_code.statusline import UNREAD_DIR
-from biff.server.state import ServerState, create_state
+from biff.server.state import RepoToggle, ServerState, create_state
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,7 @@ class McpLaunch:
 
     _resolved: ResolvedConfig
     caller: CallerIdentity | None
+    toggle: RepoToggle
 
     def state(self) -> ServerState:
         """Create initially unbound resources; the lifespan establishes presence."""
@@ -27,4 +28,5 @@ class McpLaunch:
             dormant=not is_enabled(resolved.repo_root),
             repo_root=resolved.repo_root,
             repo_common_root=resolved.repo_common_root,
+            toggle=self.toggle,
         )

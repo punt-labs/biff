@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from biff import enablement
+from biff._cli_runtime import CliInvocation
 from biff.enablement import RepoEnablement
 from biff.git_hooks import GIT_HOOKS, resolve_hooks_dir
 from biff.plugins.claude_code.claude_permissions import BIFF_RULES
@@ -61,26 +62,26 @@ def _notify_text(root: Path) -> str:
 class TestEnable:
     def test_writes_marker(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert (tmp_path / ".punt-labs" / "biff" / "enabled").is_file()
 
     def test_writes_ci_workflow(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert (tmp_path / ".github" / "workflows" / "biff-notify.yml").is_file()
 
     def test_deploys_git_hooks(self, tmp_path: Path) -> None:
         """Enable fully activates the clone: the local git hooks land too."""
         _make_repo(tmp_path)
-        change = RepoEnablement(tmp_path).enable()
+        change = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert set(change.git_hooks_changed) == set(GIT_HOOKS)
         for name in GIT_HOOKS:
             assert (_hooks_dir(tmp_path) / name).is_file()
 
     def test_idempotent(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert (tmp_path / ".punt-labs" / "biff" / "enabled").is_file()
         assert (tmp_path / ".github" / "workflows" / "biff-notify.yml").is_file()
         for name in GIT_HOOKS:
@@ -88,10 +89,10 @@ class TestEnable:
 
     def test_reports_changes(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        first = RepoEnablement(tmp_path).enable()
+        first = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert first.ci_workflow_changed is True
         assert set(first.git_hooks_changed) == set(GIT_HOOKS)
-        second = RepoEnablement(tmp_path).enable()
+        second = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert second.ci_workflow_changed is False  # already up to date
         assert second.git_hooks_changed == ()  # hooks already deployed
 
@@ -112,7 +113,7 @@ class TestEnable:
         monkeypatch.setattr("biff.enablement.deploy_ci_workflow", boom)
 
         with pytest.raises(OSError, match="disk full"):
-            RepoEnablement(tmp_path).enable()
+            RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
 
         assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
 
@@ -128,7 +129,7 @@ class TestEnable:
         monkeypatch.setattr("biff.enablement.deploy_git_hooks", boom)
 
         with pytest.raises(OSError, match="hooks unwritable"):
-            RepoEnablement(tmp_path).enable()
+            RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
 
         assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
 
@@ -140,7 +141,7 @@ class TestEnable:
         Enable must write nothing and report ``git_hooks_resolved=False`` rather
         than silently succeeding with zero hooks deployed.
         """
-        change = RepoEnablement(tmp_path).enable()
+        change = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
 
         assert change.git_hooks_resolved is False
         assert change.git_hooks_changed == ()
@@ -153,29 +154,29 @@ class TestEnable:
 class TestDisable:
     def test_removes_marker(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
-        RepoEnablement(tmp_path).disable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).disable()
         assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
 
     def test_removes_ci_workflow(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
-        RepoEnablement(tmp_path).disable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).disable()
         assert not (tmp_path / ".github" / "workflows" / "biff-notify.yml").exists()
 
     def test_removes_git_hooks(self, tmp_path: Path) -> None:
         """Disable removes exactly what enable added, including the git hooks."""
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
-        change = RepoEnablement(tmp_path).disable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
+        change = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).disable()
         assert set(change.git_hooks_changed) == set(GIT_HOOKS)
         for name in GIT_HOOKS:
             assert not (_hooks_dir(tmp_path) / name).exists()
 
     def test_idempotent(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).disable()
-        RepoEnablement(tmp_path).disable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).disable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).disable()
         assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
 
 
@@ -190,12 +191,12 @@ class TestCiWorkflowParameterization:
         _make_repo(tmp_path)
         _write_workflow(tmp_path, "build.yml", "Build")
         _write_workflow(tmp_path, "docs.yml", "Docs")
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert 'workflows: ["Build", "Docs"]' in _notify_text(tmp_path)
 
     def test_empty_list_when_no_sibling_workflows(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         text = _notify_text(tmp_path)
         assert "workflows: []" in text
         assert "No sibling workflows" in text
@@ -203,12 +204,12 @@ class TestCiWorkflowParameterization:
     def test_reenable_rerenders_after_name_change(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
         _write_workflow(tmp_path, "ci.yml", "Tests")
-        first = RepoEnablement(tmp_path).enable()
+        first = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert first.ci_workflow_changed is True
         assert 'workflows: ["Tests"]' in _notify_text(tmp_path)
 
         _write_workflow(tmp_path, "ci.yml", "Unit Tests")  # rename the workflow
-        second = RepoEnablement(tmp_path).enable()
+        second = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert second.ci_workflow_changed is True  # re-rendered, not a no-op
         assert 'workflows: ["Unit Tests"]' in _notify_text(tmp_path)
 
@@ -221,8 +222,8 @@ class TestSurfaceEquivalence:
         mcp_repo = _make_repo(tmp_path / "mcp")
 
         # Both surfaces call the same RepoEnablement definition.
-        RepoEnablement(cli_repo).enable()
-        RepoEnablement(mcp_repo).enable()
+        RepoEnablement(cli_repo, CliInvocation.plugin_registry()).enable()
+        RepoEnablement(mcp_repo, CliInvocation.plugin_registry()).enable()
 
         def state(root: Path) -> tuple[bool, bool, frozenset[str]]:
             marker = (root / ".punt-labs" / "biff" / "enabled").is_file()
@@ -239,30 +240,36 @@ class TestSurfaceEquivalence:
 class TestPermissions:
     def test_enable_grants_repo_level_rules(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        change = RepoEnablement(tmp_path).enable()
-        assert change.permissions.changed == (*BIFF_RULES["allow"], *BIFF_RULES["ask"])
+        change = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
+        assert change.permissions[0].changed == (
+            *BIFF_RULES["allow"],
+            *BIFF_RULES["ask"],
+        )
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
         assert settings["permissions"]["allow"] == list(BIFF_RULES["allow"])
         assert settings["permissions"]["ask"] == list(BIFF_RULES["ask"])
 
     def test_disable_revokes_exactly_those_rules(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
-        change = RepoEnablement(tmp_path).disable()
-        assert change.permissions.changed == (*BIFF_RULES["allow"], *BIFF_RULES["ask"])
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
+        change = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).disable()
+        assert change.permissions[0].changed == (
+            *BIFF_RULES["allow"],
+            *BIFF_RULES["ask"],
+        )
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
         assert settings["permissions"] == {"allow": [], "ask": []}
 
     def test_unresolvable_hooks_grants_nothing(self, tmp_path: Path) -> None:
-        change = RepoEnablement(tmp_path).enable()
-        assert change.permissions.changed == ()
+        change = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
+        assert change.permissions == ()
         assert not (tmp_path / ".claude").exists()
 
     def test_refused_grant_writes_nothing_and_fails(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
         (tmp_path / ".claude").mkdir()
         (tmp_path / ".claude" / "settings.json").write_text("{not json")
-        change = RepoEnablement(tmp_path).enable()
+        change = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert change.failed
         assert "biff not enabled" in change.enable_report()[-1]
         assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
@@ -272,9 +279,9 @@ class TestPermissions:
     def test_unclosed_fence_refuses_before_granting(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
         (tmp_path / "CLAUDE.md").write_text("```text\nnever closed\n")
-        change = RepoEnablement(tmp_path).enable()
+        change = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert change.failed
-        assert "unclosed code fence" in change.permissions.error
+        assert "unclosed code fence" in change.permissions[0].error
         assert "Close the code fence in CLAUDE.md" in change.enable_report()[-1]
         assert not (tmp_path / ".claude").exists()
         assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
@@ -295,7 +302,7 @@ class TestPermissions:
 
         monkeypatch.setattr("biff._enablement_artifacts.write_enabled_marker", boom)
         with pytest.raises(OSError, match="No space"):
-            RepoEnablement(tmp_path).enable()
+            RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         allow = json.loads(settings.read_text())["permissions"]["allow"]
         assert allow == ["Skill(biff:plan)"]
 
@@ -303,30 +310,30 @@ class TestPermissions:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
 
         def boom(_root: Path) -> list[str]:
             raise OSError(13, "Permission denied")
 
         monkeypatch.setattr(enablement, "remove_git_hooks", boom)
         with pytest.raises(OSError, match="Permission denied"):
-            RepoEnablement(tmp_path).disable()
+            RepoEnablement(tmp_path, CliInvocation.plugin_registry()).disable()
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
         assert settings["permissions"]["allow"] == []
 
     def test_refused_revoke_reports_failure(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         (tmp_path / ".claude" / "settings.json").write_text("[]")
-        change = RepoEnablement(tmp_path).disable()
+        change = RepoEnablement(tmp_path, CliInvocation.plugin_registry()).disable()
         assert change.failed
         assert "still in .claude/settings.json" in change.disable_report()[-1]
 
     def test_enable_ignores_punt_locks_once(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
         (tmp_path / ".gitignore").write_text("dist/")
-        RepoEnablement(tmp_path).enable()
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert (tmp_path / ".gitignore").read_text() == "dist/\n*.punt-import.lock\n"
 
     def test_enable_skips_symlinked_gitignore(self, tmp_path: Path) -> None:
@@ -334,7 +341,7 @@ class TestPermissions:
         outside = tmp_path.parent / f"{tmp_path.name}-ignore"
         outside.write_text("keep\n")
         (tmp_path / ".gitignore").symlink_to(outside)
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         assert outside.read_text() == "keep\n"
 
 
@@ -347,7 +354,7 @@ class TestRepoGuide:
     def test_enable_deposits_guide_and_registers_import(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
 
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
 
         guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
         assert "Biff (team messaging)" in guide.read_text()
@@ -356,11 +363,11 @@ class TestRepoGuide:
 
     def test_enable_is_idempotent(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
         guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
         first = guide.read_bytes()
 
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
 
         assert guide.read_bytes() == first
         assert (tmp_path / "CLAUDE.md").read_text().count(_REPO_IMPORT) == 1
@@ -369,7 +376,7 @@ class TestRepoGuide:
         _make_repo(tmp_path)
         (tmp_path / "CLAUDE.md").write_text("# Repo rules\n\nUse uv.\n")
 
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
 
         text = (tmp_path / "CLAUDE.md").read_text()
         assert text.startswith("# Repo rules\n\nUse uv.\n")
@@ -377,9 +384,9 @@ class TestRepoGuide:
 
     def test_disable_removes_import_and_leaves_guide(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
 
-        RepoEnablement(tmp_path).disable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).disable()
 
         assert _REPO_IMPORT not in (tmp_path / "CLAUDE.md").read_text()
         # Dormant: the deposited guide survives disable (§2.9).
@@ -387,7 +394,7 @@ class TestRepoGuide:
 
     def test_unresolvable_hooks_dir_writes_no_guide(self, tmp_path: Path) -> None:
         # Not a git repo: enable writes nothing, guide included.
-        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path, CliInvocation.plugin_registry()).enable()
 
         assert not (tmp_path / ".punt-labs" / "biff" / "CLAUDE.md").exists()
         assert not (tmp_path / "CLAUDE.md").exists()

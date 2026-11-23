@@ -10,6 +10,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+from biff._cli_runtime import CliInvocation
 from biff.config import ResolvedConfig
 from biff.models import BiffConfig
 from biff.server.app import create_server
@@ -43,7 +44,7 @@ async def test_unstamped_tools_use_startup_presence_only_when_opted_in(
             data_dir=None,
             relay_url="",
             prefix=tmp_path,
-        ).create_server()
+        ).create_server(CliInvocation.repo_toggle())
     state = cast("ServerState", factory.call_args.args[0])
     if enabled:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "changed-after-startup")
