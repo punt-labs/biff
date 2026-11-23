@@ -44,7 +44,7 @@ dev = [
 
 [dependency-groups]
 dev = [
-    "punt-oo-ratchet==0.4.0",
+    "punt-oo-ratchet==0.5.0",
     "pydoclint==0.12.0",
     "docstring-parser-fork==0.0.16",
     "markdown==3.11.3",
@@ -188,133 +188,94 @@ reportUnusedFunction = false
 root = "tests"
 reportPrivateUsage = false
 
-[tool.oo-ratchet.layers]
-entry = [
-    "biff",
-    "biff.__main__",
-    "biff._cli_runtime",
-    "biff.plugins.claude_code._hook_cli",
-    "biff.plugins.claude_code._hook_dispatch",
-    "biff.plugins.claude_code._hook_entry",
-    "biff.plugins.claude_code._hook_foreground",
-    "biff.plugins.claude_code._hook_runtime",
-    "biff.dispatch",
-    "biff.doctor",
-    "biff.plugins.claude_code.hook",
-    "biff.prob_gate",
-    "biff.plugins",
-    "biff.plugins.claude_code",
-    "biff.plugins.claude_code.statusline",
-    "biff.server",
-    "biff.server.app",
-    "biff.server.entrypoints",
-    "biff.server.launch",
-    "biff.server.transport_runtime",
-    "biff.server.caller_middleware",
-    "biff.server.caller_policy",
-    "biff.server.tools",
-    "biff.server.tools._descriptions",
-    "biff.server.tools.biff_relay",
-    "biff.server.tools.biff_toggle",
-    "biff.server.tools.finger",
-    "biff.server.tools.last",
-    "biff.server.tools.mesg",
-    "biff.server.tools.messaging",
-    "biff.server.tools.plan",
-    "biff.server.tools.poll_config",
-    "biff.server.tools.talk",
-    "biff.server.tools.tty",
-    "biff.server.tools.wall",
-    "biff.server.tools.who",
+# Layers from docs/package-structure.md (DES-088).  `oo-ratchet layers` gates
+# imports against these tables; modules not yet moved into their package
+# directory are claimed by exact name.  A layer may import only the layers
+# listed in `imports`.
+[tool.oo-ratchet.layers.kernel]
+prefixes = [
+    "_nats_connection",
+    "_stdlib",
+    "caller_identity",
+    "chunking",
+    "data",
+    "logging_config",
+    "markers",
+    "session_id",
+    "session_lock",
+    "usage",
+    "user_scope",
 ]
-adapters = [
-    "biff._enablement_artifacts",
-    "biff._nats_connection",
-    "biff._stdlib",
-    "biff.caller_stamp",
-    "biff.ci_workflow",
-    "biff.plugins.claude_code.claude_md",
-    "biff.plugins.claude_code.claude_permissions",
-    "biff.plugins.claude_code.installer",
-    "biff.cli_session_lock",
-    "biff.cli_session_pointer",
-    "biff.cli_session_store",
-    "biff.config",
-    "biff.data",
-    "biff.ethos_team",
-    "biff.git_hooks",
-    "biff.identity",
-    "biff.integration",
-    "biff.integration.vox",
-    "biff.logging_config",
-    "biff.markers",
-    "biff.nats_relay",
-    "biff.relay",
-    "biff.relay_select",
-    "biff.repl_readline",
-    "biff.server.mcp_protocol",
-    "biff.session_handle",
-    "biff.session_lock",
-    "biff.unread",
-    "biff.plugins.claude_code.unread_file",
-    "biff.usage",
-    "biff.user_scope",
-    "biff.wtmp_reader",
-    "biff.testing",
-    "biff.testing.*",
+imports = []
+
+[tool.oo-ratchet.layers.wire]
+prefixes = ["models", "session_routing", "talk_types", "unread"]
+imports = ["kernel"]
+
+[tool.oo-ratchet.layers.engine]
+prefixes = [
+    "caller_stamp",
+    "config",
+    "ethos_team",
+    "identity",
+    "nats_relay",
+    "relay",
+    "relay_select",
+    "session_handle",
+    "session_open",
+    "session_registry",
+    "talk_latch",
+    "talk_state",
+    "tty",
+    "wtmp_reader",
 ]
-application = [
-    "biff.cli_context",
-    "biff.cli_session",
-    "biff.cli_session_drain",
-    "biff.cli_session_host",
-    "biff.cli_session_select",
-    "biff.enablement",
-    "biff.repo_toggle",
-    "biff.session_open",
-    "biff.session_registry",
-    "biff.talk_state",
-    "biff.tty",
-    "biff.commands",
-    "biff.commands._messaging",
-    "biff.commands._session",
-    "biff.commands._talk_relay",
-    "biff.commands.finger",
-    "biff.commands.last",
-    "biff.commands.mesg",
-    "biff.commands.plan",
-    "biff.commands.read",
-    "biff.commands.session",
-    "biff.commands.status",
-    "biff.commands.talk",
-    "biff.commands.tty",
-    "biff.commands.wall",
-    "biff.commands.who",
-    "biff.commands.write",
-    "biff.server.relay_lifecycle",
-    "biff.server.state",
-    "biff.server.tools._activity",
-    "biff.server.tools._session",
-    "biff.server.tools._tasks",
-    "biff.server.tools._write_target",
+imports = ["kernel", "wire"]
+
+[tool.oo-ratchet.layers.render]
+prefixes = ["_formatting", "formatting"]
+imports = ["kernel", "wire", "engine"]
+
+[tool.oo-ratchet.layers.commands]
+prefixes = ["cli_context", "commands"]
+imports = ["kernel", "wire", "engine", "render"]
+
+[tool.oo-ratchet.layers.server]
+prefixes = ["server", "testing"]
+imports = ["kernel", "wire", "engine", "render", "commands"]
+
+[tool.oo-ratchet.layers.plugins]
+prefixes = ["plugins"]
+imports = ["kernel", "wire", "engine"]
+
+[tool.oo-ratchet.layers.service]
+prefixes = [
+    "_enablement_artifacts",
+    "ci_workflow",
+    "doctor",
+    "enablement",
+    "git_hooks",
+    "integration",
+    "prob_gate",
+    "repo_toggle",
 ]
-domain = [
-    "biff.plugins.contract",
-    "biff._formatting",
-    "biff.caller_identity",
-    "biff.chunking",
-    "biff.formatting",
-    "biff.repl_display",
-    "biff.repl_notify",
-    "biff.session_id",
-    "biff.session_routing",
-    "biff.talk_latch",
-    "biff.talk_types",
-    "biff.models",
-    "biff.commands._result",
-    "biff.server.activity",
-    "biff.server.display_queue",
-    "biff.server.tools._presence",
+imports = ["kernel", "wire", "engine", "render", "plugins"]
+
+[tool.oo-ratchet.layers.claude_code]
+prefixes = ["plugins.claude_code"]
+imports = ["kernel", "wire", "engine", "render", "commands", "plugins", "service"]
+
+[tool.oo-ratchet.layers.cli]
+prefixes = ["__main__", "_cli_runtime", "cli_session*", "dispatch", "repl_*"]
+imports = [
+    "kernel",
+    "wire",
+    "engine",
+    "render",
+    "commands",
+    "server",
+    "plugins",
+    "service",
+    "claude_code",
 ]
 
 [tool.pytest.ini_options]

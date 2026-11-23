@@ -38,17 +38,19 @@ jobs:
           case "${HEAD_REF}" in
             release/*|post-release/*) OO_ARGS="${OO_ARGS} --allow-no-improvement" ;;
           esac
-          make check-oo check-coupling check-suppressions \
-            OO_BASE="${OO_ARGS}" COUPLING_BASE="${BASE_ARGS}" SUPPRESSION_BASE="${BASE_ARGS}"
+          make check-oo check-coupling check-suppressions check-layers \
+            OO_BASE="${OO_ARGS}" COUPLING_BASE="${BASE_ARGS}" \
+            SUPPRESSION_BASE="${BASE_ARGS}" LAYERS_BASE="${BASE_ARGS}"
       - name: Ratchets (main, post-merge tripwire)
         if: github.event_name == 'push'
         env:
           BEFORE_SHA: ${{ github.event.before }}
         run: |
           BASE_ARGS="--base-ref ${BEFORE_SHA} --require-base --tripwire"
-          make check-oo check-coupling check-suppressions \
+          make check-oo check-coupling check-suppressions check-layers \
             OO_BASE="${BASE_ARGS} --allow-no-improvement" \
-            COUPLING_BASE="${BASE_ARGS}" SUPPRESSION_BASE="${BASE_ARGS}"
+            COUPLING_BASE="${BASE_ARGS}" SUPPRESSION_BASE="${BASE_ARGS}" \
+            LAYERS_BASE="${BASE_ARGS}"
 
       # Advisory only: retain the verdict or input error even after a gate
       # fails, without letting a reporting failure gate this job.
