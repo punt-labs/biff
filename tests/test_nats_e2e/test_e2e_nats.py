@@ -21,6 +21,8 @@ from biff.nats_relay import NatsRelay
 from biff.testing import RecordingClient, Transcript
 from biff.testing.caller import StampedClient
 
+from .conftest import _TEST_CALLER
+
 pytestmark = pytest.mark.nats_local
 
 
@@ -226,70 +228,19 @@ class TestCrossRelayMessaging:
 
 
 class TestTtyNameAutoAssign:
-    """Lifespan auto-assigns tty_name to KV — verifiable via /who.
-
-    Uses hex tty values (like production) to verify that /who shows the
-    auto-assigned friendly name, NOT the raw hex.  The existing fixtures
-    use tty="tty1"/"tty2" which masks the bug because tty_name and tty
-    are the same string.
-    """
+    """Registration auto-assigns tty_name to KV — verifiable via /who."""
 
     async def test_who_shows_friendly_name_not_hex(
-        self,
-        nats_server: str,
-        shared_data_dir: Path,
-        transcript: Transcript,
+        self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """Lifespan auto-assigns ttyN; /who shows it instead of hex."""
-        from biff.models import BiffConfig
-        from biff.server.app import create_server
-        from tests._state import create_state
-
-        repo = "_test-nats-e2e"
-        kai_cfg = BiffConfig(user="kai", repo_name=repo, relay_url=nats_server)
-        kai_state = create_state(
-            kai_cfg,
-            shared_data_dir / "kai",
-            tty="aabbccdd",
-            hostname="test",
-            pwd="/test",
+        result = await kai.call("who")
+        assert "kai:tty1" in result, f"Expected 'kai:tty1' in /who: {result}"
+        assert "eric:tty1" in result, f"Expected 'eric:tty1' in /who: {result}"
+        routing_id = _TEST_CALLER.routing_id
+        assert routing_id[:8] not in result, (
+            f"Hex ID {routing_id!r} should not appear in /who: {result}"
         )
-        eric_cfg = BiffConfig(user="eric", repo_name=repo, relay_url=nats_server)
-        eric_state = create_state(
-            eric_cfg,
-            shared_data_dir / "eric",
-            tty="11223344",
-            hostname="test",
-            pwd="/test",
-        )
-
-        kai_mcp = create_server(kai_state)
-        eric_mcp = create_server(eric_state)
-
-        async with (
-            StampedClient(FastMCPTransport(kai_mcp)) as kai_raw,
-            StampedClient(FastMCPTransport(eric_mcp)) as eric_raw,
-        ):
-            kai_r = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
-            RecordingClient(client=eric_raw, transcript=transcript, user="eric")
-
-            # Both servers should have auto-assigned ttyN names.
-            # /who reads from KV — should show friendly names.
-            result = await kai_r.call("who")
-
-            # Must show friendly ttyN names, NOT the raw hex.  TTY names are
-            # reserved per user, so kai and eric each get tty1 from their own
-            # namespace — the friendly name, not the hex the state was seeded
-            # with (aabbccdd / 11223344).
-            assert "kai:tty1" in result, f"Expected 'kai:tty1' in /who: {result}"
-            assert "eric:tty1" in result, f"Expected 'eric:tty1' in /who: {result}"
-            # Must NOT show hex IDs
-            assert "aabbccdd" not in result, (
-                f"Hex ID 'aabbccdd' should not appear in /who: {result}"
-            )
-            assert "11223344" not in result, (
-                f"Hex ID '11223344' should not appear in /who: {result}"
-            )
 
     async def test_tty_name_survives_disconnect_reconnect(
         self,
@@ -317,7 +268,8 @@ class TestTtyNameAutoAssign:
         async with StampedClient(FastMCPTransport(kai_mcp)) as kai_raw:
             kai_r = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
 
-            # Verify tty_name is set after startup
+            await kai_r.call("who")
+            # Verify tty_name is set after registration
             session = await kai_state.relay.get_session(kai_state.session_key)
             assert session is not None
             assert session.tty_name != "", f"Pre-disconnect: {session}"
@@ -526,10 +478,8 @@ class TestTalkSelfEchoFilter:
         mcp = create_server(state)
 
         async with StampedClient(FastMCPTransport(mcp)) as kai_raw:
-            RecordingClient(client=kai_raw, transcript=transcript, user="kai")
-
-            # The server's poller establishes the always-on talk subscription.
-            await asyncio.sleep(0.5)
+            kai = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
+            await kai.call("who")
 
             # Publish a talk frame FROM this session (self-echo).
             relay = state.relay
@@ -573,10 +523,8 @@ class TestTalkSelfEchoFilter:
         mcp = create_server(state)
 
         async with StampedClient(FastMCPTransport(mcp)) as kai_raw:
-            RecordingClient(client=kai_raw, transcript=transcript, user="kai")
-
-            # The server's poller establishes the always-on talk subscription.
-            await asyncio.sleep(0.5)
+            kai = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
+            await kai.call("who")
 
             # Publish a talk frame FROM eric's session (different key) to us.
             relay = state.relay
