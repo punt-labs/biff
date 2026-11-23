@@ -4974,7 +4974,9 @@ and with the channel components added an exhaustive run over all four kinds
 did not finish either (it had discovered $9 \times 10^5$ states and was
 still growing when it was stopped).  The model is therefore checked
 exhaustively \emph{within scopes}, and not exhaustively over the four kinds
-together.
+together.  This scope was accepted on the strength of the measurements above;
+the commands that reproduce it are given below, and every claim in this
+section is a claim about those scopes and no wider.
 Two reductions make the checks exhaustive.  First, $USER$ is shrunk to one,
 as in Section~\ref{sec:markerfix2}, and $RSLOT$ to one, so $rateLimit = 1$.
 Second, ProB's \texttt{-scope} predicate prunes the components the channel
