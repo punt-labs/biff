@@ -225,8 +225,8 @@ class TestOrgReposRefresh:
         )
         assert state.org_repos == frozenset()
 
-        # LocalRelay lacks discover_repos_for_org — inject it directly.
-        state.relay.discover_repos_for_org = AsyncMock(  # type: ignore[attr-defined]
+        # LocalRelay lacks discover_repos_for_orgs — inject it directly.
+        state.relay.discover_repos_for_orgs = AsyncMock(  # type: ignore[attr-defined]
             return_value=frozenset({"_test-org-refresh", "_test-new-repo"})
         )
         # Make isinstance(state.relay, NatsRelay) pass.
@@ -276,7 +276,7 @@ class TestOrgReposRefresh:
             config, tmp_path, tty="a1b2c3d4", hostname="test-host", pwd="/test"
         )
         discover = AsyncMock(return_value=frozenset({"_test-org-throttle"}))
-        state.relay.discover_repos_for_org = discover  # type: ignore[attr-defined]
+        state.relay.discover_repos_for_orgs = discover  # type: ignore[attr-defined]
         monkeypatch.setattr("biff.server.app.NatsRelay", type(state.relay))
 
         await _refresh_org_repos(state)
@@ -306,7 +306,7 @@ class TestOrgReposRefresh:
             config, tmp_path, tty="a1b2c3d4", hostname="test-host", pwd="/test"
         )
         discover = AsyncMock(return_value=frozenset({"_test-org-throttle-elapsed"}))
-        state.relay.discover_repos_for_org = discover  # type: ignore[attr-defined]
+        state.relay.discover_repos_for_orgs = discover  # type: ignore[attr-defined]
         monkeypatch.setattr("biff.server.app.NatsRelay", type(state.relay))
 
         clock = [1000.0]

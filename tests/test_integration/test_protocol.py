@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
+import anyio
 import pytest
 from fastmcp.client.transports import FastMCPTransport
 from mcp.types import TextContent
@@ -439,7 +440,9 @@ class TestPendingNotifyRecoveryProtocol:
                 with patch.object(
                     live_session,
                     "send_tool_list_changed",
-                    AsyncMock(side_effect=RuntimeError("transport wedged")),
+                    AsyncMock(
+                        side_effect=anyio.ClosedResourceError("transport wedged")
+                    ),
                 ):
                     await refresh_read_messages(mcp, state)
                 assert _descriptions.handshake_delivery._pending_notify

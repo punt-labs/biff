@@ -362,8 +362,11 @@ paid tier.
 \begin{faqpair}{How do I get started?}\label{faq:get-started}
   Run \texttt{uv tool install punt-biff}, then \texttt{biff install} to register
   the MCP server and slash commands, then \texttt{biff doctor} to verify the
-  setup. Restart Claude Code. Biff ships with a shared demo relay on Synadia
-  Cloud, so there is no infrastructure to provision. If your repo has
+  setup. Restart Claude Code. With no relay configured, biff runs on a local
+  relay (files in your home directory), so there is no infrastructure to
+  provision and nothing leaves your machine; for sessions on different
+  machines, opt in to the shared demo relay on Synadia Cloud, the
+  self-hosted relay or your own NATS server. If your repo has
   \texttt{.punt-labs/biff/config.yaml} (committed by a teammate), biff picks up the team
   roster automatically. Your display name is resolved from your GitHub
   identity. Type \texttt{/who} to see your team. No account creation, no
@@ -605,8 +608,10 @@ paid tier.
 
     \item \textbf{Message relay infrastructure (low risk, shipped).}
     The NATS relay is shipped and tested against hosted NATS on Synadia
-    Cloud. Biff ships with a shared demo relay so teams can start with
-    zero infrastructure. The relay follows a POP mail model: messages are
+    Cloud. Biff runs on a local filesystem relay by default, so one
+    machine needs zero infrastructure, and a shared demo relay is one
+    line of configuration away for teams that want cross-machine presence.
+    The relay follows a POP mail model: messages are
     stored only until the recipient reads them, then discarded. Teams
     that want data sovereignty can self-host the same single-binary NATS
     server.
@@ -621,8 +626,9 @@ paid tier.
     useful if your teammates also use it. Mitigation: the committed
     \texttt{.punt-labs/biff/config.yaml} means the second person on a team
     only needs to clone, run \texttt{uv tool install punt-biff} and
-    \texttt{biff install} --- the configuration is already there. The demo relay eliminates
-    infrastructure setup. The \texttt{/plan}, \texttt{/finger}, and
+    \texttt{biff install} --- the configuration is already there. The local relay eliminates
+    infrastructure setup for agents on one machine, and the demo relay for a
+    team. The \texttt{/plan}, \texttt{/finger}, and
     \texttt{/who} commands provide value to individual users even without
     teammates. See \faqref{faq:discovery} for the distribution strategy.
   \end{enumerate}
@@ -637,8 +643,9 @@ paid tier.
 \end{faqpair}
 
 \begin{faqpair}{Where does data live?}\label{faq:data}
-  All data lives on the NATS relay. The relay serves three durability
-  tiers:
+  All data lives on the relay: files under your home directory for the
+  default local relay, or the NATS server for a cross-machine relay. The
+  relay serves three durability tiers:
 
   \textbf{Persistent}: \texttt{/plan} status is stored on the relay.
   Like the original BSD \texttt{\textasciitilde/.plan} file, it survives

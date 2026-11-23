@@ -16,8 +16,10 @@ walk every text file in the surface, collect the paths it addresses through
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
+from typing import Any
 
 _PLUGIN = Path(__file__).resolve().parent.parent / "plugin"
 
@@ -125,3 +127,38 @@ class TestSurfaceIsSelfContained:
                 f"{script.name} assigns a plugin root that is not script-relative: "
                 f"{rhs.strip()}"
             )
+
+
+class TestChannelModeIsPluginDefinition:
+    """The plugin turns channel mode on; nothing else does (DES-087).
+
+    biff 1.24.2 exits 2 on an unknown option, so the mode travels as an
+    environment variable (an older binary ignores it) and the command line
+    stays exactly ``biff mcp``.
+    """
+
+    @staticmethod
+    def _servers() -> dict[str, dict[str, Any]]:
+        manifest = _PLUGIN / ".claude-plugin" / "plugin.json"
+        servers: dict[str, dict[str, Any]] = json.loads(
+            manifest.read_text(encoding="utf-8")
+        )["mcpServers"]
+        return servers
+
+    def test_tty_server_sets_the_variable(self) -> None:
+        assert self._servers()["tty"]["env"] == {"BIFF_CHANNEL_MODE": "1"}
+
+    def test_no_other_server_sets_it(self) -> None:
+        others = [s for name, s in self._servers().items() if name != "tty"]
+
+        assert all("BIFF_CHANNEL_MODE" not in s.get("env", {}) for s in others)
+
+    def test_command_line_carries_no_new_argument(self) -> None:
+        tty = self._servers()["tty"]
+
+        assert (tty["command"], tty["args"]) == ("biff", ["mcp"])
+
+    def test_dev_name_is_kept(self) -> None:
+        manifest = _PLUGIN / ".claude-plugin" / "plugin.json"
+
+        assert json.loads(manifest.read_text(encoding="utf-8"))["name"] == "biff-dev"

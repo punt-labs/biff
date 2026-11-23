@@ -12,7 +12,10 @@
       "command": "biff",
       "args": [
         "mcp"
-      ]
+      ],
+      "env": {
+        "BIFF_CHANNEL_MODE": "1"
+      }
     }
   }
 }

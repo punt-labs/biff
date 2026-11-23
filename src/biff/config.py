@@ -3,9 +3,11 @@
 Reads YAML config from ``.punt-labs/biff/`` (shared + local override)
 or runs in zero-config mode with defaults derived from the git remote.
 
-Data directory layout::
+With no relay configured the local filesystem relay is used (see
+:mod:`biff.relay_config`).  Its data directory, keyed by the repo's remote
+identity, or by its common root when it has no remote, is::
 
-    {prefix}/biff/{directory-name}/
+    ~/.punt-labs/biff/relay/{repo-key}/
         userinbox-kai.jsonl        # per-user mailbox (broadcast)
         inbox-kai-a1b2c3d4.jsonl   # per-TTY mailbox (targeted)
         userinbox-eric.jsonl
@@ -15,11 +17,11 @@ Data directory layout::
 
 from __future__ import annotations
 
-import importlib.resources
 import logging
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import ModuleType
 from typing import cast
 
 import yaml
@@ -52,14 +54,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PREFIX = Path("/tmp")  # noqa: S108
-DEMO_RELAY_URL = "tls://connect.ngs.global"
-
-
-def demo_creds_path() -> Path:
-    """Resolve the bundled demo credentials file path."""
-    return Path(str(importlib.resources.files("biff.data").joinpath("demo.creds")))
-
 
 @dataclass(frozen=True)
 class ResolvedConfig:
@@ -75,11 +69,6 @@ class ResolvedConfig:
     # ``repo_root`` when ``get_repo_common_root`` returns ``""``).
     repo_common_root: Path
     repo_root: Path | None = None
-
-
-def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
-    """Compute data directory: ``{prefix}/biff/{repo_root.name}/``."""
-    return prefix / "biff" / repo_root.name
 
 
 # ── YAML config pipeline ───────────────────────────────────────────
@@ -224,59 +213,6 @@ def _extract_peers(
     return peers, orgs
 
 
-def _extract_relay(
-    raw: dict[str, object],
-) -> tuple[str | None, RelayAuth | None, bool]:
-    """Extract relay URL, auth, and TLS handshake mode from the ``relay`` section."""
-    relay_section: object = raw.get("relay")
-    if not isinstance(relay_section, dict):
-        return None, None, False
-
-    section = cast("dict[str, object]", relay_section)
-    url: object = section.get("url")
-    relay_url = url if isinstance(url, str) else None
-    tls_handshake_first = section.get("tls_handshake_first") is True
-
-    # Auth -- at most one of token, nkeys_seed, user_credentials.
-    # TOML uses flat keys; YAML uses nested ``auth:`` mapping.
-    token = section.get("token")
-    nkeys_seed = section.get("nkeys_seed")
-    creds = section.get("user_credentials")
-    auth_section: object = section.get("auth")
-    if isinstance(auth_section, dict):
-        auth_d = cast("dict[str, object]", auth_section)
-        if token is None:
-            token = auth_d.get("token")
-        if nkeys_seed is None:
-            nkeys_seed = auth_d.get("nkeys_seed")
-        if creds is None:
-            creds = auth_d.get("credentials") or auth_d.get("user_credentials")
-
-    auth_values = {
-        k: v
-        for k, v in [
-            ("token", token),
-            ("nkeys_seed", nkeys_seed),
-            ("user_credentials", creds),
-        ]
-        if isinstance(v, str) and v
-    }
-    if len(auth_values) > 1:
-        names = ", ".join(sorted(auth_values))
-        raise SystemExit(
-            f"Conflicting auth in relay section: {names}\n"
-            "Set at most one of 'token', 'nkeys_seed', "
-            "or 'user_credentials'."
-        )
-    relay_auth = RelayAuth(**auth_values) if auth_values else None
-
-    # Default to bundled demo credentials for the demo relay
-    if relay_url == DEMO_RELAY_URL and relay_auth is None:
-        relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
-
-    return relay_url, relay_auth, tls_handshake_first
-
-
 def _extract_team(raw: dict[str, object]) -> tuple[str, ...]:
     """Extract team members from the ``team`` section."""
     team_section: object = raw.get("team")
@@ -301,23 +237,6 @@ def _extract_poll_interval(raw: dict[str, object]) -> float:
     if isinstance(value, (int, float)) and value >= 0:
         return float(value)
     return 2.0
-
-
-def extract_biff_fields(
-    raw: dict[str, object],
-) -> tuple[
-    tuple[str, ...],
-    str | None,
-    RelayAuth | None,
-    bool,
-    tuple[str, ...],
-    tuple[str, ...],
-]:
-    """Extract team, relay_url, relay_auth, relay_tls_handshake_first, peers, orgs."""
-    team = _extract_team(raw)
-    relay_url, relay_auth, tls_handshake_first = _extract_relay(raw)
-    peers, orgs = _extract_peers(raw)
-    return team, relay_url, relay_auth, tls_handshake_first, peers, orgs
 
 
 RELAY_URL_UNSET = object()
@@ -349,6 +268,9 @@ class _ConfigFields:
     # allow_env_override: true and authorize ambient env vars without a
     # team commit.
     relay_committed: bool = False
+    # The relay is the bundled demo (``type: demo``), not an explicit URL that
+    # happens to be the demo endpoint: your own credentials never go to it.
+    relay_demo: bool = False
 
 
 def _has_orgs_key(raw: dict[str, object]) -> bool:
@@ -361,95 +283,96 @@ def _has_orgs_key(raw: dict[str, object]) -> bool:
     return isinstance(peers, dict) and "orgs" in peers
 
 
-def _relay_allow_env_override(raw: dict[str, object]) -> bool:
-    """Check if the merged config explicitly opts into env-var relay overrides.
+def _relay_config() -> ModuleType:
+    """Return the ``biff.relay_config`` module, imported on first use."""
+    from biff import relay_config  # noqa: PLC0415
 
-    Absent or any non-``True`` value means "no" -- this gate defaults
-    closed (see :class:`_ConfigFields`).
+    return relay_config
+
+
+def relay_section_to_write(
+    url: str, auth: str, relay_type: str
+) -> dict[str, object] | str:
+    """Return the ``relay`` mapping the ``biff_relay`` tool writes, or an error.
+
+    The type is always explicit; a URL alone means ``nats``.
     """
-    relay_section = raw.get("relay")
-    if not isinstance(relay_section, dict):
-        return False
-    section = cast("dict[str, object]", relay_section)
-    return section.get("allow_env_override") is True
+    types = _relay_config().RELAY_TYPES
+    kind = relay_type or ("nats" if url else "")
+    if kind not in types:
+        if not kind:
+            return "Error: give a url, or relay_type local, demo or nats."
+        return (
+            f"Error: unknown relay_type {kind!r}, expected one of {', '.join(types)}."
+        )
+    if kind != "nats":
+        if url or auth:
+            return f"Error: relay_type {kind} takes no url or auth."
+        return {"type": kind}
+    if not url.startswith(("tls://", "nats://", "ws://", "wss://")):
+        return (
+            "Error: invalid relay URL scheme, "
+            "expected tls://, nats://, ws:// or wss://."
+        )
+    section: dict[str, object] = {"type": "nats", "url": url}
+    if auth:
+        section["auth"] = {"credentials": auth}
+    return section
+
+
+def relay_layers_error(
+    shared: dict[str, object], local: dict[str, object]
+) -> str | None:
+    """Return why these config files would not resolve to a relay, or ``None``."""
+    layers = [("config.yaml", shared), ("config.local.yaml", local)]
+    try:
+        _relay_config().RelayLayers.of(layers).resolve()
+    except SystemExit as exc:
+        return str(exc)
+    return None
+
+
+def _owner_orgs(repo_root: Path) -> tuple[str, ...]:
+    """Return the remote's owner as the default org scope (none without one)."""
+    owner = get_repo_owner(repo_root)
+    return (owner,) if owner else ()
 
 
 def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
-    """Resolve config fields from YAML or zero-config.
+    """Resolve config fields from ``config.yaml`` and ``config.local.yaml``.
 
-    Detection order:
-
-    1. ``.punt-labs/biff/config.yaml`` -- explicit mode.
-    2. Neither -- zero-config with derived defaults.
+    Either file may be absent: a user may have chosen a relay for themselves
+    alone, and a repo with neither file runs on derived defaults.
     """
-    # Key explicit mode on file existence, not content truthiness.
-    # An empty or comment-only config.yaml should still mean "explicit
-    # mode" — not silently fall through to zero-config derivation.
-    shared_path = yaml_config_dir(repo_root) / "config.yaml"
-    if shared_path.exists():
-        yaml_shared = load_yaml_config(repo_root)
-        yaml_local = load_yaml_local(repo_root)
-        merged = merge_config(yaml_shared, yaml_local)
-        fields = extract_biff_fields(merged)
-        poll_interval = _extract_poll_interval(merged)
-        cf = _ConfigFields(*fields, poll_interval=poll_interval)
-        # Both read from yaml_shared alone, never the merged config -- see
-        # _ConfigFields.relay_committed for why.
-        shared_relay_url, _, _ = _extract_relay(yaml_shared)
-        cf = replace(
-            cf,
-            relay_allow_env_override=_relay_allow_env_override(yaml_shared),
-            relay_committed=shared_relay_url is not None,
-        )
-        # Derive orgs from remote only when the peers.orgs key is
-        # ABSENT from the merged config. An explicit empty list
-        # (peers.orgs: []) is honored — it means "no org discovery."
-        if not _has_orgs_key(merged):
-            owner = get_repo_owner(repo_root)
-            cf = replace(cf, orgs=(owner,) if owner else ())
-        return cf
-
-    # Zero-config: derive org from remote, use demo relay.
-    # Still read config.local.yaml — user may have set relay via
-    # biff_relay --local without a shared config.yaml.
+    relay_config = _relay_config()
+    yaml_shared = load_yaml_config(repo_root)
     yaml_local = load_yaml_local(repo_root)
-    if yaml_local:
-        fields = extract_biff_fields(yaml_local)
-        poll_interval = _extract_poll_interval(yaml_local)
-        cf = _ConfigFields(*fields, poll_interval=poll_interval)
-        # Derive owner only when peers.orgs key is absent.
-        if _has_orgs_key(yaml_local):
-            orgs = cf.orgs
-        else:
-            owner = get_repo_owner(repo_root)
-            orgs = (owner,) if owner else ()
-        # Leave relay_url/relay_auth as resolved from config.local.yaml
-        # (which may be None) -- _apply_demo_relay_default, called after
-        # _apply_env_relay_overrides in _load_base_config, is the single
-        # place that fills in the demo relay fallback.
-        return replace(cf, orgs=orgs)
-
-    owner = get_repo_owner(repo_root)
-    orgs = (owner,) if owner else ()
-    # Leave relay_url/relay_auth unset here -- _apply_demo_relay_default
-    # (called from _load_base_config, after _apply_env_relay_overrides) is
-    # the single place that fills in the demo relay fallback. Applying it
-    # eagerly here, before the env-override gate runs, would make every
-    # truly zero-config repo look identical to a repo that has committed
-    # its own relay.url, silently closing the gate that Sec 0 requires to
-    # stay open in exactly this case.
-    return _ConfigFields(orgs=orgs)
-
-
-def _apply_demo_relay_default(
-    relay_url: str | None, relay_auth: RelayAuth | None
-) -> tuple[str, RelayAuth | None]:
-    """Ensure demo relay is the fallback when no relay is specified."""
-    if relay_url is None:
-        relay_url = DEMO_RELAY_URL
-    if relay_url == DEMO_RELAY_URL and relay_auth is None:
-        relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
-    return relay_url, relay_auth
+    merged = merge_config(yaml_shared, yaml_local)
+    relay = relay_config.RelayLayers.of(
+        [("config.yaml", yaml_shared), ("config.local.yaml", yaml_local)]
+    ).resolve()
+    peers, orgs = _extract_peers(merged)
+    # Derive orgs from the remote only when the peers.orgs key is ABSENT from
+    # the merged config. An explicit empty list (peers.orgs: []) is honored:
+    # it means "no org discovery."
+    if not _has_orgs_key(merged):
+        orgs = _owner_orgs(repo_root)
+    shared_relay = relay_config.RelayFile.parse("config.yaml", yaml_shared)
+    # Both gates read yaml_shared alone, never the merged config -- see
+    # _ConfigFields.relay_committed for why.  The opt-in gate defaults closed:
+    # absent or any non-True value means no.
+    return _ConfigFields(
+        team=_extract_team(merged),
+        relay_url=relay.url,
+        relay_auth=relay.auth,
+        relay_tls_handshake_first=relay.tls_handshake_first,
+        peers=peers,
+        orgs=orgs,
+        poll_interval=_extract_poll_interval(merged),
+        relay_allow_env_override=shared_relay.allows_env_override(),
+        relay_committed=shared_relay.declares(),
+        relay_demo=relay.demo,
+    )
 
 
 _TLS_TRUE_VALUES = frozenset({"1", "true", "yes"})
@@ -531,8 +454,8 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
     when ``BIFF_RELAY_NKEYS_SEED``/``BIFF_RELAY_USER_CREDENTIALS`` names a
     path that does not exist, or when an auth env var fires with no relay
     URL resolved (from ``BIFF_RELAY_URL`` or the file layers) -- an auth
-    override with nothing to authenticate against would otherwise silently
-    apply to the demo relay fallback.
+    override with nothing to authenticate against would otherwise be ignored by
+    the local relay, hiding the misconfiguration.
     """
     if cf.relay_committed and not cf.relay_allow_env_override:
         return cf
@@ -577,15 +500,17 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
         # set together), reopening the #383 footgun.
         tls_handshake_first = False
 
-    if fired_auth and relay_url is None:
+    if fired_auth and (relay_url is None or (cf.relay_demo and url_env is None)):
         # An auth override with nothing to authenticate against would
-        # otherwise silently fall through to _apply_demo_relay_default and
-        # send a real secret to the shared public demo relay.
+        # otherwise fall through to the local relay, which ignores it (a
+        # missing or misspelled BIFF_RELAY_URL would pass unnoticed), or to
+        # the public demo relay, which must never receive your credentials.
         (auth_var,) = fired_auth
         raise SystemExit(
-            f"{auth_var} is set but no relay URL is configured -- set "
+            f"{auth_var} is set but no private relay URL is configured -- set "
             "BIFF_RELAY_URL as well. An auth override with no relay URL "
-            "would otherwise silently apply to the demo relay."
+            "would otherwise be ignored by the local relay or sent to the "
+            "public demo relay."
         )
 
     tls_override = _tls_env_override()
@@ -606,15 +531,24 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
     )
 
 
-def _resolve_relay_fields(cf: _ConfigFields) -> tuple[str, RelayAuth | None, bool]:
-    """Apply env overrides and the demo-relay fallback to resolved fields."""
+def _resolve_relay_fields(
+    cf: _ConfigFields,
+) -> tuple[str | None, RelayAuth | None, bool]:
+    """Apply env overrides to resolved fields; a ``None`` URL is the local relay."""
+    relay_config = _relay_config()
     cf = _apply_env_relay_overrides(cf)
-    relay_url, relay_auth = _apply_demo_relay_default(cf.relay_url, cf.relay_auth)
-    return relay_url, relay_auth, cf.relay_tls_handshake_first
+    relay_auth = cf.relay_auth
+    if cf.relay_url == relay_config.DEMO_RELAY_URL and relay_auth is None:
+        relay_auth = RelayAuth(user_credentials=str(relay_config.DEMO_CREDS_PATH))
+    return cf.relay_url, relay_auth, cf.relay_tls_handshake_first
 
 
-def resolve_relay_config(repo_root: Path | None) -> tuple[str, RelayAuth | None, bool]:
+def resolve_relay_config(
+    repo_root: Path | None,
+) -> tuple[str | None, RelayAuth | None, bool]:
     """Resolve relay URL, auth, and TLS handshake mode for the repository.
+
+    A ``None`` URL means the local filesystem relay.
 
     Share the file and environment resolution chain with the CLI and doctor
     so diagnostics report the relay commands actually connect to.
@@ -653,11 +587,15 @@ class _BaseConfig:
     poll_interval: float
 
 
+def _override_url(override: object) -> str | None:
+    """Return the ``--relay-url`` value as a URL; empty means the local relay."""
+    return str(override) if override else None
+
+
 def _load_base_config(
     *,
     data_dir_override: Path | None,
     relay_url_override: object,
-    prefix: Path,
     start: Path | None,
 ) -> _BaseConfig:
     """Resolve everything except identity (repo, relay, team, peers, data dir).
@@ -690,8 +628,7 @@ def _load_base_config(
     # override points at (e.g. the demo relay, whose native-TLS
     # nats-server must never get it -- WRONG_VERSION_NUMBER).
     if relay_url_override is not RELAY_URL_UNSET:
-        override = str(relay_url_override) if relay_url_override else ""
-        relay_url = override or None
+        relay_url = _override_url(relay_url_override)
         relay_auth = None
         relay_tls_handshake_first = False
 
@@ -700,7 +637,7 @@ def _load_base_config(
     data_dir = (
         data_dir_override
         if data_dir_override is not None
-        else compute_data_dir(repo_root, prefix)
+        else _relay_config().RelayLocation.of(repo_root).path
     )
 
     return _BaseConfig(
@@ -750,7 +687,6 @@ def load_mcp_config(
     user_override: str | None = None,
     data_dir_override: Path | None = None,
     relay_url_override: object = RELAY_URL_UNSET,
-    prefix: Path = _DEFAULT_PREFIX,
     start: Path | None = None,
 ) -> ResolvedConfig:
     """Discover and resolve configuration for the MCP server.
@@ -771,7 +707,6 @@ def load_mcp_config(
     base = _load_base_config(
         data_dir_override=data_dir_override,
         relay_url_override=relay_url_override,
-        prefix=prefix,
         start=start,
     )
 
@@ -786,7 +721,6 @@ def load_cli_config(
     user_override: str | None = None,
     data_dir_override: Path | None = None,
     relay_url_override: object = RELAY_URL_UNSET,
-    prefix: Path = _DEFAULT_PREFIX,
     start: Path | None = None,
 ) -> ResolvedConfig:
     """Discover and resolve configuration for the ``biff`` CLI.
@@ -806,7 +740,6 @@ def load_cli_config(
     base = _load_base_config(
         data_dir_override=data_dir_override,
         relay_url_override=relay_url_override,
-        prefix=prefix,
         start=start,
     )
     user, display_name, kind = identity.resolve_human_identity(

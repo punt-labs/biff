@@ -28,9 +28,9 @@ def test_factory_creates_an_unbound_state_with_the_unread_directory(
     tmp_path: Path,
 ) -> None:
     with patch("biff.server.transport_runtime.create_server") as server:
-        McpServerOptions(
-            user="rmh", data_dir=tmp_path, relay_url="", prefix=tmp_path
-        ).create_server(CliInvocation.repo_toggle())
+        McpServerOptions(user="rmh", data_dir=tmp_path, relay_url="").create_server(
+            CliInvocation.repo_toggle()
+        )
     state = server.call_args.args[0]
     assert state.is_bound is False
     assert state.unread_dir == UNREAD_DIR
@@ -40,9 +40,9 @@ def test_factory_creates_an_unbound_state_with_the_unread_directory(
 def test_factory_hands_the_cli_toggle_to_the_server_state(tmp_path: Path) -> None:
     toggle = CliInvocation.repo_toggle()
     with patch("biff.server.transport_runtime.create_server") as server:
-        McpServerOptions(
-            user="rmh", data_dir=tmp_path, relay_url="", prefix=tmp_path
-        ).create_server(toggle)
+        McpServerOptions(user="rmh", data_dir=tmp_path, relay_url="").create_server(
+            toggle
+        )
     assert server.call_args.args[0].toggle is toggle
 
 
@@ -62,7 +62,6 @@ def test_default_caller_uses_startup_session_and_explicit_user(
             user="devin",
             data_dir=tmp_path,
             relay_url="",
-            prefix=tmp_path,
         ).create_server(CliInvocation.repo_toggle())
     assert server.call_args.kwargs["default_caller"] == CallerIdentity(
         "startup-session", "devin"
@@ -79,7 +78,6 @@ def test_default_caller_requires_valid_startup_session(
             user="devin",
             data_dir=tmp_path,
             relay_url="",
-            prefix=tmp_path,
         ).create_server(CliInvocation.repo_toggle())
 
 
@@ -88,7 +86,7 @@ def test_default_caller_has_no_new_flag() -> None:
     with patch.object(McpServerOptions, "_observed_server") as observed:
         result = runner.invoke(app, ["mcp", "--user", "devin"])
     assert result.exit_code == 0
-    observed.return_value.run.assert_called_once_with(transport="stdio")
+    observed.return_value.run_stdio.assert_called_once_with(channel=False)
     result = runner.invoke(app, ["serve", "--default-caller"])
     assert result.exit_code != 0
     assert "No such option" in result.output
@@ -103,7 +101,6 @@ def test_only_explicit_stdio_user_enables_default_caller(
             user=None if transport == "stdio" else "devin",
             data_dir=tmp_path,
             relay_url="",
-            prefix=tmp_path,
             transport="stdio" if transport == "stdio" else "http",
         )
         options.create_server(CliInvocation.repo_toggle())
@@ -112,9 +109,7 @@ def test_only_explicit_stdio_user_enables_default_caller(
 
 def test_explicit_user_gets_fresh_session_without_environment(tmp_path: Path) -> None:
     with patch("biff.server.transport_runtime.create_server") as server:
-        options = McpServerOptions(
-            user="devin", data_dir=tmp_path, relay_url="", prefix=tmp_path
-        )
+        options = McpServerOptions(user="devin", data_dir=tmp_path, relay_url="")
         options.create_server(CliInvocation.repo_toggle())
         first = server.call_args.kwargs["default_caller"]
         options.create_server(CliInvocation.repo_toggle())
@@ -126,9 +121,9 @@ def test_explicit_user_gets_fresh_session_without_environment(tmp_path: Path) ->
 
 def test_inferred_default_user_does_not_enable_unstamped_calls(tmp_path: Path) -> None:
     with patch("biff.server.transport_runtime.create_server") as server:
-        McpServerOptions(
-            user=None, data_dir=tmp_path, relay_url="", prefix=tmp_path
-        ).create_server(CliInvocation.repo_toggle(), default_user="devin")
+        McpServerOptions(user=None, data_dir=tmp_path, relay_url="").create_server(
+            CliInvocation.repo_toggle(), default_user="devin"
+        )
     assert server.call_args.kwargs["default_caller"] is None
 
 

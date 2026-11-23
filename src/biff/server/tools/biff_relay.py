@@ -1,7 +1,7 @@
-"""Relay configuration tool -- ``biff_relay(url, ...)``.
+"""Relay configuration tool -- ``biff_relay(url, auth, local, relay_type)``.
 
-Sets the relay URL (and optionally auth credentials), writes to
-``.punt-labs/biff/config.yaml`` or ``config.local.yaml``.
+Chooses the relay (``local``, ``demo`` or ``nats``) and writes it, with an
+explicit ``type``, to ``.punt-labs/biff/config.yaml`` or ``config.local.yaml``.
 Requires a Claude Code restart for the new relay to take effect.
 """
 
@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING
 from biff.config import (
     ensure_gitignore_yaml,
     load_yaml_config,
+    load_yaml_local,
+    relay_layers_error,
+    relay_section_to_write,
     write_yaml_config,
 )
 
@@ -20,7 +23,10 @@ if TYPE_CHECKING:
 
     from biff.server.state import ServerState
 
-_VALID_SCHEMES = ("tls://", "nats://", "ws://", "wss://")
+
+def _target(*, local: bool) -> str:
+    """Return the config file the relay is written to."""
+    return "config.local.yaml" if local else "config.yaml"
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -29,29 +35,33 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     @mcp.tool(
         name="biff_relay",
         description=(
-            "Set the relay URL for biff. "
+            "Choose the relay for biff: local (this machine, the default), "
+            "demo (the shared public relay) or nats (your own server, with a url). "
             "Writes config; restart Claude Code for the change to take effect. "
             "Use local=true to write to config.local.yaml instead."
         ),
     )
     async def biff_relay(
-        url: str,
+        url: str = "",
         auth: str = "",
         local: bool = False,  # noqa: FBT001, FBT002
+        relay_type: str = "",
     ) -> str:
         """Configure the relay for subsequent Claude Code sessions.
 
-        Use this to switch relay servers; restart Claude Code after saving.
+        Use this to switch relays; restart Claude Code after saving.
         Shared config is tracked, so authentication can only be saved locally.
+        The relay is always written with an explicit ``type``.
 
         Args:
-            url: Start with tls://, nats://, ws://, or wss://.
+            url: A NATS URL starting tls://, nats://, ws://, or wss://.
             auth: Optional path to a credentials file; requires local=True.
             local: Write config.local.yaml rather than the shared config.yaml.
+            relay_type: local, demo or nats; a url alone means nats.
 
         Returns:
             A save confirmation and restart reminder, or an error for an invalid
-            scheme, shared credentials, or a missing repository.
+            type or scheme, shared credentials, or a missing repository.
 
         Raises:
             OSError: Configuration or gitignore cannot be written.
@@ -61,12 +71,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if repo_root is None:
             return "Error: not in a git repository."
 
-        # Validate URL scheme
-        if not any(url.startswith(scheme) for scheme in _VALID_SCHEMES):
-            schemes = ", ".join(_VALID_SCHEMES)
-            return f"Error: invalid relay URL scheme, expected one of {schemes}."
+        section = relay_section_to_write(url, auth, relay_type)
+        if isinstance(section, str):
+            return section
 
-        # Reject auth in shared config — credentials belong in
+        # Reject auth in shared config -- credentials belong in
         # config.local.yaml (gitignored) to prevent accidental commits.
         if auth and not local:
             return (
@@ -74,34 +83,18 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 "(pass local=true). Shared config.yaml is tracked in git."
             )
 
-        # Build a fresh relay section — changing URL invalidates prior
-        # auth in the SAME file (different relay likely needs different
-        # credentials). Note: when writing to config.yaml, any auth in
-        # config.local.yaml still wins at load time via merge_config.
-        # The user must clear local auth separately if needed.
-        relay_section: dict[str, object] = {"url": url}
-        if auth:
-            relay_section["auth"] = {"credentials": auth}
-
-        if local:
-            from biff.config import load_yaml_local  # noqa: PLC0415
-
-            existing = load_yaml_local(repo_root)
-            existing["relay"] = relay_section
-            write_yaml_config(repo_root, existing, local=True)
-            ensure_gitignore_yaml(repo_root)
-            target = "config.local.yaml"
-        else:
-            existing = load_yaml_config(repo_root)
-            existing["relay"] = relay_section
-            write_yaml_config(repo_root, existing, local=False)
-            # Always ensure .gitignore exists once .punt-labs/biff/ is
-            # created — protects future config.local.yaml from being
-            # accidentally committed.
-            ensure_gitignore_yaml(repo_root)
-            target = "config.yaml"
-
+        # Build a fresh relay section -- changing the relay invalidates prior
+        # auth in the SAME file. A relay chosen in config.local.yaml wins over
+        # config.yaml (per file, not key by key); clear it separately if needed.
+        shared, personal = load_yaml_config(repo_root), load_yaml_local(repo_root)
+        existing = personal if local else shared
+        existing["relay"] = section
+        if problem := relay_layers_error(shared, personal):
+            return f"Error: that relay would leave the config unusable: {problem}"
+        write_yaml_config(repo_root, existing, local=local)
+        # Keep config.local.yaml out of git once .punt-labs/biff/ exists.
+        ensure_gitignore_yaml(repo_root)
         return (
-            f"Relay URL set to {url} in {target}. "
+            f"Relay set to {section['type']} in {_target(local=local)}. "
             "Restart Claude Code for the new relay to take effect."
         )

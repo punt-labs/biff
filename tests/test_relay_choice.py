@@ -1,0 +1,580 @@
+"""The local relay is the default; demo and NATS relays are chosen explicitly."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from biff._stdlib import biff_data_dir
+from biff.config import (
+    ResolvedConfig,
+    load_cli_config,
+    resolve_relay_config,
+)
+from biff.identity import GitHubIdentity
+from biff.models import RelayAuth
+from biff.relay_config import (
+    DEMO_CREDS_PATH,
+    DEMO_RELAY_URL,
+    RelayKey,
+    RelayLocation,
+)
+
+_KAI = GitHubIdentity(login="kai", display_name="Kai Chen")
+_DEMO = RelayAuth(user_credentials=str(DEMO_CREDS_PATH))
+_LOCAL = (None, None, False)
+
+
+def _repo(tmp_path: Path, config: str | None = None, local: str | None = None) -> Path:
+    """Create a git repo, optionally with shared and local relay config."""
+    (tmp_path / ".git").mkdir(parents=True)
+    biff_dir = tmp_path / ".punt-labs" / "biff"
+    biff_dir.mkdir(parents=True)
+    if config is not None:
+        (biff_dir / "config.yaml").write_text(config)
+    if local is not None:
+        (biff_dir / "config.local.yaml").write_text(local)
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Point HOME at an empty directory and clear relay environment overrides."""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    for name in (
+        "BIFF_RELAY_URL",
+        "BIFF_RELAY_TOKEN",
+        "BIFF_RELAY_NKEYS_SEED",
+        "BIFF_RELAY_CREDS",
+        "BIFF_RELAY_TLS_HANDSHAKE_FIRST",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return home
+
+
+class TestDefaultIsLocal:
+    def test_no_config_files_selects_local(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        assert resolve_relay_config(tmp_path) == _LOCAL
+
+    def test_config_without_relay_section_selects_local(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path, "peers:\n  orgs:\n    - punt-labs\n")
+        assert resolve_relay_config(repo) == _LOCAL
+
+    def test_local_yaml_without_relay_section_selects_local(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(tmp_path, local="poll_interval: 5\n")
+        assert resolve_relay_config(repo) == _LOCAL
+
+    def test_empty_url_still_selects_local(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path, 'relay:\n  url: ""\n')
+        assert resolve_relay_config(repo) == _LOCAL
+
+    def test_empty_relay_key_selects_local(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path, "relay:\n")
+        assert resolve_relay_config(repo) == _LOCAL
+
+
+class TestRelayType:
+    def test_type_local_selects_local(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: local\n")
+        assert resolve_relay_config(repo) == _LOCAL
+
+    def test_type_demo_selects_demo_relay_with_bundled_credentials(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: demo\n")
+        assert resolve_relay_config(repo) == (DEMO_RELAY_URL, _DEMO, False)
+
+    def test_type_nats_uses_the_url(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: nats\n  url: nats://host:4222\n")
+        assert resolve_relay_config(repo) == ("nats://host:4222", None, False)
+
+    def test_url_without_type_is_nats_and_unchanged(self, tmp_path: Path) -> None:
+        repo = _repo(
+            tmp_path,
+            "relay:\n  url: tls://relay.example\n  auth:\n    token: s3cret\n"
+            "  tls_handshake_first: true\n",
+        )
+        assert resolve_relay_config(repo) == (
+            "tls://relay.example",
+            RelayAuth(token="s3cret"),
+            True,
+        )
+
+    def test_demo_url_without_type_still_gets_bundled_credentials(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(tmp_path, f"relay:\n  url: {DEMO_RELAY_URL}\n")
+        assert resolve_relay_config(repo) == (DEMO_RELAY_URL, _DEMO, False)
+
+    def test_personal_credentials_apply_to_the_committed_relay(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(
+            tmp_path,
+            "relay:\n  url: tls://relay.example\n",
+            local="relay:\n  auth:\n    token: mine\n",
+        )
+        assert resolve_relay_config(repo) == (
+            "tls://relay.example",
+            RelayAuth(token="mine"),
+            False,
+        )
+
+
+class TestPerFilePrecedence:
+    """The highest file that sets type or url decides the relay."""
+
+    @pytest.mark.parametrize(
+        ("committed", "personal", "expected"),
+        [
+            ("type: demo", 'url: ""', None),
+            ("type: demo", "url: nats://mine", "nats://mine"),
+            ("type: local", "url: nats://mine", "nats://mine"),
+            ("type: nats\n  url: nats://x", 'url: ""', None),
+            ("url: nats://x", "type: local", None),
+            ("type: local", "type: demo", DEMO_RELAY_URL),
+        ],
+    )
+    def test_personal_file_decides(
+        self, tmp_path: Path, committed: str, personal: str, expected: str | None
+    ) -> None:
+        repo = _repo(
+            tmp_path,
+            f"relay:\n  {committed}\n",
+            local=f"relay:\n  {personal}\n",
+        )
+        assert resolve_relay_config(repo)[0] == expected
+
+    def test_committed_credentials_do_not_leak_onto_a_personal_relay(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(
+            tmp_path,
+            "relay:\n  url: nats://shared:4222\n  auth:\n    token: team\n",
+            local="relay:\n  url: nats://mine:4222\n",
+        )
+        assert resolve_relay_config(repo) == ("nats://mine:4222", None, False)
+
+
+class TestRelayConfigErrors:
+    @pytest.mark.parametrize(
+        ("config", "message"),
+        [
+            ("relay:\n  type: nats\n", "type: nats requires"),
+            ("relay:\n  type: docker\n", "Unknown relay type 'docker'"),
+            ("relay: nats://x\n", "'relay' must be a mapping"),
+            ("relay:\n  - url: x\n", "'relay' must be a mapping"),
+            ("relay:\n  url: [1]\n", "relay.url must be a string"),
+            ("relay:\n  url: 5\n", "relay.url must be a string"),
+            ("relay:\n  urll: nats://x\n", "unknown key.*urll"),
+            ("relays:\n  url: nats://x\n", "unknown key 'relays'"),
+            (
+                "relay:\n  url: nats://x\n  tls_handshake_first: yes-please\n",
+                "tls_handshake_first must be true or false",
+            ),
+            (
+                "relay:\n  url: nats://x\n  tls_handshake_first: 1\n",
+                "tls_handshake_first must be true or false",
+            ),
+            (
+                "relay:\n  url: nats://x\n  allow_env_override: 'true'\n",
+                "allow_env_override must be true or false",
+            ),
+            ("relay:\n  type: demo\n  url: nats://x\n", "type: demo.*url"),
+            ("relay:\n  type: demo\n  token: mine\n", "type: demo.*auth"),
+            ("relay:\n  type: demo\n  nkeys_seed: /k\n", "type: demo.*auth"),
+            ("relay:\n  type: demo\n  user_credentials: /c\n", "type: demo.*auth"),
+            ("relay:\n  type: demo\n  auth:\n    token: mine\n", "type: demo.*auth"),
+            (
+                "relay:\n  type: demo\n  tls_handshake_first: true\n",
+                "type: demo.*tls_handshake_first",
+            ),
+            ("relay:\n  type: local\n  url: nats://x\n", "type: local.*url"),
+            ("relay:\n  type: local\n  token: t\n", "type: local.*auth"),
+        ],
+    )
+    def test_named_error(self, tmp_path: Path, config: str, message: str) -> None:
+        repo = _repo(tmp_path, config)
+        with pytest.raises(SystemExit, match=message):
+            resolve_relay_config(repo)
+
+    def test_errors_name_the_offending_file(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path, local="relay: nope\n")
+        with pytest.raises(SystemExit, match=r"config\.local\.yaml"):
+            resolve_relay_config(repo)
+
+    def test_personal_credentials_never_reach_a_committed_demo_relay(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(
+            tmp_path,
+            "relay:\n  type: demo\n",
+            local="relay:\n  auth:\n    token: mine\n",
+        )
+        with pytest.raises(SystemExit, match="public demo relay"):
+            resolve_relay_config(repo)
+
+    def test_credentials_with_no_relay_chosen_is_an_error(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path, local="relay:\n  token: mine\n")
+        with pytest.raises(SystemExit, match="no relay type or url"):
+            resolve_relay_config(repo)
+
+
+class TestEnvOverrides:
+    def test_env_url_applies_to_repo_with_no_relay_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / ".git").mkdir()
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
+        assert resolve_relay_config(tmp_path)[0] == "tls://from-env:4222"
+
+    def test_committed_type_local_blocks_env_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: local\n")
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
+        assert resolve_relay_config(repo)[0] is None
+
+    def test_auth_env_without_url_names_the_missing_url(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / ".git").mkdir()
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "secret")
+        with pytest.raises(SystemExit, match="ignored by the local relay"):
+            resolve_relay_config(tmp_path)
+
+
+def _git(cwd: Path, *args: str) -> None:
+    env = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+    subprocess.run(  # noqa: S603
+        ["git", "-C", str(cwd), *args],  # noqa: S607
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+
+
+def _clone(path: Path, *remotes: tuple[str, str]) -> Path:
+    """Create a real git repo with (name, url) remotes."""
+    path.mkdir(parents=True)
+    _git(path, "init", "-q")
+    _git(path, "commit", "-q", "--allow-empty", "-m", "x")
+    for name, url in remotes:
+        _git(path, "remote", "add", name, url)
+    return path
+
+
+class TestRemoteRelayKey:
+    """One remote identity, one key; different identities, different keys."""
+
+    @pytest.mark.parametrize(
+        ("one", "two"),
+        [
+            ("git@github.com:punt-labs/biff.git", "https://github.com/punt-labs/biff"),
+            ("https://github.com/punt-labs/biff/", "https://github.com/punt-labs/biff"),
+            ("https://github.com/Punt-Labs/Biff", "https://github.com/punt-labs/biff"),
+            (
+                "ssh://git@github.com/punt-labs/biff.git",
+                "git@github.com:punt-labs/biff",
+            ),
+            (
+                "ssh://git@github.com:22/punt-labs/biff",
+                "https://github.com/punt-labs/biff.git",
+            ),
+            (
+                "https://GitHub.com/punt-labs/biff.git/",
+                "git@github.com:punt-labs/biff.git",
+            ),
+            (
+                "https://git-manager.devin.ai/proxy/github.com/punt-labs/biff",
+                "git@github.com:punt-labs/biff.git",
+            ),
+            ("https://gitlab.com/g/sub/repo", "git@gitlab.com:g/sub/repo.git"),
+            ("https://gitlab.com/g/sub/repo/", "https://GitLab.com/G/Sub/Repo.git"),
+        ],
+    )
+    def test_same_identity_shares_a_key(self, one: str, two: str) -> None:
+        assert RelayKey.of(one).name == RelayKey.of(two).name
+
+    @pytest.mark.parametrize(
+        ("one", "two"),
+        [
+            ("https://github.com/o/my.repo", "https://github.com/o/my-repo"),
+            ("https://github.com/o/r", "https://gitlab.com/o/r"),
+            ("https://github.com/a/r", "https://github.com/b/r"),
+            ("https://gitlab.com/g/one/repo", "https://gitlab.com/g/two/repo"),
+            ("https://github.com/o/r", "https://gitlab.com/g/o/r"),
+        ],
+    )
+    def test_different_identities_never_share_a_key(self, one: str, two: str) -> None:
+        assert RelayKey.of(one).name != RelayKey.of(two).name
+
+    def test_owner_repo_key_is_a_readable_slug_plus_hash(self) -> None:
+        key = RelayKey.of("git@github.com:Punt-Labs/Biff.git")
+        assert key.name.startswith("punt-labs__biff-")
+        assert len(key.name) == len("punt-labs__biff-") + 8
+        assert "slug" in key.reason
+
+    def test_subgroup_remote_is_keyed_by_its_url_hash(self) -> None:
+        key = RelayKey.of("https://gitlab.com/g/sub/repo")
+        assert key.name.startswith("remote-")
+        assert "URL hash" in key.reason
+
+
+class TestLocalRelayLocation:
+    def test_remote_repo_lives_in_the_per_user_relay_root(
+        self, tmp_path: Path, _isolated_home: Path
+    ) -> None:
+        repo = _clone(tmp_path / "work", ("origin", "git@github.com:o/r.git"))
+        location = RelayLocation.of(repo)
+        assert location.path.parent == biff_data_dir() / "relay"
+        assert location.path.is_relative_to(_isolated_home)
+        assert "slug" in location.reason
+
+    def test_ssh_clone_and_https_clone_with_trailing_slash_share_a_relay(
+        self, tmp_path: Path
+    ) -> None:
+        one = _clone(tmp_path / "a", ("origin", "git@github.com:Punt-Labs/biff.git"))
+        two = _clone(tmp_path / "b", ("origin", "https://github.com/punt-labs/biff/"))
+        assert RelayLocation.of(one).path == RelayLocation.of(two).path
+
+    def test_only_remote_is_used_when_it_is_not_called_origin(
+        self, tmp_path: Path
+    ) -> None:
+        one = _clone(tmp_path / "a", ("upstream", "git@github.com:o/r.git"))
+        two = _clone(tmp_path / "b", ("origin", "git@github.com:o/r.git"))
+        assert RelayLocation.of(one).path == RelayLocation.of(two).path
+
+    def test_origin_wins_among_several_remotes(self, tmp_path: Path) -> None:
+        one = _clone(
+            tmp_path / "a",
+            ("fork", "git@github.com:me/r.git"),
+            ("origin", "git@github.com:o/r.git"),
+        )
+        two = _clone(tmp_path / "b", ("origin", "git@github.com:o/r.git"))
+        assert RelayLocation.of(one).path == RelayLocation.of(two).path
+
+    def test_several_remotes_without_origin_count_as_no_remote(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _clone(
+            tmp_path / "a",
+            ("one", "git@github.com:o/r.git"),
+            ("two", "git@github.com:o/s.git"),
+        )
+        assert "no remote" in RelayLocation.of(repo).reason
+
+    def test_repos_with_the_same_name_and_no_remote_stay_apart(
+        self, tmp_path: Path
+    ) -> None:
+        one = _clone(tmp_path / "a" / "app")
+        two = _clone(tmp_path / "b" / "app")
+        assert RelayLocation.of(one).path != RelayLocation.of(two).path
+
+    def test_no_remote_key_is_stable(self, tmp_path: Path) -> None:
+        repo = _clone(tmp_path / "app")
+        assert RelayLocation.of(repo) == RelayLocation.of(repo)
+
+    def test_linked_worktree_of_a_no_remote_repo_shares_its_main_checkout(
+        self, tmp_path: Path
+    ) -> None:
+        main = _clone(tmp_path / "app")
+        worktree = tmp_path / "app-wt"
+        _git(main, "worktree", "add", "-q", str(worktree), "-b", "wt")
+        assert RelayLocation.of(worktree).path == RelayLocation.of(main).path
+        assert (worktree / ".git").is_file()
+
+    def test_linked_worktree_of_a_remote_repo_shares_its_main_checkout(
+        self, tmp_path: Path
+    ) -> None:
+        main = _clone(tmp_path / "app", ("origin", "git@github.com:o/r.git"))
+        worktree = tmp_path / "app-wt"
+        _git(main, "worktree", "add", "-q", str(worktree), "-b", "wt")
+        assert RelayLocation.of(worktree).path == RelayLocation.of(main).path
+
+    def test_loaded_config_uses_the_same_directory(self, tmp_path: Path) -> None:
+        repo = _clone(tmp_path / "app", ("origin", "git@github.com:o/r.git"))
+        with patch("biff.identity.get_github_identity", return_value=_KAI):
+            resolved: ResolvedConfig = load_cli_config(start=repo)
+        assert resolved.data_dir == RelayLocation.of(repo).path
+        assert resolved.config.repo_name == "o__r"
+
+
+class TestDemoRelayNeverGetsEnvCredentials:
+    def test_env_token_with_a_committed_demo_relay_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: demo\n  allow_env_override: true\n")
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "private")
+        with pytest.raises(SystemExit, match="public demo relay"):
+            resolve_relay_config(repo)
+
+    def test_env_url_and_token_replace_the_demo_relay(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _repo(tmp_path, "relay:\n  type: demo\n  allow_env_override: true\n")
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://mine:4222")
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "private")
+        assert resolve_relay_config(repo) == (
+            "tls://mine:4222",
+            RelayAuth(token="private"),
+            False,
+        )
+
+
+class TestFilesystemRemotes:
+    """A path remote is identified by where it points, not by its text."""
+
+    def test_the_same_relative_remote_in_different_places_stays_apart(
+        self, tmp_path: Path
+    ) -> None:
+        one = _clone(tmp_path / "a" / "work", ("origin", "../upstream.git"))
+        two = _clone(tmp_path / "b" / "work", ("origin", "../upstream.git"))
+        assert RelayLocation.of(one).path != RelayLocation.of(two).path
+
+    def test_different_spellings_of_one_path_share(self, tmp_path: Path) -> None:
+        one = _clone(tmp_path / "a" / "work", ("origin", "../up.git"))
+        two = _clone(
+            tmp_path / "a" / "other", ("origin", str(tmp_path / "a" / "up.git"))
+        )
+        assert RelayLocation.of(one).path == RelayLocation.of(two).path
+
+    def test_file_urls_are_paths(self, tmp_path: Path) -> None:
+        one = _clone(tmp_path / "a", ("origin", f"file://{tmp_path}/up.git"))
+        two = _clone(tmp_path / "b", ("origin", f"{tmp_path}/up.git"))
+        assert RelayLocation.of(one).path == RelayLocation.of(two).path
+
+    def test_path_case_is_preserved(self, tmp_path: Path) -> None:
+        one = _clone(tmp_path / "a", ("origin", f"{tmp_path}/Up.git"))
+        two = _clone(tmp_path / "b", ("origin", f"{tmp_path}/up.git"))
+        assert RelayLocation.of(one).path != RelayLocation.of(two).path
+
+
+class TestPortsAndGlobalRemotes:
+    def test_different_non_default_ports_are_different_servers(self) -> None:
+        one = RelayKey.of("ssh://git@git.example.com:2222/o/r.git")
+        two = RelayKey.of("ssh://git@git.example.com:2223/o/r.git")
+        assert one.name != two.name
+
+    @pytest.mark.parametrize(
+        "same",
+        [
+            "ssh://git@git.example.com:22/o/r.git",
+            "https://git.example.com:443/o/r",
+            "https://git.example.com/o/r.git",
+            "git@git.example.com:o/r.git",
+        ],
+    )
+    def test_default_ports_do_not_split_one_server(self, same: str) -> None:
+        assert RelayKey.of(same).name == RelayKey.of("git@git.example.com:o/r").name
+
+    def test_a_global_remote_is_not_a_repos_remote(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        global_config = tmp_path / "gitconfig"
+        global_config.write_text('[remote "origin"]\n\turl = git@github.com:o/r.git\n')
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+        one = _clone(tmp_path / "a")
+        two = _clone(tmp_path / "b")
+        assert "no remote" in RelayLocation.of(one).reason
+        assert RelayLocation.of(one).path != RelayLocation.of(two).path
+
+
+class TestPrivateAccountOnTheDemoEndpoint:
+    """The demo URL is shared; only the bundled demo selection refuses credentials."""
+
+    def test_an_explicit_url_takes_your_own_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        creds = tmp_path / "mine.creds"
+        creds.write_text("creds")
+        repo = _repo(
+            tmp_path,
+            f"relay:\n  url: {DEMO_RELAY_URL}\n  allow_env_override: true\n",
+        )
+        monkeypatch.setenv("BIFF_RELAY_USER_CREDENTIALS", str(creds))
+        url, auth, _ = resolve_relay_config(repo)
+        assert url == DEMO_RELAY_URL
+        assert auth == RelayAuth(user_credentials=str(creds))
+
+    def test_an_env_url_with_credentials_replaces_the_bundled_demo(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        creds = tmp_path / "mine.creds"
+        creds.write_text("creds")
+        repo = _repo(tmp_path, "relay:\n  type: demo\n  allow_env_override: true\n")
+        monkeypatch.setenv("BIFF_RELAY_URL", DEMO_RELAY_URL)
+        monkeypatch.setenv("BIFF_RELAY_USER_CREDENTIALS", str(creds))
+        assert resolve_relay_config(repo)[1] == RelayAuth(user_credentials=str(creds))
+
+
+class TestRemoteSpellings:
+    def test_zero_padded_ports_are_the_same_port(self) -> None:
+        assert (
+            RelayKey.of("ssh://git@h.example:02222/o/r").name
+            == RelayKey.of("ssh://git@h.example:2222/o/r").name
+        )
+        assert (
+            RelayKey.of("ssh://git@h.example:0022/o/r").name
+            == RelayKey.of("git@h.example:o/r").name
+        )
+
+    def test_bracketed_ipv6_hosts_are_hosts_not_paths(self) -> None:
+        key = RelayKey.of("https://[2001:db8::1]/o/r.git")
+        assert key.name.startswith("o__r-")
+        assert key.name == RelayKey.of("ssh://git@[2001:db8::1]/o/r").name
+
+    def test_file_urls_decode_and_ignore_a_local_authority(self) -> None:
+        plain = RelayKey.of("/srv/Team Repo.git")
+        assert RelayKey.of("file:///srv/Team%20Repo.git") == plain
+        assert RelayKey.of("file://localhost/srv/Team%20Repo.git") == plain
+
+    def test_a_checkout_and_its_git_directory_are_one_repository(self) -> None:
+        assert RelayKey.of("/srv/up/.git") == RelayKey.of("/srv/up")
+
+    def test_a_remote_from_an_included_config_is_the_repos_remote(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _clone(tmp_path / "a")
+        extra = repo / ".git" / "extra"
+        extra.write_text('[remote "origin"]\n\turl = git@github.com:o/r.git\n')
+        _git(repo, "config", "include.path", "extra")
+        other = _clone(tmp_path / "b", ("origin", "git@github.com:o/r.git"))
+        assert RelayLocation.of(repo).path == RelayLocation.of(other).path
+
+
+class TestLiteralFileRemotesAndScpIpv6:
+    def test_file_url_paths_keep_question_marks_and_hashes(self) -> None:
+        plain = RelayKey.of("/srv/we?ird#repo.git")
+        assert RelayKey.of("file:///srv/we?ird#repo.git") == plain
+        assert RelayKey.of("file://localhost/srv/we?ird#repo.git") == plain
+
+    def test_scp_style_ipv6_hosts_split_after_the_brackets(self) -> None:
+        scp = RelayKey.of("git@[2001:db8::1]:o/r.git")
+        assert scp.name.startswith("o__r-")
+        assert scp.name == RelayKey.of("ssh://git@[2001:db8::1]/o/r").name
+        assert scp.name == RelayKey.of("https://[2001:db8::1]/o/r").name
+
+
+def test_scp_style_remotes_on_a_host_named_file_stay_apart(tmp_path: Path) -> None:
+    one = RelayKey.of("file:/srv/team/repo.git", tmp_path)
+    two = RelayKey.of("file:/var/team/repo.git", tmp_path)
+    assert one.name != two.name

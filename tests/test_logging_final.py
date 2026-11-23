@@ -238,7 +238,7 @@ def test_stdio_shutdown_is_durable(durable_log: Path) -> None:
     with patch.object(McpServerOptions, "_observed_server") as observed:
         result = CliRunner().invoke(app, ["mcp", "--user", "private-user"])
     assert result.exit_code == 0
-    observed.return_value.run.assert_called_once_with(transport="stdio")
+    observed.return_value.run_stdio.assert_called_once_with(channel=False)
     lines = durable_log.read_text().splitlines()
     stop = [line for line in lines if "shutdown outcome=" in line]
     assert len(stop) == 1
@@ -255,7 +255,7 @@ def test_stdio_failure_does_not_report_completion(
 ) -> None:
     """Crashes and abnormal exits propagate without a false success record."""
     with patch.object(McpServerOptions, "_observed_server") as observed:
-        observed.return_value.run.side_effect = error
+        observed.return_value.run_stdio.side_effect = error
         result = CliRunner().invoke(app, ["mcp", "--user", "private-user"])
     assert result.exit_code != 0
     assert result.exception is error

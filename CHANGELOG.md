@@ -14,6 +14,31 @@
   be live it tells the model, and the user at startup, why, the fix, and to poll
   with `/biff:read 2m`. It says nothing when every visible gate is open, a gate
   cannot be read, or polling is already on.
+- `relay.type` in `config.yaml` / `config.local.yaml` chooses the relay:
+  `local` (the default), `demo` (the shared public relay, bundled
+  credentials) or `nats` (your own NATS server, with `relay.url`). A `relay`
+  section with only `url` still means `nats`.
+- Channel mode for the Claude Code plugin (DES-087). `plugin.json` sets
+  `BIFF_CHANNEL_MODE=1` in the `tty` server's `env`; `biff mcp` reads it first
+  thing, before any configuration load or subprocess, and removes it from its
+  environment (a value other than `1` is logged). In
+  that mode the server advertises `experimental["claude/channel"]` and serves
+  stdio on the handshake-only loop, so Claude Code registers it as a channel:
+  the 2026-07-28 probe gets -32601, `initialize` succeeds, and a later
+  2026-07-28 request is refused and logged. `ChannelServer.channel_link` is the
+  send capability for the channel sender; it detects a closed stream, a dropped
+  write and the end of client input. In channel mode a tool-list notification
+  that timed out or was dropped keeps the stored session and stays owed, the
+  poller retries it on every loop iteration (backing off 30 s after a failure),
+  and a failure logs once per episode with its cause, again every 10 minutes
+  while it lasts, and once on recovery; a code bug logs at ERROR. The server logs `channel_mode=on|off` at start, the
+  negotiated `protocolVersion`, malformed client input and transport crashes.
+  FastMCP is pinned to `<4.3`.
+- Outside channel mode the loop, capabilities and subscriptions are unchanged.
+  A tool call cancelled during its in-request tool-list notification now leaves
+  the notification owed, a failing poller tick also logs a WARNING (an ERROR for
+  a code bug) once per episode, and a handshake session that cannot be read is
+  logged.
 - Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
   fails on any import that breaks the DES-088 package layers and is not in
   `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs
@@ -29,12 +54,52 @@
 
 ### Changed
 
+- **Behavior change: the local relay is the default.** A repo with no relay
+  configured now uses the local filesystem relay (no network, no shared
+  credentials) instead of connecting to the public demo relay
+  (`tls://connect.ngs.global`). Sessions in such a repo no longer see
+  sessions on other machines. If you relied on the implicit demo relay, keep
+  it with one line of config in `.punt-labs/biff/config.yaml` or
+  `config.local.yaml`: `relay: {type: demo}`. Repos that already set
+  `relay.url` see no change. Supersedes the demo-relay default of DES-037
+  (DES-090).
+- The local relay keeps its files in `~/.punt-labs/biff/relay/<repo-key>/`
+  instead of `/tmp/biff/<directory-name>/`, private to you (directories `0700`,
+  files `0600`). They survive a reboot. `<repo-key>` is a slug plus a hash of
+  the remote's normalized identity (host, `owner/repo`, no trailing `/` or
+  `.git`), so ssh and https clones, and every worktree, of one repo share one
+  relay while different repos never do; a repo with no remote is keyed by its
+  common root. Content in `/tmp/biff/` is not migrated.
+- The relay is chosen per config file: the highest file that sets `relay.type`
+  or `relay.url` decides, so a personal `url` beats a committed `type`.
+  Malformed relay config (not a mapping, non-string `url`, unknown key,
+  non-bool flag, `relays:`, `type: demo` or `local` with a `url`, credentials
+  or `tls_handshake_first`) now exits with a message naming the file.
+- `biff doctor` prints the local relay directory and why it is that directory,
+  and probes it for writability; `biff status` prints `relay: local (<dir>)`.
+  An unusable directory is reported with its path (one line in the CLI; an
+  error naming the path over MCP), not a traceback or "Internal server error".
+- A heartbeat failure on a non-NATS relay is logged at WARNING on the first
+  failure and on recovery.
+- The `biff_relay` MCP tool writes an explicit `type` and takes `relay_type`
+  (`local`, `demo`, `nats`).
+- `biff wall` run under GitHub Actions on the local relay now exits non-zero
+  naming `vars.BIFF_RELAY_URL`, instead of posting where no one reads it; `biff
+  enable` and `biff doctor` warn when `biff-notify.yml` is installed but the
+  repo resolves to the local relay.
+- `biff` CLI commands and `biff doctor` work on the local relay; they used to
+  refuse to run without a NATS relay URL.
 - Replace generated agents' per-edit `make check` hooks with advisory Ethos DES-085
   file checks, blocking commit checks, and the full gate at handoff.
   Requires ethos 5.2.0 or later (`ethos hook post-edit`).
 - Upgrade the dev dependency to `punt-oo-ratchet==0.5.0`, retaining existing
   OO, coupling and suppression policies and baselines. The design check now
   reads the declared layers instead of the four fixed ones.
+
+### Removed
+
+- The `--prefix` option of `biff mcp` and `biff serve`. Use `--data-dir` to
+  place the local relay elsewhere.
 
 ### Fixed
 

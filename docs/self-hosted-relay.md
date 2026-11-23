@@ -1,9 +1,11 @@
 # Self-Hosted Relay
 
-Biff talks to a NATS relay for presence (`/who`, `/finger`), messaging
-(`/write`, `/wall`, `/talk`), and plan data. Biff ships with a shared demo
-relay (`tls://connect.ngs.global`) so you can start immediately, but that
-relay shares its namespace with every biff user. Repos are still isolated
+By default biff keeps presence (`/who`, `/finger`), messaging (`/write`,
+`/wall`, `/talk`) and plan data in files on your machine (the local relay), so
+sessions on one machine see each other with no server. When sessions must see
+each other across machines, a NATS relay does that. Biff can use the shared
+demo relay (`tls://connect.ngs.global`, opt in with `relay: {type: demo}`), but
+that relay shares its namespace with every biff user. Repos are still isolated
 (see [DES-007](../DESIGN.md#des-007-nats-namespace-scoping)), but you're
 sharing connection capacity with everyone else on it.
 
@@ -116,9 +118,9 @@ docker rm -fv biff-relay
 
 The `-v` flag removes the anonymous volume along with the container —
 without it, `docker rm -f` leaves the volume dangling on disk (see
-[Persistence](#persistence) above). Switch
-`.punt-labs/biff/config.yaml`'s `relay.url` back to the demo relay, or to
-another relay, and you're done.
+[Persistence](#persistence) above). Remove the `relay` section from
+`.punt-labs/biff/config.yaml` to go back to the local relay, or point it at
+another relay (`relay.type: demo` or `nats`), and you're done.
 
 ---
 
@@ -457,9 +459,10 @@ kubectl delete -f k8s/biff-relay-service.yaml
 kubectl delete -f k8s/biff-relay-pvc.yaml   # deletes the PVC; underlying volume fate depends on your storage class's reclaim policy
 ```
 
-No other biff state depends on this relay having existed. Point
-`.punt-labs/biff/config.yaml`'s `relay.url` back at the demo relay, or
-delete the file, and the pilot is over.
+No other biff state depends on this relay having existed. Remove the
+`relay` section from `.punt-labs/biff/config.yaml` (or delete the file) to go
+back to the local relay, or set `relay.type: demo` for the shared demo relay,
+and the pilot is over.
 
 ### If the POV succeeds
 

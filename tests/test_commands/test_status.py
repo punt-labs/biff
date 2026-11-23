@@ -3,29 +3,46 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from biff.cli_context import CliContext
 from biff.commands.status import status
 from biff.commands.wall import wall
-from biff.models import UserSession, WallPost
+from biff.models import BiffConfig, UserSession, WallPost
 from biff.relay import LocalRelay
 
 
 class TestStatus:
-    async def test_basic_status(self, ctx: CliContext) -> None:
+    async def test_basic_status(self, ctx: CliContext, tmp_path: Path) -> None:
         result = await status(ctx)
         assert not result.error
         assert "biff" in result.text
         assert "kai" in result.text
-        assert "relay: local (connected)" in result.text
+        assert f"relay: local ({tmp_path})" in result.text
+        assert "connected" not in result.text
         assert "unread: 0" in result.text
         assert "wall: (none)" in result.text
         json_data = result.json_data
         assert isinstance(json_data, dict)
         assert json_data["user"] == "kai"
         assert json_data["relay"] == "local"
+        assert json_data["relay_dir"] == str(tmp_path)
         assert json_data["unread"] == 0
         assert json_data["wall"] is None
+
+    async def test_nats_relay_is_named_by_its_url(self, relay: LocalRelay) -> None:
+        nats_ctx = CliContext(
+            relay=relay,
+            config=BiffConfig(user="kai", repo_name="test", relay_url="nats://x:4222"),
+            session_key="kai:abc12345",
+            user="kai",
+            tty="abc12345",
+        )
+        result = await status(nats_ctx)
+        assert "relay: nats://x:4222 (connected)" in result.text
+        json_data = result.json_data
+        assert isinstance(json_data, dict)
+        assert json_data["relay_dir"] is None
 
     async def test_status_with_session(
         self, ctx: CliContext, relay: LocalRelay
@@ -81,7 +98,8 @@ class TestStatus:
         lines = result.text.splitlines()
         assert len(lines) > 6  # base status lines + wrapped wall lines
         for line in lines:
-            assert visible_width(line) <= TABLE_WIDTH
+            if not line.startswith("relay:"):  # a directory path is not wrapped
+                assert visible_width(line) <= TABLE_WIDTH
 
     async def test_status_wall_escapes_neutralized(
         self, ctx: CliContext, relay: LocalRelay

@@ -28,11 +28,11 @@ apply are folded in below.
 presence, plans), reached through two entry points that any harness can use:
 the `biff` CLI and the `biff mcp` server. With NATS, both receive arrivals by
 push: the always-on inbox, wall and talk subscriptions and the wake poke
-(DES-062). With no relay configured, biff connects to the public demo NATS
-relay (DES-037). The local filesystem relay (`relay: url: ""`) is a supported
-single-machine relay: JSONL inboxes under `/tmp/biff/<repo>/`, no network, no
-shared credentials. It has no push of its own, so it gets a filesystem watch
-(section 6).
+(DES-062). With no relay configured, biff uses the local filesystem relay
+(DES-090): JSONL inboxes under `~/.punt-labs/biff/relay/<repo-key>/`, no
+network, no shared credentials. The local relay has no push of its own, so it
+gets a filesystem watch (section 6). The public demo NATS relay is the opt-in
+`relay: {type: demo}`.
 
 **Plugins** adapt biff to one harness each. Each owns its harness's last mile,
 the step that gets an arrival in front of the model:
@@ -225,12 +225,15 @@ minutes), so held kinds can become eligible at different times. At most one
 `loop.call_later` exists, set for the earliest moment any held kind is
 eligible. When it fires it sends every held kind whose window is open, with
 current state, and arms a new one only if a kind is still held, for that
-kind's own opening. Each firing has one of three outcomes per held kind: it
+kind's own opening. Each firing has one of four outcomes per held kind: it
 sends that kind; it finds the kind no longer owed (the user read the mail, the
-invite expired) and drops it without sending; or the send times out, and that
-kind is re-armed once. A second timeout drops that kind only: other held kinds
+invite expired) and drops it without sending; it finds mesg off or the client
+not yet initialised and releases the kind with its last-sent record unchanged,
+so the kind stays owed and goes out when mesg comes on or the client
+initialises; or the send times out, and that kind is re-armed once. A second timeout drops that kind only: other held kinds
 keep their own openings, and the one timer is re-armed for the earliest of
-them. With nothing held, no timer exists, so it cannot recur indefinitely. It
+them. With nothing held, no timer exists, so it cannot recur indefinitely: a
+send that empties the held set cancels the timer. It
 is part of delivering held arrivals, not a periodic job. Later arrivals in a window only raise the state
 the pending timer will send.
 
@@ -422,8 +425,10 @@ Checks:
    the deferred send is enabled only by an arrival, a reconnect, a tool call
    or `pollOn`; the deferred send is enabled only while an event is held. For
    each held kind a firing sends it, drops it because nothing is owed any
-   more, or times out and re-arms it once; a second timeout drops that kind
-   alone, and the timer exists only while some kind is still held.
+   more, releases it because mesg is off or the client is not initialised
+   (record unchanged), or times out and re-arms it once; a second timeout
+   drops that kind alone, and the timer exists only while some kind is still
+   held. A send that empties the held set cancels the timer.
 
 `/z-spec:check`, `/z-spec:test` and a zero-GAP `/z-spec:audit` on
 `notification.tex` gate the channel-events PR, per CLAUDE.md.

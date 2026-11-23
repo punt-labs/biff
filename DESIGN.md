@@ -381,7 +381,7 @@ Implemented in biff-faz. Commit `3101515` (replace /on /off with /mesg y|n), PR 
 1. **LocalRelay** — Filesystem-based. JSONL inboxes in `{data_dir}/`. JSON session files. Works out of the box with no infrastructure. Repo-scoped by directory path.
 2. **NatsRelay** — NATS KV for sessions/presence, JetStream for messaging. Requires a NATS server. Enables cross-machine communication.
 
-Selection is automatic, driven by `config.relay_url` (`.punt-labs/biff/config.yaml` + `config.local.yaml`, per DES-037 — not a `.biff` file, which was removed in v1.13.1): set, use NatsRelay; unset, use LocalRelay. In practice `relay_url` is rarely unset — `_apply_demo_relay_default` fills it with the bundled demo relay whenever no explicit URL is configured, so NatsRelay against the demo relay is the effective default, not LocalRelay (`ServerState`'s relay-selection docstring in `src/biff/server/state.py`).
+Selection is automatic, driven by `config.relay_url` (`.punt-labs/biff/config.yaml` + `config.local.yaml`, per DES-037 — not a `.biff` file, which was removed in v1.13.1): set, use NatsRelay; unset, use LocalRelay. An unset `relay_url` is the default: DES-090 removed the fallback that filled in the bundled demo relay, so a repo with no relay configured uses LocalRelay, and the demo relay is the opt-in `relay: {type: demo}`.
 
 ### Message Semantics: POP (Read-Once)
 
@@ -4045,7 +4045,7 @@ guidance.
 ## DES-037: Zero-Config — Config Migration and Owner Derivation
 
 **Date:** 2026-04-12
-**Status:** SETTLED — implemented and shipped; `.biff` removed entirely in v1.13.1 (see CHANGELOG.md)
+**Status:** SETTLED — implemented and shipped; `.biff` removed entirely in v1.13.1 (see CHANGELOG.md); the demo-relay default is superseded by DES-090
 **Topic:** Move config to `.punt-labs/biff/`, YAML format, derive org
 scope from git remote, make explicit config optional
 **Related:** DES-007a (slug-based namespace), DES-012 (config file),
@@ -8510,7 +8510,12 @@ user starts it.
 Biff does no background or scheduled work except connection liveness
 (keepalive and wedge detection) and the deferred send of one arrival the rate
 limit held back: at most one `call_later` at a time, armed only while an
-arrival is held and ending when none is, never recurring. The poller's wall-countdown, invite-expiry and unread-backstop jobs
+arrival is held and ending when none is, never recurring. Each firing, per
+held kind, sends it, drops it because nothing is owed, releases it with its
+record unchanged because mesg is off or the client is not initialised, or
+times out (re-armed once; a second timeout drops that kind alone). A send that
+empties the held set cancels the timer (`docs/notification.tex`, Channel
+Delivery). The poller's wall-countdown, invite-expiry and unread-backstop jobs
 are removed: each value is computed when read, push is the detection path, and
 a relay reconnect (`NatsRelay._on_reconnect`) re-runs the summarizer to catch
 mail that core NATS did not replay. Mail is ordered by `inbox_high_water`
@@ -8539,6 +8544,72 @@ paths in every session; polling removed entirely; a user-set
 flags flushed during `initialize`; count-based mail detection; bodies in
 summaries; invite summaries that say to accept; no rate limit. Each is
 rejected in the design document.
+
+**Mechanism (channel mode).** `ChannelServer.serve_channel_stdio()`, in
+`server/channel_server.py`, copies `serve_loop`'s body (a `JSONRPCDispatcher`, a
+`Connection.for_loop`, a `ServerRunner`) so that it can wrap both stream ends,
+and closes the write stream itself on exit, even if the connection cleanup
+raises. It lives there rather than in `server/entrypoints.py` so that module's
+OO and coupling baselines do not regress (DES-088's ratchets). A transport crash
+(stdin `OSError`, broken stdout) is logged with its traceback before it
+propagates. The `server/discover` probe goes to the runner, which answers -32601
+at a handshake version; any other request carrying the 2026-07-28 envelope is
+refused with -32600, logged once per distinct method. Observed on Claude Code
+2.1.330 (PL-1348): the probe fails, `initialize` succeeds at 2025-11-25, and
+both launch orders work.
+
+The SDK's dispatcher swallows a write onto a closed stream and, after client
+end of input, drops writes without touching the stream until its handlers
+finish. So `ChannelLink` (owned by `ChannelServer.channel_link`) wraps the write
+stream (`ObservedWriteStream`, which records a failed write) and the read
+stream (`ObservedReadStream`, which closes the link when client input ends).
+`ChannelLink.send` writes a `notifications/claude/channel` frame to the
+`ObservedWriteStream` directly, bounded by a timeout; a normal return means the
+frame was handed to the stdout writer task, not that the client read it. It
+raises `ChannelUnavailableError` on a closed link.
+
+`biff mcp` takes `BIFF_CHANNEL_MODE` from the environment first thing, before
+the config load, so that load's git subprocesses never inherit it. A notify
+owes its debt before its first await, so a cancellation at the subscription-bus
+checkpoint or in the middle of the send leaves it owed.
+
+In channel mode `_HandshakeDelivery.serve_single_connection(link)` makes every
+tool-list send consult the link, in the standalone path and in the in-request
+path. A send that timed out, failed, or was dropped by the SDK keeps the stored
+session and stays owed. The poller retries owed notifications (`flush_owed`) on
+every iteration of its loop, outside the tick-work gate, backing off
+`CHANNEL_BACKOFF` (30 s) after a failure so a client that stopped reading does
+not stall every pass for the 3 s send timeout. The poller sleeps `poll_interval`
+seconds between iterations whether it is active or napping (napping skips only
+the relay poll, not the loop), so the retry runs every `poll_interval` seconds,
+on every wake, and, with `poll_interval <= 0`, on each 30 s fallback timeout:
+late, not lost.
+
+`EpisodeLog` (`src/biff/failure_log.py`, kernel layer, shared by the server and
+any relay or watcher code) keeps repeated failures readable without hiding a
+bug, because biff's log keeps INFO and above. A failure of a transport type (`TimeoutError`,
+`OSError`, the anyio closed/broken errors, `ChannelUnavailableError`; the poller
+adds every `nats.errors.Error`: `RELAY_ERRORS` in `src/biff/relay_errors.py`)
+latches per (label, type): one WARNING with the cause and traceback when the
+episode opens, a WARNING every 10 minutes while it stays open, DEBUG in between,
+and one WARNING when the label next succeeds. Any other exception is a code bug:
+it logs at ERROR with its traceback, once per distinct type, and again at ERROR
+every 10 minutes while it lasts, whatever episodes are open. A channel-mode
+retry with no handshake session is a failure of the same kind, opened only after
+`HANDSHAKE_WINDOW` (30 s) from when the link was created (before any startup
+notification can run, attached stream or not), so the normal start-up order
+(a notify before the stream attaches or before `initialize`) logs nothing. The poller uses
+`RelayLog` (`EpisodeLog` with `RELAY_ERRORS`).
+
+What changes outside channel mode (HTTP, `--user` stdio, opencode, codex, the
+CLI) is small: the loop, the capabilities and the 2026-07-28 subscriptions are
+unchanged, and a failed tool-list send still clears the stored session and sets
+the debt. A tool call cancelled in the middle of its in-request notification now
+leaves the debt owed (the flag is set before the send, as the standalone path
+already did). A failing poller tick also logs a WARNING (or an ERROR for a code
+bug) once per episode, besides its DEBUG traceback. A handshake session that
+cannot be read is logged. `docs/notification.tex` is unchanged by this step; its
+send-failure transitions describe the default.
 
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
 **Amends.** DES-080, for the Claude Code plugin only; DES-061's rule that a
@@ -8626,3 +8697,170 @@ on the same Python file. The full gate measured 68.145 seconds and remains a
 delivery requirement. Generated hooks invoke `ethos hook post-edit` with a
 70-second harness timeout. Git and harness integration still require the new
 Ethos binary and installed hook shims; policy files alone do not install them.
+
+## DES-090: The Local Relay Is the Default; Demo and NATS Relays Are Opt-In
+
+**Date:** 2026-11-22
+**Status:** SETTLED
+**Topic:** Which relay a repo uses when none is configured, how a relay is
+chosen in `config.yaml`, and where the local relay keeps its files
+**Supersedes:** the demo-relay default in DES-037 (the "demo relay + bundled
+creds" fallback for an absent `relay` section) and in INS-007's "Demo Relay
+Default"
+**Related:** DES-037 (zero-config), DES-059 (self-hosted relay image), DES-038
+(three-layer delivery), DES-054 (repo common root), DES-088 (package layers)
+
+### Problem
+
+Most users first need their own agents on one machine to see and message each
+other, mainly under opencode, pi, Devin and other harnesses. DES-037 made a
+repo with no relay configured connect to the public demo NATS relay
+(`tls://connect.ngs.global`). That sent every new user's presence through a
+public relay, using credentials bundled in the package, before the user had
+chosen anything. The local filesystem relay (`LocalRelay`) already did the
+single-machine job, but it was reachable only through the empty-string trick
+`relay: url: ""` (or `--relay-url ""`), and it kept its files in
+`/tmp/biff/<directory-name>/`, which a reboot clears and which every repo with
+the same directory name shares.
+
+### Decision
+
+**1. No relay configured means the local relay.** `config.py` leaves
+`relay_url` unset when neither `config.yaml` nor `config.local.yaml` names a
+relay, and `RelaySelector` turns an unset URL into `LocalRelay`. The fallback
+that filled in the demo URL is gone. The CLI (`cli_session_host`) opens the
+relay the same selector chooses; it used to refuse to run without a NATS URL.
+`biff doctor` resolves the directory exactly as the server does, prints it with
+the reason (slug, URL hash or no remote) and probes it (create, write, remove a
+file); `biff status` prints `relay: local (<dir>)` and the directory in its
+JSON.
+
+**2. A relay is chosen with `relay.type`, per file.**
+
+```yaml
+relay:
+  type: local   # the default: no network, no credentials
+```
+
+```yaml
+relay:
+  type: demo    # the shared public NATS relay, bundled credentials
+```
+
+```yaml
+relay:
+  type: nats    # your own NATS server: the Docker image (DES-059) or any other
+  url: tls://relay.example.com:4222
+```
+
+A `relay` section with only `url` still means `nats`, so every existing
+explicit relay URL behaves as before; `url: ""` still selects the local relay.
+The relay is decided per config file, not by a key-by-key merge: the
+highest-precedence file that sets `type` or `url` decides which relay it is.
+Credentials and `tls_handshake_first` come from that file or one above it, so a
+personal token applies to a committed relay and a committed token never follows
+a personal relay. A personal `url` (no `type`) therefore beats a committed
+`type: demo`; a personal `url: ""` gives the local relay; a personal
+`type: local` beats a committed `url`.
+
+The relay section fails loudly, naming the file: `relay` not a mapping, `url`
+not a string, an unknown key, `tls_handshake_first` or `allow_env_override` not
+a real bool, a top-level `relays:`, an unknown `type`, `type: nats` without a
+`url`, and `type: local` or `type: demo` combined in one file with `url` or any
+credential. `type: demo` is also refused with `tls_handshake_first`, and
+credentials that reach a demo or local relay by layering are refused too: the
+user's own credentials must never go to the public demo relay. The option
+`tls_handshake_first` applies to `nats` only. The `BIFF_RELAY_*` environment
+overrides are unchanged, including the gate that a committed `relay` section
+(now a `type` or a `url`) closes them unless it sets `allow_env_override: true`.
+The `biff_relay` MCP tool writes an explicit `type` and gained `relay_type`
+(`local`, `demo`, `nats`); its existing arguments still work.
+
+**3. The local relay lives in `~/.punt-labs/biff/relay/<repo-key>/`, private to
+the user.** The relay root and each repo directory are created `0700` (existing
+ones are tightened), and message, session, wall, lock and hint files are
+`0600`. `<repo-key>` is built so that one repo is one directory and two repos
+are never one:
+
+- A repo with a remote (`origin`, or the only remote) is keyed by the remote's
+  normalized identity: lowercase host plus lowercase `owner/repo`, with the
+  trailing `/` and `.git` stripped, so ssh and https forms agree. The key is a
+  readable sanitized slug of the identity plus `-` plus the first 8 hex of its
+  sha256, so `owner/my.repo` and `owner/my-repo`, or the same `owner/repo` on
+  GitHub and GitLab, get different directories.
+- A remote that does not parse to `owner/repo` (a GitLab subgroup) is keyed
+  `remote-` plus the hash of its normalized URL, so its clones still share.
+  A non-default port (not 22, 80, 443 or 9418) is part of the identity, and a
+  bracketed IPv6 host is a host. A filesystem remote (a path, a relative path,
+  or a `file://` URL) is keyed `remote-` plus the hash of the absolute path it
+  opens, resolved from the common root with case kept and `/.git` folded into
+  its checkout. Only the repository's own git config (including files it
+  includes) names the remote, never the user's global config.
+- A repo with no remote is keyed by the common root's name plus a hash of the
+  common root's resolved path, so a linked worktree shares its main checkout.
+
+`repo_name`, which namespaces NATS, is unchanged: this key is for the local
+relay only. The `--prefix` option of `biff mcp` and `biff serve` is removed;
+`--data-dir` still overrides the directory.
+
+### Why this location
+
+| Option | Durable | Same-name repos stay apart | Worktrees and clones share one relay | Per-user |
+|--------|---------|----------------------------|--------------------------------------|----------|
+| `/tmp/biff/<directory-name>/` (before) | No: cleared on reboot | No | No: a linked worktree has its own directory name | No: `/tmp` is shared |
+| `~/.punt-labs/biff/relay/<directory-name>/` | Yes | No | No | Yes |
+| `~/.punt-labs/biff/relay/<repo-key>/` (chosen) | Yes | Yes | Yes | Yes |
+
+Costs: undelivered messages and presence rows now survive a reboot, so a
+stale session or unread message can outlive its author; deleting the repo's
+directory under `~/.punt-labs/biff/relay/` resets it. Content in `/tmp/biff/`
+is not migrated: it was reachable only with the empty-string trick, and it was
+cleared on reboot anyway.
+
+An XDG state directory was rejected: biff keeps everything else under
+`~/.punt-labs/biff/`, and a second root would split one user's state.
+
+### Failures are visible
+
+An unusable relay directory is reported with its path, never a bare
+traceback: the CLI prints one line (path, error, fix); the MCP server logs the
+exception and an `OSError` reaches the client as an error naming the path, not
+"Internal server error". On a non-NATS relay a heartbeat failure logs WARNING
+on the first failure and on recovery. A CI runner is another machine, so
+`biff wall` under `GITHUB_ACTIONS` with no relay exits non-zero naming
+`vars.BIFF_RELAY_URL`, and `biff enable` and `biff doctor` warn when
+`biff-notify.yml` is installed but the repo resolves to the local relay.
+
+### Cross-machine presence is opt-in
+
+A repo with no relay configured no longer appears on the public relay, and
+its sessions no longer see peers on other machines. Teams that want
+cross-machine presence commit `relay: {type: nats, url: ...}` (or `type:
+demo` for the shared public relay) as before. A repo that committed a
+`relay.url` sees no change. A repo that relied on the implicit demo relay
+changes behavior and needs `relay: {type: demo}` in `config.yaml` or
+`config.local.yaml` to keep it.
+
+Org discovery (DES-034) is a NATS feature; with the local relay it finds no
+other repos and the CLI skips it.
+
+### Alternatives rejected
+
+- **Keep the demo relay as the default and add `type: local`.** Keeps sending
+  every new user's presence to a public relay before they choose it, which is
+  the problem.
+- **A `local: true` flag next to `url`.** Two keys can contradict; one `type`
+  key cannot.
+- **Key the directory by the remote slug only.** Repos without a remote would
+  collide on their directory name.
+
+### Verification
+
+`tests/test_relay_choice.py` covers the default, each `type`, the unchanged
+URL-only form, the merge case, the environment gate and the directory keys.
+A wheel built from this branch, installed in a scratch virtual environment
+with an isolated `HOME` and no network relay, ran `biff status`
+(`relay: local (<dir>)`), `biff who` (two users listed) and a `biff write`
+that the second user read; two clones of one remote (ssh, and https with a
+trailing slash) and a linked worktree of a no-remote repo shared one relay
+directory, with modes `0700` and `0600`.
