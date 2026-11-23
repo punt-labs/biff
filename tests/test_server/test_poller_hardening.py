@@ -23,6 +23,7 @@ from fastmcp.client.transports import FastMCPTransport
 from watchdog.observers import Observer
 
 import biff.directory_kqueue as dk
+import biff.failure_log as failure_log
 import biff.local_watch as local_watch
 from biff.commands._messaging import deliver_with_retry
 from biff.local_watch import LocalWatch, WatchKeeper
@@ -239,7 +240,7 @@ class TestWatchFailureReporting:
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(WatchKeeper, "REMINDER_SECONDS", 0.0)
+        monkeypatch.setattr(failure_log, "REMINDER_SECONDS", 0.0)
         blocker = tmp_path / "blocker"
         blocker.write_text("x")
         keeper = WatchKeeper((LocalWatch(blocker / "relay", lambda: None),))
@@ -251,9 +252,7 @@ class TestWatchFailureReporting:
         debug = [r for r in caplog.records if r.levelno == logging.DEBUG]
         assert debug  # every retry is recorded
         assert len(errors) >= 2  # the first error, then a periodic reminder
-        assert any(
-            "errno" in r.getMessage() or "Errno" in r.getMessage() for r in errors
-        )
+        assert any("NotADirectoryError" in r.getMessage() for r in errors)
 
 
 class TestPollerRestart:

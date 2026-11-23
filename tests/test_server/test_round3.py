@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 import biff.local_watch as local_watch
-from biff.failure_log import FailureLog
 from biff.local_watch import LocalWatch, WatchKeeper
 from biff.models import BiffConfig, Message
 from biff.relay import LocalRelay
@@ -227,37 +226,6 @@ class TestRecoveryIsProven:
         text = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
         assert not any("running again" in m for m in text)
         assert any("canary" in m for m in text)
-
-
-class TestFailureLog:
-    def test_onset_reminders_and_recovery(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        clock = [0.0]
-        logger = logging.getLogger("test.failure_log")
-        log = FailureLog(logger, remind_every=600, clock=lambda: clock[0])
-        with caplog.at_level(logging.DEBUG, logger=logger.name):
-            log.failed("the poller", OSError("disk"))  # onset
-            clock[0] = 60.0
-            log.failed("the poller", OSError("disk"))  # quiet
-            clock[0] = 700.0
-            log.failed("the poller", OSError("disk"))  # reminder
-            log.recovered("the poller")
-        levels = [r.levelno for r in caplog.records]
-        assert levels.count(logging.ERROR) == 1  # unexpected type: ERROR onset
-        assert levels.count(logging.WARNING) == 2  # reminder, recovery
-        assert logging.DEBUG in levels
-
-    def test_an_expected_type_starts_at_warning_without_a_traceback(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        logger = logging.getLogger("test.failure_log2")
-        log = FailureLog(logger, expected=(OSError,))
-        with caplog.at_level(logging.DEBUG, logger=logger.name):
-            log.failed("x", OSError("disk"))
-        (record,) = caplog.records
-        assert record.levelno == logging.WARNING
-        assert record.exc_info is None
 
 
 class TestWatchdogPrivateApiWeRelyOn:

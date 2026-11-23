@@ -225,6 +225,7 @@ prefixes = [
     "invite_expiry",
     "local_watch",
     "nats_relay",
+    "relay_errors",
     "relay",
     "relay_config",
     "relay_select",

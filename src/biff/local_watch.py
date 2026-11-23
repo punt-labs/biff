@@ -20,7 +20,7 @@ from watchdog.observers import Observer
 from watchdog.utils import UnsupportedLibcError
 
 from biff.directory_kqueue import DirectoryKqueue
-from biff.failure_log import FailureLog
+from biff.failure_log import EpisodeLog
 
 if TYPE_CHECKING:
     from watchdog.observers.api import BaseObserver
@@ -376,25 +376,24 @@ class WatchKeeper:
     :meth:`start` and :meth:`check` block (they start and join threads and wait
     for a canary event); call them with ``asyncio.to_thread`` (:meth:`acheck`).
     A failure to start, or a failed check, goes to a
-    :class:`~biff.failure_log.FailureLog` (onset, quiet retries, a reminder
-    every ``REMINDER_SECONDS``: arrivals are then only picked up by the
+    :class:`~biff.failure_log.EpisodeLog` (an ERROR at onset since nothing is
+    *expected* here, quiet retries, a reminder every ``REMINDER_SECONDS``:
+    arrivals are then only picked up by the
     liveness pass).  Recovery is logged once, and only after a later check has
     proven the watch (canary included), never merely because a rebuild did not
     raise.
     """
 
-    REMINDER_SECONDS: ClassVar[float] = 600.0
-
     __slots__ = ("_log", "_watches")
 
     _watches: tuple[LocalWatch, ...]
-    _log: FailureLog
+    _log: EpisodeLog
 
     def __new__(cls, watches: tuple[LocalWatch, ...]) -> Self:
         """Create a keeper over *watches*, none of them started yet."""
         self = super().__new__(cls)
         self._watches = watches
-        self._log = FailureLog(logger, remind_every=cls.REMINDER_SECONDS)
+        self._log = EpisodeLog(logger, ())  # nothing is expected: ERROR at onset
         return self
 
     @property
