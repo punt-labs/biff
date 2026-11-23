@@ -572,3 +572,9 @@ class TestLiteralFileRemotesAndScpIpv6:
         assert scp.name.startswith("o__r-")
         assert scp.name == RelayKey.of("ssh://git@[2001:db8::1]/o/r").name
         assert scp.name == RelayKey.of("https://[2001:db8::1]/o/r").name
+
+
+def test_scp_style_remotes_on_a_host_named_file_stay_apart(tmp_path: Path) -> None:
+    one = RelayKey.of("file:/srv/team/repo.git", tmp_path)
+    two = RelayKey.of("file:/var/team/repo.git", tmp_path)
+    assert one.name != two.name

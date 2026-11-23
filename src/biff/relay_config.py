@@ -274,7 +274,7 @@ class RelayKey:
             or cls._URL.fullmatch(text)
             or cls._SCP.fullmatch(text)
         )
-        if match is None or text.startswith("file:"):
+        if match is None or text.startswith("file://"):
             return cls._for_filesystem(url, base or Path())
         port = int(match.groupdict().get("port") or 0)
         host = match["host"]
@@ -290,7 +290,7 @@ class RelayKey:
     @classmethod
     def _for_filesystem(cls, url: str, base: Path) -> Self:
         """Key a path or ``file://`` remote by the absolute path it opens."""
-        is_url = url.strip().lower().startswith("file:")
+        is_url = url.strip().lower().startswith("file://")
         # After file:// and an optional host, everything is the path: git reads
         # a ? or # there literally.
         rest = url.strip()[len("file://") :]
