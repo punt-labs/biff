@@ -22,8 +22,58 @@ design-shadow: ## Report advisory design changes; never part of check
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-test: ## Run tests (unit + integration)
+test: ## Run the default suite (unit + integration)
 	uv run pytest
+
+hooks: ## Install the repository's pre-commit and pre-push test hooks
+	@if path=$$(git config --get core.hooksPath) && [ "$$path" != .githooks ]; then \
+		echo "core.hooksPath already set to $$path; chain .githooks manually" >&2; exit 1; \
+	fi
+	git config --local core.hooksPath .githooks
+
+test-changed: ## Run default tests affected by staged paths (pre-commit)
+	uv run python tools/test_changed.py
+
+test-push: test ## Run the pre-push gate
+
+test-unit: ## Run the default suite without the integration directory
+	uv run pytest --ignore=tests/test_integration
+
+test-integration: ## Run in-process MCP integration tests
+	uv run pytest tests/test_integration
+
+test-subprocess: ## Run real biff subprocesses over stdio
+	uv run pytest -m 'subprocess and not quarantine'
+
+test-cli-multi-user: ## Run CLI multi-user tests over a local nats-server
+	uv run pytest -m 'cli_multi_user and not quarantine'
+
+test-nats-local: ## Run MCP and relay tests over a local nats-server
+	uv run pytest -m 'nats_local and not quarantine'
+
+test-docker: ## Build the relay image and run tests against it
+	uv run pytest -m 'nats_docker and not quarantine'
+
+test-e2e: test-wheel test-cli-multi-user test-nats-local ## Run installed-wheel and local NATS end-to-end tests
+
+test-nightly: test-subprocess test-cli-multi-user test-nats-local ## Run broader credential-free suites
+
+test-quarantine: ## List quarantines; an empty selection is expected
+	@uv run pytest --collect-only -m quarantine || [ "$$?" = 5 ]
+
+test-live: ## Run hosted NATS tests (requires BIFF_TEST_NATS_URL and auth)
+	@test -n "$${BIFF_TEST_NATS_URL:-}" || { echo "Set BIFF_TEST_NATS_URL and one BIFF_TEST_NATS_* auth variable" >&2; exit 1; }
+	uv run pytest -m 'nats_hosted and not stress and not quarantine'
+
+test-stress: ## Run hosted NATS scale tests (same prerequisites as test-live)
+	@test -n "$${BIFF_TEST_NATS_URL:-}" || { echo "Set BIFF_TEST_NATS_URL and one BIFF_TEST_NATS_* auth variable" >&2; exit 1; }
+	uv run pytest -m 'stress and not quarantine'
+
+test-agent: ## Drive real Claude sessions through biff (requires ANTHROPIC_API_KEY)
+	@test -n "$${ANTHROPIC_API_KEY:-}" || { echo "Set a scoped ANTHROPIC_API_KEY" >&2; exit 1; }
+	uv run pytest -m 'sdk and not quarantine'
+
+.PHONY: hooks test-changed test-push test-unit test-integration test-subprocess test-cli-multi-user test-nats-local test-docker test-e2e test-nightly test-quarantine test-live test-stress test-agent
 
 smoke-release: ## Build a wheel and smoke-test it installed in a clean environment
 	rm -rf .tmp/smoke-dist
@@ -50,7 +100,7 @@ coverage-ci: ## Test line and branch coverage with a CI XML report
 lint: check-comments check-docstrings ## Lint and format check (ruff + shellcheck)
 	uv run ruff check .
 	uv run ruff format --check .
-	shellcheck plugin/hooks/*.sh install.sh scripts/*.sh
+	shellcheck plugin/hooks/*.sh install.sh scripts/*.sh .githooks/*
 	uv run python -c 'import json, subprocess; hook = json.load(open("devin-plugin/hooks.json"))["SessionStart"][0]["hooks"][0]["command"]; subprocess.run(["shellcheck", "--shell=sh", "-"], input=hook, text=True, check=True)'
 
 check-comments: ## Reject commented-out code and tracker references in Python prose

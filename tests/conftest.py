@@ -13,6 +13,9 @@ from unittest.mock import patch
 import pytest
 
 from biff.server.tools._descriptions import _reset_session
+from tools.test_quarantine import (
+    pytest_collection_modifyitems as pytest_collection_modifyitems,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
