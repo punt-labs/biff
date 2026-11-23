@@ -396,7 +396,7 @@ Without a configuration file, biff uses the local relay: sessions on this machin
 team:
   members: ["kai", "eric", "priya"]
 
-relay:
+relay:                          # optional: omit it to use the local relay
   type: nats                    # local (the default), demo or nats
   url: "tls://relay.example.com:4222"
 

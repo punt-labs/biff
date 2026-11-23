@@ -112,7 +112,15 @@ The `members` list controls who appears in `/who`. The `relay` section chooses h
 
 ## Relay Configuration
 
-With no `relay` section, biff uses the **local relay**: sessions on this machine find each other and exchange messages through files under `~/.punt-labs/biff/relay/<repo-key>/`. It needs no network, no server and no credentials. `<repo-key>` is the `owner__repo` name of the repo's `origin` remote, so every clone and worktree of one repo on this machine shares one relay. A repo with no remote gets its directory name plus a short digest of its path. To reset a repo's local relay, delete its directory. The relay is real time on the machine only; it never leaves it.
+With no `relay` section, biff uses the **local relay**: sessions on this machine find each other and exchange messages through files under `~/.punt-labs/biff/relay/<repo-key>/`. It needs no network, no server and no credentials. The directory and its files are private to you (directories `0700`, files `0600`). `biff doctor` and `biff status` print the directory.
+
+`<repo-key>` identifies the repo, so every clone and worktree of one repo on this machine shares one relay, and two different repos never do:
+
+- **Repo with a remote** (`origin`, or the only remote): a readable slug of the remote's `owner/repo` plus a short hash of its normalized identity, such as `punt-labs__biff-1a2b3c4d`. The identity is the lowercase host plus the lowercase `owner/repo`, without a trailing `/` or `.git`, so `git@github.com:Punt-Labs/biff.git` and `https://github.com/punt-labs/biff/` are one repo, while `owner/my.repo` and `owner/my-repo`, or the same `owner/repo` on GitHub and GitLab, are not.
+- **A remote that is not `owner/repo`** (a GitLab subgroup): `remote-` plus a hash of its normalized URL, so its clones still share one relay.
+- **Repo with no remote**: the directory name plus a hash of the repo's absolute path (the main checkout's, for a linked worktree), so a worktree shares its main checkout and two unrelated repos that share a directory name do not.
+
+To reset a repo's local relay, delete its directory. The relay is real time on the machine only; it never leaves it.
 
 Choose another relay with `relay.type` in `config.yaml` (shared) or `config.local.yaml` (yours). These are advanced setups, for sessions that must see each other across machines.
 
@@ -135,9 +143,13 @@ relay:
   url: "tls://your-nats-server:4222"
 ```
 
-A `relay` section with only `url` still means `type: nats`. `type: nats` without a `url`, or an unknown type, stops biff with a message naming the problem. When `type` is `local` or `demo`, a `url` in the same merged config is ignored: `config.local.yaml` merges over `config.yaml` key by key, so a personal `relay: {type: local}` overrides a committed `url`.
+A `relay` section with only `url` still means `type: nats`. A bare `url: ""` means the local relay.
 
-**Upgrading from a version that defaulted to the demo relay.** A repo that set no relay used to connect to the demo relay. It now uses the local relay, and its sessions no longer see sessions on other machines. To keep the demo relay, add this to `.punt-labs/biff/config.yaml` (or to `config.local.yaml` for yourself only):
+**Which file decides.** The relay is chosen per file, not key by key: the highest-precedence file that sets `type` or `url` (`config.local.yaml` over `config.yaml`) decides which relay it is. So a personal `url: nats://mine` (no `type`) beats a committed `type: demo`, a personal `url: ""` gives the local relay whatever is committed, and a personal `type: local` beats a committed `url`. Credentials (`token`, `nkeys_seed`, `user_credentials`, `auth`) and `tls_handshake_first` come from the file that chose the relay or one above it, so a personal token applies to a committed relay but a committed token never follows you to a personal relay.
+
+**Errors.** Biff stops with a message naming the file and the problem, and never falls back silently, when: `relay` is not a mapping; `url` is not a string; the section has an unknown key (allowed: `type`, `url`, `auth`, `token`, `nkeys_seed`, `user_credentials`, `tls_handshake_first`, `allow_env_override`); `tls_handshake_first` or `allow_env_override` is not `true` or `false`; the top level has `relays:`; `type: nats` has no `url`; the type is unknown; `type: local` or `type: demo` is combined, in one file, with `url` or any credential (`type: demo` also with `tls_handshake_first`, since your own credentials must never go to the public demo relay); or credentials are set with no relay chosen. `config.local.yaml` that is malformed YAML is ignored, as it always was.
+
+**Upgrading from a version that defaulted to the demo relay.** A repo that set no relay used to connect to the demo relay. It now uses the local relay, and its sessions no longer see sessions on other machines. To keep the demo relay, add this to `.punt-labs/biff/config.yaml` (or to `config.local.yaml` for yourself only; a personal `url` or `type` there beats the committed one):
 
 ```yaml
 relay:

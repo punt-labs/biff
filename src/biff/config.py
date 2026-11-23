@@ -3,11 +3,11 @@
 Reads YAML config from ``.punt-labs/biff/`` (shared + local override)
 or runs in zero-config mode with defaults derived from the git remote.
 
-With no relay configured the local filesystem relay is used.  Its data
-directory layout (``{relay-root}`` is ``~/.punt-labs/biff/relay`` unless
-overridden)::
+With no relay configured the local filesystem relay is used (see
+:mod:`biff.relay_config`).  Its data directory, keyed by the repo's remote
+identity, or by its common root when it has no remote, is::
 
-    {relay-root}/{repo-key}/
+    ~/.punt-labs/biff/relay/{repo-key}/
         userinbox-kai.jsonl        # per-user mailbox (broadcast)
         inbox-kai-a1b2c3d4.jsonl   # per-TTY mailbox (targeted)
         userinbox-eric.jsonl

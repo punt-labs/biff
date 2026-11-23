@@ -8656,12 +8656,15 @@ the same directory name shares.
 
 **1. No relay configured means the local relay.** `config.py` leaves
 `relay_url` unset when neither `config.yaml` nor `config.local.yaml` names a
-relay, and `RelaySelector` already turns an unset URL into `LocalRelay`. The
-fallback that filled in the demo URL is gone. The CLI (`cli_session_host`) now
-opens the relay the same selector chooses; it used to refuse to run without a
-NATS URL. `biff doctor` reports the local relay as needing no network.
+relay, and `RelaySelector` turns an unset URL into `LocalRelay`. The fallback
+that filled in the demo URL is gone. The CLI (`cli_session_host`) opens the
+relay the same selector chooses; it used to refuse to run without a NATS URL.
+`biff doctor` resolves the directory exactly as the server does, prints it with
+the reason (slug, URL hash or no remote) and probes it (create, write, remove a
+file); `biff status` prints `relay: local (<dir>)` and the directory in its
+JSON.
 
-**2. A relay is chosen with `relay.type`.**
+**2. A relay is chosen with `relay.type`, per file.**
 
 ```yaml
 relay:
@@ -8680,21 +8683,47 @@ relay:
 ```
 
 A `relay` section with only `url` still means `nats`, so every existing
-explicit relay URL behaves as before. `url: ""` still selects the local relay.
-`type` wins over `url`: `config.local.yaml` merges over `config.yaml` key by
-key, so a personal `type: local` must beat a committed `url`. `type: nats`
-without a `url` and an unknown `type` exit with a message that names the
-problem. `relay.auth.*` and `relay.tls_handshake_first` apply to `nats` and
-`demo`, never to `local`. The `BIFF_RELAY_*` environment overrides are
-unchanged, including the gate that a committed `relay` section (now a `type` or
-a `url`) closes them unless it sets `allow_env_override: true`.
+explicit relay URL behaves as before; `url: ""` still selects the local relay.
+The relay is decided per config file, not by a key-by-key merge: the
+highest-precedence file that sets `type` or `url` decides which relay it is.
+Credentials and `tls_handshake_first` come from that file or one above it, so a
+personal token applies to a committed relay and a committed token never follows
+a personal relay. A personal `url` (no `type`) therefore beats a committed
+`type: demo`; a personal `url: ""` gives the local relay; a personal
+`type: local` beats a committed `url`.
 
-**3. The local relay lives in `~/.punt-labs/biff/relay/<repo-key>/`.**
-`<repo-key>` is the sanitized `owner__repo` slug from the `origin` remote when
-there is one, and `<directory-name>-<first 8 hex of sha256(repo common
-root)>` when there is not. The directory is `biff_data_dir() / "relay"`, the
-same per-user root that already holds session handles, hint markers and
-sentinels. The `--prefix` option of `biff mcp` and `biff serve` is removed;
+The relay section fails loudly, naming the file: `relay` not a mapping, `url`
+not a string, an unknown key, `tls_handshake_first` or `allow_env_override` not
+a real bool, a top-level `relays:`, an unknown `type`, `type: nats` without a
+`url`, and `type: local` or `type: demo` combined in one file with `url` or any
+credential. `type: demo` is also refused with `tls_handshake_first`, and
+credentials that reach a demo or local relay by layering are refused too: the
+user's own credentials must never go to the public demo relay. The option
+`tls_handshake_first` applies to `nats` only. The `BIFF_RELAY_*` environment
+overrides are unchanged, including the gate that a committed `relay` section
+(now a `type` or a `url`) closes them unless it sets `allow_env_override: true`.
+The `biff_relay` MCP tool writes an explicit `type` and gained `relay_type`
+(`local`, `demo`, `nats`); its existing arguments still work.
+
+**3. The local relay lives in `~/.punt-labs/biff/relay/<repo-key>/`, private to
+the user.** The relay root and each repo directory are created `0700` (existing
+ones are tightened), and message, session, wall, lock and hint files are
+`0600`. `<repo-key>` is built so that one repo is one directory and two repos
+are never one:
+
+- A repo with a remote (`origin`, or the only remote) is keyed by the remote's
+  normalized identity: lowercase host plus lowercase `owner/repo`, with the
+  trailing `/` and `.git` stripped, so ssh and https forms agree. The key is a
+  readable sanitized slug of the identity plus `-` plus the first 8 hex of its
+  sha256, so `owner/my.repo` and `owner/my-repo`, or the same `owner/repo` on
+  GitHub and GitLab, get different directories.
+- A remote that does not parse to `owner/repo` (a GitLab subgroup) is keyed
+  `remote-` plus the hash of its normalized URL, so its clones still share.
+- A repo with no remote is keyed by the common root's name plus a hash of the
+  common root's resolved path, so a linked worktree shares its main checkout.
+
+`repo_name`, which namespaces NATS, is unchanged: this key is for the local
+relay only. The `--prefix` option of `biff mcp` and `biff serve` is removed;
 `--data-dir` still overrides the directory.
 
 ### Why this location
@@ -8705,23 +8734,25 @@ sentinels. The `--prefix` option of `biff mcp` and `biff serve` is removed;
 | `~/.punt-labs/biff/relay/<directory-name>/` | Yes | No | No | Yes |
 | `~/.punt-labs/biff/relay/<repo-key>/` (chosen) | Yes | Yes | Yes | Yes |
 
-The remote slug is the same value NATS uses as the repo namespace
-(`repo_name`, DES-007a), so a repo reaches the same peers on the local relay
-and on NATS. Two clones of one remote, and every linked worktree, share one
-local relay. A repo with no remote has no stable name, so its key adds a
-digest of the absolute common root (DES-054) that every worktree of that
-checkout agrees on; two unrelated repos that share a directory name get
-different keys.
-
 Costs: undelivered messages and presence rows now survive a reboot, so a
 stale session or unread message can outlive its author; deleting the repo's
-directory under `~/.punt-labs/biff/relay/` resets it. Files are only as
-private as the home directory, which is stricter than `/tmp`. Content in
-`/tmp/biff/` is not migrated: it was reachable only with the empty-string
-trick, and it was cleared on reboot anyway.
+directory under `~/.punt-labs/biff/relay/` resets it. Content in `/tmp/biff/`
+is not migrated: it was reachable only with the empty-string trick, and it was
+cleared on reboot anyway.
 
 An XDG state directory was rejected: biff keeps everything else under
 `~/.punt-labs/biff/`, and a second root would split one user's state.
+
+### Failures are visible
+
+An unusable relay directory is reported with its path, never a bare
+traceback: the CLI prints one line (path, error, fix); the MCP server logs the
+exception and an `OSError` reaches the client as an error naming the path, not
+"Internal server error". On a non-NATS relay a heartbeat failure logs WARNING
+on the first failure and on recovery. A CI runner is another machine, so
+`biff wall` under `GITHUB_ACTIONS` with no relay exits non-zero naming
+`vars.BIFF_RELAY_URL`, and `biff enable` and `biff doctor` warn when
+`biff-notify.yml` is installed but the repo resolves to the local relay.
 
 ### Cross-machine presence is opt-in
 
@@ -8752,5 +8783,7 @@ other repos and the CLI skips it.
 URL-only form, the merge case, the environment gate and the directory keys.
 A wheel built from this branch, installed in a scratch virtual environment
 with an isolated `HOME` and no network relay, ran `biff status`
-(`relay: local (connected)`), `biff who` (two users listed) and a `biff
-write` that the second user read.
+(`relay: local (<dir>)`), `biff who` (two users listed) and a `biff write`
+that the second user read; two clones of one remote (ssh, and https with a
+trailing slash) and a linked worktree of a no-remote repo shared one relay
+directory, with modes `0700` and `0600`.

@@ -6,6 +6,13 @@ the settled-decision summary.
 Ticket: biff-xvv. Mission: m-2026-08-23-005 (design), m-2026-08-23-006
 (implementation).
 
+Since DES-090 a repo with no relay configured uses the local relay, not the
+demo relay. `_apply_demo_relay_default` no longer exists: the demo relay is
+the explicit `relay: {type: demo}`, and the bundled demo credentials are
+attached whenever the resolved URL is the demo URL. Where this document says
+"the demo-relay fallback", read "the local relay" for a repo with no relay
+configured. The override mechanism itself is unchanged.
+
 ## Why a standalone doc, not a `DESIGN.md` ADR
 
 `DESIGN.md` records *settled* decisions (DES-NNN entries) after implementation.
@@ -35,9 +42,10 @@ other CLI command, has zero flags for this. Even where `--relay-url` exists,
 `relay_auth` and `relay_tls_handshake_first` on override, so it cannot point
 at a token-authed relay anyway — see PR #383's postmortem below.
 
-Net effect: CI always falls back to the bundled demo relay
-(`DEMO_RELAY_URL = "tls://connect.ngs.global"`), silently, with no way to
-reach the private relay a team's Claude Code plugin sessions actually use.
+Net effect (before the local relay became the default): CI always fell back
+to the bundled demo relay (`DEMO_RELAY_URL = "tls://connect.ngs.global"`),
+silently, with no way to reach the private relay a team's Claude Code plugin
+sessions actually use.
 
 ## The PR #383 precedent — read before touching this chain
 
@@ -280,11 +288,12 @@ returning — the same rule `_load_base_config` already applies to the CLI
 `--relay-url` override (`config.py:1153-1157`), for the same reason: auth is
 a property of the relay being replaced, not portable to whatever
 `BIFF_RELAY_URL` now points at. Concretely: a repo whose `config.yaml` has no
-`relay:` section resolves to the demo relay's URL *and* its bundled demo
-credentials (`_apply_demo_relay_default`); if CI sets only `BIFF_RELAY_URL`
-to a private relay without also setting an auth env var, silently carrying
-the demo creds forward would mean CI attempts to authenticate to the private
-relay with demo creds — an even more confusing failure than "no auth
+`relay:` section resolves to the local relay (no URL, no credentials); a
+repo with `relay: {type: demo}` resolves to the demo relay's URL *and* its
+bundled demo credentials. If CI sets only `BIFF_RELAY_URL` to a private relay
+without also setting an auth env var, silently carrying the demo creds
+forward would mean CI attempts to authenticate to the private relay with
+demo creds — an even more confusing failure than "no auth
 configured."
 
 **`relay_tls_handshake_first` is reset to `False` whenever `BIFF_RELAY_URL`
@@ -688,13 +697,18 @@ Notes on this shape:
   empty strings, `_apply_env_relay_overrides` treats an empty value as "not
   set" (consistent with how `config.py` already treats absent-vs-empty
   elsewhere, e.g. `_has_orgs_key`), and behavior is byte-for-byte identical
-  to today: the workflow degrades to the demo relay, not an error. No repo
-  is forced onto this mechanism to keep `biff-notify.yml` working. **This
-  does NOT hold if only one of the two is configured** — a repo that sets
-  `secrets.BIFF_RELAY_TOKEN` but leaves `vars.BIFF_RELAY_URL` unset hits §2's
-  auth-requires-a-URL check and fails fast with `SystemExit` instead,
-  deliberately, rather than silently sending that secret to the demo relay.
-  Configure both together or neither.
+  to today: the job resolves the relay from the repo's config. A repo with no
+  relay configured resolves to the local relay, and a CI runner is another
+  machine, so `biff wall` fails there (non-zero exit, a message naming
+  `vars.BIFF_RELAY_URL`) instead of reporting success having delivered
+  nothing. Set `vars.BIFF_RELAY_URL` (and the token, if the relay needs one),
+  or commit a relay in `.punt-labs/biff/config.yaml`. `biff enable` and
+  `biff doctor` warn when `biff-notify.yml` is installed but the repo
+  resolves to the local relay. **Setting only one of the two is a
+  different failure** — a repo that sets `secrets.BIFF_RELAY_TOKEN` but
+  leaves `vars.BIFF_RELAY_URL` unset hits §2's auth-requires-a-URL check and
+  fails fast with `SystemExit`, deliberately, rather than silently ignoring
+  that secret. Configure both together or neither.
 - **A repo whose own `config.yaml` already commits a `relay:` section
   needs one more change than this workflow shape alone provides.** Per
   §0's repo-scoping gate, `_apply_env_relay_overrides` no-ops when the
