@@ -145,10 +145,7 @@ class UserSession(BaseModel):
     hostname: str = ""
     pwd: str = ""
     display_name: str = ""
-    kind: str = Field(
-        default="",
-        description="Identity kind: human, agent, or empty",
-    )
+    kind: str = Field(default="", description="Identity kind: human, agent, or empty")
     launched_by: str = Field(
         default="",
         description="OS user of the human who launched the process, or empty",

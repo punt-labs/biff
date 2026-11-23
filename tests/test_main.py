@@ -289,20 +289,6 @@ class TestMcpCommand:
     @patch("biff.server.transport_runtime.create_server")
     @patch("biff.server.launch.create_state", return_value=_STATE)
     @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
-    def test_passes_prefix(
-        self,
-        mock_config: MagicMock,
-        _mock_state: MagicMock,
-        mock_server: MagicMock,
-    ) -> None:
-        mock_server.return_value = MagicMock()
-        runner.invoke(app, ["mcp", "--user", "kai", "--prefix", "/var/spool"])
-        call_kwargs = mock_config.call_args.kwargs
-        assert call_kwargs["prefix"] == Path("/var/spool")
-
-    @patch("biff.server.transport_runtime.create_server")
-    @patch("biff.server.launch.create_state", return_value=_STATE)
-    @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_no_user_delegates_to_config(
         self,
         mock_config: MagicMock,

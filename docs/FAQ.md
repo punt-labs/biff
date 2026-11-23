@@ -34,13 +34,13 @@ Run the one-line installer, restart Claude Code twice, and type `/who`:
 curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/419ac99/install.sh | sh
 ```
 
-Biff ships with a shared demo relay on Synadia Cloud, so there is no infrastructure to provision. If your repo has `.punt-labs/biff/config.yaml` (committed by a teammate), biff picks up the team roster automatically. Your display name is resolved from your GitHub identity. No account creation, no workspace to configure.
+With no relay configured, biff runs on a local relay (files in your home directory), so there is no infrastructure to provision and nothing leaves your machine. If your repo has `.punt-labs/biff/config.yaml` (committed by a teammate), biff picks up the team roster automatically. Your display name is resolved from your GitHub identity. No account creation, no workspace to configure.
 
 See [Installing](INSTALLING.md) for the full guide.
 
 ### Do I need to set up a NATS server?
 
-No. Biff ships with a shared demo relay that works out of the box. When you're ready for your own relay (for privacy, performance, or team isolation), see [relay configuration](INSTALLING.md#relay-configuration).
+No. Biff works out of the box on a local relay for your agents on one machine. When sessions must see each other across machines, opt in to the shared demo relay, the self-hosted Docker relay or your own NATS server; see [relay configuration](INSTALLING.md#relay-configuration).
 
 ### Why does biff need two restarts?
 
@@ -52,7 +52,7 @@ The first restart lets Claude Code discover the new plugin and run the SessionSt
 
 Messages follow a POP mail model: they are held on the NATS relay only until the recipient reads them, then discarded. Biff is not a system of record.
 
-The shared demo relay is hosted on Synadia Cloud. Teams that want data sovereignty can self-host a NATS server and route all traffic through their own infrastructure.
+The local relay keeps messages in files under `~/.punt-labs/biff/relay/` on your machine. The opt-in demo relay is hosted on Synadia Cloud. Teams that want data sovereignty can self-host a NATS server and route all traffic through their own infrastructure.
 
 ### Are messages encrypted?
 

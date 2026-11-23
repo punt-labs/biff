@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -22,6 +23,12 @@ from biff.doctor import (
 )
 from biff.models import RelayAuth
 from biff.plugins.contract import CheckResult, PluginRegistry
+
+
+def tmp_home(repo: Path) -> Path:
+    """Return the isolated HOME the ``local_repo`` fixture set."""
+    return repo.parent / "home"
+
 
 # -- Individual checks -------------------------------------------------------
 
@@ -168,10 +175,10 @@ class TestCheckGitHooks:
 
 class TestResolveRelayConfig:
     @patch("biff.doctor.find_git_root", return_value=None)
-    def test_defaults_to_demo_relay(self, _mock: object) -> None:
+    def test_defaults_to_local_relay(self, _mock: object) -> None:
         url, auth, tls_handshake_first = _resolve_relay_config()
-        assert "ngs.global" in url
-        assert auth is not None
+        assert url is None
+        assert auth is None
         assert tls_handshake_first is False
 
     def test_uses_yaml_config(self, tmp_path: Path) -> None:
@@ -221,6 +228,54 @@ class TestResolveRelayConfig:
 
 
 class TestCheckRelay:
+    @pytest.fixture
+    def local_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        return repo
+
+    def test_local_relay_reports_its_directory_and_why(self, local_repo: Path) -> None:
+        with patch("biff.doctor.find_git_root", return_value=local_repo):
+            result = _check_relay()
+        assert result.passed
+        assert "local filesystem relay" in result.message
+        assert str(tmp_home(local_repo) / ".punt-labs" / "biff" / "relay") in (
+            result.message
+        )
+        assert "no remote" in result.message
+
+    def test_local_relay_directory_is_probed_and_left_clean(
+        self, local_repo: Path
+    ) -> None:
+        with patch("biff.doctor.find_git_root", return_value=local_repo):
+            _check_relay()
+        relay_root = tmp_home(local_repo) / ".punt-labs" / "biff" / "relay"
+        (directory,) = relay_root.iterdir()
+        assert list(directory.iterdir()) == []
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+    def test_unwritable_local_relay_directory_fails_naming_path_and_error(
+        self, local_repo: Path
+    ) -> None:
+        relay_root = tmp_home(local_repo) / ".punt-labs" / "biff" / "relay"
+        relay_root.mkdir(parents=True)
+        relay_root.chmod(0o500)
+        try:
+            with patch("biff.doctor.find_git_root", return_value=local_repo):
+                result = _check_relay()
+        finally:
+            relay_root.chmod(0o700)
+        assert not result.passed
+        assert str(relay_root) in result.message
+        assert "Permission denied" in result.message
+
+    def test_outside_a_repo_the_local_relay_has_no_directory(self) -> None:
+        with patch("biff.doctor.find_git_root", return_value=None):
+            result = _check_relay()
+        assert result.passed
+        assert "not in a repo" in result.message
+
     @patch("biff.doctor._test_nats_connection", return_value=True)
     @patch("biff.doctor._resolve_relay_config")
     def test_reachable(self, mock_config: object, _mock_conn: object) -> None:
@@ -242,6 +297,7 @@ class TestCheckRelay:
         result = _check_relay()
         assert not result.passed
         assert "connection error" in result.message
+        assert "Exception: boom" in result.message
 
     @patch("biff.doctor._test_nats_connection", return_value=True)
     @patch("biff.doctor._resolve_relay_config")

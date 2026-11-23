@@ -18,9 +18,7 @@ from biff._stdlib import (
     yaml_config_dir,
 )
 from biff.config import (
-    DEMO_RELAY_URL,
     _deep_merge,
-    demo_creds_path,
     ensure_gitignore_yaml,
     load_cli_config,
     load_yaml_config,
@@ -344,25 +342,24 @@ class TestLoadConfigZeroConfig:
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
     @patch("biff.identity.get_github_identity", return_value=_KAI)
-    def test_zero_config_uses_demo_relay(
+    def test_zero_config_uses_local_relay(
         self, _gh: object, _slug: object, tmp_path: Path
     ) -> None:
         (tmp_path / ".git").mkdir()
         resolved = load_cli_config(start=tmp_path)
-        assert resolved.config.relay_url == DEMO_RELAY_URL
-        assert resolved.config.relay_auth is not None
-        assert resolved.config.relay_auth.user_credentials == str(demo_creds_path())
+        assert resolved.config.relay_url is None
+        assert resolved.config.relay_auth is None
 
     @patch("biff.config.get_repo_owner", return_value=None)
     @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_zero_config_no_remote_no_orgs(
         self, _gh: object, _owner: object, tmp_path: Path
     ) -> None:
-        """No remote -> empty orgs, but still demo relay."""
+        """No remote -> empty orgs, but still the local relay."""
         (tmp_path / ".git").mkdir()
         resolved = load_cli_config(start=tmp_path)
         assert resolved.config.orgs == ()
-        assert resolved.config.relay_url == DEMO_RELAY_URL
+        assert resolved.config.relay_url is None
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
     @patch("biff.identity.get_github_identity", return_value=_KAI)
@@ -457,14 +454,13 @@ class TestLoadConfigYaml:
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
     @patch("biff.identity.get_github_identity", return_value=_KAI)
-    def test_explicit_config_without_relay_gets_demo(
+    def test_explicit_config_without_relay_gets_local_relay(
         self, _gh: object, _slug: object, tmp_path: Path
     ) -> None:
-        """Explicit config that omits relay still gets demo relay as fallback."""
+        """Explicit config that omits relay uses the local relay."""
         (tmp_path / ".git").mkdir()
         biff_dir = tmp_path / ".punt-labs" / "biff"
         biff_dir.mkdir(parents=True)
         (biff_dir / "config.yaml").write_text("peers:\n  orgs:\n    - punt-labs\n")
         resolved = load_cli_config(start=tmp_path)
-        # Demo relay is always the fallback
-        assert resolved.config.relay_url == DEMO_RELAY_URL
+        assert resolved.config.relay_url is None
