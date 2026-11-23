@@ -33,18 +33,22 @@ jobs:
           path: dist/
           retention-days: 1
 
-  docker:
-    # Gated on pypi, not just build, so a tag can never end up with a
-    # Docker image published on GHCR but no matching PyPI release (or
-    # vice versa) -- both channels ship together (see CLAUDE.md).
-    needs: pypi
+  relay-image-candidate:
+    # Build and push the relay image once, under a candidate tag. The release
+    # tag is a retag of this exact manifest (the docker job), never a rebuild,
+    # so what relay-image-test proves is what ships.
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm64
@@ -56,13 +60,71 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: docker
           file: docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/punt-labs/biff-relay:${{ env.VERSION }}
+          tags: ghcr.io/punt-labs/biff-relay:${{ env.VERSION }}-candidate
+
+  relay-image-test:
+    # The relay-image tier (tests/test_relay_image/) against the pushed
+    # candidate digest, natively on both shipped architectures.
+    needs: relay-image-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      BIFF_RELAY_IMAGE: ghcr.io/punt-labs/biff-relay@${{ needs.relay-image-candidate.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: docker pull "$BIFF_RELAY_IMAGE"
+      - run: uv sync --frozen --extra dev
+      - run: uv run pytest -m nats_docker tests/test_relay_image
+
+  docker:
+    # Gated on pypi, so a tag can never end up with a Docker image published
+    # on GHCR but no matching PyPI release (or vice versa) -- both channels
+    # ship together (see CLAUDE.md). Promotes the tested candidate manifest.
+    needs: [pypi, relay-image-candidate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the tested candidate as the release
+        env:
+          DIGEST: ${{ needs.relay-image-candidate.outputs.digest }}
+        run: |
+          docker buildx imagetools create \
+            --tag "ghcr.io/punt-labs/biff-relay:${GITHUB_REF_NAME#v}" \
+            "ghcr.io/punt-labs/biff-relay@${DIGEST}"
 
   testpypi:
     needs: build
@@ -107,22 +169,14 @@ jobs:
         # the hash comparison keeps them honest. Standard library only; no
         # package code runs here. Tested in tests/test_verify_testpypi.py.
         run: python tools/verify_testpypi.py punt-biff "${GITHUB_REF_NAME#v}" dist verified
-      - name: Install the verified wheel alone
-        # --no-deps: nothing but punt-biff may come from TestPyPI, where anyone
-        # can publish a higher version of a dependency's name.
-        run: uv pip install --system --no-deps verified/*.whl
-      - name: Install its dependencies from PyPI only
-        # The requirement list comes from the installed package's own metadata,
-        # so it never drifts from pyproject.toml.
-        run: |
-          python -c "import importlib.metadata as m; print('\n'.join(m.requires('punt-biff') or []))" > requirements.txt
-          cat requirements.txt
-          uv pip install --system --index-url https://pypi.org/simple/ -r requirements.txt
-      - name: Verify CLI
-        run: biff --help
+      - name: Smoke-test the verified wheel in a clean environment
+        # Installs only the verified wheel plus dependencies from PyPI into a
+        # fresh venv, HOME and git repo, then sends and reads a message through
+        # the installed CLI and the installed MCP server.
+        run: bash scripts/smoke-release.sh candidate "${GITHUB_REF_NAME#v}" verified/*.whl
 
   pypi:
-    needs: test-install
+    needs: [test-install, relay-image-test]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: release
@@ -134,3 +188,61 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  published-smoke:
+    # TST-8: the exact version from production PyPI, on both shipped OSes.
+    needs: pypi
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: bash scripts/smoke-release.sh published "${GITHUB_REF_NAME#v}"
+
+  published-image-smoke:
+    # TST-8 for the relay image: pull the release tag from GHCR, confirm it is
+    # the tested candidate, and run the relay-image tier against it.
+    needs: [docker, relay-image-candidate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      CANDIDATE_DIGEST: ${{ needs.relay-image-candidate.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the release tag and match it to the candidate
+        run: |
+          image="ghcr.io/punt-labs/biff-relay:${GITHUB_REF_NAME#v}"
+          docker pull "$image"
+          published=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          if [[ "$published" != "$CANDIDATE_DIGEST" ]]; then
+            echo "::error::$image is $published, not the tested candidate $CANDIDATE_DIGEST"
+            exit 1
+          fi
+          echo "BIFF_RELAY_IMAGE=$image" >> "$GITHUB_ENV"
+      - run: uv sync --frozen --extra dev
+      - run: uv run pytest -m nats_docker tests/test_relay_image
