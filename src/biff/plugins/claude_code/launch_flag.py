@@ -119,8 +119,14 @@ class LaunchFlagGate:
 
     def _argv(self) -> ClaudeArgv | None:
         """Return Claude Code's parsed argv, or ``None`` (logged) when unknown."""
-        corroborate = None if self._ancestors is None else self._ancestors()
-        pid = main_agent_id(self._env, ancestors=corroborate)
+        try:
+            corroborate = None if self._ancestors is None else self._ancestors()
+            pid = main_agent_id(self._env, ancestors=corroborate)
+        except (psutil.Error, OSError) as exc:
+            logger.info(
+                "launch_flag_unknown: ancestors unreadable: %s", type(exc).__name__
+            )
+            return None
         if pid is None:
             logger.info("launch_flag_unknown: CLAUDE_PID is not a live ancestor")
             return None

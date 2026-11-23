@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Self, final
 
 __all__ = ["PollCommand"]
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -31,8 +34,11 @@ class PollCommand:
     @classmethod
     def for_env(cls, env: Mapping[str, str]) -> Self:
         """Return the command for the plugin named in *env*."""
-        if env.get("BIFF_PLUGIN_NAME", "").endswith("-dev"):
+        name = env.get("BIFF_PLUGIN_NAME", "")
+        if name.endswith("-dev"):
             return cls("/biff-dev:read-dev 2m")
+        if name != "biff":
+            logger.info("BIFF_PLUGIN_NAME is %r; assuming the biff plugin", name)
         return cls("/biff:read 2m")
 
     @property

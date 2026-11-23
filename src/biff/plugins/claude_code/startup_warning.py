@@ -76,8 +76,12 @@ class StartupWarning:
         cls, output: dict[str, object], data: dict[str, object]
     ) -> dict[str, object]:
         """Return SessionStart *output* with this machine's warning added."""
-        claim = WarningClaim.for_hook(os.environ, data)
-        return cls.for_machine().apply(output, data, claim.take)
+        once: Callable[[], bool] | None = None
+        try:
+            once = WarningClaim.for_hook(os.environ, data).take
+        except Exception:
+            logger.warning("warning claim unavailable", exc_info=True)
+        return cls.for_machine().apply(output, data, once)
 
     def apply(
         self,
@@ -141,15 +145,23 @@ class StartupWarning:
     def _closed(self) -> list[ClosedGate]:
         """Return what every gate reports.
 
-        A gate that raises is logged and skipped: this runs while a session
-        starts and must neither break it nor hide what the other gates found.
+        A gate that raises is logged and reported as an unknown, so the model
+        is still told: this runs while a session starts and must neither break
+        it nor hide what the other gates found.
         """
         closed: list[ClosedGate] = []
         for gate in self._gates:
             try:
                 closed.extend(gate.closed())
             except Exception:
-                logger.warning(
-                    "channel gate %s failed", type(gate).__name__, exc_info=True
+                name = type(gate).__name__
+                logger.warning("channel gate %s failed", name, exc_info=True)
+                closed.append(
+                    ClosedGate(
+                        reason=f"{name} could not be checked",
+                        fix="",
+                        notify_user=False,
+                        unknown=True,
+                    )
                 )
         return closed

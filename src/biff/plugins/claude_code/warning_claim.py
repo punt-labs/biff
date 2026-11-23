@@ -77,13 +77,19 @@ class WarningClaim:
     def take(self) -> bool:
         """Return whether this caller is the first to claim the warning.
 
-        Fails open: when the marker cannot be written the warning is shown.
+        Fails open: when the state directory or marker cannot be used the
+        warning is shown.  Only a marker that already exists means another
+        plugin claimed it.
         """
         if self._key is None:
             return True
         try:
             self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             self._prune()
+        except OSError:
+            logger.info("warning claim unavailable: %s", self._directory, exc_info=True)
+            return True
+        try:
             fd = os.open(
                 self._directory / self._key,
                 os.O_CREAT | os.O_EXCL | os.O_WRONLY,

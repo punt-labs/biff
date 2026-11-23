@@ -7,7 +7,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import ClassVar, Protocol, cast
 from unittest.mock import patch
@@ -132,6 +132,36 @@ class TestUncertainty:
         assert "could not be checked" not in text
 
 
+class TestCrashedGate:
+    """A gate that crashes is an unknown, not silence."""
+
+    def test_only_a_crashed_gate_still_tells_the_model(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        warning = StartupWarning((_BrokenGate(),))
+        text = warning.text()
+        assert text == (
+            "biff: channels may not be live in this session "
+            "(_BrokenGate could not be checked). "
+            "If new messages do not arrive on their own, run /biff:read 2m."
+        )
+        assert warning.text(user=True) is None
+        assert "_BrokenGate" in caplog.text
+
+    def test_claim_construction_failure_still_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        warning = StartupWarning(EnvGate.opt_outs({"DISABLE_TELEMETRY": "1"}))
+        with (
+            caplog.at_level("INFO"),
+            patch.object(StartupWarning, "for_machine", return_value=warning),
+            patch.object(WarningClaim, "for_hook", side_effect=OSError("no home")),
+        ):
+            out = StartupWarning.add_to(BASE, {"source": "startup"})
+        assert "DISABLE_TELEMETRY is set" in cast("str", out["systemMessage"])
+        assert "warning claim" in caplog.text
+
+
 class TestStartupWarning:
     """The assembled warning."""
 
@@ -198,6 +228,23 @@ class TestPollCommand:
         env = {} if name is None else {"BIFF_PLUGIN_NAME": name}
         assert PollCommand.for_env(env).text == command
 
+    @pytest.mark.parametrize("name", [None, "", "garbage"])
+    def test_an_unrecognized_name_is_logged(
+        self, name: str | None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = {} if name is None else {"BIFF_PLUGIN_NAME": name}
+        with caplog.at_level("INFO"):
+            PollCommand.for_env(env)
+        assert "BIFF_PLUGIN_NAME" in caplog.text
+
+    @pytest.mark.parametrize("name", ["biff", "biff-dev"])
+    def test_a_known_name_is_not_logged(
+        self, name: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("INFO"):
+            PollCommand.for_env({"BIFF_PLUGIN_NAME": name})
+        assert "BIFF_PLUGIN_NAME" not in caplog.text
+
 
 class TestSessionOutputFailure:
     """A crash in the warning machinery still tells the model."""
@@ -212,62 +259,93 @@ class TestSessionOutputFailure:
         )
 
 
+def _claim(
+    directory: Path,
+    env: Mapping[str, str],
+    data: dict[str, object],
+    now: Callable[[], float] | None = None,
+) -> WarningClaim:
+    """Build a claim on a pinned clock, so no test straddles a minute boundary."""
+    return WarningClaim(directory, env, data, now or (lambda: 1000.0))
+
+
 class TestWarningClaim:
     """Two biff plugins in one session warn once."""
 
     def test_only_the_first_claim_wins(self, tmp_path: Path) -> None:
         env = {"CLAUDE_PID": "4242"}
         data: dict[str, object] = {"session_id": "s", "source": "startup"}
-        first = WarningClaim(tmp_path, env, data)
-        second = WarningClaim(tmp_path, env, data)
+        first = _claim(tmp_path, env, data)
+        second = _claim(tmp_path, env, data)
         assert first.take() is True
         assert second.take() is False
 
     def test_other_sessions_and_sources_claim_separately(self, tmp_path: Path) -> None:
         env = {"CLAUDE_PID": "4242"}
         base: dict[str, object] = {"session_id": "s", "source": "startup"}
-        assert WarningClaim(tmp_path, env, base).take()
-        assert WarningClaim(tmp_path, env, {**base, "session_id": "t"}).take()
-        assert WarningClaim(tmp_path, env, {**base, "source": "compact"}).take()
-        assert WarningClaim(tmp_path, {"CLAUDE_PID": "1"}, base).take()
+        assert _claim(tmp_path, env, base).take()
+        assert _claim(tmp_path, env, {**base, "session_id": "t"}).take()
+        assert _claim(tmp_path, env, {**base, "source": "compact"}).take()
+        assert _claim(tmp_path, {"CLAUDE_PID": "1"}, base).take()
 
     def test_two_compactions_minutes_apart_both_warn(self, tmp_path: Path) -> None:
         env = {"CLAUDE_PID": "4242"}
         data: dict[str, object] = {"session_id": "s", "source": "compact"}
-        first = WarningClaim(tmp_path, env, data, lambda: 1000.0)
-        later = WarningClaim(tmp_path, env, data, lambda: 1000.0 + 180)
+        first = _claim(tmp_path, env, data, lambda: 1000.0)
+        later = _claim(tmp_path, env, data, lambda: 1000.0 + 180)
         assert first.take() is True
         assert later.take() is True
 
     def test_simultaneous_runs_warn_once(self, tmp_path: Path) -> None:
         env = {"CLAUDE_PID": "4242"}
         data: dict[str, object] = {"session_id": "s", "source": "compact"}
-        plugins = [WarningClaim(tmp_path, env, data, lambda: 1000.0) for _ in range(2)]
+        plugins = [_claim(tmp_path, env, data, lambda: 1000.0) for _ in range(2)]
         assert [plugin.take() for plugin in plugins] == [True, False]
+
+    def test_dangling_symlink_directory_fails_open(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        directory = tmp_path / "claims"
+        directory.symlink_to(tmp_path / "nowhere")
+        data: dict[str, object] = {"session_id": "s", "source": "startup"}
+        with caplog.at_level("INFO"):
+            assert _claim(directory, {}, data).take() is True
+            assert _claim(directory, {}, data).take() is True
+        assert "warning claim unavailable" in caplog.text
+
+    def test_a_file_where_the_directory_belongs_fails_open(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        directory = tmp_path / "claims"
+        directory.write_text("")
+        data: dict[str, object] = {"session_id": "s", "source": "startup"}
+        with caplog.at_level("INFO"):
+            assert _claim(directory, {}, data).take() is True
+        assert "warning claim unavailable" in caplog.text
 
     def test_marker_is_private(self, tmp_path: Path) -> None:
         env = {"CLAUDE_PID": "4242"}
-        WarningClaim(tmp_path, env, {"session_id": "s", "source": "x"}).take()
+        _claim(tmp_path, env, {"session_id": "s", "source": "x"}).take()
         (marker,) = tmp_path.iterdir()
         assert marker.stat().st_mode & 0o777 == 0o600
 
     def test_no_session_id_cannot_dedupe(self, tmp_path: Path) -> None:
-        claim = WarningClaim(tmp_path, {}, {})
+        claim = _claim(tmp_path, {}, {})
         assert claim.take() and claim.take()
 
     def test_old_markers_are_pruned(self, tmp_path: Path) -> None:
         stale = tmp_path / "old"
         stale.write_text("")
         os.utime(stale, (0, 0))
-        WarningClaim(tmp_path, {}, {"session_id": "s"}).take()
+        _claim(tmp_path, {}, {"session_id": "s"}).take()
         assert not stale.exists()
 
     def test_apply_emits_once(self, tmp_path: Path) -> None:
         env = {"CLAUDE_PID": "4242"}
         data: dict[str, object] = {"session_id": "s", "source": "startup"}
         warning = StartupWarning(EnvGate.opt_outs({"DISABLE_TELEMETRY": "1"}))
-        first = warning.apply(BASE, data, WarningClaim(tmp_path, env, data).take)
-        second = warning.apply(BASE, data, WarningClaim(tmp_path, env, data).take)
+        first = warning.apply(BASE, data, _claim(tmp_path, env, data).take)
+        second = warning.apply(BASE, data, _claim(tmp_path, env, data).take)
         assert "systemMessage" in first
         assert second == BASE
 
@@ -404,7 +482,7 @@ def run(
         def for_hook(
             _cls: type[WarningClaim], env: Mapping[str, str], data: dict[str, object]
         ) -> WarningClaim:
-            return WarningClaim(claims, env, data)
+            return _claim(claims, env, data)
 
         monkeypatch.setattr(WarningClaim, "for_hook", classmethod(for_hook))
 

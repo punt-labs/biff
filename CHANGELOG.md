@@ -10,7 +10,7 @@
   `DISABLE_TELEMETRY`, `CLAUDE_CODE_DISABLE_FEATURE_FLAGS`), a cloud provider
   (`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, `_FOUNDRY`), and the `claude` process's
   launch flag (from `CLAUDE_PID`). When it knows channels are off it tells the
-  user at startup and the model, why, the fix, and to poll with `/read 2m`
+  user at startup and the model, why, the fix, and to poll with `/biff:read 2m`
   (`/biff-dev:read-dev 2m` for the development plugin). Anything it cannot see,
   such as server-managed policy, makes it tell only the model that channels may
   be off. Two biff plugins in one session warn once.

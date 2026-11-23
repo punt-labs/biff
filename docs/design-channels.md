@@ -277,17 +277,41 @@ channel gate it can see without the model:
 | Managed policy | The effective policy does not set `channelsEnabled` to a non-true value. An absent key is no finding. The first source with a policy key wins (macOS preference domain `com.anthropic.claudecode`, then the settings files in `/Library/Application Support/ClaudeCode`, `/etc/claude-code` or `C:\Program Files\ClaudeCode`, with `managed-settings.d/*.json`), or all of them merge with `managedSourcesBehavior: "merge"`. Server-managed settings and the Windows registry are not visible to a hook, so a local `channelsEnabled` that is not true is only a model-only note ("a server-managed policy may still allow channels"), never a user warning |
 | Launch flag and allowlist, judged together | Live only when the development flag lists biff (`plugin:biff@punt-labs`, or `plugin:biff-dev@...`), which bypasses `allowedChannelPlugins`; or `--channels` lists `plugin:biff@punt-labs` and the managed policy lists biff in `allowedChannelPlugins`. With `--channels`, a local allowlist that does not list biff (or no allowlist) is a model-only note, because a server-managed policy outranks every local source and a hook cannot see it. The user is warned only when the launch itself never names biff. A `-p` run ignores channels and only the model is told. The flags come from the argv of `CLAUDE_PID`, read with `psutil`, trusted only when that process is a live ancestor of the hook (the corroboration of `caller_stamp.py`). Otherwise the gate is unknown: the hook tells only the model that launch flags could not be checked |
 
-Two biff plugins in one session (the installed plugin and a `--plugin-dir` one) warn once: each hook run tries to create one marker file for `CLAUDE_PID`, `session_id` and `source` in biff's state directory, and only the creator emits. If the warning code itself fails, the hook logs it and tells the model that biff could not check whether channels are live. A saved poll cadence does not silence the warning: a durable cron job can expire, so the text says "if you are not already polling". The user sees the message only at `startup`; the model
-gets the context on every SessionStart, so it survives a resume, a clear and a
-compaction.
+Two biff plugins in one session (the installed plugin and a `--plugin-dir`
+one) warn once. Each hook run tries to create one marker file in biff's state
+directory, keyed on `CLAUDE_PID`, `session_id`, `source` and the current minute;
+only the creator emits. Two runs that straddle a minute boundary may both warn,
+and markers are pruned after 10 minutes, so a later compaction warns again. If
+the state directory cannot be used, the hook warns without a claim. If the warning
+code itself fails, the hook logs it and tells the model that biff could not check
+whether channels are live; a gate that crashes is reported to the model as unknown.
 
-If any gate is closed, the hook tells both the user (as a visible message)
-and the model (as context):
+Who sees what. Every SessionStart the plugin handles gives the model the
+warning in `additionalContext`, so it survives a resume, a clear and a
+compaction. The user sees a `systemMessage` only at `startup`, and only for gates
+that know (`notify_user`): an env opt-out, a cloud provider, or a launch that
+never names biff. Gates that depend on what a hook cannot see (server-managed
+policy, an unreadable launch state, a crashed gate, a `-p` run) tell only the
+model. A saved poll cadence does not silence the warning: a durable cron job can
+expire.
+
+When a gate knows channels are off, the text is:
 
 ```text
 biff: channels are not live in this session (<reason>). New messages will
-not arrive on their own. Run /biff:read 2m to poll. <fix for the reason>.
+not arrive on their own. If you are not already polling, run <command>. <fix>
 ```
+
+When only unknown gates fired, it is:
+
+```text
+biff: channels may not be live in this session (<reason>). If new messages
+do not arrive on their own, run <command>.
+```
+
+`<command>` is `/biff:read 2m`, or `/biff-dev:read-dev 2m` for the
+`--plugin-dir` plugin, named by the SessionStart dispatchers through
+`BIFF_PLUGIN_NAME`.
 
 If every visible gate is open, it says nothing. The warning costs no model
 turn and changes nothing about delivery.

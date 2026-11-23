@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,8 +23,28 @@ def _run(script: Path) -> str:
     return done.stdout.strip()
 
 
-def test_the_checkout_names_the_dev_plugin() -> None:
-    assert _run(_HELPER) == "biff-dev"
+def test_the_checkout_prints_exactly_its_manifest_name() -> None:
+    manifest = _HOOKS.parent / ".claude-plugin" / "plugin.json"
+    assert _run(_HELPER) == json.loads(manifest.read_text())["name"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"author":{"name":"Punt Labs"},"name":"biff"}',
+        '{"name":"biff","author":{"name":"Punt Labs"}}',
+        '{\n  "author": {"name": "Punt Labs"},\n  "name": "biff"\n}\n',
+    ],
+    ids=["minified-nested-first", "minified", "nested-before-top-level"],
+)
+def test_helper_reads_the_top_level_name(tmp_path: Path, body: str) -> None:
+    hooks = tmp_path / "hooks"
+    manifest = tmp_path / ".claude-plugin"
+    hooks.mkdir()
+    manifest.mkdir()
+    shutil.copy(_HELPER, hooks / "plugin-name.sh")
+    (manifest / "plugin.json").write_text(body)
+    assert _run(hooks / "plugin-name.sh") == "biff"
 
 
 @pytest.mark.parametrize("name", ["biff", "biff-dev"])

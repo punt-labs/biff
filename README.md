@@ -455,14 +455,15 @@ does not run `biff enable` or change repository enablement policy.
 When Claude Code starts in a biff-enabled repository, biff checks whether new
 messages can reach the session on their own (as Claude Code channel events). If it
 knows they cannot, it prints a warning at startup and tells the model: why, how to
-fix it, and to poll instead with `/read 2m` (`/biff-dev:read-dev 2m` for the
+fix it, and to poll instead with `/biff:read 2m` (`/biff-dev:read-dev 2m` for the
 development plugin). If you are already polling, ignore the warning.
 
 Biff warns you only when it can see the cause: a telemetry or feature-flag opt-out
 (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,
 `DISABLE_TELEMETRY`, `CLAUDE_CODE_DISABLE_FEATURE_FLAGS`), a cloud provider
 (`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`), or
-a launch without `--dangerously-load-development-channels plugin:biff@punt-labs`.
+a Claude Code that was "not started with a channel flag for biff"
+(`--dangerously-load-development-channels plugin:biff@punt-labs`).
 Settings it cannot see, such as server-managed policy, never produce a warning for
 you; the model is told only that channels may be off. On resume, clear and
 compaction only the model is told, and a `-p` run is model-only.

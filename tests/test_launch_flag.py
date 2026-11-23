@@ -25,15 +25,19 @@ def _closed(
     policy: ManagedPolicy | None = UNLISTED,
     *,
     env: dict[str, str] | None = None,
-    ancestors: frozenset[int] = frozenset({4242}),
+    ancestors: frozenset[int] | Exception = frozenset({4242}),
 ) -> tuple[ClosedGate, ...]:
     def read(_pid: int) -> list[str]:
         if isinstance(argv, Exception):
             raise argv
         return argv
 
-    gate = LaunchFlagGate(ENV if env is None else env, policy, read, lambda: ancestors)
-    return gate.closed()
+    def walk() -> frozenset[int]:
+        if isinstance(ancestors, Exception):
+            raise ancestors
+        return ancestors
+
+    return LaunchFlagGate(ENV if env is None else env, policy, read, walk).closed()
 
 
 class TestArgv:
@@ -145,6 +149,17 @@ class TestUnknown:
     ) -> None:
         with caplog.at_level("INFO"):
             (gate,) = _closed(["claude"], env=env)
+        assert "launch_flag_unknown" in caplog.text
+        self._model_only(gate)
+
+    @pytest.mark.parametrize(
+        "error", [psutil.NoSuchProcess(1), psutil.AccessDenied(1), OSError(5, "io")]
+    )
+    def test_ancestor_walk_failure_is_unknown(
+        self, error: Exception, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("INFO"):
+            (gate,) = _closed(["claude"], ancestors=error)
         assert "launch_flag_unknown" in caplog.text
         self._model_only(gate)
 
