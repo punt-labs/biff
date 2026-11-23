@@ -2073,6 +2073,7 @@ raised to record the debt.
   \Delta NotificationState
   \where
   pendingAge' = pendingAge \\
+  channelEnabled = zfalse \\
   toolContext = zfalse \\
   siteSuspenders \in inFlight \\
   inFlight' = inFlight \setminus \{ siteSuspenders \} \\
@@ -2416,6 +2417,7 @@ defect, at a different site.
   \Delta NotificationState
   \where
   pendingAge' = pendingAge \\
+  channelEnabled = zfalse \\
   session = sessNone \\
   siteCapture \in inFlight \\
   inFlight' = inFlight \setminus \{ siteCapture \} \\
@@ -5309,7 +5311,9 @@ with the specification.  Nothing is claimed beyond the scope.
   A: mail, wall & 128{,}508 & 2{,}621{,}590 & no violation, no deadlock \\
   B: invite, message & 24{,}040 & 492{,}592 & no violation, no deadlock \\
   C: mail, invite & 48{,}156 & 973{,}070 & no violation, no deadlock \\
-  D: mail, $pendingNotify$ free & 17{,}472 & 291{,}534 &
+  D: mail, $pendingNotify$ free & 17{,}304 & 298{,}954 &
+    no violation, no deadlock \\
+  E: D, $channelEnabled = ztrue$ & 16{,}472 & 286{,}842 &
     no violation, no deadlock \\
   P: mail, polling free & 2{,}544 & 43{,}272 & no violation, no deadlock \\
 \end{tabular}
@@ -5318,8 +5322,8 @@ with the specification.  Nothing is claimed beyond the scope.
 Run D drops the $pendingNotify$, $inFlight$, $lastNotifyResult$ and
 snapshot pins and pins the wall and the talk kinds away, so that the shared
 capture operations are exercised beside the channel: $CaptureSession$,
-$CaptureSessionFlushBegin$, $CaptureSessionFlushOk$ and
-$CaptureSessionFlushFail$ all fire, with $chanInit$ reset at the first and
+$CaptureSessionFlushBegin$, $CaptureSessionFlushOk$,
+$CaptureSessionFlushFail$ and $CaptureSessionFlushFailChannel$ all fire, with $chanInit$ reset at the first and
 the sender unaffected.  Run P drops the $pollOn = zfalse$ pin, so that
 $PollStart$, $PollPull$ and $PollStop$ fire (1{,}268 times each) and their
 successor states are expanded; in the other runs the pin prunes the state
@@ -5532,7 +5536,8 @@ obligation, not a modelled one: a second \texttt{initialize} while the
 session is captured and $pendingNotify = ztrue$ (the flush path).
 
 \paragraph{Coverage.}  Across the runs every operation of this section
-fires, except the five defective twins, which are enabled in no reachable
+fires, except the defective twins (the five of this section and
+$FlushOwedFailUnrecorded$), which are enabled in no reachable
 state by design.  $RecaptureSession$, uncovered in the base specification
 (it was enabled only after the dead $Unrecorded$ twins), now fires in every
 run, because its guard admits a captured session.  $WallExpire$,
@@ -5650,6 +5655,402 @@ it.  A test is owed for the refusal as well as for the success.
     (the table in Section~\ref{sec:chanchecks}, check~7).
 \end{enumerate}
 
+
+\subsection{Single-connection delivery}
+\label{sec:singleconn}
+
+The Claude Code plugin's channel mode (DES-087) serves one stdio connection
+for the life of the process, and the sections above describe the DES-061 code,
+which forgets the stored session whenever a standalone send fails.  Channel
+mode does not: the connection is the only one there will be, so a send that
+timed out, failed, or was dropped by the SDK keeps $session$ and keeps
+$pendingNotify = ztrue$, and the poller retries (\texttt{flush\_owed}) until a
+send succeeds.  This subsection is the model of that difference.
+
+The mode is $channelEnabled$, which the Channel Delivery section already
+carries and every operation already frames: channel mode is
+$channelEnabled = ztrue$.  $PollTickNotifyFail$ and
+$CaptureSessionFlushFail$, the two DES-061 failure schemas that set
+$session' = sessNone$, now require $channelEnabled = zfalse$.
+$NotifyBeltSendFail$ already leaves $session$ unchanged (the in-request send
+uses the request's own session), so it needs no variant.  Their channel-mode
+counterparts are $PollTickNotifyFailChannel$ and
+$CaptureSessionFlushFailChannel$: the same post-state with $session'$ kept
+(for the flush, $session' = sessCaptured$, because the real code stores the
+session before it flushes) and $pendingNotify' = ztrue$.
+
+The retry is $FlushOwedOk$ and $FlushOwedFail$.  Both require
+$channelEnabled = ztrue$, a captured session, $pendingNotify = ztrue$ and no
+critical section in flight (the real method holds the same lock as the other
+three sites).  The first clears the debt and the changed flags and sets
+$lastNotifyResult' = notifySent$; the second leaves the session and the debt
+as they were and sets $lastNotifyResult' = notifyDropped$.  The back-off
+(\texttt{CHANNEL\_BACKOFF}, 30~s) and the poller's cadence are not modelled:
+the model lets the retry fire whenever it is owed, and a back-off only delays a
+transition that is already enabled, which no safety property here depends on.
+$FlushOwedFailUnrecorded$ is the dead twin: a failed retry that clears
+$pendingNotify$ and sets the ghost $notifyLost' = ztrue$.
+
+\paragraph{The invariant.}  ``In channel mode an owed change is never dropped,
+and $pendingNotify$ stays true until a send succeeds'' is
+$notifyLost = zfalse$, the invariant of Section~\ref{sec:sessionloss}, which
+now governs these schemas too: no real schema of this subsection clears
+$pendingNotify$ except $FlushOwedOk$, and the one that would,
+$FlushOwedFailUnrecorded$, is disabled by the invariant exactly as its
+siblings are (ProB enables an operation only if its post-state satisfies the
+invariants).  No new state variable was needed.
+
+\paragraph{Checks.}  \texttt{fuzz -t docs/notification.tex} reports no errors.
+The five runs of Section~\ref{sec:chanchecks} are repeated with the same
+commands.  A, B, C and P prune the tool-list machinery, so the new schemas do
+not fire there and their counts are unchanged ($128{,}508$, $24{,}040$,
+$48{,}156$ and $2{,}544$ states).  Run D, which leaves $pendingNotify$ free,
+now explores $17{,}304$ states and $298{,}954$ transitions with no violation
+and no deadlock: $CaptureSessionFlushFailChannel$ fires $224$ times,
+$FlushOwedOk$ and $FlushOwedFail$ $4{,}592$ times each, and
+$CaptureSessionFlushFail$ $64$ times (the default-mode part of the scope, with
+$channelEnabled = zfalse$).  Run E is run D with the pin
+$channelEnabled = ztrue$ added: $16{,}472$ states, $286{,}842$ transitions,
+no violation, no deadlock; $PollTickNotifyFail$ and $CaptureSessionFlushFail$
+are enabled in no state of it.
+\begin{verbatim}
+SCOPE="channelEnabled = ztrue & idleMarker = talkDescDefault &
+  readDescDefault = talkDescDefault & wallDescDefault = talkDescDefault &
+  size(queueItems) <= 1 & fileExists = zfalse & barStale = ztrue &
+  fileItems = [] & barLine2 = idleMarker & talkSubscribed = zfalse &
+  talkConnected = zfalse & talkBare = {} & pollOn = zfalse &
+  chanNewer <: {kMail} & chanUnseen <: {kMail} & wallLive = zfalse &
+  talkPending = {} & talkQueued = 0"
+probcli docs/notification.tex -model_check -noltl -coverage \
+  -p DEFAULT_SETSIZE 2 -card USER 1 -card SOURCEKEY 1 -card SESSIONKEY 1 \
+  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 -card RSLOT 1 \
+  -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000 -scope "$SCOPE"
+\end{verbatim}
+Two further checks, both at run E's scope.  Enabledness: the CTL formula
+\begin{verbatim}
+AG(({SCOPE & session = sessCaptured & pendingNotify = ztrue & inFlight = {}})
+   => e(FlushOwedOk))
+\end{verbatim}
+(the scope predicate in the premise, as in Section~\ref{sec:chanchecks}) is
+true: whenever a change is owed and the session is captured, the retry is
+enabled.  And a sequence that fails the first retry and then succeeds,
+\begin{verbatim}
+probcli docs/notification.tex -p DEFAULT_SETSIZE 2 -card USER 1 \
+  -card SOURCEKEY 1 -card SESSIONKEY 1 -card QSLOT 1 -card USLOT 1 \
+  -card ASLOT 1 -card PSLOT 1 -card RSLOT 1 -p MAX_INITIALISATIONS 16 \
+  -cbc_sequence 'CaptureSession;EnsureConnected;CloseConnection;
+    EnterToolContext;NotifyBeltBegin;LeaveToolContext;MailArrive;
+    EnterToolContext;NotifyBeltSendFail;LeaveToolContext;FlushOwedFail;
+    FlushOwedOk'
+\end{verbatim}
+is found and executed: the session survives the failed retry and the second
+retry delivers.  The dead twin in place of the last two steps gives \emph{no
+solution}; with $notifyLost = zfalse$ deleted from $NotificationState$
+(\texttt{sed} on the line, as in Section~\ref{sec:chanchecks}) the same
+sequence is found, so the invariant is what rules the twin out.
+
+What the model does not say, and the implementation owes as tests: that a
+timed-out or dropped send is retried before the next change ($FlushOwed$'s
+enabledness is modelled, its scheduling is not), that the back-off is honoured,
+and that a bug in the send (a code error, not a transport error) is logged and
+keeps the debt.
+
+\begin{schema}{PollTickNotifyFailChannel}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  channelEnabled = ztrue \\
+  toolContext = zfalse \\
+  siteSuspenders \in inFlight \\
+  inFlight' = inFlight \setminus \{ siteSuspenders \} \\
+  lastNotifyResult' = notifyDropped \\
+  barStale' = barStale \\
+  session' = session \\
+  pendingNotify' = ztrue \\
+  notifyLost' = notifyLost \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  beltPnSnapshot' = beltPnSnapshot \\
+  capPnSnapshot' = capPnSnapshot \\
+  raceLost' = raceLost \\
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{CaptureSessionFlushFailChannel}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  channelEnabled = ztrue \\
+  session = sessNone \\
+  siteCapture \in inFlight \\
+  inFlight' = inFlight \setminus \{ siteCapture \} \\
+  session' = sessCaptured \\
+  natsConn' = natsConn \\
+  lastNotifyResult' = notifyDropped \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  pendingNotify' = ztrue \\
+  notifyLost' = notifyLost \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  beltPnSnapshot' = beltPnSnapshot \\
+  raceLost' = raceLost \\
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{FlushOwedOk}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  channelEnabled = ztrue \\
+  session = sessCaptured \\
+  pendingNotify = ztrue \\
+  inFlight = \emptyset \\
+  inFlight' = inFlight \\
+  session' = session \\
+  natsConn' = natsConn \\
+  lastNotifyResult' = notifySent \\
+  wallDescChanged' = zfalse \\
+  talkDescChanged' = zfalse \\
+  pendingNotify' = zfalse \\
+  notifyLost' = notifyLost \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  beltPnSnapshot' = beltPnSnapshot \\
+  raceLost' = raceLost \\
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  capPnSnapshot' = capPnSnapshot \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{FlushOwedFail}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  channelEnabled = ztrue \\
+  session = sessCaptured \\
+  pendingNotify = ztrue \\
+  inFlight = \emptyset \\
+  inFlight' = inFlight \\
+  session' = session \\
+  natsConn' = natsConn \\
+  lastNotifyResult' = notifyDropped \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  pendingNotify' = ztrue \\
+  notifyLost' = notifyLost \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  beltPnSnapshot' = beltPnSnapshot \\
+  raceLost' = raceLost \\
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  capPnSnapshot' = capPnSnapshot \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{FlushOwedFailUnrecorded}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  channelEnabled = ztrue \\
+  session = sessCaptured \\
+  pendingNotify = ztrue \\
+  inFlight = \emptyset \\
+  inFlight' = inFlight \\
+  session' = session \\
+  natsConn' = natsConn \\
+  lastNotifyResult' = notifyDropped \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  pendingNotify' = zfalse \\
+  notifyLost' = ztrue \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  beltPnSnapshot' = beltPnSnapshot \\
+  raceLost' = raceLost \\
+  staleWithdrawHit' = staleWithdrawHit \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  capPnSnapshot' = capPnSnapshot \\
+  pollRogue' = pollRogue
+\end{schema}
 
 %%----------------------------------------------------------------------
 \section{System Properties}

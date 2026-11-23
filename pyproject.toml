@@ -17,7 +17,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "fastmcp>=4.2.0,<5",
+    # Channel mode reaches FastMCP's _mcp_server (DES-087): pin the minor version.
+    "fastmcp>=4.2.0,<4.3",
     "mcp>=2.3.0,<3",
     "pydantic>=2.0.0,<3",
     "typer>=0.15.0,<1",
@@ -199,6 +200,7 @@ prefixes = [
     "caller_identity",
     "chunking",
     "data",
+    "failure_log",
     "logging_config",
     "markers",
     "prob_gate",
@@ -222,6 +224,7 @@ prefixes = [
     "nats_relay",
     "relay",
     "relay_config",
+    "relay_errors",
     "relay_select",
     "session_handle",
     "session_open",

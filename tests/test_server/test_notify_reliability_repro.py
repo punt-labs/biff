@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import anyio
 import pytest
 from mcp.server.session import ServerSession
 
@@ -60,7 +61,7 @@ class TestDroppedMidSessionNotificationHasNoRecovery:
 
         dying_session = MagicMock(spec=ServerSession)
         dying_session.send_tool_list_changed = AsyncMock(
-            side_effect=RuntimeError("transport closed")
+            side_effect=anyio.ClosedResourceError("transport closed")
         )
         _descriptions.handshake_delivery._session = dying_session
 
@@ -90,7 +91,7 @@ class TestDroppedMidSessionNotificationHasNoRecovery:
 
         dying_session = MagicMock(spec=ServerSession)
         dying_session.send_tool_list_changed = AsyncMock(
-            side_effect=RuntimeError("transport closed")
+            side_effect=anyio.ClosedResourceError("transport closed")
         )
         _descriptions.handshake_delivery._session = dying_session
 
