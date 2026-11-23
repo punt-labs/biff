@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self, cast
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 from biff._stdlib import biff_data_dir, get_repo_common_root
 from biff.models import RelayAuth
@@ -253,7 +253,7 @@ class RelayKey:
         r"(?::(?P<port>\d+))?/(?P<path>.+)",
         re.IGNORECASE,
     )
-    _SCP = re.compile(r"(?:[^@/]+@)?(?P<host>[^:/@]+):(?P<path>[^/].*)")
+    _SCP = re.compile(r"(?:[^@/]+@)?(?P<host>\[[^\]]+\]|[^:/@]+):(?P<path>[^/].*)")
     _DEFAULT_PORTS = (0, 22, 80, 443, 9418)
 
     @classmethod
@@ -291,7 +291,10 @@ class RelayKey:
     def _for_filesystem(cls, url: str, base: Path) -> Self:
         """Key a path or ``file://`` remote by the absolute path it opens."""
         is_url = url.strip().lower().startswith("file:")
-        raw = unquote(urlsplit(url.strip()).path) if is_url else url.strip()
+        # After file:// and an optional host, everything is the path: git reads
+        # a ? or # there literally.
+        rest = url.strip()[len("file://") :]
+        raw = unquote(rest[rest.find("/") :]) if is_url else url.strip()
         resolved = (base / raw).expanduser().resolve()
         if resolved.name == ".git":  # git opens a checkout through its .git
             resolved = resolved.parent

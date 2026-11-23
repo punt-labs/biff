@@ -559,3 +559,16 @@ class TestRemoteSpellings:
         _git(repo, "config", "include.path", "extra")
         other = _clone(tmp_path / "b", ("origin", "git@github.com:o/r.git"))
         assert RelayLocation.of(repo).path == RelayLocation.of(other).path
+
+
+class TestLiteralFileRemotesAndScpIpv6:
+    def test_file_url_paths_keep_question_marks_and_hashes(self) -> None:
+        plain = RelayKey.of("/srv/we?ird#repo.git")
+        assert RelayKey.of("file:///srv/we?ird#repo.git") == plain
+        assert RelayKey.of("file://localhost/srv/we?ird#repo.git") == plain
+
+    def test_scp_style_ipv6_hosts_split_after_the_brackets(self) -> None:
+        scp = RelayKey.of("git@[2001:db8::1]:o/r.git")
+        assert scp.name.startswith("o__r-")
+        assert scp.name == RelayKey.of("ssh://git@[2001:db8::1]/o/r").name
+        assert scp.name == RelayKey.of("https://[2001:db8::1]/o/r").name
