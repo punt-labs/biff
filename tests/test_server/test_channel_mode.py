@@ -1026,3 +1026,35 @@ class TestOwedDebtIsRetriedEveryPollerIteration:
             await task
 
         assert not delivery._pending_notify
+
+
+class TestNoSessionCapturedIsAFailureEpisode:
+    async def test_it_warns_once_then_reminds_and_recovers(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from biff import failure_log
+
+        delivery = _descriptions.handshake_delivery
+        link = ChannelLink()
+        link.observe(anyio.create_memory_object_stream[SessionMessage](1)[0])
+        delivery.serve_single_connection(link)
+        delivery._pending_notify = True
+        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.0)
+        now = [1000.0]
+        monkeypatch.setattr(
+            failure_log, "time", SimpleNamespace(monotonic=lambda: now[0])
+        )
+        with caplog.at_level(logging.WARNING):
+            for _ in range(3):
+                await delivery.flush_owed()
+            now[0] += failure_log.REMINDER_SECONDS
+            await delivery.flush_owed()
+            session = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
+            session.send_tool_list_changed = AsyncMock()
+            await delivery.capture_session(session)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert "no session captured" in messages[0]
+        assert "still failing" in messages[1]
+        assert "recovered" in messages[2]
+        assert not delivery._pending_notify

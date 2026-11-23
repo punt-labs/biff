@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 import anyio
 import pytest
 
-from biff.server import tool_list_send
+from biff import failure_log
+from biff.failure_log import REMINDER_SECONDS, EpisodeLog
 from biff.server.channel import ChannelUnavailableError
-from biff.server.tool_list_send import EpisodeLog
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -24,9 +24,7 @@ _EXPECTED = (TimeoutError, ChannelUnavailableError, anyio.ClosedResourceError, O
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> Callable[[float], None]:
     now = [1000.0]
-    monkeypatch.setattr(
-        tool_list_send, "time", SimpleNamespace(monotonic=lambda: now[0])
-    )
+    monkeypatch.setattr(failure_log, "time", SimpleNamespace(monotonic=lambda: now[0]))
 
     def advance(seconds: float) -> None:
         now[0] += seconds
@@ -99,7 +97,7 @@ class TestExpectedFailuresLatchPerType:
             log.failed(_WHAT, TimeoutError())
             clock(30)
             log.failed(_WHAT, TimeoutError())
-            clock(tool_list_send.REMINDER_SECONDS)
+            clock(REMINDER_SECONDS)
             log.failed(_WHAT, TimeoutError())
 
         warnings = _records(caplog, logging.WARNING)
@@ -145,3 +143,59 @@ class TestThroughTheCallers:
                 )
 
         assert [r.levelno for r in caplog.records] == [logging.WARNING, logging.ERROR]
+
+
+class TestALastingBugReminds:
+    def test_a_bug_that_never_goes_away_logs_error_every_reminder_period(
+        self, caplog: pytest.LogCaptureFixture, clock: Callable[[float], None]
+    ) -> None:
+        log = _log()
+        with caplog.at_level(logging.DEBUG, logger=_LOG.name):
+            for _ in range(200):
+                clock(30)
+                log.failed(_WHAT, TypeError("bug"))
+
+        errors = _records(caplog, logging.ERROR)
+        assert len(errors) == 1 + (6000 - 30) // int(REMINDER_SECONDS)
+        assert "still failing" in errors[-1].getMessage()
+        assert "attempts" in errors[-1].getMessage()
+
+
+class TestThePollerTreatsANatsOutageAsTransport:
+    async def test_a_connection_closed_tick_is_a_warning_with_reminders(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        clock: Callable[[float], None],
+    ) -> None:
+        import nats.errors
+
+        from biff.server.tools import _descriptions
+
+        _descriptions._reset_session()
+
+        async def tick(*_args: object, **_kwargs: object) -> None:
+            raise nats.errors.ConnectionClosedError
+
+        monkeypatch.setattr(_descriptions, "_active_tick", tick)
+        with caplog.at_level(logging.WARNING):
+            for _ in range(2):
+                await _descriptions._safe_tick(
+                    None,  # type: ignore[arg-type]
+                    None,  # type: ignore[arg-type]
+                    0,
+                    ("", ""),
+                    ((), 0, ""),
+                    gate=None,  # type: ignore[arg-type]
+                )
+            clock(REMINDER_SECONDS)
+            await _descriptions._safe_tick(
+                None,  # type: ignore[arg-type]
+                None,  # type: ignore[arg-type]
+                0,
+                ("", ""),
+                ((), 0, ""),
+                gate=None,  # type: ignore[arg-type]
+            )
+
+        assert [r.levelno for r in caplog.records] == [logging.WARNING] * 2

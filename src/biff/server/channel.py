@@ -14,7 +14,7 @@ import anyio
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCNotification
 
-from biff.server.tool_list_send import TRANSPORT_ERRORS, EpisodeLog
+from biff.failure_log import TRANSPORT_ERRORS, EpisodeLog
 
 logger = logging.getLogger(__name__)
 

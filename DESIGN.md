@@ -8574,19 +8574,23 @@ path. A send that timed out, failed, or was dropped by the SDK keeps the stored
 session and stays owed. The poller retries owed notifications (`flush_owed`) on
 every iteration of its loop, outside the tick-work gate, backing off
 `CHANNEL_BACKOFF` (30 s) after a failure so a client that stopped reading does
-not stall every pass for the 3 s send timeout. An iteration runs every
-`poll_interval` seconds while active, every `nap_interval_for(poll_interval)`
-(15 times the interval) while napping, on every wake, and, with
-`poll_interval <= 0`, every 30 s fallback timeout: late, not lost.
+not stall every pass for the 3 s send timeout. The poller sleeps `poll_interval`
+seconds between iterations whether it is active or napping (napping skips only
+the relay poll, not the loop), so the retry runs every `poll_interval` seconds,
+on every wake, and, with `poll_interval <= 0`, on each 30 s fallback timeout:
+late, not lost.
 
-`EpisodeLog` keeps repeated failures readable without hiding a bug, because
-biff's log keeps INFO and above. A failure of a transport type (`TimeoutError`,
-`OSError`, the anyio closed/broken errors, `ChannelUnavailableError`) latches per
-(label, type): one WARNING with the cause and traceback when the episode opens,
-a WARNING every 10 minutes while it stays open, DEBUG in between, and one
-WARNING when the label next succeeds. Any other exception is a code bug and is
-logged at ERROR with its traceback, once per distinct type, whatever episodes
-are open.
+`EpisodeLog` (`src/biff/failure_log.py`, kernel layer, shared by the server and
+any relay or watcher code) keeps repeated failures readable without hiding a
+bug, because biff's log keeps INFO and above. A failure of a transport type (`TimeoutError`,
+`OSError`, the anyio closed/broken errors, `ChannelUnavailableError`; the poller
+adds every `nats.errors.Error`, `RELAY_ERRORS` in `src/biff/relay_errors.py`)
+latches per (label, type): one WARNING with the cause and traceback when the
+episode opens, a WARNING every 10 minutes while it stays open, DEBUG in between,
+and one WARNING when the label next succeeds. Any other exception is a code bug:
+it logs at ERROR with its traceback, once per distinct type, and again at ERROR
+every 10 minutes while it lasts, whatever episodes are open. A channel-mode
+retry with no handshake session is a failure of the same kind.
 
 What changes outside channel mode (HTTP, `--user` stdio, opencode, codex, the
 CLI) is small: the loop, the capabilities and the 2026-07-28 subscriptions are

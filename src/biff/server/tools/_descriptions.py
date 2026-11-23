@@ -34,7 +34,7 @@ from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.server.display_queue import DisplayItem
-from biff.server.tool_list_send import TRANSPORT_ERRORS, EpisodeLog, ListChanged
+from biff.server.tool_list_send import ListChanged
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
 from biff.talk_types import TalkNotification, TalkPhase
 from biff.tty import format_address
@@ -169,11 +169,8 @@ class _HandshakeDelivery:
 
     async def _notify_standalone(self) -> None:
         self._pending_notify = True
-        if self._session is None:
-            return
-        sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(
-            self._session.send_tool_list_changed
-        )
+        push = self._session.send_tool_list_changed if self._session else None
+        sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(push)
         self._pending_notify = not sent.delivered
         self._session = self._session if sent.keep_session else None
 
@@ -226,7 +223,7 @@ def _reset_session() -> None:
     global handshake_delivery, _tty_name, _biff_enabled, _spoken_wall_key, _tick_log
     handshake_delivery, _tick_log = (
         _HandshakeDelivery(),
-        EpisodeLog(logger, TRANSPORT_ERRORS),
+        ListChanged.poller_log(logger),
     )
     _tty_name = ""
     _biff_enabled = True
@@ -982,7 +979,7 @@ async def _active_tick(
     return last_count, last_wall, last_talk
 
 
-_tick_log = EpisodeLog(logger, TRANSPORT_ERRORS)
+_tick_log = ListChanged.poller_log(logger)
 
 
 async def _safe_tick(

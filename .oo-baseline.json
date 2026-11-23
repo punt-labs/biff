@@ -558,6 +558,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/failure_log.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.67,
+    "max_complexity": 6.0,
+    "avg_complexity": 4.0,
+    "module_size": 58.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/formatting.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
@@ -909,6 +922,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/relay_errors.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 0.0,
+    "avg_complexity": 0.0,
+    "module_size": 4.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/relay_select.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1146,11 +1172,11 @@
   "src/biff/server/tool_list_send.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.5,
-    "max_complexity": 6.0,
-    "avg_complexity": 3.33,
-    "module_size": 101.0,
-    "classes_per_module": 3.0,
+    "avg_params": 1.25,
+    "max_complexity": 8.0,
+    "avg_complexity": 3.0,
+    "module_size": 57.0,
+    "classes_per_module": 2.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
@@ -1188,7 +1214,7 @@
     "avg_params": 2.03,
     "max_complexity": 14.0,
     "avg_complexity": 3.21,
-    "module_size": 624.0,
+    "module_size": 621.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 0.161,
     "init_violations": 1.0,
