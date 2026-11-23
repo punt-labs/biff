@@ -7,8 +7,8 @@ import http.client
 import json
 import urllib.error
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Self
 
 import pytest
 
@@ -56,34 +56,89 @@ def _metadata(
     return json.dumps({"urls": urls}).encode()
 
 
-@dataclass
-class _Net:
-    """Scripted responses per URL; the last response repeats once a script runs out."""
+class _Clock:
+    """A fake monotonic clock; sleeping and slow fetches advance it."""
 
-    scripts: dict[str, list[Response]]
-    calls: list[str] = field(default_factory=list[str])
+    __slots__ = ("_now", "_waits")
+
+    _now: float
+    _waits: list[float]
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self._now = 0.0
+        self._waits = []
+        return self
+
+    @property
+    def waits(self) -> list[float]:
+        return self._waits
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+    def sleep(self, seconds: float) -> None:
+        self._waits.append(seconds)
+        self.advance(seconds)
+
+    def time(self) -> float:
+        return self._now
+
+
+class _Net:
+    """Scripted responses per URL; the last response repeats once a script runs out.
+
+    Each fetch takes ``cost`` seconds on ``clock``, so a test can model a slow
+    request crossing the deadline.
+    """
+
+    __slots__ = ("_calls", "_clock", "_cost", "_scripts")
+
+    _scripts: dict[str, list[Response]]
+    _calls: list[str]
+    _clock: _Clock | None  # None: fetches take no time
+    _cost: float
+
+    def __new__(
+        cls,
+        scripts: dict[str, list[Response]],
+        clock: _Clock | None = None,  # None: fetches take no time
+        cost: float = 0.0,
+    ) -> Self:
+        self = super().__new__(cls)
+        self._scripts = scripts
+        self._calls = []
+        self._clock = clock
+        self._cost = cost
+        return self
+
+    @property
+    def calls(self) -> list[str]:
+        return self._calls
 
     def fetch(self, url: str, timeout: float) -> bytes:
         assert timeout > 0
-        self.calls.append(url)
-        script = self.scripts[url]
+        self._calls.append(url)
+        if self._clock is not None:
+            self._clock.advance(self._cost)
+        script = self._scripts[url]
         response = script.pop(0) if len(script) > 1 else script[0]
         if isinstance(response, BaseException):
             raise response
         return response
 
 
-@dataclass
-class _Clock:
-    now: float = 0.0
-    waits: list[float] = field(default_factory=list[float])
-
-    def sleep(self, seconds: float) -> None:
-        self.waits.append(seconds)
-        self.now += seconds
-
-    def time(self) -> float:
-        return self.now
+# One list for both retry tests, so the metadata and download paths cannot drift.
+_TRANSIENT_CASES = pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.URLError("dns"),
+        TimeoutError("slow"),
+        ConnectionResetError("reset"),
+        http.client.IncompleteRead(b"partial"),
+    ],
+    ids=["url-error", "timeout", "reset", "incomplete-read"],
+)
 
 
 @pytest.fixture
@@ -134,16 +189,7 @@ def test_waits_until_testpypi_lists_every_file(dist: Path) -> None:
     assert clock.waits == [30.0]
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        urllib.error.URLError("dns"),
-        TimeoutError("slow"),
-        ConnectionResetError("reset"),
-        http.client.IncompleteRead(b"partial"),
-    ],
-    ids=["url-error", "timeout", "reset", "incomplete-read"],
-)
+@_TRANSIENT_CASES
 def test_transient_metadata_errors_are_retried(
     dist: Path, error: BaseException
 ) -> None:
@@ -152,16 +198,7 @@ def test_transient_metadata_errors_are_retried(
     assert net.calls.count(_META) == 2
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        urllib.error.URLError("dns"),
-        TimeoutError("slow"),
-        ConnectionResetError("reset"),
-        http.client.IncompleteRead(b"partial"),
-    ],
-    ids=["url-error", "timeout", "reset", "incomplete-read"],
-)
+@_TRANSIENT_CASES
 def test_transient_download_errors_are_retried(
     dist: Path, error: BaseException
 ) -> None:
@@ -213,6 +250,17 @@ def test_budget_bounds_all_retries(dist: Path) -> None:
     with pytest.raises(VerificationError, match="budget spent"):
         _run(dist, net, clock, budget=45.0)
     assert clock.waits == [30.0]
+
+
+def test_a_fetch_that_crosses_the_deadline_stops_before_the_next(
+    dist: Path,
+) -> None:
+    clock = _Clock()
+    net = _Net({_META: [_metadata()], _WHEEL_URL: [_WHEEL]}, clock=clock, cost=50.0)
+    with pytest.raises(VerificationError, match="budget spent"):
+        _run(dist, net, clock, budget=45.0)
+    assert net.calls == [_META]
+    assert clock.waits == []
 
 
 def test_dist_without_a_wheel_fails(tmp_path: Path) -> None:

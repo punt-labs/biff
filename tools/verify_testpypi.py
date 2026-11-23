@@ -203,6 +203,7 @@ class ReleaseVerifier:
         """
         url = f"https://test.pypi.org/pypi/{self._package}/{self._version}/json"
         for attempt in range(1, policy.attempts + 1):
+            self._require_budget()
             try:
                 listed = ServedFile.listing(self._fetch(url, _METADATA_TIMEOUT))
                 if set(built) <= set(listed):
@@ -231,6 +232,7 @@ class ReleaseVerifier:
             VerificationError: When every attempt fails, or the bytes differ.
         """
         for attempt in range(1, policy.attempts + 1):
+            self._require_budget()
             try:
                 data = self._fetch(url, _DOWNLOAD_TIMEOUT)
             except _TRANSIENT as err:
@@ -276,11 +278,15 @@ class ReleaseVerifier:
                 )
         return {name: listed[name].url for name in built}
 
-    def _wait(self, seconds: float) -> None:
-        if self._clock() + seconds > self._deadline:
+    def _require_budget(self, needed: float = 0.0) -> None:
+        """Raise unless ``needed`` more seconds fit before the deadline."""
+        if self._clock() + needed > self._deadline:
             raise VerificationError(
                 f"gave up on {self._package} {self._version}: release budget spent"
             )
+
+    def _wait(self, seconds: float) -> None:
+        self._require_budget(seconds)
         self._sleep(seconds)
 
 
