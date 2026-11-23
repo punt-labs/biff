@@ -410,9 +410,8 @@ class LocalRelay:
         The per-user relay root (``.../biff/relay``) is tightened too; any
         other parent of a custom data directory is left as it is.
         """
-        root = data_dir.parent
-        in_relay_root = root.name == "relay" and root.parent.name == "biff"
-        for path in (root, data_dir) if in_relay_root else (data_dir,):
+        in_relay_root = data_dir.parts[-3:-1] == ("biff", "relay")
+        for path in (data_dir.parent, data_dir) if in_relay_root else (data_dir,):
             path.mkdir(mode=0o700, parents=True, exist_ok=True)
             path.chmod(0o700)
 

@@ -86,10 +86,7 @@ class HostHandle:
         orgs = self.resolved.config.orgs
         if not (orgs and isinstance(self.relay, NatsRelay)):
             return frozenset[str]()
-        found = await asyncio.gather(
-            *(self.relay.discover_repos_for_org(org) for org in orgs)
-        )
-        return frozenset[str]().union(*found)
+        return await self.relay.discover_repos_for_orgs(orgs)
 
 
 @asynccontextmanager
@@ -115,6 +112,13 @@ async def cli_session_host(
         )
         await host.sweep()
         yield HostHandle(host=host, resolved=resolved, relay=relay)
+    except OSError as exc:
+        if exc.filename is None:  # not a file problem, e.g. a dropped connection
+            raise
+        raise ValueError(
+            f"cannot use {exc.filename}: {exc.strerror}; "
+            "check its permissions, or choose another relay in config"
+        ) from exc
     finally:
         try:
             await relay.close()
