@@ -183,6 +183,8 @@ class TestWatch:
         seen = _Counter()
         with LocalWatch(relay.data_dir, seen):
             pass
+        await asyncio.sleep(0.2)  # what the watch itself did at start and stop
+        seen.count = 0
         await relay.deliver(Message(from_user="eric", to_user="kai", body="late"))
         await asyncio.sleep(_QUIET)
         assert seen.count == 0
