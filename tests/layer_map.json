@@ -42,6 +42,7 @@
   "biff.doctor": "service",
   "biff.enablement": "service",
   "biff.ethos_team": "engine",
+  "biff.failure_log": "kernel",
   "biff.formatting": "render",
   "biff.git_hooks": "service",
   "biff.identity": "engine",

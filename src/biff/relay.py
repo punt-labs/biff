@@ -31,6 +31,7 @@ import os
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import IO, Protocol
 
@@ -489,9 +490,8 @@ class LocalRelay:
             # existing file would not change the directory).  The old text is
             # carried through as it is, so a line this version cannot parse is
             # never dropped by a delivery.
-            path.touch(mode=0o600)  # the mailbox exists from here, empty if new
-            old = path.read_text().splitlines()
-            atomic_write(path, "\n".join([*old, message.model_dump_json()]) + "\n")
+            lines = [*self._lines(path), message.model_dump_json()]
+            atomic_write(path, "\n".join(lines) + "\n")
             path.chmod(0o600)
 
     async def fetch(self, session_key: str) -> list[Message]:
@@ -520,17 +520,42 @@ class LocalRelay:
         """Mark messages as read in the user's broadcast mailbox."""
         self._mark_read(self._user_inbox_path(user), ids)
 
+    _warn_once = staticmethod(lru_cache(maxsize=1024)(logger.warning))  # per line
+
+    @staticmethod
+    def _lines(path: Path) -> list[str]:
+        """Return the lines of *path*, or none if it does not exist."""
+        return path.read_text().splitlines() if path.exists() else []
+
+    @staticmethod
+    def _parsed(line: str) -> Message | None:
+        """Parse one mailbox line; an unparseable one is warned about once."""
+        try:
+            return Message.model_validate_json(line) if line.strip() else None
+        except (ValidationError, ValueError):
+            LocalRelay._warn_once("Skipping malformed line: %s", line.strip()[:80])
+            return None
+
+    @staticmethod
+    def _marked(line: str, ids: set[uuid.UUID]) -> str:
+        """Return *line* with its message marked read if it is one of *ids*."""
+        msg = LocalRelay._parsed(line)
+        if msg and msg.id in ids:
+            return msg.model_copy(update={"read": True}).model_dump_json()
+        return line
+
     def _mark_read(self, path: Path, ids: Sequence[uuid.UUID]) -> None:
-        """Rewrite the inbox at *path* with the messages *ids* marked read."""
-        wanted = set(ids)
+        """Mark the messages *ids* read in the inbox at *path*.
+
+        Works on raw lines and changes only the parsed lines being marked, so a
+        line this version cannot parse (from a newer biff) is kept as it is.
+        """
         with self._lock():
-            messages = self._read_inbox_file(path)
-            updated = [
-                m.model_copy(update={"read": True}) if m.id in wanted else m
-                for m in messages
-            ]
-            if updated != messages:
-                self._write_inbox_file(path, updated)
+            lines = self._lines(path)
+            marked = [self._marked(line, set(ids)) for line in lines]
+            if marked != lines:
+                atomic_write(path, "\n".join(marked) + "\n")
+                path.chmod(0o600)
 
     async def get_user_unread_count(self, user: str) -> int:
         """Count unread messages in the user's broadcast mailbox."""
@@ -854,25 +879,8 @@ class LocalRelay:
     @staticmethod
     def _read_inbox_file(path: Path) -> list[Message]:
         """Read all messages from an inbox file."""
-        if not path.exists():
-            return []
-        messages: list[Message] = []
-        for line in path.read_text().splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                messages.append(Message.model_validate_json(stripped))
-            except (ValidationError, ValueError):
-                logger.warning("Skipping malformed inbox line: %s", stripped[:80])
-        return messages
-
-    @staticmethod
-    def _write_inbox_file(path: Path, messages: Sequence[Message]) -> None:
-        """Atomically rewrite an inbox file."""
-        content = "".join(msg.model_dump_json() + "\n" for msg in messages)
-        atomic_write(path, content)
-        path.chmod(0o600)
+        lines = LocalRelay._lines(path)
+        return [m for m in map(LocalRelay._parsed, lines) if m is not None]
 
     def _read_inbox(self, session_key: str) -> list[Message]:
         """Read all messages from a session's TTY inbox."""

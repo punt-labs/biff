@@ -52,7 +52,7 @@ async def reap_sentinels(state: ServerState) -> None:
     """
     d = sentinel_dir(state.config.repo_name)
     for sentinel in d.iterdir() if d.exists() else ():
-        if sentinel.is_file():
+        if sentinel.is_file() and not sentinel.name.startswith("."):
             await _reap_one(state, sentinel)
 
 
@@ -62,6 +62,9 @@ async def _reap_one(state: ServerState, sentinel: Path) -> None:
         session_key = sentinel.read_text().strip()
     except OSError:
         return
+    user, _, session_id = session_key.partition(":")
+    if not (user and session_id):
+        return  # not a sentinel: never ask the relay about ""
     # Under identity routing a resumed session carries the SAME key as its
     # just-exited incarnation ({user}:{session_id} is stable across resume),
     # so a leftover sentinel for our own key must NOT be reaped — we are
@@ -71,7 +74,7 @@ async def _reap_one(state: ServerState, sentinel: Path) -> None:
     if session_key == state.session_key:
         sentinel.unlink(missing_ok=True)
         return
-    with routing_lock(session_key.partition(":")[2]) as acquired:
+    with routing_lock(session_id) as acquired:
         if acquired and await _reap_dead_session(state, session_key):
             sentinel.unlink(missing_ok=True)
 

@@ -196,8 +196,8 @@ class TestWatchLiveness:
             hits.clear()
             await relay.deliver(Message(from_user="eric", to_user="kai", body="x"))
             await _until(lambda: bool(hits), "wake after the rebuild")
-            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-            assert len(warnings) == 2  # onset and recovery, once each
+            noted = [r for r in caplog.records if r.levelno >= logging.WARNING]
+            assert len(noted) == 2  # onset and recovery, once each
         finally:
             keeper.stop()
 

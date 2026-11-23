@@ -33,12 +33,12 @@ from mcp.shared.subscriptions import ToolsListChanged
 from mcp.types import ToolListChangedNotification
 from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 
+from biff.failure_log import FailureLog
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.server.display_queue import DisplayItem
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
-from biff.talk_state import TalkState
 from biff.talk_types import TalkNotification, TalkPhase
 from biff.tty import format_address
 
@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from mcp.server.subscriptions import SubscriptionBus
 
     from biff.server.state import ServerState
+    from biff.talk_state import TalkState
 
 logger = logging.getLogger(__name__)
 
@@ -893,6 +894,9 @@ class _Seen:
     wall: tuple[str, str] = ("", "")
     talk: tuple[tuple[str, ...], int, str] = ((), -1, "")
     failed: bool = False  # the last pass raised; the liveness pass retries it
+    failures: FailureLog = field(
+        default_factory=lambda: FailureLog(logger, expected=(OSError, TimeoutError))
+    )
     wall_expires: datetime | None = None  # the relay's wall, not the display item
 
     def timeout(self, liveness: float | None, deadline: float) -> float | None:
@@ -976,6 +980,7 @@ async def _active_tick(
         wall=last_wall,
         talk=last_talk,
         wall_expires=current_wall.expires_at if current_wall else None,
+        failures=seen.failures,
     )
 
 
@@ -1018,16 +1023,11 @@ async def _safe_tick(
         result = await _active_tick(mcp, state, seen, gate=gate, due=due)
     except asyncio.CancelledError:
         raise
-    except Exception:
-        if seen.failed:
-            logger.debug("Poller tick still failing", exc_info=True)
-        else:
-            logger.warning(
-                "Poller tick failed; retrying on the liveness pass", exc_info=True
-            )
+    except Exception as exc:
+        logger.debug("Poller tick failed", exc_info=True)
+        seen.failures.failed("Poller tick", exc)  # onset, reminders, recovery
         return replace(seen, failed=True)
-    if seen.failed:
-        logger.warning("Poller tick recovered")
+    seen.failures.recovered("Poller tick")
     return result
 
 

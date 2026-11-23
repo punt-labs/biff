@@ -74,6 +74,19 @@ def _deaf(*_a: object) -> None:
     """Swallow an event or a wake, as a stalled watcher would."""
 
 
+class _DeafKqueue:
+    """A kqueue that is alive and never reports anything."""
+
+    is_alive = True
+
+    def __init__(self, *_a: object) -> None:
+        """Accept and ignore the path and callback."""
+
+    def stop(self) -> bool:
+        """Report that it stopped."""
+        return True
+
+
 class TestCancelledPollerLeavesNoWatch:
     """A re-point cancels the poller while its watches are still starting."""
 
@@ -204,7 +217,7 @@ class TestWatchFailureReporting:
             assert healthy.unhealthy_reason(canary_timeout=15.0) is None
         # Every thread is alive and the directory is right, but no event comes.
         monkeypatch.setattr(local_watch.ArrivalHandler, "on_any_event", _deaf)
-        monkeypatch.setattr(LocalWatch, "_wake", _deaf)  # kqueue path
+        monkeypatch.setattr(local_watch, "DirectoryKqueue", _DeafKqueue)
         with LocalWatch(tmp_path, lambda: None) as deaf:
             reason = deaf.unhealthy_reason(canary_timeout=1.0)
         assert reason is not None
@@ -221,8 +234,12 @@ class TestWatchFailureReporting:
         assert any(w in reason for w in ("inode", "device", "kqueue", "emitter"))
 
     async def test_start_failures_are_logged_at_every_level(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.setattr(WatchKeeper, "REMINDER_SECONDS", 0.0)
         blocker = tmp_path / "blocker"
         blocker.write_text("x")
         keeper = WatchKeeper((LocalWatch(blocker / "relay", lambda: None),))

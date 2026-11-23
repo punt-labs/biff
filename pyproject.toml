@@ -26,7 +26,7 @@ dependencies = [
     "psutil>=6.0,<8",
     "punt-observe==0.1.1",
     "wcwidth>=0.8.2,<1",
-    "watchdog>=6.0,<8",
+    "watchdog>=7,<8",
 ]
 
 [project.optional-dependencies]
@@ -200,6 +200,7 @@ prefixes = [
     "caller_identity",
     "chunking",
     "data",
+    "failure_log",
     "logging_config",
     "markers",
     "prob_gate",
