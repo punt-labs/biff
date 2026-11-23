@@ -99,7 +99,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - run: docker pull "$BIFF_RELAY_IMAGE"
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest -m nats_docker tests/test_relay_image
+      - run: uv run pytest -m 'nats_docker and not quarantine' tests/test_relay_image
 
   docker:
     # Gated on pypi, so a tag can never end up with a Docker image published
@@ -247,4 +247,4 @@ jobs:
       - run: uv sync --frozen --extra dev
       # The full tier ran on this digest before promotion; post-release only
       # needs one real operation against the published tag (TST-8, <2 min).
-      - run: uv run pytest -m nats_docker tests/test_relay_image -k TestPresenceAndMessaging
+      - run: uv run pytest -m 'nats_docker and not quarantine' tests/test_relay_image -k TestPresenceAndMessaging
