@@ -78,9 +78,15 @@ _AMBIENT_BIFF_SETTINGS = (
     "BIFF_RELAY_TOKEN",
     "BIFF_RELAY_URL",
     "BIFF_RELAY_USER_CREDENTIALS",
-    "BIFF_RULES",
     "BIFF_SESSION",
+    "BIFF_TELEMETRY",
 )
+
+
+def strip_ambient_biff_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every ambient biff setting for the rest of the test."""
+    for name in _AMBIENT_BIFF_SETTINGS:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -88,8 +94,7 @@ def _no_ambient_biff_settings(  # pyright: ignore[reportUnusedFunction]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Strip biff's own settings so every test starts from the defaults."""
-    for name in _AMBIENT_BIFF_SETTINGS:
-        monkeypatch.delenv(name, raising=False)
+    strip_ambient_biff_settings(monkeypatch)
 
 
 @pytest.fixture(autouse=True)
