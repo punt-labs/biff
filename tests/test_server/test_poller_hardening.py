@@ -234,13 +234,12 @@ class TestWatchFailureReporting:
         assert reason is not None
         assert any(w in reason for w in ("inode", "device", "kqueue", "emitter"))
 
-    async def test_start_failures_are_logged_at_every_level(
+    async def test_a_failed_start_is_one_episode_with_a_reminder(
         self,
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(failure_log, "REMINDER_SECONDS", 0.0)
         blocker = tmp_path / "blocker"
         blocker.write_text("x")
         keeper = WatchKeeper((LocalWatch(blocker / "relay", lambda: None),))
@@ -248,12 +247,23 @@ class TestWatchFailureReporting:
             keeper.start()
             for _ in range(11):
                 keeper.check()
-        errors = [r for r in caplog.records if r.levelno >= logging.WARNING]
-        debug = [r for r in caplog.records if r.levelno == logging.DEBUG]
-        assert debug  # every retry is recorded
-        reminders = [r for r in errors if "still failing" in r.getMessage()]
-        assert reminders  # not only each cause's onset: a periodic reminder
-        assert any("NotADirectoryError" in r.getMessage() for r in errors)
+            monkeypatch.setattr(failure_log, "REMINDER_SECONDS", 0.0)
+            keeper.check()  # the next failure is past the reminder period
+        loud = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        onsets = [r for r in loud if "still failing" not in r.getMessage()]
+        reminders = [r for r in loud if "still failing" in r.getMessage()]
+        debug = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.DEBUG and "still failing" in r.getMessage()
+        ]
+        assert len(onsets) == 1  # one outage, one episode, one cause
+        assert "NotADirectoryError" in onsets[0].getMessage()
+        assert len(reminders) == 1
+        assert len(debug) == 11  # every retry in between is recorded quietly
+        assert not any("not started" in r.getMessage() for r in caplog.records)
+        for record in caplog.records:
+            assert record.getMessage()  # every call's format and arguments agree
 
 
 class TestPollerRestart:

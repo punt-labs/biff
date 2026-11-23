@@ -283,6 +283,11 @@ class LocalWatch:
         except RuntimeError:
             logger.debug("Local relay watch fired after the event loop closed")
 
+    @property
+    def is_started(self) -> bool:
+        """Whether a start has succeeded and not been stopped since."""
+        return self._observer is not None
+
     def unhealthy_reason(self, canary_timeout: float | None = None) -> str | None:
         """Return what is wrong with the watch, or ``None`` if it is healthy.
 
@@ -413,6 +418,10 @@ class WatchKeeper:
         rebuilt = False
         for watch in self._watches:
             what = f"Local relay watch on {watch.data_dir}"
+            if not watch.is_started:  # its start failed and was reported: retry it
+                self._build(watch)
+                rebuilt = True
+                continue
             cause = self._failure(watch)
             if cause is None:
                 self._log.recovered(what)

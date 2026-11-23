@@ -228,3 +228,23 @@ class TestRelayErrors:
             log.failed(_WHAT, KeyError("bug"))
 
         assert [r.levelno for r in caplog.records] == [logging.WARNING, logging.ERROR]
+
+
+class TestEveryRecordFormats:
+    """A record whose format and arguments disagree is withheld by the handler."""
+
+    def test_each_line_an_episode_writes_formats(
+        self, caplog: pytest.LogCaptureFixture, clock: Callable[[float], None]
+    ) -> None:
+        log = _log()
+        with caplog.at_level(logging.DEBUG, logger=_LOG.name):
+            for exc in (TimeoutError("t"), TypeError("bug")):
+                log.failed(_WHAT, exc)
+                log.failed(_WHAT, exc)
+                clock(REMINDER_SECONDS)
+                log.failed(_WHAT, exc)
+            log.recovered(_WHAT)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert len(messages) == 7
+        assert all(_WHAT in m for m in messages)
