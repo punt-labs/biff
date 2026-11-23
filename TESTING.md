@@ -340,7 +340,7 @@ checkout:
 | Candidate relay image | `relay-image-candidate`, `relay-image-test` | The image is built once and pushed as `biff-relay:<version>-candidate`; tier 3b runs against that digest (`BIFF_RELAY_IMAGE`) on amd64 and arm64 runners. |
 | Promotion | `pypi`, `docker` | PyPI upload waits on both candidate checks; the release image tag is a retag of the tested digest, never a rebuild. |
 | Published package | `published-smoke` | `scripts/smoke-release.sh published` installs `punt-biff==<version>` from production PyPI on Linux and macOS and repeats the CLI and MCP round trip. |
-| Published relay image | `published-image-smoke` | Pulls `biff-relay:<version>`, checks it is the candidate digest, and reruns tier 3b against it. |
+| Published relay image | `published-image-smoke` | Pulls `biff-relay:<version>`, checks it is the candidate digest, and runs tier 3b's presence and messaging tests against it (the full tier ran on that digest before promotion). |
 
 Run the candidate check locally with `make smoke-release`. A failed
 post-release check means the published version is broken: yank or ship a

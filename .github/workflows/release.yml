@@ -197,7 +197,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -212,10 +212,10 @@ jobs:
 
   published-image-smoke:
     # TST-8 for the relay image: pull the release tag from GHCR, confirm it is
-    # the tested candidate, and run the relay-image tier against it.
+    # the tested candidate, and send a message through it.
     needs: [docker, relay-image-candidate]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     permissions:
       contents: read
       packages: read
@@ -245,4 +245,6 @@ jobs:
           fi
           echo "BIFF_RELAY_IMAGE=$image" >> "$GITHUB_ENV"
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest -m nats_docker tests/test_relay_image
+      # The full tier ran on this digest before promotion; post-release only
+      # needs one real operation against the published tag (TST-8, <2 min).
+      - run: uv run pytest -m nats_docker tests/test_relay_image -k TestPresenceAndMessaging
