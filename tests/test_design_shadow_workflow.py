@@ -6,7 +6,6 @@ import asyncio
 import os
 import textwrap
 import tomllib
-from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -29,23 +28,29 @@ def test_full_report_includes_non_gating_design_scan() -> None:
 @pytest.mark.parametrize(
     ("module", "expected"),
     [
-        ("biff", "entry"),
-        ("biff.__main__", "entry"),
-        ("biff.plugins.claude_code._hook_runtime", "entry"),
-        ("biff.server.entrypoints", "entry"),
-        ("biff.server.caller_policy", "entry"),
-        ("biff.caller_identity", "domain"),
-        ("biff.server.tools.messaging", "entry"),
-        ("biff.commands.write", "application"),
-        ("biff.commands._result", "domain"),
-        ("biff.server.tools._presence", "domain"),
-        ("biff.server.tools._write_target", "application"),
-        ("biff.relay", "adapters"),
-        ("biff.nats_relay", "adapters"),
-        ("biff.talk_state", "application"),
-        ("biff.talk_types", "domain"),
-        ("biff.cli_session_store", "adapters"),
-        ("biff.models", "domain"),
+        ("biff.session_id", "kernel"),
+        ("biff.models", "wire"),
+        ("biff.talk_types", "wire"),
+        ("biff.relay", "engine"),
+        ("biff.relay_select", "engine"),
+        ("biff.nats_relay", "engine"),
+        ("biff.talk_state", "engine"),
+        ("biff._formatting", "render"),
+        ("biff.formatting", "render"),
+        ("biff.cli_context", "commands"),
+        ("biff.commands.write", "commands"),
+        ("biff.server.entrypoints", "server"),
+        ("biff.server.tools._presence", "server"),
+        ("biff.testing.caller", "server"),
+        ("biff.plugins", "plugins"),
+        ("biff.plugins.contract", "plugins"),
+        ("biff.repo_toggle", "service"),
+        ("biff.integration.vox", "service"),
+        ("biff.plugins.claude_code._hook_runtime", "claude_code"),
+        ("biff.plugins.claude_code.installer", "claude_code"),
+        ("biff.__main__", "cli"),
+        ("biff.cli_session_store", "cli"),
+        ("biff.repl_display", "cli"),
         ("biff.undeclared", None),
     ],
 )
@@ -56,14 +61,19 @@ def test_design_layer_boundaries(
     layers = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["oo-ratchet"][
         "layers"
     ]
-    actual = next(
-        (
-            layer
-            for layer, patterns in layers.items()
-            if any(fnmatchcase(module, pattern) for pattern in patterns)
-        ),
-        None,
-    )
+    relative = module.removeprefix("biff.")
+    # Longest matching prefix wins, as in oo-ratchet's declared layers.
+    matches = [
+        (len(prefix.rstrip("*")), name)
+        for name, spec in layers.items()
+        for prefix in spec["prefixes"]
+        if (
+            relative.startswith(prefix.removesuffix("*"))
+            if prefix.endswith("*")
+            else relative == prefix or relative.startswith(f"{prefix}.")
+        )
+    ]
+    actual = max(matches)[1] if matches else None
     assert actual == expected
 
 

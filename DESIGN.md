@@ -8260,6 +8260,11 @@ The outcome is an advisory architecture inventory and comparison, not a new
 design gate. Unmatched future modules remain advisory `unlayered-module`
 findings until a maintainer assigns their responsibility.
 
+**0.5.0 update.** The four fixed layers above are replaced by the DES-088
+package layers, declared in `[tool.oo-ratchet.layers.<name>]` tables. The
+advisory design check reads the same tables, and the gating `oo-ratchet layers`
+check is wired into `make check` and CI (DES-088).
+
 ---
 
 ## DES-079: Share Diagnostics and Keep Usage Local
@@ -8565,10 +8570,14 @@ rewrite: after process startup, entry points reach the engine only through
 arrivals leave through `DeliverySink`, `wire` types stay plain data, and the
 engine holds no per-tool state.
 
-**Enforcement.** A layer checker runs in `make check` against a baseline of
-known violations that only shrinks, as in Lux (`lux/tools/layer_contract.py`).
-On `968e4c5` the baseline is 25 violating imports; direct engine imports from
-entry points (41) are reported separately and do not gate.
+**Enforcement.** `oo-ratchet layers src/biff` (punt-oo-ratchet 0.5.0) runs in
+`make check` as `make check-layers`, and in the CI lint workflow, against
+`.oo-layers-baseline.json`, a baseline of known violations that only shrinks
+(`make update-layers`), as in Lux (`lux/tools/layer_contract.py`). The layers
+are declared in `pyproject.toml` under `[tool.oo-ratchet.layers.<name>]`. The
+count was 25 violating imports on `968e4c5` and is 19 on `a924a7b`, when the
+gate was adopted; direct engine imports from entry points (41 on `968e4c5`)
+are reported separately and do not gate.
 
 **Why.** Biff serves Claude Code, Devin, opencode, codex and pi. About a tenth
 of its lines exist only for Claude Code and sit beside the shared engine;

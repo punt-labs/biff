@@ -193,43 +193,55 @@ Ask these in order and stop at the first yes:
 
 ## How it is enforced
 
-A layer checker reads every module's imports and reports each import that
-breaks the table above. It runs in `make check` against a baseline file that
-lists today's known violations:
+`oo-ratchet layers src/biff --check` (punt-oo-ratchet 0.5.0) reads every
+module's imports and reports each import that breaks the table above. It runs
+in `make check` as `make check-layers`, against `.oo-layers-baseline.json`,
+which lists the known violations:
 
 - A new violation fails `make check`.
 - Fixing a violation and not removing it from the baseline also fails, so the
   baseline only shrinks.
-- `make update-layers` rewrites the baseline after a fix.
+- `make update-layers` rewrites the baseline after a fix and appends a line to
+  `.oo-layers-audit.jsonl`. It never adds a violation.
+- CI runs `check-layers` beside the other ratchets, against the merge base on
+  pull requests and against the previous commit on `main`.
+
+The layers are declared in `pyproject.toml` as `[tool.oo-ratchet.layers.<name>]`
+tables. Each has `prefixes` (module names relative to `biff`, the longest match
+wins) and `imports` (the layers it may import). The gate fails closed: every
+module must belong to a layer, every layer must match a module, and widening a
+layer's `imports` fails the check unless that change lands alone with
+`--allow-config-change`. Until a package is moved into its directory, its
+modules are listed by name, so moving one means editing its prefix in the same
+PR.
+
+The gate over-approximates on purpose. It counts imports inside functions and
+under `TYPE_CHECKING`, `from biff import X` as an import of every module
+`biff/__init__.py` takes `X` from, and `importlib.import_module("biff.x")` with
+a literal name. Biff's `biff.data` package holds bundled files and one
+docstring-only `__init__.py`; it sits in `kernel`, which imports nothing.
 
 This is the same ratchet Lux uses (`lux/tools/layer_contract.py`,
-`.layer-baseline.json`). The checker belongs in the shared `punt-oo-ratchet`
-package so both projects run the same tool.
-
-`punt-oo-ratchet` 0.4.0 already checks layers in its advisory `design` gate,
-which reads `[tool.oo-ratchet.layers]` in `pyproject.toml`. Biff's current
-config there sorts modules into four fixed layers (`entry`, `adapters`,
-`application`, `domain`) and never fails a build. The gating checker extends
-that same layer code to accept this standard's package names and import table;
-when it ships, biff's `[tool.oo-ratchet.layers]` is rewritten to the packages
-above and becomes the single layer configuration.
+`.layer-baseline.json`), now shipped in the shared `punt-oo-ratchet` package.
+The advisory `design` gate reads the same layer tables, so there is one layer
+configuration.
 
 ## Where biff stands today
 
-Measured on `main` at `968e4c5`, 2026-11-22: 115 modules, 25 imports that
-break the table. Most modules still sit flat in `src/biff/`; the package names
+Measured on `main` at `a924a7b`, 2026-11-22: 121 modules, 19 imports that
+break the table (`.oo-layers-baseline.json`). On `968e4c5` the same table,
+before the Claude Code modules moved and the plugin registry landed, counted
+25. Most modules still sit flat in `src/biff/`; the package names
 above describe where each one is headed, not today's directories.
 
 | From | To | Count | Example | Why it matters |
 |------|----|-------|---------|----------------|
 | `commands` | `server` | 4 | `commands/finger.py` imports `server/tools/_session.py` | Commands are shared by every adapter; one must not depend on the MCP server |
-| `server` | `service` | 4 | `server/app.py` imports `integration/vox.py` | The MCP server reaches into install-time code |
-| `service` | `claude_code` | 3 | `enablement.py` imports `claude_md.py` and `claude_permissions.py` | Enable is hard-wired to Claude Code; it should hand that work to each plugin |
-| `server` | `claude_code` | 2 | `server/launch.py` imports `statusline.py` | Claude Code code inside the shared MCP server |
 | `commands` | `cli` | 2 | `commands/session.py` imports `cli_session_store.py` | A command depends on its own caller |
+| `server` | `service` | 2 | `server/app.py` imports `integration/vox.py` | The MCP server reaches into install-time code |
+| `server` | `claude_code` | 2 | `server/launch.py` imports `statusline.py` | Claude Code code inside the shared MCP server |
 | `wire` | `engine` | 2 | `talk_types.py` imports `tty.py` | A data type depends on engine code |
 | `engine` | `claude_code` | 1 | `session_open.py` imports `unread_file.py` | The engine writes the Claude Code status-line file |
-| `engine` | `server` | 1 | `session_open.py` imports `server/state.py` | The engine depends on the MCP server |
 | `kernel` | `engine` | 1 | `_nats_connection.py` imports `relay.py` | A helper depends on the relay |
 | `kernel` | `wire` | 1 | `caller_identity.py` imports `session_routing.py` | A helper depends on a data type |
 | `kernel` | `claude_code` | 1 | `user_scope.py` imports `claude_md.py` | A helper depends on Claude Code code |
@@ -242,7 +254,7 @@ In this table `claude_code` means `plugins/claude_code/`.
 Two placements in this count were settled by DES-088: `formatting` and
 `_formatting` form their own `render` package, and `cli_context` (the context
 every command receives) belongs to `commands`.
-`biff.data` (bundled files, no code) is not assigned to a layer.
+`biff.data` (bundled files, no code) is assigned to `kernel`.
 
 One tool-specific leak the count does not show: `session_lock.py` names an
 `opencode-` lock file, so opencode-specific code already sits in a module the
@@ -254,8 +266,8 @@ tool-neutral.
 Lux's order, applied to biff:
 
 1. Ratify this document as a DES entry.
-2. Add the layer checker with today's 25 violations as its baseline, so
-   nothing new slips in.
+2. Add the layer checker with today's violations as its baseline, so
+   nothing new slips in. Done: `make check-layers`.
 3. Move the Claude Code modules into `plugins/claude_code/`. This is a
    behavior-neutral move; it removes no imports by itself.
 4. Add `plugins/contract.py` together with the Claude Code adapter and its

@@ -69,6 +69,13 @@ checks:
     target: check-suppressions
     on_fail: block
     timeout: 120s
+  - name: layers-ratchet
+    stage: commit
+    files: ["src/**/*.py", ".oo-layers-baseline.json", "Makefile", "pyproject.toml", "uv.lock"]
+    adapter: make
+    target: check-layers
+    on_fail: block
+    timeout: 120s
   - name: full-gate
     stage: handoff
     files: all

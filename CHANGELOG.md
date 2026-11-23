@@ -4,6 +4,11 @@
 
 ### Added
 
+- Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
+  fails on any import that breaks the DES-088 package layers and is not in
+  `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs
+  in `make check` and the CI lint workflow. The layers are declared in
+  `pyproject.toml`, replacing the four fixed design layers.
 - Report-only design ratchet with explicit responsibility layers for every
   current Python module. `make design-shadow` compares against `origin/main`
   (override `DESIGN_BASE`), and PR CI appends the advisory verdict to the job
