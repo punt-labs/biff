@@ -349,7 +349,7 @@ reports status but never fails the command.
 
 Doctor resolves relay config the same way the server does: read
 `.punt-labs/biff/config.yaml` + `config.local.yaml` (DES-037), then fall back
-to the demo relay with bundled demo credentials if no `relay.url` is set. The
+to the local relay if none is configured (DES-090). The
 connection test uses a 3-second timeout and `asyncio.run()` (blocking, since
 doctor is a CLI command).
 
@@ -430,13 +430,14 @@ the schema above before that removal.
 - **Plugin config** — managed by `biff install`, not this file.
 - **Status line config** — managed by `biff install-statusline`.
 
-### Demo Relay Default
+### Demo Relay Is Opt-In
 
-If `relay.url` is unset (or the repo has no `config.yaml` at all), biff
-defaults to the demo relay (`DEMO_RELAY_URL`, `tls://connect.ngs.global`
-via Synadia NGS). Demo NATS credentials are bundled in the package at
+Superseded by DES-090: if no relay is configured (or the repo has no
+`config.yaml` at all), biff uses the local filesystem relay. The demo relay
+(`DEMO_RELAY_URL`, `tls://connect.ngs.global` via Synadia NGS) is chosen with
+`relay: {type: demo}`. Demo NATS credentials are bundled in the package at
 `biff/data/demo.creds` and auto-loaded when the relay URL matches the demo
-URL and no explicit auth is configured (`_apply_demo_relay_default` in
+URL and no explicit auth is configured (`_resolve_relay_fields` in
 `src/biff/config.py`).
 
 ---

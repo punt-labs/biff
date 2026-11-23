@@ -27,7 +27,7 @@ import json
 import logging
 import ssl
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -1905,11 +1905,6 @@ class NatsRelay:
         single list.  Used by cross-repo commands (``/who``, ``/finger``)
         when peers are configured (DES-030).
         """
-        if not repos:
-            return []
-        if len(repos) == 1:
-            (repo,) = repos
-            return await self._get_sessions_for_repo(repo)
         repo_results = await asyncio.gather(
             *(self._get_sessions_for_repo(repo) for repo in repos)
         )
@@ -1937,6 +1932,13 @@ class NatsRelay:
             # the full detail.
             logger.info("Org discovery failed for %s", org, exc_info=True)
             return frozenset()
+
+    async def discover_repos_for_orgs(self, orgs: Iterable[str]) -> frozenset[str]:
+        """Discover the repos of every org in *orgs* concurrently (DES-034)."""
+        names = tuple(orgs)
+        logger.debug("Org discovery: %s in bucket %s", names, self._kv_bucket)
+        found = await asyncio.gather(*map(self.discover_repos_for_org, names))
+        return frozenset[str]().union(*found)
 
     async def _discover_repos_for_org_inner(self, org: str) -> frozenset[str]:
         """Inner implementation — may raise on NATS errors."""

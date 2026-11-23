@@ -104,21 +104,60 @@ team:
   members: ["kai", "eric", "priya"]
 
 relay:
-  url: "tls://connect.ngs.global"
+  type: nats
+  url: "tls://your-nats-server:4222"
 ```
 
-The `members` list controls who appears in `/who`. The `relay` section configures the NATS server for cross-machine communication.
-
-Biff ships with a shared demo relay on Synadia Cloud so your team can start immediately.
+The `members` list controls who appears in `/who`. The `relay` section chooses how sessions find each other; leave it out to stay on the local relay.
 
 ## Relay Configuration
 
-The demo relay works out of the box. To run your own NATS server, set the URL in the committed `config.yaml`:
+With no `relay` section, biff uses the **local relay**: sessions on this machine find each other and exchange messages through files under `~/.punt-labs/biff/relay/<repo-key>/`. It needs no network, no server and no credentials. The directory and its files are private to you (directories `0700`, files `0600`). `biff doctor` and `biff status` print the directory.
+
+`<repo-key>` identifies the repo, so every clone and worktree of one repo on this machine shares one relay, and two different repos never do:
+
+- **Repo with a remote** (`origin`, or the only remote): a readable slug of the remote's `owner/repo` plus a short hash of its normalized identity, such as `punt-labs__biff-1a2b3c4d`. The identity is the lowercase host plus the lowercase `owner/repo`, without a trailing `/` or `.git`, so `git@github.com:Punt-Labs/biff.git` and `https://github.com/punt-labs/biff/` are one repo, while `owner/my.repo` and `owner/my-repo`, or the same `owner/repo` on GitHub and GitLab, are not. A non-default port (not 22, 80, 443 or 9418) is part of the identity, so two servers on one host stay apart, and a repo reached on port 2222 over ssh and on 443 over https counts as two; a bracketed IPv6 host is a host. Only the repository'"'"'s own git config names the remote, never your global config.
+- **A remote that is not `owner/repo`** (a GitLab subgroup): `remote-` plus a hash of its normalized URL, so its clones still share one relay.
+- **A filesystem remote** (a path, a relative path or a `file://` URL): `remote-` plus a hash of the absolute path it opens (a relative path resolves from the repo's main checkout, the case is kept, and a checkout and its `.git` directory are one repository).
+- **Repo with no remote**: the directory name plus a hash of the repo's absolute path (the main checkout's, for a linked worktree), so a worktree shares its main checkout and two unrelated repos that share a directory name do not.
+
+To reset a repo's local relay, delete its directory. The relay is real time on the machine only; it never leaves it.
+
+Choose another relay with `relay.type` in `config.yaml` (shared) or `config.local.yaml` (yours). These are advanced setups, for sessions that must see each other across machines.
+
+| `relay.type` | Relay | Needs |
+|--------------|-------|-------|
+| `local` (the default) | Files on this machine | Nothing |
+| `demo` | The shared public NATS relay on Synadia Cloud, with credentials bundled in the package | Network access; it is shared with every other demo user |
+| `nats` | A NATS server you run: the [self-hosted Docker relay](self-hosted-relay.md) or any other | `relay.url`, and usually credentials |
 
 ```yaml
 relay:
+  type: demo
+```
+
+To use your own NATS server, set the type and URL in the committed `config.yaml`:
+
+```yaml
+relay:
+  type: nats
   url: "tls://your-nats-server:4222"
 ```
+
+A `relay` section with only `url` still means `type: nats`. A bare `url: ""` means the local relay.
+
+**Which file decides.** The relay is chosen per file, not key by key: the highest-precedence file that sets `type` or `url` (`config.local.yaml` over `config.yaml`) decides which relay it is. So a personal `url: nats://mine` (no `type`) beats a committed `type: demo`, a personal `url: ""` gives the local relay whatever is committed, and a personal `type: local` beats a committed `url`. Credentials (`token`, `nkeys_seed`, `user_credentials`, `auth`) and `tls_handshake_first` come from the file that chose the relay or one above it, so a personal token applies to a committed relay but a committed token never follows you to a personal relay.
+
+**Errors.** Biff stops with a message naming the file and the problem, and never falls back silently, when: `relay` is not a mapping; `url` is not a string; the section has an unknown key (allowed: `type`, `url`, `auth`, `token`, `nkeys_seed`, `user_credentials`, `tls_handshake_first`, `allow_env_override`); `tls_handshake_first` or `allow_env_override` is not `true` or `false`; the top level has `relays:`; `type: nats` has no `url`; the type is unknown; `type: local` or `type: demo` is combined, in one file, with `url` or any credential (`type: demo` also with `tls_handshake_first`, since your own credentials must never go to the public demo relay); or credentials are set with no relay chosen. `config.local.yaml` that is malformed YAML is ignored, as it always was.
+
+**Upgrading from a version that defaulted to the demo relay.** A repo that set no relay used to connect to the demo relay. It now uses the local relay, and its sessions no longer see sessions on other machines. To keep the demo relay, add this to `.punt-labs/biff/config.yaml` (or to `config.local.yaml` for yourself only; a personal `url` or `type` there beats the committed one):
+
+```yaml
+relay:
+  type: demo
+```
+
+Repos that already set `relay.url` are unchanged.
 
 Authentication goes in the gitignored `.punt-labs/biff/config.local.yaml` instead — never in the committed file (pick at most one):
 
@@ -158,7 +197,7 @@ relay:
 
 Without `allow_env_override: true`, a committed `relay.url` always wins — an ambient env var (a stray `export`, a misconfigured systemd unit) cannot silently redirect a team's traffic to a different relay. A personal relay entry in the gitignored `config.local.yaml` does **not** close this gate — only a relay committed in the shared `config.yaml` does.
 
-**Auth requires a URL.** Setting one of the three auth vars without a resolved relay URL (from `BIFF_RELAY_URL` or the file layers) fails fast with a clear error, rather than silently sending that credential to the bundled demo relay.
+**Auth requires a URL.** Setting one of the three auth vars without a resolved relay URL (from `BIFF_RELAY_URL` or the file layers) fails fast with a clear error, rather than silently ignoring that credential on the local relay.
 
 **Human interactive use:** put `BIFF_RELAY_*` in that repo's `.envrc.local` (gitignored, direnv-scoped — unloaded automatically on `cd` out of the repo), not in a bare shell `export` or a shell profile such as `~/.zshrc`. A bare export is ambient for the rest of that shell session across every repo you `cd` into, which can leak one team's credential to another team's relay. See [relay-env-overrides.md](relay-env-overrides.md) for the full design rationale.
 

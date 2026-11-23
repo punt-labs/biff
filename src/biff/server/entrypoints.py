@@ -25,16 +25,12 @@ _User = Annotated[
 ]
 _DataDir = Annotated[
     Path | None,
-    typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
+    typer.Option(help="Local relay directory. Auto-computed per repo."),
 ]
 _RelayUrl = Annotated[
     str | None,
     typer.Option(help="Relay URL override. Empty string forces local relay."),
 ]
-_Prefix = Annotated[
-    Path, typer.Option(help="Base path for data directory (default: /tmp).")
-]
-_DEFAULT_PREFIX = Path("/tmp")  # noqa: S108
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +40,6 @@ class McpServerOptions:
     user: str | None
     data_dir: Path | None
     relay_url: str | None
-    prefix: Path
     transport: Literal["stdio", "http"] = "stdio"
 
     def create_server(
@@ -57,7 +52,6 @@ class McpServerOptions:
             relay_url_override=(
                 self.relay_url if self.relay_url is not None else RELAY_URL_UNSET
             ),
-            prefix=self.prefix,
         )
 
         return McpServerBuilder(
@@ -80,12 +74,11 @@ class McpServerOptions:
         user: _User = None,
         data_dir: _DataDir = None,
         relay_url: _RelayUrl = None,
-        prefix: _Prefix = _DEFAULT_PREFIX,
         host: Annotated[str, typer.Option(help="HTTP host.")] = "127.0.0.1",
         port: Annotated[int, typer.Option(help="HTTP port.")] = 8419,
     ) -> None:
         """Start the biff MCP server (HTTP transport)."""
-        server = cls(user, data_dir, relay_url, prefix, "http")._observed_server(ctx)
+        server = cls(user, data_dir, relay_url, "http")._observed_server(ctx)
         logger.info("Starting Biff MCP server (HTTP): port=%d", port)
         typer.echo(f"Starting biff MCP server on http://{host}:{port}")
         http = {"log_config": McpLifecycleHandler.configuration()}
@@ -98,8 +91,7 @@ class McpServerOptions:
         user: _User = None,
         data_dir: _DataDir = None,
         relay_url: _RelayUrl = None,
-        prefix: _Prefix = _DEFAULT_PREFIX,
     ) -> None:
         """Start the biff MCP server (stdio transport)."""
         with McpLifecycleHandler.stdio():
-            cls(user, data_dir, relay_url, prefix)._observed_server(ctx).run_stdio()
+            cls(user, data_dir, relay_url)._observed_server(ctx).run_stdio()

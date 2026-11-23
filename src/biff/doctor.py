@@ -16,10 +16,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from biff.config import find_git_root, is_enabled, resolve_relay_config
-from biff.models import RelayAuth
 from biff.plugins.contract import CheckResult
+from biff.relay_check import LocalRelayCheck
 
 if TYPE_CHECKING:
+    from biff.models import RelayAuth
     from biff.plugins.contract import PluginRegistry
 
 PLUGIN_ID = "biff@punt-labs"
@@ -37,6 +38,8 @@ BIFF_COMMANDS = (
     "write.md",
 )
 
+
+_REACHABILITY = {True: "reachable", False: "unreachable"}
 
 # Individual checks ----------------------------------------------------------
 
@@ -148,7 +151,7 @@ def _check_user_commands(commands_dir: Path | None = None) -> CheckResult:
     )
 
 
-def _resolve_relay_config() -> tuple[str, RelayAuth | None, bool]:
+def _resolve_relay_config() -> tuple[str | None, RelayAuth | None, bool]:
     """Resolve relay settings without requiring user identity.
 
     Delegate to the CLI's file and environment resolution chain so doctor
@@ -222,12 +225,14 @@ async def _test_nats_connection(
 
 
 def _check_relay() -> CheckResult:
-    """Check NATS relay is reachable."""
+    """Check the relay: the local one needs no network, a NATS one must connect."""
     # Lazy import -- keep doctor's module-level imports free of nats_relay
     # (and its eager `import nats`) for checks that don't need it.
     from biff.nats_relay import sanitize_relay_url
 
-    relay_url, relay_auth, tls_handshake_first = _resolve_relay_config()
+    relay_url, relay_auth, tls = _resolve_relay_config()
+    if relay_url is None:
+        return LocalRelayCheck.of(find_git_root())
     # A NATS URL may embed user:pass@ -- doctor's success/failure messages
     # go straight to the operator's terminal, so they must never echo the
     # raw credential-bearing URL.
@@ -235,16 +240,13 @@ def _check_relay() -> CheckResult:
 
     try:
         reachable = asyncio.run(
-            _test_nats_connection(
-                relay_url, relay_auth, tls_handshake_first=tls_handshake_first
-            )
+            _test_nats_connection(relay_url, relay_auth, tls_handshake_first=tls)
         )
-    except Exception:  # noqa: BLE001
-        return CheckResult("NATS relay", False, f"connection error ({host})")
+    except Exception as exc:  # noqa: BLE001
+        detail = f"{type(exc).__name__}: {str(exc).replace(relay_url, host)}"
+        return CheckResult("NATS relay", False, f"connection error ({host}): {detail}")
 
-    if reachable:
-        return CheckResult("NATS relay", True, f"reachable ({host})")
-    return CheckResult("NATS relay", False, f"unreachable ({host})")
+    return CheckResult("NATS relay", reachable, f"{_REACHABILITY[reachable]} ({host})")
 
 
 def _check_biff_file() -> CheckResult:
@@ -275,12 +277,7 @@ def _check_enabled() -> CheckResult:
     """
     repo_root = find_git_root()
     if repo_root is None:
-        return CheckResult(
-            "Enabled",
-            False,
-            "not in a git repo",
-            required=False,
-        )
+        return CheckResult("Enabled", False, "not in a git repo", required=False)
     if is_enabled(repo_root):
         return CheckResult(
             "Enabled", True, "yes (.punt-labs/biff/enabled)", required=False
@@ -297,12 +294,7 @@ def _check_git_hooks() -> CheckResult:
     """Check biff git hooks are deployed (informational)."""
     repo_root = find_git_root()
     if repo_root is None:
-        return CheckResult(
-            "Git hooks",
-            False,
-            "not in a git repo",
-            required=False,
-        )
+        return CheckResult("Git hooks", False, "not in a git repo", required=False)
     if not is_enabled(repo_root):
         return CheckResult(
             "Git hooks",
@@ -343,9 +335,7 @@ def _check_ci_workflow() -> CheckResult:
     from biff.ci_workflow import check_ci_workflow
 
     if check_ci_workflow(repo_root):
-        return CheckResult(
-            "CI workflow", True, "biff-notify.yml deployed", required=False
-        )
+        return LocalRelayCheck.ci_workflow(repo_root)
     return CheckResult(
         "CI workflow",
         False,

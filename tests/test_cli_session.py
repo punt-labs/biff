@@ -170,7 +170,7 @@ class TestCliSessionLifecycle:
     ) -> None:
         with (
             patch("biff.cli_session.load_cli_config", return_value=mock_config),
-            patch("biff.cli_session.NatsRelay", return_value=mock_relay),
+            patch("biff.relay_select.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session() as ctx:
                 assert ctx.user == "kai"
@@ -196,7 +196,7 @@ class TestCliSessionLifecycle:
     ) -> None:
         with (
             patch("biff.cli_session.load_cli_config", return_value=mock_config),
-            patch("biff.cli_session.NatsRelay", return_value=mock_relay),
+            patch("biff.relay_select.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session() as _ctx:
                 pass
@@ -211,7 +211,7 @@ class TestCliSessionLifecycle:
     ) -> None:
         with (
             patch("biff.cli_session.load_cli_config", return_value=mock_config),
-            patch("biff.cli_session.NatsRelay", return_value=mock_relay),
+            patch("biff.relay_select.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session(interactive=True) as _ctx:
                 # Allow the background heartbeat task to be started.
@@ -230,7 +230,7 @@ class TestCliSessionLifecycle:
 
         with (
             patch("biff.cli_session.load_cli_config", return_value=mock_config),
-            patch("biff.cli_session.NatsRelay", return_value=mock_relay),
+            patch("biff.relay_select.NatsRelay", return_value=mock_relay),
             pytest.raises(ConnectionError, match="NATS down"),
         ):
             async with cli_session() as _ctx:
@@ -265,7 +265,7 @@ class TestCliSessionLifecycle:
         )
         with (
             patch("biff.cli_session.load_cli_config", return_value=resolved),
-            patch("biff.cli_session.NatsRelay", return_value=mock_relay),
+            patch("biff.relay_select.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session() as _ctx:
                 pass
@@ -274,21 +274,23 @@ class TestCliSessionLifecycle:
         assert registered.launched_by == "jim"
 
     @pytest.mark.anyio()
-    async def test_no_relay_url_raises(self, tmp_path: Path) -> None:
+    async def test_no_relay_url_uses_the_local_relay(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from biff.config import ResolvedConfig
+        from biff.relay import LocalRelay
 
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
         no_relay = ResolvedConfig(
             config=BiffConfig(user="kai", repo_name="test"),
-            data_dir=tmp_path,
+            data_dir=tmp_path / "relay",
             repo_root=tmp_path,
             repo_common_root=tmp_path,
         )
-        with (
-            patch("biff.cli_session.load_cli_config", return_value=no_relay),
-            pytest.raises(ValueError, match="NATS relay"),
-        ):
-            async with cli_session() as _ctx:
-                pass
+        with patch("biff.cli_session.load_cli_config", return_value=no_relay):
+            async with cli_session() as ctx:
+                assert isinstance(ctx.relay, LocalRelay)
+                assert await ctx.relay.get_session(ctx.session_key) is not None
 
 
 class TestSessionPersistence:
@@ -321,7 +323,7 @@ class TestSessionPersistence:
         resolved, relay = env
         with (
             patch("biff.cli_session.load_cli_config", return_value=resolved),
-            patch("biff.cli_session.NatsRelay", return_value=relay),
+            patch("biff.relay_select.NatsRelay", return_value=relay),
         ):
             async with cli_session() as first:
                 pass
@@ -336,7 +338,7 @@ class TestSessionPersistence:
         resolved, relay = env
         with (
             patch("biff.cli_session.load_cli_config", return_value=resolved),
-            patch("biff.cli_session.NatsRelay", return_value=relay),
+            patch("biff.relay_select.NatsRelay", return_value=relay),
         ):
             async with cli_session() as ctx:
                 pass
@@ -352,7 +354,7 @@ class TestSessionPersistence:
         resolved, relay = env
         with (
             patch("biff.cli_session.load_cli_config", return_value=resolved),
-            patch("biff.cli_session.NatsRelay", return_value=relay),
+            patch("biff.relay_select.NatsRelay", return_value=relay),
         ):
             async with cli_session() as first:
                 pass

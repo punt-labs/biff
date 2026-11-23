@@ -34,11 +34,9 @@ from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.plugins.claude_code.unread_file import write_unread_file
-from biff.server.channel import ChannelLink
 from biff.server.display_queue import DisplayItem
-from biff.server.tool_list_send import notify_tool_list
+from biff.server.tool_list_send import ListChanged
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
-from biff.talk_state import TalkState
 from biff.talk_types import TalkNotification, TalkPhase
 from biff.tty import format_address
 
@@ -54,7 +52,9 @@ if TYPE_CHECKING:
     from mcp.server.session import ServerSession
     from mcp.server.subscriptions import SubscriptionBus
 
+    from biff.server.channel import ChannelLink
     from biff.server.state import ServerState
+    from biff.talk_state import TalkState
 
 logger = logging.getLogger(__name__)
 
@@ -170,14 +170,17 @@ class _HandshakeDelivery:
                 self._session = ctx.session
 
     def serve_single_connection(self, link: ChannelLink) -> None:
-        """Serve one connection for the process's life, observed through *link*."""
-        self._link = link
+        """Serve one connection for the process's life, observed through *link*.
+
+        The connection starts with no stored session; ``initialize`` captures it.
+        """
+        self._session, self._link = None, link
 
     async def _notify_standalone(self) -> None:
         self._pending_notify = True
         if self._session is None:
             return
-        sent = await notify_tool_list(self._session, _NOTIFY_SEND_TIMEOUT, self._link)
+        sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(self._session)
         self._pending_notify = not sent.delivered
         self._session = self._session if sent.keep_session else None
 
