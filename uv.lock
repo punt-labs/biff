@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 2
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
@@ -1341,6 +1341,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "typer" },
+    { name = "watchdog" },
     { name = "wcwidth" },
 ]
 
@@ -1391,6 +1392,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.15.0,<1" },
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "watchdog", specifier = ">=6.0,<8" },
     { name = "wcwidth", specifier = ">=0.8.2,<1" },
 ]
 provides-extras = ["dev"]

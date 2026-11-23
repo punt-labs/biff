@@ -70,7 +70,7 @@ class TestKvWatchSurvivalE2E:
 
         cache: dict[str, object] = {}
 
-        with patch("biff.server.activity.ActivityTracker.wake", _counting_wake):
+        with patch("biff.server.wake.WakeSignal.wake", _counting_wake):
             await _run_kv_watch(
                 relay,
                 state,

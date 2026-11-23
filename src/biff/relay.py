@@ -432,6 +432,11 @@ class LocalRelay:
         self._validate_user(user)
         return self._data_dir / f"userinbox-{user}.jsonl"
 
+    @property
+    def data_dir(self) -> Path:
+        """The directory holding the mailboxes, sessions and wall files."""
+        return self._data_dir
+
     # -- Messages --
 
     async def deliver(
@@ -452,21 +457,16 @@ class LocalRelay:
 
         if ":" in message.to_user:
             # Targeted delivery — TTY inbox
-            user_part = message.to_user.split(":")[0]
-            self._validate_user(user_part)
+            self._validate_user(message.to_user.split(":")[0])
             path = self._inbox_path_for_key(message.to_user)
-            if any(m.id == message.id for m in self._read_inbox_file(path)):
-                return  # same id twice is one message, as JetStream dedups it
-            with path.open("a") as f:
-                f.write(message.model_dump_json() + "\n")
         else:
             # Broadcast — single user mailbox, no session lookup
             self._validate_user(message.to_user)
             path = self._user_inbox_path(message.to_user)
-            if any(m.id == message.id for m in self._read_inbox_file(path)):
-                return
-            with path.open("a") as f:
-                f.write(message.model_dump_json() + "\n")
+        if any(m.id == message.id for m in self._read_inbox_file(path)):
+            return  # same id twice is one message, as JetStream dedups it
+        with path.open("a") as f:
+            f.write(message.model_dump_json() + "\n")
 
     async def fetch(self, session_key: str) -> list[Message]:
         """Get unread messages for a session, oldest first."""
@@ -474,20 +474,7 @@ class LocalRelay:
 
     async def mark_read(self, session_key: str, ids: Sequence[uuid.UUID]) -> None:
         """Mark messages as read.  Rewrites the session's inbox atomically."""
-        id_set = set(ids)
-        if not id_set:
-            return
-        messages = self._read_inbox(session_key)
-        updated: list[Message] = []
-        changed = False
-        for msg in messages:
-            if msg.id in id_set and not msg.read:
-                updated.append(msg.model_copy(update={"read": True}))
-                changed = True
-            else:
-                updated.append(msg)
-        if changed:
-            self._write_inbox(session_key, updated)
+        self._mark_read_in(self._inbox_path_for_key(session_key), ids)
 
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:
         """Count unread messages across TTY and user inboxes."""
@@ -505,21 +492,7 @@ class LocalRelay:
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[uuid.UUID]) -> None:
         """Mark messages as read in the user's broadcast mailbox."""
-        id_set = set(ids)
-        if not id_set:
-            return
-        path = self._user_inbox_path(user)
-        messages = self._read_inbox_file(path)
-        updated: list[Message] = []
-        changed = False
-        for msg in messages:
-            if msg.id in id_set and not msg.read:
-                updated.append(msg.model_copy(update={"read": True}))
-                changed = True
-            else:
-                updated.append(msg)
-        if changed:
-            self._write_inbox_file(path, updated)
+        self._mark_read_in(self._user_inbox_path(user), ids)
 
     async def get_user_unread_count(self, user: str) -> int:
         """Count unread messages in the user's broadcast mailbox."""
@@ -849,13 +822,20 @@ class LocalRelay:
         content = "".join(msg.model_dump_json() + "\n" for msg in messages)
         atomic_write(path, content)
 
+    def _mark_read_in(self, path: Path, ids: Sequence[uuid.UUID]) -> None:
+        """Rewrite the inbox at *path* atomically with *ids* marked read."""
+        id_set = set(ids)
+        messages = self._read_inbox_file(path) if id_set else []
+        updated = [
+            m.model_copy(update={"read": True}) if m.id in id_set else m
+            for m in messages
+        ]
+        if updated != messages:
+            self._write_inbox_file(path, updated)
+
     def _read_inbox(self, session_key: str) -> list[Message]:
         """Read all messages from a session's TTY inbox."""
         return self._read_inbox_file(self._inbox_path_for_key(session_key))
-
-    def _write_inbox(self, session_key: str, messages: Sequence[Message]) -> None:
-        """Atomically rewrite a session's TTY inbox."""
-        self._write_inbox_file(self._inbox_path_for_key(session_key), messages)
 
     def _parse_sessions_file(self) -> dict[str, UserSession]:
         """Parse sessions.json, raising on corruption.

@@ -1,10 +1,10 @@
-"""Docker demo: push beats poll for broadcast message detection.
+"""Docker demo: push detects a broadcast; with no poke, no timer does.
 
 Runs the same A/B measurement as ``tests/test_nats_e2e/test_push_vs_poll_latency.py``
 end to end against the real ``ghcr.io/punt-labs/biff-relay`` container built
 fresh from ``docker/`` — ``entrypoint.sh``'s config selection, the real
 auth handshake, and the container network, not a bare ``nats-server``.
-The printed comparison table plus the saved transcript (this test is marked
+The printed comparison plus the saved transcript (this test is marked
 ``@pytest.mark.transcript``) are the demo artifact ``scripts/demo-push-vs-poll.sh``
 points an operator at.
 """
@@ -23,7 +23,7 @@ from fastmcp.client.transports import FastMCPTransport
 from biff.models import BiffConfig, Message, RelayAuth
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
-from biff.server.tools._descriptions import _reset_session, nap_interval_for
+from biff.server.tools._descriptions import _reset_session
 from biff.testing import NotificationTracker, RecordingClient, Transcript
 from biff.testing.caller import StampedClient
 from tests._state import create_state
@@ -40,11 +40,9 @@ pytestmark = pytest.mark.nats_docker
 _TEST_REPO = "_test-push-vs-poll-demo"
 _KAI_TTY = "aaaa00d1"
 
-# Fast enough to wait out in a test, mirroring test_push_vs_poll_latency.py.
-_POLL_INTERVAL = 0.3
-_BACKSTOP = nap_interval_for(_POLL_INTERVAL)
-_TRIAL_TIMEOUT = _BACKSTOP * 2.0
-_SYNC_PAUSE = _BACKSTOP + 2 * _POLL_INTERVAL
+# Mirrors test_push_vs_poll_latency.py: longer than the retired 2s poll tick.
+_TRIAL_TIMEOUT = 6.0
+_NO_TIMER_WAIT = 3.0
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 
@@ -68,15 +66,12 @@ def transcript(request: pytest.FixtureRequest) -> Iterator[Transcript]:
         path.write_text(t.render())
 
 
-def _client_config(
-    container: RelayContainer, user: str, *, poll_interval: float
-) -> BiffConfig:
+def _client_config(container: RelayContainer, user: str) -> BiffConfig:
     return BiffConfig(
         user=user,
         repo_name=_TEST_REPO,
         relay_url=container.url,
         relay_auth=RelayAuth(token=container.token),
-        poll_interval=poll_interval,
     )
 
 
@@ -116,16 +111,15 @@ async def _wait_for_unread_description(
     return None
 
 
-def _print_comparison(push_latency: float, poll_latency: float) -> None:
+def _print_comparison(push_latency: float, unpoked_waited: bool) -> None:
     print(f"\n{'Path':<8} {'Latency (ms)':>14}")
     print("-" * 24)
     print(f"{'push':<8} {push_latency * 1000:>14.1f}")
-    print(f"{'poll':<8} {poll_latency * 1000:>14.1f}")
-    print(f"\nbackstop (nap_interval): {_BACKSTOP * 1000:.1f}ms")
+    print(f"\nno poke: waited for an explicit read: {unpoked_waited}")
 
 
 class TestPushVsPollDemo:
-    """The push-vs-poll demonstration against the real relay container."""
+    """The push demonstration against the real relay container."""
 
     @pytest.mark.transcript
     async def test_push_beats_poll_against_real_relay(
@@ -134,11 +128,9 @@ class TestPushVsPollDemo:
         tmp_path: Path,
         transcript: Transcript,
     ) -> None:
-        """Push detects a broadcast fast; poll waits out the backstop cadence."""
+        """Push detects a broadcast fast; with no poke, only a read finds it."""
         _reset_session()
-        kai_config = _client_config(
-            relay_container, "kai", poll_interval=_POLL_INTERVAL
-        )
+        kai_config = _client_config(relay_container, "kai")
         kai_state = create_state(
             kai_config,
             tmp_path / "kai",
@@ -175,20 +167,18 @@ class TestPushVsPollDemo:
                 push_latency = t_recv - t_send
                 await kai.call("read_messages")  # drains, records the delivered text
 
-                # -- poll: JetStream publish only, no poke (poll-only path) --
-                await asyncio.sleep(_SYNC_PAUSE)  # let the backstop clock reset first
-                t_send = time.monotonic()
+                # -- no poke: JetStream publish only; no timer exists to find it --
                 await _publish_broadcast_without_poke(
                     sender, to_user="kai", from_user="eric", body="standup notes (poll)"
                 )
-                t_recv = await _wait_for_unread_description(
-                    kai_raw, timeout=_TRIAL_TIMEOUT
+                await asyncio.sleep(_NO_TIMER_WAIT)
+                unpoked_waited = (
+                    await _wait_for_unread_description(kai_raw, timeout=0.2) is None
                 )
-                assert t_recv is not None, "poll: read_messages never showed 1 unread"
-                poll_latency = t_recv - t_send
-                await kai.call("read_messages")  # drains, records the delivered text
+                read = await kai.call("read_messages")  # an explicit read finds it
+                assert "standup notes (poll)" in str(read)
 
-            _print_comparison(push_latency, poll_latency)
+            _print_comparison(push_latency, unpoked_waited)
 
             # Generous, CI-stable margins — same bounds as the tier-3c
             # comparative test, since the docker tier runs in CI on
@@ -196,10 +186,7 @@ class TestPushVsPollDemo:
             assert push_latency < 2.0, (
                 f"push took {push_latency * 1000:.1f}ms, expected < 2s"
             )
-            assert poll_latency >= _BACKSTOP * 0.5, (
-                f"poll took {poll_latency * 1000:.1f}ms, "
-                f"expected >= {_BACKSTOP * 500:.1f}ms (half the backstop)"
-            )
+            assert unpoked_waited, "a poke-less message was found without a read"
         finally:
             await sender.close()
             _reset_session()

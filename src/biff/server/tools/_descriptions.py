@@ -1,9 +1,10 @@
-"""Dynamic tool description updates and inbox polling.
+"""Dynamic tool description updates and the arrival poller.
 
 Refreshes tool descriptions based on current server state.
 Called after every tool execution (belt) and by a background
 poller (suspenders) so notifications stay fresh even between
-tool calls.
+tool calls.  The poller runs only when something arrives: a
+relay push, a local-relay file change, or the liveness reconcile.
 
 After mutating the ``read_messages`` description, fires
 ``notifications/tools/list_changed`` so Claude Code re-reads
@@ -19,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -58,27 +58,12 @@ logger = logging.getLogger(__name__)
 
 _READ_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
 
-_DEFAULT_POLL_INTERVAL = 2.0
-_DEFAULT_IDLE_THRESHOLD = 120.0  # 2 minutes — transition to napping
-_DEFAULT_NAP_INTERVAL = 30.0  # 30 seconds — reduced polling while napping
-
-_DISABLED_POLLER_FALLBACK_INTERVAL = 30.0  # seconds — see _sleep_or_wake
-
-
-def nap_interval_for(poll_interval: float) -> float:
-    """Scale the napping/backstop cadence proportionally to *poll_interval*.
-
-    ``set_poll_interval`` (DES-062) is repointed to also govern the
-    unread-count backstop cadence, not just the active-tick interval — but
-    ``poll_inbox``'s *nap_interval* has always been a separate, reduced-rate
-    knob (30s default vs. the 2s active default), and the config surface
-    exposes only one number. Preserving the historical 15x ratio between
-    the two lets a single ``set_poll_interval`` value scale both: an
-    operator who narrows or widens it gets a correspondingly narrower or
-    wider backstop window, instead of the backstop staying pinned to the
-    historical default regardless of what they configured.
-    """
-    return poll_interval * (_DEFAULT_NAP_INTERVAL / _DEFAULT_POLL_INTERVAL)
+# The one timer the poller keeps: how often a NATS-backed poller checks that
+# its always-on subscriptions are bound to the live client.  It is part of
+# connection liveness (DES-041, DES-042, DES-087), not a cadence for finding
+# arrivals — see ``WakeSignal.wait``.  A client replacement leaves every SUB
+# orphaned until this check rebinds it, so it bounds that gap.
+SUB_RECONCILE_INTERVAL = 5.0
 
 
 # Wording for the inbox-notify always-on SUB's re-subscribe latch (DES-062),
@@ -266,6 +251,8 @@ async def _sync_unread_file(
     except Exception:
         logger.debug("_sync_unread_file: relay call failed", exc_info=True)
         return
+    # Rotation is computed here, when the queue is read, not by a timer.
+    state.display_queue.advance_if_due()
     items = state.display_queue.snapshot()
     write_unread_file(
         state.unread_path,
@@ -571,7 +558,7 @@ def _relay_pushes_inbox_notify(state: ServerState) -> bool:
 
 
 class _InboxPokeGate:
-    """Poke-gated recompute with a periodic backstop (DES-062).
+    """Poke-gated unread recompute (DES-062).
 
     Shared between the inbox-notify SUB callback and the talk-SUB
     callback's wake-poke branch — a targeted message's wake poke rides the
@@ -581,51 +568,43 @@ class _InboxPokeGate:
     ``_active_tick``, which calls :meth:`claim` once per tick.
 
     :meth:`claim` is true when a poke has arrived since the last
-    recompute, OR when *backstop_interval* has elapsed since the last
-    recompute regardless of any poke — the dropped-poke insurance that
-    keeps the at-most-once core-NATS pokes safe (a lost poke costs
-    at most one backstop interval of latency, never a stalled unread
-    count). It clears the poke and resets the clock in the same
+    recompute.  There is no timer backstop (DES-087): a poke lost while the
+    connection was down is recovered by the reconnect catch-up, and an
+    explicit read recomputes the count.  It clears the poke in the same
     synchronous step as the check, *before* the caller's own ``await`` on
     the actual refresh: a poke that arrives while that refresh is still in
     flight sets ``_poked`` again, which nothing after the clear can
     clobber, so it survives to the next tick instead of being silently
     absorbed into a refresh that started before it arrived. A refresh
     that then fails should call :meth:`mark` again to re-arm the retry
-    for the next tick, rather than waiting out a full backstop for a
-    transient failure.
+    for the next tick.
 
     Starts poked so the first tick always recomputes once, matching the
     old ``last_count = -1`` "force initial refresh" idiom it replaces.
-    Uses ``time.monotonic()``, not wall-clock time: a backward NTP step
-    would otherwise make ``elapsed`` go negative and suspend the backstop
-    until the clock caught back up.
     """
 
-    __slots__ = ("_backstop_interval", "_last_recompute", "_poked")
+    __slots__ = ("_poked",)
 
-    def __init__(self, *, backstop_interval: float) -> None:
-        self._backstop_interval = backstop_interval
+    def __init__(self) -> None:
         self._poked = True
-        self._last_recompute = time.monotonic()
 
     def mark(self) -> None:
         """Record that a wake poke arrived (called from a NATS callback)."""
         self._poked = True
 
+    @property
+    def pending(self) -> bool:
+        """Whether a recompute is owed that no wake has yet claimed."""
+        return self._poked
+
     def claim(self) -> bool:
         """Atomically decide whether a recompute is owed, and claim it if so.
 
-        Returns ``True`` (having already cleared the poke and reset the
-        backstop clock) when the caller should recompute now; ``False``
-        when there is nothing to do this tick.
+        Returns ``True`` (having already cleared the poke) when the caller
+        should recompute now; ``False`` when there is nothing to do.
         """
-        due = self._poked or (
-            time.monotonic() - self._last_recompute >= self._backstop_interval
-        )
-        if due:
-            self._poked = False
-            self._last_recompute = time.monotonic()
+        due = self._poked
+        self._poked = False
         return due
 
 
@@ -636,7 +615,6 @@ async def _reconcile_always_on_sub(
     *,
     state: ServerState,
     gate: _InboxPokeGate,
-    wake_event: asyncio.Event,
 ) -> SubscriptionBinding | None:
     """Re-establish an always-on SUB when unbound or its client was replaced.
 
@@ -654,7 +632,7 @@ async def _reconcile_always_on_sub(
 
     Invariant this enforces (every kind, uniformly): every event that can
     change unread state either marks the poke gate directly or is covered
-    by the backstop's periodic fallback tick. A newly (re)established SUB
+    by the reconnect catch-up (DES-087). A newly (re)established SUB
     of ANY kind — first bind, a retry after an earlier failure, or a
     wedge-teardown re-subscribe — cannot see a poke published while nothing
     was listening; core NATS has no replay. The mark+wake lives here,
@@ -670,8 +648,7 @@ async def _reconcile_always_on_sub(
     fresh = await resubscribe()
     if fresh is not None:
         gate.mark()
-        state.activity.wake()
-        wake_event.set()
+        state.wake.wake()
     return fresh
 
 
@@ -679,24 +656,23 @@ async def subscribe_talk(
     state: ServerState,
     latch: TalkNotifyLatch,
     gate: _InboxPokeGate,
-    wake_event: asyncio.Event,
 ) -> SubscriptionBinding | None:
     """Establish the always-on talk subscription feeding the held ``TalkState``.
 
     Started once at poller start (ungated — a fresh agent must receive an
     unsolicited invite).  Every talk frame flows into
     ``state.talk.receive`` (self-echo and session-scope filtering happen
-    there); when the frame wakes the poller, *wake_event* cuts the tick
-    loop's sleep short so push latency stops being bounded by whatever
-    ``poll_interval`` happens to be.
+    there); when the frame wakes the poller, ``state.wake`` runs its next
+    pass at once, so push latency is bounded by network and processing
+    time alone.
 
     A wake poke — a ``/write`` message notification riding this subject
     with no recognized ``type`` (``TalkNotification.is_wake_poke``,
     ``talk_state.py`` diverts it before the session filter) — also marks
     *gate*.  Without this, a targeted message's only signal was
-    ``state.activity.wake()``, which un-naps the tracker but has no say
+    ``state.wake.wake()``, which runs the next pass but has no say
     over whether the now poke-gated tick actually recomputes the unread
-    count — the gate, not activity, decides that. A genuine talk frame
+    count — the gate decides that. A genuine talk frame
     (invite/message/end/withdraw) does *not* mark the gate — marking it
     for talk activity unrelated to the inbox would be a spurious unread
     recompute.
@@ -745,8 +721,7 @@ async def subscribe_talk(
                     # Do NOT fire notifications here — sending from a NATS
                     # callback is unreliable (different coroutine context).
                     # Wake the poller; its next tick refreshes + notifies.
-                    state.activity.wake()
-                    wake_event.set()
+                    state.wake.wake()
             except (json.JSONDecodeError, AttributeError, TypeError):
                 logger.debug("Failed to process talk notification", exc_info=True)
 
@@ -765,16 +740,14 @@ async def _reconcile_talk_sub(
     talk_sub: SubscriptionBinding | None,
     latch: TalkNotifyLatch,
     gate: _InboxPokeGate,
-    wake_event: asyncio.Event,
 ) -> SubscriptionBinding | None:
     """Re-establish the talk SUB when it is unbound or its client was replaced."""
     return await _reconcile_always_on_sub(
         talk_sub,
         _relay_generation(state),
-        lambda: subscribe_talk(state, latch, gate, wake_event),
+        lambda: subscribe_talk(state, latch, gate),
         state=state,
         gate=gate,
-        wake_event=wake_event,
     )
 
 
@@ -782,17 +755,15 @@ async def subscribe_inbox_notify(
     state: ServerState,
     latch: TalkNotifyLatch,
     gate: _InboxPokeGate,
-    wake_event: asyncio.Event,
 ) -> SubscriptionBinding | None:
     """Establish an always-on broadcast inbox-notify subscription (DES-062).
 
     Started once at poller start (ungated), mirroring :func:`subscribe_talk`
     exactly (``nats-relay.tex`` ``Subscribe``, kind ``inboxNotify``): the poke
-    carries no payload, so the callback does exactly three things — marks
-    *gate* so ``_active_tick`` knows a recompute is owed, wakes the poller,
-    and sets *wake_event* so the tick loop's sleep does not have to elapse
-    before the recompute runs — never a refresh or a notify directly
-    (DES-020/DES-021). NATS-only.
+    carries no payload, so the callback does exactly two things — marks
+    *gate* so ``_active_tick`` knows a recompute is owed, and wakes the
+    poller so the recompute runs at once — never a refresh or a notify
+    directly (DES-020/DES-021). NATS-only.
 
     Binds to the broadcast inbox of ``state.config.user``.
     """
@@ -812,8 +783,7 @@ async def subscribe_inbox_notify(
             # Do NOT fire notifications here — sending from a NATS callback
             # is unreliable (different coroutine context). Wake the poller;
             # its next tick recomputes the unread count and notifies.
-            state.activity.wake()
-            wake_event.set()
+            state.wake.wake()
 
         handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
             subject, cb=_on_inbox_notify_msg
@@ -830,23 +800,20 @@ async def _reconcile_inbox_notify_sub(
     inbox_notify_sub: SubscriptionBinding | None,
     latch: TalkNotifyLatch,
     gate: _InboxPokeGate,
-    wake_event: asyncio.Event,
 ) -> SubscriptionBinding | None:
     """Re-establish an inbox-notify SUB when unbound or its client was replaced."""
     return await _reconcile_always_on_sub(
         inbox_notify_sub,
         _relay_generation(state),
-        lambda: subscribe_inbox_notify(state, latch, gate, wake_event),
+        lambda: subscribe_inbox_notify(state, latch, gate),
         state=state,
         gate=gate,
-        wake_event=wake_event,
     )
 
 
 async def subscribe_wall_notify(
     state: ServerState,
     latch: TalkNotifyLatch,
-    wake_event: asyncio.Event,
 ) -> SubscriptionBinding | None:
     """Establish an always-on wall-change notify subscription.
 
@@ -854,11 +821,8 @@ async def subscribe_wall_notify(
     :func:`subscribe_inbox_notify`.  The poke is repo-scoped and
     user-independent — a wall is a team broadcast — so this binds to
     ``wall_notify_subject(repo)``, the one subject every session in the
-    repo shares.  The payload-less poke's callback does exactly two
-    things: wakes the poller out of any nap (so its next tick runs
-    ``_active_tick`` rather than skipping as a cheap nap) and sets
-    *wake_event* so that tick fires without waiting out the sleep.  It
-    never refreshes or notifies directly — sending from a NATS callback
+    repo shares.  The payload-less poke's callback only wakes the poller.
+    It never refreshes or notifies directly — sending from a NATS callback
     is unreliable (DES-020/DES-021).  The woken tick re-reads
     ``get_wall()`` (unconditional, every tick) and reconciles the display
     queue, which is what clears a stale wall on a peer.
@@ -877,8 +841,7 @@ async def subscribe_wall_notify(
         subject = state.relay.wall_notify_subject(state.config.repo_name)
 
         async def _on_wall_notify_msg(_msg: object) -> None:
-            state.activity.wake()
-            wake_event.set()
+            state.wake.wake()
 
         handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
             subject, cb=_on_wall_notify_msg
@@ -895,42 +858,52 @@ async def _reconcile_wall_notify_sub(
     wall_notify_sub: SubscriptionBinding | None,
     latch: TalkNotifyLatch,
     gate: _InboxPokeGate,
-    wake_event: asyncio.Event,
 ) -> SubscriptionBinding | None:
     """Re-establish a wall-notify SUB when unbound or its client was replaced."""
     return await _reconcile_always_on_sub(
         wall_notify_sub,
         _relay_generation(state),
-        lambda: subscribe_wall_notify(state, latch, wake_event),
+        lambda: subscribe_wall_notify(state, latch),
         state=state,
         gate=gate,
-        wake_event=wake_event,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _Seen:
+    """What the last pass saw, so the next pass refreshes only on a change.
+
+    The defaults make the first pass refresh everything.
+    """
+
+    unread: int = -1  # the local relay's count comparison only
+    wall: tuple[str, str] = ("", "")
+    talk: tuple[tuple[str, ...], int, str] = ((), -1, "")
 
 
 async def _active_tick(
     mcp: FastMCP[ServerState],
     state: ServerState,
-    last_count: int,
-    last_wall: tuple[str, str],
-    last_talk: tuple[tuple[str, ...], int, str],
+    seen: _Seen,
     *,
     gate: _InboxPokeGate,
-) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
-    """One active-mode poller tick: check inbox, wall, and talk changes.
+) -> _Seen:
+    """One poller pass: check inbox, wall, and talk changes.
+
+    Runs because something woke the poller, never on a schedule.
 
     Unread recompute is poke-gated (DES-062) for a NATS-backed relay, not
     unconditional: broadcast and targeted messages alike push a wake poke,
     so ``get_unread_summary`` only needs to run when *gate* says a poke
-    arrived or its backstop cadence elapsed — ``refresh_read_messages``
+    arrived — ``refresh_read_messages``
     does its own fetch and its own change-gated notify, so there is
     nothing left for this tick to fetch redundantly. A relay with no push
-    mechanism (``LocalRelay``) falls back to the plain count-comparison
-    gate via *last_count* — see
-    :func:`_relay_pushes_inbox_notify`.
+    mechanism (``LocalRelay``) is woken by its file watch and compares the
+    count against *last_count* — see :func:`_relay_pushes_inbox_notify`.
 
-    Returns updated ``(count, wall_key, talk_signal)`` tracking state.
+    Returns what this pass saw.
     """
+    last_count, last_wall, last_talk = seen.unread, seen.wall, seen.talk
     if _relay_pushes_inbox_notify(state):
         if gate.claim():
             ok = await refresh_read_messages(mcp, state)
@@ -938,9 +911,8 @@ async def _active_tick(
                 # The gate already cleared its poke before this await
                 # started (claim()'s clear-before-refresh ordering). A
                 # transient relay failure here must not freeze the count
-                # until the next backstop tick — re-arm so the very next
-                # tick retries, matching the ~2s cadence the old
-                # unconditional per-tick poll always retried at.
+                # until the next arrival — re-arm so the next pass retries.
+                # ``poll_inbox`` runs that pass on its liveness wake.
                 gate.mark()
     else:
         total = (await state.relay.get_unread_summary(state.session_key)).count
@@ -959,131 +931,42 @@ async def _active_tick(
         last_wall = wall_key
         await refresh_wall(mcp, state, wall=current_wall)
 
-    # Age out pending talk invites whose inviter never returned and never
-    # withdrew (notification.tex ExpirePendingInvite). The reduced pending
-    # count changes talk_signal below, which drives the description refresh.
-    state.talk.expire_stale_invites()
-
     # Refresh talk tool description when the held TalkState changes
-    # (new invite, queued message, phase transition, or an aged-out invite).
+    # (new invite, queued message, phase transition).  Reading the state
+    # ages out a stale invite (``TalkState.expire_stale_invites``).
     talk_key = talk_signal(state.talk)
     if talk_key != last_talk:
         last_talk = talk_key
         await refresh_talk(mcp, state)
 
-    # Rotate display queue — talk items expire, wall items cycle
-    if state.display_queue.advance_if_due():
-        await _sync_unread_file(state)
-
-    return last_count, last_wall, last_talk
+    return _Seen(unread=last_count, wall=last_wall, talk=last_talk)
 
 
 async def _safe_tick(
     mcp: FastMCP[ServerState],
     state: ServerState,
-    last_count: int,
-    last_wall: tuple[str, str],
-    last_talk: tuple[tuple[str, ...], int, str],
+    seen: _Seen,
     *,
     gate: _InboxPokeGate,
-) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
+) -> _Seen:
     """Wrap ``_active_tick`` with error handling.
 
     A transient NATS error must not kill the poller — log and retry
-    on the next interval.  ``CancelledError`` is re-raised so shutdown
+    on the next wake.  ``CancelledError`` is re-raised so shutdown
     propagates correctly.
 
-    Logged at DEBUG, not WARNING: the poller ticks every ~2s, so a
-    NATS wedge would spam a warning per tick.  The relay's
+    Logged at DEBUG, not WARNING: a NATS wedge would otherwise spam a
+    warning per wake.  The relay's
     ``_ConnectionHealth`` is the single source of onset/recovery
     warnings — it logs the wedge once, not once per tick.
     """
     try:
-        return await _active_tick(
-            mcp,
-            state,
-            last_count,
-            last_wall,
-            last_talk,
-            gate=gate,
-        )
+        return await _active_tick(mcp, state, seen, gate=gate)
     except asyncio.CancelledError:
         raise
     except Exception:
         logger.debug("Poller tick failed, will retry", exc_info=True)
-        return last_count, last_wall, last_talk
-
-
-class _WakeOutcome(Enum):
-    """Why ``_sleep_or_wake`` returned — the caller's next action differs per kind."""
-
-    SHUTDOWN = auto()  # shutdown fired — the poller must exit
-    EVENT = auto()  # wake_event fired before the timeout — real activity
-    TIMEOUT = auto()  # neither fired — interval/fallback simply elapsed
-
-
-async def _sleep_or_wake(
-    *,
-    interval: float,
-    shutdown: asyncio.Event | None,
-    wake_event: asyncio.Event,
-) -> _WakeOutcome:
-    """Sleep up to *interval*, returning early on a wake or shutdown signal.
-
-    Distinguishing :attr:`_WakeOutcome.EVENT` from
-    :attr:`_WakeOutcome.TIMEOUT` lets the caller tell "there is
-    real activity to react to" apart from "nothing happened, this was
-    just the liveness backstop" — see ``poll_inbox``'s own use, which
-    must not run its periodic tick work on a bare disabled-interval
-    fallback wake. Clears *wake_event* on every return so a wake this
-    call already consumed cannot immediately re-trigger the next one.
-
-    ``interval <= 0`` disables the fast periodic cadence, but does NOT
-    wait indefinitely: it falls back to
-    ``_DISABLED_POLLER_FALLBACK_INTERVAL``. Waiting forever on *wake_event*
-    alone has a real liveness hole — a client discard (a wedge teardown's
-    ``_force_reconnect``, or ``_on_closed`` giving up) strands every
-    always-on SUB on the dead client, and reconciling them is the tick
-    loop's own job, which runs only after this wait returns. With no
-    live SUB, no poke can ever arrive to end that wait, so the very
-    thing that would fix the stranding never gets to run — the family's
-    ``nats-relay.tex`` liveness proof (a stranded SUB always eventually
-    re-binds) implicitly assumes *some* real scheduler keeps calling
-    ``Subscribe``; this fallback is what keeps that assumption true when
-    poke traffic alone cannot be relied on. It is deliberately much
-    slower than the active-mode default (30s here vs. 2s there) — this
-    is a liveness backstop, not a cadence.
-    """
-    timeout = interval if interval > 0 else _DISABLED_POLLER_FALLBACK_INTERVAL
-    waiters = [asyncio.ensure_future(wake_event.wait())]
-    if shutdown is not None:
-        waiters.append(asyncio.ensure_future(shutdown.wait()))
-    try:
-        done, _pending = await asyncio.wait(
-            waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
-        )
-    finally:
-        for task in waiters:
-            if not task.done():
-                task.cancel()
-    # Snapshot the event's own state before clearing it, rather than
-    # trusting `done` alone. asyncio.wait()'s internal timeout resolution
-    # and a callback's wake_event.set() are two independent events that can
-    # land in either order in the same narrow window; a set() that wins
-    # that race without getting the wait-task into `done` first would
-    # otherwise be silently erased by the unconditional clear() below with
-    # no outcome ever reflecting it — at a disabled interval, poll_inbox
-    # treats that as TIMEOUT and skips the tick's recompute entirely, so
-    # the poke is lost until the next fallback tick, not just delayed.
-    # Only this function ever calls .clear() on wake_event, so nothing else
-    # can flip is_set() between this read and the clear — the read is safe.
-    woke = wake_event.is_set()
-    wake_event.clear()
-    if shutdown is not None and shutdown.is_set():
-        return _WakeOutcome.SHUTDOWN
-    if done or woke:  # a waiter completed, or the event was set regardless
-        return _WakeOutcome.EVENT
-    return _WakeOutcome.TIMEOUT
+        return seen
 
 
 async def poll_inbox(
@@ -1091,51 +974,43 @@ async def poll_inbox(
     state: ServerState,
     *,
     shutdown: asyncio.Event | None = None,
-    interval: float = _DEFAULT_POLL_INTERVAL,
-    idle_threshold: float = _DEFAULT_IDLE_THRESHOLD,
-    nap_interval: float = _DEFAULT_NAP_INTERVAL,
 ) -> None:
-    """Background task: poll inbox and wall, refresh notifications on change.
+    """Background task: react to arrivals, refresh notifications on change.
 
-    Runs for the lifetime of the MCP server, at every *interval* — even
-    ``interval <= 0``: the SUBs below and their poke-driven recompute run
-    regardless, since push detection never depended on a periodic tick in
-    the first place. What ``interval <= 0`` actually disables is the
-    *periodic* work that has no push signal of its own — the wall
-    countdown's re-render, stale talk-invite expiry, and the
-    nap-interval backstop — because with no periodic sleep timeout, that
-    work only runs on whatever tick a poke happens to wake, not on a
-    schedule of its own. In **active** mode (``interval > 0``), polls the
-    relay every *interval* seconds. After *idle_threshold* seconds with no
-    tool call, transitions to **napping**: reduces polling to
-    *nap_interval* but keeps the NATS connection alive so KV watches
-    continue to deliver wall/session changes in real-time.
+    Runs for the lifetime of the MCP server and does work only when woken:
+    by a NATS push (talk frame, inbox poke, wall poke), by a KV watcher,
+    or — for the local relay — by a file change in its data directory
+    (:meth:`~biff.relay.LocalRelay.watch`).  Nothing schedules a pass
+    (DES-087): the wall's remaining time, a talk invite's age and the unread
+    count are computed when read, and an explicit ``read_messages`` call
+    recomputes the count.
 
-    Push-to-refresh latency does not wait out *interval*: every wake
-    (talk activity, a targeted message's wake poke, or a broadcast
-    inbox-notify poke) interrupts the sleep immediately via a shared
-    wake event, so it is bounded by actual network/processing time, not
-    by whatever cadence is configured — the tool description's "arrives
-    in real time regardless of this value" claim is literally true, not
-    a latency bound stated as a hope.
+    The one timer is connection liveness.  A NATS-backed poller wakes every
+    ``SUB_RECONCILE_INTERVAL`` to rebind its always-on subscriptions to the
+    live client, and to retry an unread refresh that failed; it runs no
+    other work then.  A filesystem relay has no subscriptions and no timer.
+
+    Every wake interrupts the sleep immediately via ``state.wake``, so
+    push-to-refresh latency is bounded by actual network/processing time.
+    The first pass runs at start, to catch anything that arrived before the
+    subscriptions and the watch were in place (core NATS does not replay).
 
     When *shutdown* is set, exits cleanly between iterations —
     no NATS operations are interrupted mid-flight.
 
-    Establishes two always-on NATS subscriptions: talk notifications
-    (ungated — a fresh agent must receive an unsolicited invite) and the
-    broadcast inbox-notify wake poke for this session's own user. Every
-    talk frame on this session's own subject flows into the shared
-    ``TalkState``; a wake poke (message notification riding the talk
-    subject) additionally marks the poke gate so a targeted message's
-    detection is not silently deferred to the backstop.
+    Establishes three always-on NATS subscriptions: talk notifications
+    (ungated — a fresh agent must receive an unsolicited invite), the
+    broadcast inbox-notify wake poke for this session's own user, and the
+    wall poke. Every talk frame on this session's own subject flows into
+    the shared ``TalkState``; a wake poke (message notification riding the
+    talk subject) additionally marks the poke gate so a targeted message's
+    detection is not silently deferred.
     """
-    tracker = state.activity
-    last_count = -1  # Force initial refresh (LocalRelay fallback path only)
-    last_wall: tuple[str, str] = ("", "")  # Force initial refresh
-    last_talk: tuple[tuple[str, ...], int, str] = ((), -1, "")  # Force initial refresh
-    gate = _InboxPokeGate(backstop_interval=nap_interval)
-    wake_event = asyncio.Event()
+    seen = _Seen()
+    gate = _InboxPokeGate()
+    liveness_timeout = (
+        SUB_RECONCILE_INTERVAL if _relay_pushes_inbox_notify(state) else None
+    )
     talk_latch = TalkNotifyLatch.for_resubscribe(logger)
     inbox_notify_latch = TalkNotifyLatch(logger, _INBOX_NOTIFY_RESUBSCRIBE_MESSAGES)
     wall_notify_latch = TalkNotifyLatch(logger, _WALL_NOTIFY_RESUBSCRIBE_MESSAGES)
@@ -1143,119 +1018,58 @@ async def poll_inbox(
     inbox_notify_sub: SubscriptionBinding | None = None
     wall_notify_sub: SubscriptionBinding | None = None
 
-    try:
-        # Bind each subscription inside the cleanup scope so cancellation
-        # during the next await cannot leak an established subscription.
-        talk_sub = await subscribe_talk(state, talk_latch, gate, wake_event)
-        inbox_notify_sub = await subscribe_inbox_notify(
-            state, inbox_notify_latch, gate, wake_event
-        )
-        wall_notify_sub = await subscribe_wall_notify(
-            state, wall_notify_latch, wake_event
-        )
-        while shutdown is None or not shutdown.is_set():
-            outcome = await _sleep_or_wake(
-                interval=interval, shutdown=shutdown, wake_event=wake_event
+    with state.wake.watching(state.relay):
+        try:
+            # Bind each subscription inside the cleanup scope so cancellation
+            # during the next await cannot leak an established subscription.
+            talk_sub = await subscribe_talk(state, talk_latch, gate)
+            inbox_notify_sub = await subscribe_inbox_notify(
+                state, inbox_notify_latch, gate
             )
-            if outcome is _WakeOutcome.SHUTDOWN:
-                return
-
-            # A TIMEOUT outcome at a disabled interval is purely the
-            # liveness backstop _sleep_or_wake documents — it exists only
-            # to keep the SUB reconcile below alive, not to resurrect the
-            # periodic tick work interval<=0 is supposed to have turned
-            # off (wall re-render, invite expiry, the unread backstop).
-            # At interval>0 every TIMEOUT is the normal periodic tick and
-            # runs it as always; only the disabled-interval fallback is
-            # special-cased.
-            #
-            # That special case is conditioned on the relay actually having
-            # a push mechanism (_relay_pushes_inbox_notify): DES-062's whole
-            # premise is that disabling the interval is safe because the
-            # always-on SUBs' pokes (or _reconcile_always_on_sub's own
-            # rebind-triggered wake) drive detection
-            # instead. A filesystem-backed LocalRelay has no push mechanism
-            # of any kind — wake_event never fires from anything but this
-            # same fallback timer — so skipping tick work on every TIMEOUT
-            # would silently disable /write detection for the rest of the
-            # session's life, not just delay it. For
-            # a non-push relay the fallback IS the only detection mechanism,
-            # so every wake must run tick work regardless of outcome kind.
-            run_tick_work = not (
-                interval <= 0
-                and outcome is _WakeOutcome.TIMEOUT
-                and _relay_pushes_inbox_notify(state)
-            )
-
-            if run_tick_work:
-                # Transition: active → napping (connection stays open)
-                if not tracker.napping and tracker.idle_seconds() > idle_threshold:
-                    tracker.enter_nap()
-
-                # Napping: skip only the expensive relay poll on a cheap nap
-                # tick (the KV watcher is primary for wall).  The SUB
-                # reconciles below still run — a background wedge teardown
-                # (the heartbeat loop's _tracked → _force_reconnect) can
-                # advance connection_generation *during* the nap, independent
-                # of this poller, and orphan the always-on SUBs on the dead
-                # client.  Gating the reconcile behind this skip would drop
-                # an unsolicited invite (or a message poke) to the idle
-                # agent until the nap ends.  Reconcile is a cheap no-op — a
-                # generation compare, no relay call — when nothing changed.
-                cheap_nap = (
-                    tracker.napping and tracker.seconds_since_nap_poll() < nap_interval
+            wall_notify_sub = await subscribe_wall_notify(state, wall_notify_latch)
+            state.wake.wake()  # the first pass
+            while shutdown is None or not shutdown.is_set():
+                outcome = await state.wake.wait(
+                    timeout=liveness_timeout, shutdown=shutdown
                 )
-                if not cheap_nap:
-                    last_count, last_wall, last_talk = await _safe_tick(
-                        mcp,
-                        state,
-                        last_count,
-                        last_wall,
-                        last_talk,
-                        gate=gate,
-                    )
-                    if tracker.napping:
-                        tracker.record_nap_poll()
+                if outcome.is_shutdown:
+                    return
 
-            # Keep the always-on SUBs bound to the live client — AFTER the
-            # tick, not before. The tick's relay calls are what can trigger the
-            # wedge teardown (_force_reconnect / _on_closed) that advances
-            # connection_generation and orphans a SUB on the dead client.
-            # Reconciling here rebinds a same-tick client swap immediately;
-            # reconciling first would defer it a whole poll interval (minutes of
-            # dead talk/inbox-notify on the agent-facing MCP path). Also retries
-            # a failed initial subscribe (NATS down at startup) and
-            # re-subscribes after a client replacement whose new client carries
-            # no SUB. Cheap: a generation compare when nothing changed.
-            talk_sub = await _reconcile_talk_sub(
-                state, talk_sub, talk_latch, gate, wake_event
-            )
-            inbox_notify_sub = await _reconcile_inbox_notify_sub(
-                state,
-                inbox_notify_sub,
-                inbox_notify_latch,
-                gate,
-                wake_event,
-            )
-            wall_notify_sub = await _reconcile_wall_notify_sub(
-                state,
-                wall_notify_sub,
-                wall_notify_latch,
-                gate,
-                wake_event,
-            )
-    finally:
-        # A hard cancel arriving while unsubscribing one SUB must not skip
-        # the rest — each attempt is shielded from that specific
-        # cancellation (the underlying unsubscribe keeps running server-side
-        # even if this task stops waiting for it) and both Exception and
-        # CancelledError are swallowed here so the loop always reaches every
-        # remaining SUB. This is a deliberate, narrow exception to "always
-        # re-raise CancelledError": we are already inside the finally block
-        # reacting to the original cancellation, and teardown must stay
-        # bounded and complete rather than abandoning it partway through.
-        all_subs = (talk_sub, inbox_notify_sub, wall_notify_sub)
-        for sub in all_subs:
-            if sub is not None:
-                with suppress(Exception, asyncio.CancelledError):
-                    await asyncio.shield(sub.handle.unsubscribe())
+                # A TIMEOUT is purely the liveness check WakeSignal.wait
+                # documents: it exists to keep the SUB reconcile below
+                # alive, and to retry a failed unread refresh (the gate
+                # re-marks itself), not to find arrivals.
+                if outcome.is_arrival or gate.pending:
+                    seen = await _safe_tick(mcp, state, seen, gate=gate)
+
+                # Keep the always-on SUBs bound to the live client — AFTER the
+                # tick, not before. The tick's relay calls are what can trigger
+                # the wedge teardown (_force_reconnect / _on_closed) that
+                # advances connection_generation and orphans a SUB on the dead
+                # client. Reconciling here rebinds a same-tick client swap
+                # immediately. Also retries a failed initial subscribe (NATS
+                # down at startup) and re-subscribes after a client replacement
+                # whose new client carries no SUB. Cheap: a generation compare
+                # when nothing changed.
+                talk_sub = await _reconcile_talk_sub(state, talk_sub, talk_latch, gate)
+                inbox_notify_sub = await _reconcile_inbox_notify_sub(
+                    state, inbox_notify_sub, inbox_notify_latch, gate
+                )
+                wall_notify_sub = await _reconcile_wall_notify_sub(
+                    state, wall_notify_sub, wall_notify_latch, gate
+                )
+        finally:
+            # A hard cancel arriving while unsubscribing one SUB must not skip
+            # the rest — each attempt is shielded from that specific
+            # cancellation (the underlying unsubscribe keeps running server-side
+            # even if this task stops waiting for it) and both Exception and
+            # CancelledError are swallowed here so the loop always reaches every
+            # remaining SUB. This is a deliberate, narrow exception to "always
+            # re-raise CancelledError": we are already inside the finally block
+            # reacting to the original cancellation, and teardown must stay
+            # bounded and complete rather than abandoning it partway through.
+            all_subs = (talk_sub, inbox_notify_sub, wall_notify_sub)
+            for sub in all_subs:
+                if sub is not None:
+                    with suppress(Exception, asyncio.CancelledError):
+                        await asyncio.shield(sub.handle.unsubscribe())

@@ -19,9 +19,9 @@ import json
 import logging
 import time
 from collections import deque
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Protocol, Self, final, runtime_checkable
 
-from biff.nats_relay import NatsRelay
+from biff.invite_expiry import InviteExpiry
 from biff.talk_types import (
     MAX_BODY_LEN,
     AcceptOutcome,
@@ -34,6 +34,8 @@ from biff.talk_types import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from nats.aio.client import Client as NatsClient
 
     from biff.relay import Relay
 
@@ -63,13 +65,23 @@ PENDING_INVITE_TTL = 300.0
 ``maxInviteAge`` / ``ExpirePendingInvite``).
 
 An invite whose inviter never returns and never sends an ``ntWithdraw``
-would otherwise strand the ``[TALK]`` marker forever.  The poller
-reaps invites older than this on its tick.  Five minutes comfortably exceeds
+would otherwise strand the ``[TALK]`` marker forever.  Invites older than
+this are reaped when invites are read or answered.  Five minutes comfortably exceeds
 several talk poll cycles (~1 min each), so a genuinely-waiting invite is
 never reaped before the agent can act, while a stranded marker still
 self-heals within a bounded, human-scale window.  ``ntWithdraw`` is the fast
 clean path; this TTL is the crash/disconnect backstop.
 """
+
+_EXPIRY = InviteExpiry(PENDING_INVITE_TTL)
+
+
+@runtime_checkable
+class _TalkPublisher(Protocol):
+    """A relay that can publish talk frames: only the NATS relay can."""
+
+    def talk_notify_subject(self, session_key: str) -> str: ...
+    async def get_nc(self) -> NatsClient: ...
 
 
 @final
@@ -189,14 +201,16 @@ class TalkState:
         """User-to-invite map of invites awaiting a response.
 
         Each value carries the inviter's session key (so the accept hint
-        names a session) and monotonic arrival time (so the poller can age
-        it out).
+        names a session) and monotonic arrival time.  An invite past
+        ``PENDING_INVITE_TTL`` is aged out as it is read.
         """
+        self.expire_stale_invites()
         return dict(self._pending)
 
     @property
     def queued(self) -> int:
         """Number of notifications waiting to be drained."""
+        self.expire_stale_invites()
         return len(self._queue)
 
     @property
@@ -210,7 +224,7 @@ class TalkState:
         keeps waiting for the partner's next frame — a live connection is not,
         by itself, new traffic to surface.
         """
-        return bool(self._queue or self._pending)
+        return bool(self.queued or self._pending)
 
     @property
     def queued_invite_users(self) -> tuple[str, ...]:
@@ -223,9 +237,9 @@ class TalkState:
         message.  Order-preserving and de-duplicated so a repeated inviter is
         named once.
         """
-        return tuple(
-            dict.fromkeys(q.notif.nfrom for q in self._queue if q.notif.is_invite)
-        )
+        self.expire_stale_invites()
+        queue = self._queue
+        return tuple(dict.fromkeys(q.notif.nfrom for q in queue if q.notif.is_invite))
 
     # -- Receive (talk.tex ReceiveNotification family) --
 
@@ -432,6 +446,7 @@ class TalkState:
         conversation.  Returns an :class:`AgentDrain` snapshot; the ``talk``
         tool then decides whether to accept, connect, or invite.
         """
+        self.expire_stale_invites()
         messages: list[TalkNotification] = []
         ended = False
         auto_accept: TalkNotification | None = None
@@ -507,7 +522,8 @@ class TalkState:
         """Reap invites older than the TTL, drained or not; return the count.
 
         notification.tex ExpirePendingInvite: an invite whose monotonic age
-        reaches ``PENDING_INVITE_TTL`` is removed on a poller tick.  The model
+        reaches ``PENDING_INVITE_TTL`` is removed.  It runs when invites are
+        read or answered, never on a timer (DES-087).  The model
         holds every invite in ``talkPending`` from arrival, so the backstop must
         cover both the drained invites in ``_pending`` and an *undrained* invite
         still sitting in ``_queue`` — otherwise a never-drained invite (a
@@ -518,29 +534,10 @@ class TalkState:
         re-derives the talk description after a non-zero return.
         """
         clock = time.monotonic() if now is None else now
-        stale = [
-            user
-            for user, invite in self._pending.items()
-            if clock - invite.arrived >= PENDING_INVITE_TTL
-        ]
-        for user in stale:
-            del self._pending[user]
-        return len(stale) + self._expire_queued_invites(clock)
-
-    def _expire_queued_invites(self, clock: float) -> int:
-        """Drop undrained invite frames past the TTL; return the number dropped.
-
-        Only invite frames age out — a queued message clears by being drained
-        (talk.tex ``DrainMessage``), never by time-to-live — so a stuck message
-        is left untouched while a stranded invite is reaped.
-        """
-        before = len(self._queue)
-        self._queue = deque(
-            q
-            for q in self._queue
-            if not (q.notif.is_invite and clock - q.arrived >= PENDING_INVITE_TTL)
-        )
-        return before - len(self._queue)
+        before = len(self._pending) + len(self._queue)
+        self._pending = _EXPIRY.pending(self._pending, clock)
+        self._queue = _EXPIRY.queued(self._queue, clock)
+        return before - len(self._pending) - len(self._queue)
 
     # -- Local transitions (talk.tex Send*/Respond/End operations) --
 
@@ -569,6 +566,7 @@ class TalkState:
         display tty — the caller sets ``partner_tty`` from it so the connected
         hint reads ``talk user:ttyN``, never the opaque session-key hex.
         """
+        self.expire_stale_invites()
         return self._pending.pop(user, None)
 
     def restore_pending_invite(self, invite: PendingInvite) -> None:
@@ -652,7 +650,7 @@ class TalkState:
         bounded queue to ``MAX_TALK_QUEUE`` frames of unbounded body.
         """
         relay = self._relay
-        if not isinstance(relay, NatsRelay):
+        if not isinstance(relay, _TalkPublisher):
             return
         nc = await relay.get_nc()
         payload = json.dumps(

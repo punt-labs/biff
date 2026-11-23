@@ -7,7 +7,7 @@ back into view until they expire or are cleared.  Talk items are ephemeral
 
 The queue is a pure synchronous data structure with no I/O, no asyncio,
 and no MCP dependency.  It lives on :class:`~biff.server.state.ServerState`
-alongside :class:`~biff.server.activity.ActivityTracker`.
+alongside :class:`~biff.server.wake.WakeSignal`.
 
 See DES-020 for the notification model that makes this low-latency.
 """
@@ -57,8 +57,9 @@ class DisplayQueue:
     expires or is cleared).  Talk items are shown once then dropped.
 
     All methods are synchronous — asyncio is single-threaded so no
-    locking is needed.  The queue is driven by the poller's 2s tick
-    calling :meth:`advance_if_due`.
+    locking is needed.  Nothing ticks it: :meth:`advance_if_due` runs
+    whenever the status file is written, so rotation and expiry are
+    computed when the queue is read, never on a timer.
 
     *clock* defaults to :func:`time.monotonic` but can be injected
     for deterministic testing (no ``time.sleep`` needed).

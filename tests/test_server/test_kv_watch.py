@@ -159,7 +159,7 @@ class TestKvWatchSnapshotSurvival:
 
         shutdown_task = asyncio.create_task(_shutdown_after_drain())
 
-        with patch("biff.server.activity.ActivityTracker.wake", _tracking_wake):
+        with patch("biff.server.wake.WakeSignal.wake", _tracking_wake):
             await _run_kv_watch(
                 fake_relay,  # type: ignore[arg-type]
                 state,
@@ -205,7 +205,7 @@ class TestKvWatchSnapshotSurvival:
 
         shutdown_task = asyncio.create_task(_shutdown_after_wall())
 
-        with patch("biff.server.activity.ActivityTracker.wake", _tracking_wake):
+        with patch("biff.server.wake.WakeSignal.wake", _tracking_wake):
             await _run_kv_watch(
                 fake_relay,  # type: ignore[arg-type]
                 state,
@@ -249,7 +249,7 @@ class TestKvWatchSnapshotSurvival:
 
         shutdown_task = asyncio.create_task(_shutdown_after_wall())
 
-        with patch("biff.server.activity.ActivityTracker.wake", _tracking_wake):
+        with patch("biff.server.wake.WakeSignal.wake", _tracking_wake):
             await _run_kv_watch(
                 fake_relay,  # type: ignore[arg-type]
                 state,

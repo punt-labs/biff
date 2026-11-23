@@ -26,6 +26,7 @@ dependencies = [
     "psutil>=6.0,<8",
     "punt-observe==0.1.1",
     "wcwidth>=0.8.2,<1",
+    "watchdog>=6.0,<8",
 ]
 
 [project.optional-dependencies]
@@ -219,6 +220,8 @@ prefixes = [
     "config",
     "ethos_team",
     "identity",
+    "invite_expiry",
+    "local_watch",
     "nats_relay",
     "relay",
     "relay_select",

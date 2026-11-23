@@ -464,12 +464,11 @@ async def _run_kv_watch(
                 continue  # Snapshot-done marker
             key = str(entry.key)  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType,reportAttributeAccessIssue]
             if key == NatsRelay.wall_kv_key(state.config.repo_name):
-                # Wake the poller so the next 2s tick runs _active_tick
-                # and detects the wall change.  Do NOT call refresh_wall
-                # here — sending MCP notifications from a background task
-                # is unreliable.  The poller handles notification delivery
-                # from its own coroutine context.
-                state.activity.wake()
+                # Wake the poller so it detects the wall change.  Do NOT
+                # call refresh_wall here — sending MCP notifications from a
+                # background task is unreliable.  The poller handles
+                # notification delivery from its own coroutine context.
+                state.wake.wake()
                 continue
             await _handle_kv_entry(entry, relay, state, cache)
     finally:
@@ -506,15 +505,12 @@ async def _kv_watcher_loop(
     Handles:
     - **Wall changes**: detected in ``_run_kv_watch()`` when the KV key
       matches ``NatsRelay.wall_kv_key(state.config.repo_name)``.  Wakes
-      the poller from napping so the next 2s tick detects the change and
-      fires the MCP notification from its own coroutine context.
+      the poller, which detects the change and fires the MCP
+      notification from its own coroutine context.
     - **Session logout events**: for *other* sessions that disappear
       via TTL expiry or crash (no graceful shutdown).  Our own session's
       logout is written explicitly by ``_append_logout_event()`` during
       graceful shutdown.
-
-    The NATS connection stays alive during napping so wall changes
-    arrive in real-time regardless of activity state.
 
     **Duplicate risk**: If multiple servers are running, each may
     observe the same KV delete and write a logout event.  This is
@@ -1278,16 +1274,7 @@ class _LiveSession:
         await _append_login_event(state, final_name)
         await _close_orphaned_logins(state, sessions)
 
-        poll_interval = state.config.poll_interval
-        # Always on, even at poll_interval <= 0: the always-on SUBs never
-        # depended on a periodic tick, only the periodic work does.
-        poll = _descriptions.poll_inbox(
-            mcp,
-            state,
-            shutdown=self.shutdown,
-            interval=poll_interval,
-            nap_interval=_descriptions.nap_interval_for(poll_interval),
-        )
+        poll = _descriptions.poll_inbox(mcp, state, shutdown=self.shutdown)
         # The poller outlives the requests that may start it.
         self.tasks.append(asyncio.create_task(poll, context=Context()))
         self.reaper = asyncio.create_task(_reap_loop(state, self.shutdown))
