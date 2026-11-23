@@ -594,7 +594,7 @@ The user's `CLAUDE.md` is user-owned prose (§2.1). The only mutation biff makes
 
 ### The §2.4 Write Contract
 
-`ClaudeMdImport` (`src/biff/claude_md.py`) implements the load-bearing details so all 15 punt CLIs produce byte-identical results:
+`ClaudeMdImport` (`src/biff/plugins/claude_code/claude_md.py`) implements the load-bearing details so all 15 punt CLIs produce byte-identical results:
 
 - **Exclusive lock.** `flock` on a sibling lock file for the whole read-modify-write — two parallel `install` runs cannot lose an update to a last-writer-wins race.
 - **Atomic + byte-preserving.** Temp file in the target's directory, `fsync`, `os.replace`; read/write with `newline=""` so LF, CRLF, and lone-CR survive verbatim. The appended line uses the host file's own EOL.

@@ -13,8 +13,7 @@ if TYPE_CHECKING:
     import pytest
 
 from biff.__main__ import app
-from biff.session_routing import SessionRouting
-from biff.statusline import (
+from biff.plugins.claude_code.statusline import (
     _LINE2_IDLE,
     InstallResult,
     UninstallResult,
@@ -37,6 +36,7 @@ from biff.statusline import (
     write_settings,
     write_stash,
 )
+from biff.session_routing import SessionRouting
 from biff.unread import DisplayItemView, SessionUnread, as_str_dict, read_session_unread
 
 runner = CliRunner()
@@ -244,7 +244,9 @@ class TestGitSegment:
         workspace = tmp_path / "my-repo"
         workspace.mkdir()
         session: dict[str, object] = {"workspace": str(workspace)}
-        with patch("biff.statusline._git_branch", return_value="main"):
+        with patch(
+            "biff.plugins.claude_code.statusline._git_branch", return_value="main"
+        ):
             result = _git_segment(session)
         assert result == "my-repo:main"
 
@@ -257,7 +259,9 @@ class TestGitSegment:
                 "current_dir": str(workspace),
             }
         }
-        with patch("biff.statusline._git_branch", return_value="feat/x"):
+        with patch(
+            "biff.plugins.claude_code.statusline._git_branch", return_value="feat/x"
+        ):
             result = _git_segment(session)
         assert result == "my-repo:feat/x"
 
@@ -265,7 +269,7 @@ class TestGitSegment:
         workspace = tmp_path / "another-repo"
         workspace.mkdir()
         session: dict[str, object] = {"workspace": {"current_dir": str(workspace)}}
-        with patch("biff.statusline._git_branch", return_value=""):
+        with patch("biff.plugins.claude_code.statusline._git_branch", return_value=""):
             result = _git_segment(session)
         assert result == "another-repo"
 
@@ -273,7 +277,7 @@ class TestGitSegment:
         workspace = tmp_path / "plain-dir"
         workspace.mkdir()
         session: dict[str, object] = {"workspace": str(workspace)}
-        with patch("biff.statusline._git_branch", return_value=""):
+        with patch("biff.plugins.claude_code.statusline._git_branch", return_value=""):
             result = _git_segment(session)
         assert result == "plain-dir"
 
@@ -777,7 +781,7 @@ class TestRunStatusline:
     def test_no_original_no_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "/biff enable" in result
@@ -787,7 +791,7 @@ class TestRunStatusline:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_session_unread(unread_dir, "kai", 3, "tty1")
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "kai:tty1(3)" in result
@@ -798,7 +802,7 @@ class TestRunStatusline:
         unread_dir = tmp_path / "unread"
         _write_session_unread(unread_dir, "kai", 2, "tty1")
         write_stash(stash_path, {"type": "command", "command": "echo 42%"})
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "42%" in result
@@ -809,7 +813,7 @@ class TestRunStatusline:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         write_stash(stash_path, {"type": "command", "command": "echo 42%"})
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "42%" in result
@@ -821,7 +825,7 @@ class TestRunStatusline:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_session_unread(unread_dir, "kai", 1)
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "kai(1)" in result
@@ -845,7 +849,7 @@ class TestRunStatusline:
                 "cost": {"total_cost_usd": 1.50},
             }
         )
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = session_json
             result = run_statusline(stash_path, unread_dir)
         assert "my-repo" in result
@@ -869,7 +873,7 @@ class TestRunStatusline:
                 "cost": {"total_cost_usd": 1.50},
             }
         )
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = session_json
             result = run_statusline(stash_path, unread_dir)
         # Original output replaces base segments
@@ -888,7 +892,7 @@ class TestRunStatusline:
             "tty1",
             display_items=[{"kind": "wall", "text": "eric: release freeze"}],
         )
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
@@ -902,7 +906,7 @@ class TestRunStatusline:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_session_unread(unread_dir, "kai", 0, "tty1")
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
@@ -920,7 +924,7 @@ class TestRunStatusline:
             "tty1",
             display_items=[{"kind": "talk", "text": "eric: check PR #42"}],
         )
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
@@ -943,7 +947,7 @@ class TestRunStatusline:
             "tty1",
             display_items=[{"kind": "wall", "text": "admin: release freeze"}],
         )
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
@@ -967,7 +971,7 @@ class TestRunStatusline:
                 "cost": {"total_cost_usd": 1.50},
             }
         )
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = session_json
             result = run_statusline(stash_path, unread_dir)
         # Empty successful original → its empty output is used (not native segments)
@@ -991,7 +995,7 @@ class TestRunStatusline:
         unread_dir = tmp_path / "unread"
         _write_session_unread(unread_dir, "kai", 3, "tty1")
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SESSION_ID)
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = ""
             result = run_statusline(stash_path, unread_dir)
         assert "kai:tty1(3)" in result
@@ -1012,7 +1016,7 @@ class TestRunStatusline:
         other = SessionRouting("some-other-session").unread_path(unread_dir)
         other.write_text(json.dumps({"user": "eric", "count": 9, "tty_name": "tty2"}))
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "some-other-session")
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "kai:tty1(5)" in result
@@ -1030,7 +1034,7 @@ class TestRunStatusline:
         unread_dir = tmp_path / "unread"
         _write_session_unread(unread_dir, "kai", 3, "tty1")
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = ""
             result = run_statusline(stash_path, unread_dir)
         assert "/biff enable" in result
@@ -1048,7 +1052,7 @@ class TestRunStatusline:
         unread_dir = tmp_path / "unread"
         _write_session_unread(unread_dir, "kai", 3, "tty1")
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "../../etc/passwd")
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = ""
             result = run_statusline(stash_path, unread_dir)
         assert "/biff enable" in result
@@ -1066,7 +1070,7 @@ class TestRunStatusline:
         unread_dir = tmp_path / "unread"
         _write_session_unread(unread_dir, "kai", 3, "tty1")
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "a-session-with-no-file")
-        with patch("biff.statusline.sys.stdin") as mock_stdin:
+        with patch("biff.plugins.claude_code.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = ""
             result = run_statusline(stash_path, unread_dir)
         assert "/biff enable" in result
@@ -1081,8 +1085,8 @@ class TestCLI:
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
         with (
-            patch("biff.statusline.SETTINGS_PATH", settings_path),
-            patch("biff.statusline.STASH_PATH", stash_path),
+            patch("biff.plugins.claude_code.statusline.SETTINGS_PATH", settings_path),
+            patch("biff.plugins.claude_code.statusline.STASH_PATH", stash_path),
         ):
             result = runner.invoke(app, ["install-statusline"])
         assert result.exit_code == 0
@@ -1093,8 +1097,8 @@ class TestCLI:
         stash_path = tmp_path / "stash.json"
         write_stash(stash_path, None)
         with (
-            patch("biff.statusline.SETTINGS_PATH", settings_path),
-            patch("biff.statusline.STASH_PATH", stash_path),
+            patch("biff.plugins.claude_code.statusline.SETTINGS_PATH", settings_path),
+            patch("biff.plugins.claude_code.statusline.STASH_PATH", stash_path),
         ):
             result = runner.invoke(app, ["install-statusline"])
         assert result.exit_code == 1
@@ -1110,8 +1114,8 @@ class TestCLI:
         write_settings(settings_path, {"statusLine": biff_sl})
         write_stash(stash_path, {"type": "command", "command": "echo old"})
         with (
-            patch("biff.statusline.SETTINGS_PATH", settings_path),
-            patch("biff.statusline.STASH_PATH", stash_path),
+            patch("biff.plugins.claude_code.statusline.SETTINGS_PATH", settings_path),
+            patch("biff.plugins.claude_code.statusline.STASH_PATH", stash_path),
         ):
             result = runner.invoke(app, ["uninstall-statusline"])
         assert result.exit_code == 0
@@ -1121,8 +1125,8 @@ class TestCLI:
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
         with (
-            patch("biff.statusline.SETTINGS_PATH", settings_path),
-            patch("biff.statusline.STASH_PATH", stash_path),
+            patch("biff.plugins.claude_code.statusline.SETTINGS_PATH", settings_path),
+            patch("biff.plugins.claude_code.statusline.STASH_PATH", stash_path),
         ):
             result = runner.invoke(app, ["uninstall-statusline"])
         assert result.exit_code == 1

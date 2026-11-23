@@ -241,7 +241,7 @@ hooks/<event>.sh → shell commands only → exit
 ### 7b. Lightweight Python Entry Point (biff model)
 
 ```text
-hooks/<event>.sh → <tool>-hook <event> → _hook_entry.py → _stdlib.py → handler
+hooks/<event>.sh → <tool>-hook <event> → plugins/claude_code/_hook_entry.py → _stdlib.py → handler
 ```
 
 A separate console script (`<tool>-hook`) bypasses `__main__.py`.

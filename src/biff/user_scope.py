@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Self, final
 
-from biff.claude_md import ClaudeMdImport
+from biff.plugins.claude_code.claude_md import ClaudeMdImport
 
 __all__ = ["USER_IMPORT_LINE", "UserScope"]
 

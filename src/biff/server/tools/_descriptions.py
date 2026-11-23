@@ -33,12 +33,12 @@ from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
+from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.server.display_queue import DisplayItem
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
 from biff.talk_state import TalkState
 from biff.talk_types import TalkNotification, TalkPhase
 from biff.tty import format_address
-from biff.unread_file import write_unread_file
 
 
 class _WallLookup(Enum):

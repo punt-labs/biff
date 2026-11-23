@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from biff._hook_entry import main as _dispatch
+from biff.plugins.claude_code._hook_entry import main as _dispatch
 
 logger = logging.getLogger(__name__)
 

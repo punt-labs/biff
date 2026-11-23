@@ -19,7 +19,6 @@ from punt_observe.logging import Role
 from typer.testing import CliRunner
 
 from biff.__main__ import _suppress_nats_noise, app
-from biff.claude_md import ClaudeMdImport
 from biff.cli_context import CliContext
 from biff.commands import CommandResult
 from biff.config import ResolvedConfig
@@ -27,6 +26,7 @@ from biff.doctor import installed_plugin_version
 from biff.logging_config import configure_logging
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
+from biff.plugins.claude_code.claude_md import ClaudeMdImport
 from biff.server.transport_runtime import McpLifecycleHandler
 
 runner = CliRunner()
@@ -367,7 +367,7 @@ class TestEnableCommand:
     def test_prints_each_rule_and_settings_commit(
         self, mock_root: MagicMock, tmp_path: Path
     ) -> None:
-        from biff.claude_permissions import BIFF_RULES
+        from biff.plugins.claude_code.claude_permissions import BIFF_RULES
 
         repo = _git_init_repo(tmp_path)
         mock_root.return_value = repo

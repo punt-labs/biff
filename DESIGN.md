@@ -8468,33 +8468,79 @@ Logging from unconditional cleanup would incorrectly report crashes as completed
 Exceptions continue to propagate without a completed outcome. HTTP retains its
 existing started/completed records and uvicorn stderr routing.
 
-## DES-087: Advisory Agent Edit Checks and Blocking Delivery Gates
+## DES-087: Channels Are the Claude Code Plugin's Last Mile
 
-**Decision.** Adopt Ethos DES-085 (the upstream agent-check design, not Biff
-DES-085) through the project-default `biff` check set. Regenerate agent files
-with Ethos rather than editing generated hooks. Ruff lint/format and ShellCheck
-provide advisory file-local edit feedback within 10 seconds per check.
-Staged Python and shell files receive blocking lint/format checks; source and
-baseline changes trigger the existing project-aware OO, coupling, and suppression
-ratchets. Changes to the embedded Devin hook run `make lint` at commit so its
-extracted shell command also receives ShellCheck validation. Ethos rejects
-matched staged paths with unstaged changes before running commit checks.
+**Status.** Proposed, awaiting operator ratification. Full design, evidence,
+reviews and plan: `docs/design-channels.md`.
 
-The full `make check` remains blocking at handoff, with a five-minute budget.
-Markdownlint stays there because the Node installation depends on nvm and its
-availability on the harness hook PATH is not established.
+**Context.** Biff itself (the relay, the `biff` CLI, `biff mcp`) already
+receives arrivals in real time: NATS pushes to the server and the CLI
+(DES-062). What varies is the last mile from biff to the model, and that
+belongs to each plugin: Claude Code, Devin, opencode, possibly codex, and pi
+(which uses the CLI). This decision covers the Claude Code plugin's last mile.
 
-**Alternatives.** Running the full gate after every edit blocks intentional
-multi-file intermediate states and repeatedly pays repository-wide test costs.
-File-local type checks do not replace project-wide mypy/pyright. Passing the
-JSON hook file directly to ShellCheck would not check its embedded command.
+**Decision.** In the Claude Code plugin, channels are always on.
+`plugin.json` sets `BIFF_CHANNEL_MODE=1` in the `tty` server's `env`; that is
+part of the plugin's definition, never a user setting. In that mode
+`biff mcp` advertises `experimental["claude/channel"]`, serves stdio on the
+SDK's handshake-only loop through `serve_channel_stdio()`, and sends each
+arrival summary as a `notifications/claude/channel` event. Every other caller
+of `biff mcp` is unchanged.
 
-**Outcome.** The old inline hook measured 69.532 seconds median across three
-runs; the advisory hook measured 0.027 seconds across five cache-cleared runs
-on the same Python file. The full gate measured 68.145 seconds and remains a
-delivery requirement. Generated hooks invoke `ethos hook post-edit` with a
-70-second harness timeout. Git and harness integration still require the new
-Ethos binary and installed hook shims; policy files alone do not install them.
+Biff produces arrival summaries when the relay pushes a change: new mail (by
+inbox sequence number), a new wall, a new talk invite, or a new message in an
+accepted talk. Summaries carry no bodies, label senders as claimed and never
+tell the model to accept a talk; any plugin can carry them. The Claude Code
+channel sender keeps a last-sent record per kind, advanced only after a send
+completes, and is rate limited by fixed constants.
+
+When a channel gate it can see is closed, the plugin's SessionStart hook warns
+the user and the model that channels are not live and tells them to poll with
+`/biff:read 2m`. `biff doctor`, run on demand, checks end to end by asking
+each running session over the relay to send a check event with a one-time
+token for the model to return through `channel_ack`, and names the gate to
+open. Polling, including the `unread-nudge` hook, stays dormant until the
+user starts it.
+
+Biff does no background or scheduled work except connection liveness
+(keepalive and wedge detection) and the deferred send of one arrival the rate
+limit held back: at most one `call_later` at a time, armed only while an
+arrival is held and ending when none is, never recurring. The poller's wall-countdown, invite-expiry and unread-backstop jobs
+are removed: each value is computed when read, push is the detection path, and
+a relay reconnect (`NatsRelay._on_reconnect`) re-runs the summarizer to catch
+mail that core NATS did not replay. Mail is ordered by `inbox_high_water`
+(never used as a count), talk arrivals by monotonic `TalkState` counters, and
+the doctor acknowledgement travels over the relay, not a local file.
+
+**Why the plugin turns channels on.** Registering as a channel needs the
+handshake-only loop, which only Claude Code needs; making it the default for
+every stdio caller would push it onto Devin, opencode and codex. An
+environment variable, not a flag, because biff 1.24.2 exits 2 on an unknown
+option.
+
+**Why the warning and the doctor check.** Claude Code 2.1.330 declares no
+channel capability and acknowledges no event, so biff can only read the gates
+it can see at start-up, or prove the channel with a round trip on demand.
+
+**Why handshake-only.** Claude Code opens with a 2026-07-28 `server/discover`
+probe and does not register a 2026-07-28 server as a channel. The dual-era
+loop answers the probe and then refuses `initialize`; the handshake-only loop
+refuses the probe and accepts `initialize`.
+
+**Alternatives.** Channel mode as the default for every stdio caller; a
+`--channels` flag; automatic fallback chosen by a session-start check; both
+paths in every session; polling removed entirely; a user-set
+`MCP_PROTOCOL_NEGOTIATION=legacy`; emitting from description changes; owed
+flags flushed during `initialize`; count-based mail detection; bodies in
+summaries; invite summaries that say to accept; no rate limit. Each is
+rejected in the design document.
+
+**Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
+**Amends.** DES-080, for the Claude Code plugin only; DES-061's rule that a
+failed send clears the stored session, in channel mode; DES-038's always-on
+`unread-nudge` hook, now on only while polling; DES-062's unread backstop and
+the poller's wall-countdown and invite-expiry jobs, removed. DES-063's
+`.envrc` deviation gains a guard test.
 
 ## DES-088: Package Structure — Layers, a Plugin Contract, and Room for biffd
 
@@ -8543,3 +8589,31 @@ with the Claude Code adapter and its callers (`biff enable` and `biff doctor`
 through `Installer`), never as an unused interface; move one package per PR
 after that, each lowering the count. New modules go in their target package from
 the start.
+
+## DES-089: Advisory Agent Edit Checks and Blocking Delivery Gates
+
+**Decision.** Adopt Ethos DES-085 (the upstream agent-check design, not Biff
+DES-085) through the project-default `biff` check set. Regenerate agent files
+with Ethos rather than editing generated hooks. Ruff lint/format and ShellCheck
+provide advisory file-local edit feedback within 10 seconds per check.
+Staged Python and shell files receive blocking lint/format checks; source and
+baseline changes trigger the existing project-aware OO, coupling, and suppression
+ratchets. Changes to the embedded Devin hook run `make lint` at commit so its
+extracted shell command also receives ShellCheck validation. Ethos rejects
+matched staged paths with unstaged changes before running commit checks.
+
+The full `make check` remains blocking at handoff, with a five-minute budget.
+Markdownlint stays there because the Node installation depends on nvm and its
+availability on the harness hook PATH is not established.
+
+**Alternatives.** Running the full gate after every edit blocks intentional
+multi-file intermediate states and repeatedly pays repository-wide test costs.
+File-local type checks do not replace project-wide mypy/pyright. Passing the
+JSON hook file directly to ShellCheck would not check its embedded command.
+
+**Outcome.** The old inline hook measured 69.532 seconds median across three
+runs; the advisory hook measured 0.027 seconds across five cache-cleared runs
+on the same Python file. The full gate measured 68.145 seconds and remains a
+delivery requirement. Generated hooks invoke `ethos hook post-edit` with a
+70-second harness timeout. Git and harness integration still require the new
+Ethos binary and installed hook shims; policy files alone do not install them.

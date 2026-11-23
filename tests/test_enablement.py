@@ -21,9 +21,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from biff import enablement
-from biff.claude_permissions import BIFF_RULES
 from biff.enablement import RepoEnablement
 from biff.git_hooks import GIT_HOOKS, resolve_hooks_dir
+from biff.plugins.claude_code.claude_permissions import BIFF_RULES
 
 if TYPE_CHECKING:
     from pathlib import Path

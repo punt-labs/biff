@@ -352,7 +352,7 @@ class TestSignalSurvivesCleanupFailure:
 def _unread_dir(home: Path) -> Path:
     """Unread-status directory under the isolated ``HOME``.
 
-    Mirrors ``biff.statusline.UNREAD_DIR``.
+    Mirrors ``biff.plugins.claude_code.statusline.UNREAD_DIR``.
     """
     return home / ".punt-labs" / "biff" / "unread"
 

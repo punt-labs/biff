@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from biff.caller_identity import CallerIdentity
 from biff.config import ResolvedConfig, is_enabled
+from biff.plugins.claude_code.statusline import UNREAD_DIR
 from biff.server.state import ServerState, create_state
-from biff.statusline import UNREAD_DIR
 
 
 @dataclass(frozen=True)

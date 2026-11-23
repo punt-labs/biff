@@ -65,7 +65,7 @@ def __getattr__(name: str) -> object:
 
     Avoids loading the full dependency tree (nats, pydantic, fastmcp)
     when lightweight entry points like ``biff-hook`` only need
-    ``biff._stdlib`` or ``biff.hook``.
+    ``biff._stdlib`` or ``biff.plugins.claude_code.hook``.
     """
     # Module re-exports (import the submodule itself).
     submodules = {"commands"}

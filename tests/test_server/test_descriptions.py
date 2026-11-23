@@ -18,6 +18,7 @@ import pytest
 
 from biff.models import BiffConfig, Message, UnreadSummary, WallPost
 from biff.nats_relay import NatsRelay
+from biff.plugins.claude_code.unread_file import MAX_UNREAD_COUNT, write_unread_file
 from biff.relay import LocalRelay
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
@@ -43,7 +44,6 @@ from biff.server.tools._descriptions import (
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
 from biff.talk_latch import TalkNotifyLatch
 from biff.talk_state import TalkState
-from biff.unread_file import MAX_UNREAD_COUNT, write_unread_file
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
