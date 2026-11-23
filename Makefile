@@ -1,13 +1,16 @@
-.PHONY: help test lint type mdlint check check-oo update-oo check-coupling update-coupling check-suppressions update-suppressions require-full-ratchet-source report format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
+.PHONY: help test lint type mdlint check check-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-layers update-layers require-full-ratchet-source report format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
 
 ifneq ($(filter environment%,$(origin SRC)),)
 override undefine SRC
 endif
 .DEFAULT_GOAL := help
 SRC ?= src/biff/
-OO_BASE ?=
-COUPLING_BASE ?=
-SUPPRESSION_BASE ?=
+# Plain "=" so an environment value such as LAYERS_BASE=--allow-config-change
+# cannot waive a gate; only the command line or the CI step sets these.
+OO_BASE =
+COUPLING_BASE =
+SUPPRESSION_BASE =
+LAYERS_BASE =
 DESIGN_BASE ?= origin/main
 override export DESIGN_BASE := $(value DESIGN_BASE)
 
@@ -49,7 +52,7 @@ type: ## Type check with mypy and pyright
 mdlint: ## Lint markdown files (matches .github/workflows/docs.yml)
 	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
 
-check: lint type mdlint test check-oo check-coupling check-suppressions ## Run all quality gates
+check: lint type mdlint test check-oo check-coupling check-suppressions check-layers ## Run all quality gates
 
 check-oo: ## Check the OO must-improve ratchet
 	uv run oo-ratchet oo "$(SRC)" --check $(OO_BASE)
@@ -68,6 +71,13 @@ check-suppressions: ## Check for new lint and type suppressions
 
 update-suppressions: require-full-ratchet-source ## Update the suppression baseline for the full source tree
 	uv run oo-ratchet suppressions "$(SRC)" --update
+
+# The layer contract covers the biff package only, whatever SRC is.
+check-layers: ## Check package imports against the DES-088 layers
+	uv run oo-ratchet layers src/biff --check $(LAYERS_BASE)
+
+update-layers: ## Shrink the layer baseline (adopts it on first run)
+	uv run oo-ratchet layers src/biff --update
 
 require-full-ratchet-source:
 	@test "$(abspath $(SRC))" = "$(abspath src/biff/)" || { \

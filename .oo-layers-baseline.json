@@ -1,0 +1,53 @@
+{
+  "biff._nats_connection": [
+    "biff.relay"
+  ],
+  "biff.caller_identity": [
+    "biff.session_routing"
+  ],
+  "biff.commands._talk_relay": [
+    "biff.server.tools._session"
+  ],
+  "biff.commands.finger": [
+    "biff.server.tools._session"
+  ],
+  "biff.commands.session": [
+    "biff.cli_session_host",
+    "biff.cli_session_store"
+  ],
+  "biff.commands.wall": [
+    "biff.server.tools.wall"
+  ],
+  "biff.commands.write": [
+    "biff.server.tools._write_target"
+  ],
+  "biff.plugins.claude_code.unread_file": [
+    "biff.server.display_queue"
+  ],
+  "biff.server.app": [
+    "biff.integration.vox"
+  ],
+  "biff.server.entrypoints": [
+    "biff._cli_runtime"
+  ],
+  "biff.server.launch": [
+    "biff.plugins.claude_code.statusline"
+  ],
+  "biff.server.tools._descriptions": [
+    "biff.integration.vox",
+    "biff.plugins.claude_code.unread_file"
+  ],
+  "biff.session_open": [
+    "biff.plugins.claude_code.unread_file"
+  ],
+  "biff.session_routing": [
+    "biff.tty"
+  ],
+  "biff.talk_types": [
+    "biff._formatting",
+    "biff.tty"
+  ],
+  "biff.user_scope": [
+    "biff.plugins.claude_code.claude_md"
+  ]
+}

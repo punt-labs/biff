@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import textwrap
-import tomllib
-from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -24,47 +22,6 @@ def test_full_report_includes_non_gating_design_scan() -> None:
         .split("\nformat:", 1)[0]
     )
     assert '\t-uv run oo-ratchet design "$(SRC)"\n' in report
-
-
-@pytest.mark.parametrize(
-    ("module", "expected"),
-    [
-        ("biff", "entry"),
-        ("biff.__main__", "entry"),
-        ("biff.plugins.claude_code._hook_runtime", "entry"),
-        ("biff.server.entrypoints", "entry"),
-        ("biff.server.caller_policy", "entry"),
-        ("biff.caller_identity", "domain"),
-        ("biff.server.tools.messaging", "entry"),
-        ("biff.commands.write", "application"),
-        ("biff.commands._result", "domain"),
-        ("biff.server.tools._presence", "domain"),
-        ("biff.server.tools._write_target", "application"),
-        ("biff.relay", "adapters"),
-        ("biff.nats_relay", "adapters"),
-        ("biff.talk_state", "application"),
-        ("biff.talk_types", "domain"),
-        ("biff.cli_session_store", "adapters"),
-        ("biff.models", "domain"),
-        ("biff.undeclared", None),
-    ],
-)
-def test_design_layer_boundaries(
-    module: str,
-    expected: str | None,  # None means the module matches no layer.
-) -> None:
-    layers = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["oo-ratchet"][
-        "layers"
-    ]
-    actual = next(
-        (
-            layer
-            for layer, patterns in layers.items()
-            if any(fnmatchcase(module, pattern) for pattern in patterns)
-        ),
-        None,
-    )
-    assert actual == expected
 
 
 def shadow_step() -> str:
