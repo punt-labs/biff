@@ -35,12 +35,14 @@ class ClosedGate:
     """One reason channels cannot be live, and what the user does about it.
 
     ``notify_user`` is false for a closure the user cannot act on, which only
-    the model is told about.
+    the model is told about.  ``unknown`` marks a gate whose state could not be
+    read: channels may be off, which is worded as uncertain.
     """
 
     reason: str
     fix: str
     notify_user: bool = True
+    unknown: bool = False
 
 
 class ChannelGate(Protocol):

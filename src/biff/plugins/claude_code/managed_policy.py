@@ -93,9 +93,11 @@ class ManagedPolicy:
 
 @final
 class ManagedPolicyGate:
-    """Closed when the effective policy sets ``channelsEnabled`` to a non-true value.
+    """Unknown when the effective policy sets ``channelsEnabled`` to a non-true value.
 
-    An unset key is no finding: Pro and Max users have no managed policy, and
+    A server-managed setting outranks every local source and a hook cannot see
+    it, so a local value is never proof: the gate tells only the model.  An
+    unset key is no finding: Pro and Max users have no managed policy, and
     Claude Code's own default applies.
     """
 
@@ -121,11 +123,12 @@ class ManagedPolicyGate:
             return ()
         return (
             ClosedGate(
-                reason=f"managed settings set channelsEnabled to {value!r}",
-                fix=(
-                    "Ask your administrator to set channelsEnabled to true. "
-                    "A server-managed setting, which a hook cannot see, may "
-                    "override this one."
+                reason=(
+                    f"managed settings set channelsEnabled to {value!r} locally; "
+                    "a server-managed policy may still allow channels"
                 ),
+                fix="",
+                notify_user=False,
+                unknown=True,
             ),
         )

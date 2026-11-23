@@ -228,5 +228,6 @@ class TestGate:
         gates = ManagedPolicyGate(ManagedPolicy(({"channelsEnabled": value},))).closed()
         assert len(gates) == 1
         assert "channelsEnabled" in gates[0].reason
-        assert "set channelsEnabled to true" in gates[0].fix
-        assert "server-managed" in gates[0].fix
+        assert gates[0].unknown
+        assert not gates[0].notify_user
+        assert "server-managed policy may still allow channels" in gates[0].reason

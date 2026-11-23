@@ -103,19 +103,15 @@ class TestJointGate:
     def test_channels_with_the_allowlist_is_open(self) -> None:
         assert _closed(["claude", "--channels", BIFF], LISTED) == ()
 
-    @pytest.mark.parametrize("policy", [NO_ALLOWLIST, None])
-    def test_channels_with_no_visible_allowlist_is_silent(
-        self, policy: ManagedPolicy | None, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize("policy", [NO_ALLOWLIST, UNLISTED, None])
+    def test_channels_without_a_visible_biff_entry_is_unknown(
+        self, policy: ManagedPolicy | None
     ) -> None:
-        with caplog.at_level("INFO"):
-            assert _closed(["claude", "--channels", BIFF], policy) == ()
-        assert "allowlist" in caplog.text
-
-    def test_channels_when_a_visible_allowlist_omits_biff_is_closed(self) -> None:
-        (gate,) = _closed(["claude", "--channels", BIFF], UNLISTED)
-        assert "Anthropic's own" in gate.reason
+        (gate,) = _closed(["claude", "--channels", BIFF], policy)
+        assert gate.unknown
+        assert not gate.notify_user
+        assert "server-managed policy may still allow channels" in gate.reason
         assert "allowedChannelPlugins" in gate.reason
-        assert f"{DEV} {BIFF}" in gate.fix
 
     def test_dev_flag_naming_another_entry_is_closed(self) -> None:
         (gate,) = _closed(["claude", DEV, "server:fakechat"])
@@ -140,7 +136,8 @@ class TestUnknown:
     @staticmethod
     def _model_only(gate: ClosedGate) -> None:
         assert not gate.notify_user
-        assert "launch flags could not be checked" in gate.reason
+        assert gate.unknown
+        assert gate.reason == "launch flags could not be checked"
 
     @pytest.mark.parametrize("env", [{}, {"CLAUDE_PID": ""}, {"CLAUDE_PID": "abc"}])
     def test_no_usable_pid(

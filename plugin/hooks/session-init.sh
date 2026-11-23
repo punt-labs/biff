@@ -9,4 +9,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 MARKER="$REPO_ROOT/.punt-labs/biff/enabled"
 [[ -f "$MARKER" && ! -L "$MARKER" ]] || exit 0
 command -v biff-hook >/dev/null 2>&1 || exit 0
+# The loaded plugin's name picks the poll command the warning names:
+# /biff:read for "biff", /biff-dev:read-dev for the --plugin-dir "biff-dev".
+PLUGIN_JSON="$(dirname "$0")/../.claude-plugin/plugin.json"
+BIFF_PLUGIN_NAME=$(sed -n 's/^[[:space:]]*"name":[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_JSON" 2>/dev/null | sed -n 1p)
+export BIFF_PLUGIN_NAME
 biff-hook claude-code session-start 2>/dev/null || true

@@ -67,7 +67,7 @@
   "biff.plugins.claude_code.launch_flag": "claude_code",
   "biff.plugins.claude_code.managed_policy": "claude_code",
   "biff.plugins.claude_code.managed_sources": "claude_code",
-  "biff.plugins.claude_code.poll_setting": "claude_code",
+  "biff.plugins.claude_code.poll_command": "claude_code",
   "biff.plugins.claude_code.session_output": "claude_code",
   "biff.plugins.claude_code.startup_warning": "claude_code",
   "biff.plugins.claude_code.statusline": "claude_code",

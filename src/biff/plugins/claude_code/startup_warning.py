@@ -11,7 +11,7 @@ from typing import Self, cast, final
 from biff.plugins.claude_code.channel_gates import ChannelGate, ClosedGate, EnvGate
 from biff.plugins.claude_code.launch_flag import LaunchFlagGate
 from biff.plugins.claude_code.managed_policy import ManagedPolicy, ManagedPolicyGate
-from biff.plugins.claude_code.poll_setting import PollSetting
+from biff.plugins.claude_code.poll_command import PollCommand
 from biff.plugins.claude_code.warning_claim import WarningClaim
 
 __all__ = ["StartupWarning"]
@@ -25,24 +25,25 @@ class StartupWarning:
 
     The warning is built from every gate a hook can see without the model: the
     feature-flag opt-outs, the cloud provider, the managed policy, and the
-    launch flag judged together with that policy.  A gate whose state is
-    unknown stays silent, and so does everything once the user is polling.
+    launch flag judged together with that policy.  A gate warns the user only
+    on knowledge; a gate that depends on something a hook cannot see, such as
+    a server-managed policy, tells only the model that channels may be off.
     """
 
-    __slots__ = ("_gates", "_polling")
+    __slots__ = ("_command", "_gates")
 
+    _command: PollCommand
     _gates: tuple[ChannelGate, ...]
-    _polling: Callable[[], bool]
 
     def __new__(
         cls,
         gates: tuple[ChannelGate, ...],
-        polling: Callable[[], bool] | None = None,
+        command: PollCommand | None = None,
     ) -> Self:
-        """Check *gates*, in order, unless *polling* says the user polls."""
+        """Check *gates*, in order, naming *command* as the way to poll."""
         self = super().__new__(cls)
         self._gates = gates
-        self._polling = (lambda: False) if polling is None else polling
+        self._command = PollCommand.for_env({}) if command is None else command
         return self
 
     @classmethod
@@ -68,7 +69,7 @@ class StartupWarning:
         else:
             gates.append(ManagedPolicyGate(policy))
         gates.append(LaunchFlagGate(env, policy))
-        return cls(tuple(gates), lambda: PollSetting.here().is_on())
+        return cls(tuple(gates), PollCommand.for_env(env))
 
     @classmethod
     def add_to(
@@ -114,30 +115,35 @@ class StartupWarning:
         """
         return self._render(self._closed(), user=user)
 
-    @staticmethod
-    def _render(closed: list[ClosedGate], *, user: bool) -> str | None:
+    def _render(self, closed: list[ClosedGate], *, user: bool) -> str | None:
         shown = [gate for gate in closed if gate.notify_user or not user]
-        if not shown:
-            return None
-        reasons = "; ".join(gate.reason for gate in shown)
-        fixes = " ".join(gate.fix for gate in shown if gate.fix)
+        known = [gate for gate in shown if not gate.unknown]
+        if known:
+            return self._known(known)
+        return self._uncertain(shown) if shown else None
+
+    def _known(self, gates: list[ClosedGate]) -> str:
+        reasons = "; ".join(gate.reason for gate in gates)
+        fixes = " ".join(gate.fix for gate in gates if gate.fix)
         return (
             f"biff: channels are not live in this session ({reasons}). "
             "New messages will not arrive on their own. "
-            f"Run /biff:read 2m to poll. {fixes}"
+            f"If you are not already polling, run {self._command.text}. {fixes}"
         ).rstrip()
 
+    def _uncertain(self, gates: list[ClosedGate]) -> str:
+        reasons = "; ".join(gate.reason for gate in gates)
+        return (
+            f"biff: channels may not be live in this session ({reasons}). "
+            f"If new messages do not arrive on their own, run {self._command.text}."
+        )
+
     def _closed(self) -> list[ClosedGate]:
-        """Return what every gate reports; empty while the user polls.
+        """Return what every gate reports.
 
         A gate that raises is logged and skipped: this runs while a session
         starts and must neither break it nor hide what the other gates found.
         """
-        try:
-            if self._polling():
-                return []
-        except Exception:
-            logger.warning("poll setting unavailable", exc_info=True)
         closed: list[ClosedGate] = []
         for gate in self._gates:
             try:

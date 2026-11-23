@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 from typing import Protocol, cast, final
+
+from biff.plugins.claude_code.poll_command import PollCommand
 
 __all__ = ["SessionOutput"]
 
 logger = logging.getLogger(__name__)
 
 _WARNING_MODULE = "biff.plugins.claude_code.startup_warning"
-_CHECK_FAILED = (
-    "biff could not check whether channels are live; "
-    "if messages do not arrive, run /biff:read 2m."
-)
 
 
 class _Warner(Protocol):
@@ -46,7 +45,11 @@ class SessionOutput:
         except Exception:
             logger.warning("channel warning failed at SessionStart", exc_info=True)
             specific = cast("dict[str, object]", output["hookSpecificOutput"])
-            context = f"{specific['additionalContext']} {_CHECK_FAILED}"
+            command = PollCommand.for_env(os.environ).text
+            context = (
+                f"{specific['additionalContext']} biff could not check whether "
+                f"channels are live; if messages do not arrive, run {command}."
+            )
             return {
                 **output,
                 "hookSpecificOutput": {**specific, "additionalContext": context},

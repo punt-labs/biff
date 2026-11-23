@@ -14,18 +14,18 @@ from unittest.mock import patch
 import pytest
 
 from biff.plugins.claude_code import _hook_entry, hook
-from biff.plugins.claude_code.channel_gates import ClosedGate, EnvGate
+from biff.plugins.claude_code.channel_gates import ChannelGate, ClosedGate, EnvGate
 from biff.plugins.claude_code.launch_flag import LaunchFlagGate
 from biff.plugins.claude_code.managed_policy import ManagedPolicy
 from biff.plugins.claude_code.managed_sources import ManagedSources
-from biff.plugins.claude_code.poll_setting import PollSetting
+from biff.plugins.claude_code.poll_command import PollCommand
 from biff.plugins.claude_code.session_output import SessionOutput
 from biff.plugins.claude_code.startup_warning import StartupWarning
 from biff.plugins.claude_code.warning_claim import WarningClaim
 
 DEV = "--dangerously-load-development-channels"
 BIFF = "plugin:biff@punt-labs"
-POLL = "Run /biff:read 2m to poll."
+POLL = "If you are not already polling, run /biff:read 2m."
 FLAGS = (
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
     "DISABLE_GROWTHBOOK",
@@ -100,6 +100,36 @@ class _SilentGate:
         return (ClosedGate("quiet reason", "quiet fix", notify_user=False),)
 
 
+class _UnknownGate:
+    def closed(self) -> tuple[ClosedGate, ...]:
+        return (
+            ClosedGate(
+                "launch flags could not be checked", "", notify_user=False, unknown=True
+            ),
+        )
+
+
+class TestUncertainty:
+    """The opener matches what is known."""
+
+    def test_unknown_only_says_may_not_be_live(self) -> None:
+        assert StartupWarning((_UnknownGate(),)).text() == (
+            "biff: channels may not be live in this session "
+            "(launch flags could not be checked). "
+            "If new messages do not arrive on their own, run /biff:read 2m."
+        )
+
+    def test_a_known_closure_wins_over_an_unknown_one(self) -> None:
+        gates: tuple[ChannelGate, ...] = (
+            _UnknownGate(),
+            *EnvGate.opt_outs({"DISABLE_TELEMETRY": "1"}),
+        )
+        text = StartupWarning(gates).text()
+        assert text is not None
+        assert text.startswith("biff: channels are not live in this session (")
+        assert "could not be checked" not in text
+
+
 class TestStartupWarning:
     """The assembled warning."""
 
@@ -123,12 +153,6 @@ class TestStartupWarning:
         assert warning.text() is not None
         assert warning.text(user=True) is None
 
-    def test_polling_on_silences_everything(self) -> None:
-        env = {"DISABLE_TELEMETRY": "1"}
-        gates = EnvGate.opt_outs(env)
-        assert StartupWarning(gates, lambda: True).text() is None
-        assert StartupWarning(gates, lambda: False).text() is not None
-
 
 class _CountingGate:
     def __init__(self) -> None:
@@ -137,11 +161,6 @@ class _CountingGate:
     def closed(self) -> tuple[ClosedGate, ...]:
         self.calls += 1
         return (ClosedGate("counted", "fix"),)
-
-
-def _raises() -> bool:
-    msg = "yaml bad"
-    raise ValueError(msg)
 
 
 class TestGuardedAssembly:
@@ -155,16 +174,27 @@ class TestGuardedAssembly:
         assert text is not None
         assert "DISABLE_TELEMETRY is set" in text
 
-    def test_polling_failure_does_not_drop_the_warning(self) -> None:
-        gates = EnvGate.opt_outs(self.ENV)
-        text = StartupWarning(gates, _raises).text()
-        assert text is not None
-        assert "DISABLE_TELEMETRY is set" in text
-
     def test_gates_are_evaluated_once_per_apply(self) -> None:
         gate = _CountingGate()
         StartupWarning((gate,)).apply(BASE, {"source": "startup"})
         assert gate.calls == 1
+
+
+class TestPollCommand:
+    """The poll command is the loaded plugin variant's."""
+
+    @pytest.mark.parametrize(
+        ("name", "command"),
+        [
+            (None, "/biff:read 2m"),
+            ("", "/biff:read 2m"),
+            ("biff", "/biff:read 2m"),
+            ("biff-dev", "/biff-dev:read-dev 2m"),
+        ],
+    )
+    def test_command(self, name: str | None, command: str) -> None:
+        env = {} if name is None else {"BIFF_PLUGIN_NAME": name}
+        assert PollCommand.for_env(env).text == command
 
 
 class TestSessionOutputFailure:
@@ -260,34 +290,6 @@ class TestApply:
         assert "quiet reason" in json.dumps(out)
 
 
-class TestPollSetting:
-    """Polling already started means the user needs no warning."""
-
-    def _root(self, tmp_path: Path, body: str | None) -> Path:
-        config = tmp_path / ".punt-labs" / "biff"
-        config.mkdir(parents=True)
-        if body is not None:
-            (config / "config.local.yaml").write_text(body)
-        return tmp_path
-
-    @pytest.mark.parametrize(
-        ("body", "expected"),
-        [
-            (None, False),
-            ("other: 1\n", False),
-            ("poll_interval: 0\n", False),
-            ("poll_interval: 120\n", True),
-            ("poll_interval: 2.5\n", True),
-            ("poll_interval: nope\n", False),
-        ],
-    )
-    def test_is_on(self, tmp_path: Path, body: str | None, expected: bool) -> None:
-        assert PollSetting(self._root(tmp_path, body)).is_on() is expected
-
-    def test_no_repository_is_not_polling(self) -> None:
-        assert PollSetting(None).is_on() is False
-
-
 class TestWarningFailure:
     """Biff's own context survives every failure of the warning path."""
 
@@ -357,14 +359,6 @@ def _ignore(_data: dict[str, object]) -> None:
     return None
 
 
-def _polling(_self: PollSetting) -> bool:
-    return True
-
-
-def _no_poll(_cls: type[PollSetting]) -> PollSetting:
-    return PollSetting(None)
-
-
 @pytest.fixture
 def run(
     monkeypatch: pytest.MonkeyPatch,
@@ -378,7 +372,6 @@ def run(
     monkeypatch.setenv("CLAUDE_PID", "4242")
     monkeypatch.setattr(hook, "_is_biff_enabled", lambda: True)
     monkeypatch.setattr(hook, "_open_session", _ignore)
-    monkeypatch.setattr(PollSetting, "here", classmethod(_no_poll))
     monkeypatch.setattr("biff.caller_stamp._live_ancestors", lambda: frozenset({4242}))
 
     def go(
@@ -453,19 +446,57 @@ class TestEntryPoint:
         out = run(["claude", DEV, BIFF], managed={"channelsEnabled": True})
         assert "systemMessage" not in out
 
-    def test_channels_flag_with_a_visible_allowlist_omitting_biff(
+    def test_channels_flag_with_an_allowlist_omitting_biff_is_model_only(
         self, run: _Run
     ) -> None:
         argv = ["claude", "--channels", BIFF]
         omits: dict[str, object] = {"allowedChannelPlugins": ["other@marketplace"]}
         listed: dict[str, object] = {"allowedChannelPlugins": ["biff@punt-labs"]}
-        assert "systemMessage" in run(argv, managed=omits)
-        assert "systemMessage" not in run(argv, managed=listed)
+        out = run(argv, managed=omits)
+        assert "systemMessage" not in out
+        assert "server-managed policy may still allow channels" in _text(out)
+        assert "channels may not be live" in _text(out)
+        quiet = run(argv, managed=listed)
+        assert "systemMessage" not in quiet
+        assert "may not be live" not in _text(quiet)
 
-    def test_channels_flag_with_no_visible_allowlist_is_silent(self, run: _Run) -> None:
-        argv = ["claude", "--channels", BIFF]
-        assert "systemMessage" not in run(argv)
-        assert "systemMessage" not in run(argv, managed={"channelsEnabled": True})
+    def test_channels_flag_with_no_visible_allowlist_is_model_only(
+        self, run: _Run
+    ) -> None:
+        enabled: dict[str, object] = {"channelsEnabled": True}
+        for managed in (None, enabled):
+            out = run(["claude", "--channels", BIFF], managed=managed)
+            assert "systemMessage" not in out
+            assert "server-managed policy may still allow channels" in _text(out)
+
+    def test_local_channels_enabled_false_is_model_only(self, run: _Run) -> None:
+        out = run(["claude", DEV, BIFF], managed={"channelsEnabled": False})
+        assert "systemMessage" not in out
+        assert "server-managed policy may still allow channels" in _text(out)
+
+    def test_saved_poll_cadence_does_not_silence_the_warning(
+        self, run: _Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = tmp_path / ".punt-labs" / "biff"
+        config.mkdir(parents=True)
+        (config / "config.local.yaml").write_text("poll_interval: 120\n")
+        monkeypatch.chdir(tmp_path)
+        assert "systemMessage" in run(["claude"])
+
+    def test_dev_plugin_gets_its_own_poll_command(
+        self, run: _Run, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("BIFF_PLUGIN_NAME", "biff-dev")
+        out = run(["claude"])
+        banner = cast("str", out["systemMessage"])
+        assert "run /biff-dev:read-dev 2m" in banner
+        assert "/biff:read" not in banner
+
+    def test_prod_plugin_gets_the_prod_poll_command(
+        self, run: _Run, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("BIFF_PLUGIN_NAME", "biff")
+        assert "run /biff:read 2m" in cast("str", run(["claude"])["systemMessage"])
 
     def test_two_plugins_warn_once(self, run: _Run) -> None:
         first = run(["claude"])
@@ -479,14 +510,6 @@ class TestEntryPoint:
         out = run(["claude", DEV, BIFF])
         banner = cast("str", out["systemMessage"])
         assert "channels need Anthropic authentication" in banner
-
-    def test_polling_on_sends_nothing(
-        self, run: _Run, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(PollSetting, "is_on", _polling)
-        out = run(["claude"])
-        assert "systemMessage" not in out
-        assert "channels are not live" not in _text(out)
 
     def test_resume_sends_context_but_no_banner(self, run: _Run) -> None:
         out = run(["claude"], event="session-resume", source="resume")

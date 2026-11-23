@@ -79,11 +79,10 @@ class LaunchFlagGate:
         if argv is None:
             return (
                 ClosedGate(
-                    reason=(
-                        "launch flags could not be checked, so channels may be off"
-                    ),
+                    reason="launch flags could not be checked",
                     fix="",
                     notify_user=False,
+                    unknown=True,
                 ),
             )
         if argv.is_print:
@@ -98,18 +97,17 @@ class LaunchFlagGate:
             return ()
         if argv.channels_name_biff:
             policy = self._policy
-            if policy is None or not policy.has_allowlist:
-                logger.info("channels allowlist not visible: it may be server-managed")
-                return ()
-            if policy.lists_biff:
+            if policy is not None and policy.lists_biff:
                 return ()
             return (
                 ClosedGate(
                     reason=(
-                        f"{CHANNELS_FLAG} only accepts Anthropic's own plugin list "
-                        "unless managed settings list biff in allowedChannelPlugins"
+                        "allowedChannelPlugins for biff is not visible locally; "
+                        "a server-managed policy may still allow channels"
                     ),
-                    fix=f"Restart Claude Code with {DEV_FLAG} {BIFF_CHANNEL}.",
+                    fix="",
+                    notify_user=False,
+                    unknown=True,
                 ),
             )
         return (
