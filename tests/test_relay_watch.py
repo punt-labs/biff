@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -166,3 +167,44 @@ class TestWatch:
         with LocalWatch(relay.data_dir, seen):
             await relay.deliver(Message(from_user="eric", to_user="kai", body="hi"))
             await seen.next()
+
+
+class TestAnotherProcess:
+    """An arrival written by a different process wakes the watch promptly.
+
+    macOS FSEvents reports another process's writes in batches seconds late
+    (measured up to ~9s), so the watch must not rely on it there.
+    """
+
+    _PROMPT = 3.0
+    _SCRIPT = (
+        "import asyncio, sys\n"
+        "from datetime import UTC, datetime, timedelta\n"
+        "from pathlib import Path\n"
+        "from biff.models import Message, WallPost\n"
+        "from biff.relay import LocalRelay\n"
+        "relay = LocalRelay(Path(sys.argv[1]))\n"
+        "now = datetime.now(UTC)\n"
+        "post = WallPost(text='w', from_user='eric', expires_at=now + timedelta(hours=1))\n"
+        "async def run():\n"
+        "    await relay.deliver(Message(from_user='eric', to_user='kai', body='x'))\n"
+        "    await relay.set_wall(post)\n"
+        "asyncio.run(run())\n"
+    )
+
+    async def test_each_arrival_from_another_process_wakes_promptly(
+        self, relay: LocalRelay, tmp_path: Path
+    ) -> None:
+        seen = _Counter()
+        with LocalWatch(relay.data_dir, seen):
+            await asyncio.sleep(0.5)  # let the watch settle
+            for _ in range(3):  # a batched backend lags a burst behind
+                seen.count = 0
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-c", self._SCRIPT, str(tmp_path)
+                )
+                await proc.wait()
+                async with asyncio.timeout(self._PROMPT):
+                    while seen.count == 0:
+                        await asyncio.sleep(0.05)
+                await asyncio.sleep(0.2)

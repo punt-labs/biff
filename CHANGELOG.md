@@ -23,6 +23,16 @@
 
 ### Changed
 
+- The biff server runs no timer except connection liveness (DES-087). The
+  poller no longer ticks every 2 seconds: the wall countdown re-render, stale
+  talk-invite expiry and the unread-count backstop are removed. A wall's
+  remaining time and an invite's age are computed when read, the status file
+  rotates its display queue when it is written, and an explicit read
+  recomputes the unread count. The local relay replaces its fixed poll with a
+  filesystem watch on its data directory (`watchdog`, a new dependency); the
+  NATS poller keeps one 5-second check that rebinds its subscriptions after a
+  client replacement. `set_poll_interval` now only records the cadence
+  `/biff:read` schedules; the server runs no timer for it.
 - **Behavior change: the local relay is the default.** A repo with no relay
   configured now uses the local filesystem relay (no network, no shared
   credentials) instead of connecting to the public demo relay

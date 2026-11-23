@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING, ClassVar, Self
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.kqueue import KqueueObserver
 
 if TYPE_CHECKING:
     from watchdog.observers.api import BaseObserver
@@ -76,32 +78,41 @@ class LocalWatch:
     ``atomic_write`` replaces a file's inode.  The OS reports each change, so
     no timer is involved (DES-087).  Enter it as a context manager from the
     event loop; the watch stops on exit.
+
+    macOS runs two observers.  FSEvents sees every change but reports another
+    process's writes in batches seconds late (measured up to ~9s for a wall
+    posted by the ``biff`` CLI).  kqueue reports them as they happen but can
+    miss a file created and renamed between two of its directory snapshots.
+    Either one waking the signal is enough, and a second wake is free, so each
+    covers the other's gap.
     """
 
-    __slots__ = ("_data_dir", "_observer", "_on_change")
+    __slots__ = ("_data_dir", "_observers", "_on_change")
 
     _JOIN_SECONDS: ClassVar[float] = 2.0
 
     _data_dir: Path
     _on_change: Callable[[], None]
-    _observer: BaseObserver | None
+    _observers: tuple[BaseObserver, ...]
 
     def __new__(cls, data_dir: Path, on_change: Callable[[], None]) -> Self:
         """Create a watch on *data_dir* that calls *on_change* on each arrival."""
         self = super().__new__(cls)
         self._data_dir = data_dir
         self._on_change = on_change
-        self._observer = None
+        self._observers = ()
         return self
 
     def __enter__(self) -> Self:
         """Start watching, creating the data directory if it is missing."""
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         handler = ArrivalHandler(asyncio.get_running_loop(), self._on_change)
-        observer = Observer()
-        observer.schedule(handler, str(self._data_dir), recursive=False)
-        observer.start()
-        self._observer = observer
+        kinds = (KqueueObserver, Observer) if sys.platform == "darwin" else (Observer,)
+        observers = tuple(kind() for kind in kinds)
+        for observer in observers:
+            observer.schedule(handler, str(self._data_dir), recursive=False)
+            observer.start()
+        self._observers = observers
         return self
 
     def __exit__(
@@ -111,8 +122,8 @@ class LocalWatch:
         tb: TracebackType | None,
     ) -> None:
         """Stop watching."""
-        observer = self._observer
-        self._observer = None
-        if observer is not None:
+        observers, self._observers = self._observers, ()
+        for observer in observers:
             observer.stop()
+        for observer in observers:
             observer.join(timeout=self._JOIN_SECONDS)
