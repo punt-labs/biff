@@ -84,7 +84,9 @@ jobs:
   test-install:
     needs: testpypi
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Worst case: 10 metadata polls (30s timeout + 30s wait each), 5 download
+    # tries (60s timeout + 30s wait each), then the PyPI dependency install.
+    timeout-minutes: 30
     steps:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
