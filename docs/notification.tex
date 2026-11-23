@@ -345,6 +345,9 @@ the status bar, and the last notification outcome.
   chanNewer : \power EventKind \\
   chanHeld : \power EventKind \\
   chanRetried : \power EventKind \\
+  chanUnseen : \power EventKind \\
+  chanDormant : \power EventKind \\
+  invAge : \nat \\
   kindClosed : \power EventKind \\
   winSent : \nat \\
   mesgOn : ZBOOL \\
@@ -387,10 +390,14 @@ the status bar, and the last notification outcome.
   raceLost = zfalse \\
   chanHeld \subseteq chanNewer \\
   chanRetried \subseteq chanHeld \\
+  chanUnseen \subseteq \{ kMail, kWall \} \\
+  chanDormant \cap chanHeld = \emptyset \\
+  invAge \leq maxInviteAge \\
   (timerArmed = ztrue \implies chanHeld \neq \emptyset) \\
   (chanHeld \neq \emptyset \implies timerArmed = ztrue) \\
   winSent \leq rateLimit \\
   (channelEnabled = zfalse \implies chanNewer = \emptyset) \\
+  (channelEnabled = zfalse \implies chanUnseen = \emptyset) \\
   chanLost = zfalse \\
   chanStale = zfalse \\
   chanOverrate = zfalse \\
@@ -525,6 +532,9 @@ factor at two rather than one per user.
   chanNewer' = \emptyset \\
   chanHeld' = \emptyset \\
   chanRetried' = \emptyset \\
+  chanUnseen' = \emptyset \\
+  chanDormant' = \emptyset \\
+  invAge' = 0 \\
   kindClosed' = \emptyset \\
   winSent' = 0 \\
   mesgOn' = ztrue \\
@@ -614,6 +624,9 @@ $CaptureSessionFlushOk$, and $CaptureSessionFlushFail$.
   mesgOn' = mesgOn \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -694,6 +707,9 @@ without requiring a fresh capture first.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -754,6 +770,9 @@ by itself invalidate it; only a failed \emph{send} does
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -839,6 +858,9 @@ handler.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -893,6 +915,9 @@ handler.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -988,6 +1013,9 @@ $NotifyBeltSendFail$ are its two possible commits.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1054,6 +1082,9 @@ that write happened.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1119,6 +1150,9 @@ written.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1174,6 +1208,9 @@ written.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1241,6 +1278,9 @@ actually has.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1325,7 +1365,7 @@ tool context and a live NATS connection.
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
   staleWithdrawHit' = staleWithdrawHit \\
-  wallLive' = ztrue \\
+  wallLive' = zfalse \\
   chanNewer' = chanNewer \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -1335,6 +1375,9 @@ tool context and a live NATS connection.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1397,6 +1440,9 @@ notifications.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1461,6 +1507,9 @@ handles the receive-side effects.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1494,6 +1543,7 @@ have a valid session when it fires the deferred notification.
 
 \begin{schema}{KVWallReceive}
   \Delta NotificationState \\
+  missed? : ZBOOL \\
   wallText? : MSG \\
   wallKey? : SOURCEKEY
   \where
@@ -1539,9 +1589,17 @@ have a valid session when it fires the deferred notification.
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
   staleWithdrawHit' = staleWithdrawHit \\
-  (channelEnabled = ztrue \implies
+  ((missed? = zfalse \land channelEnabled = ztrue) \implies
   chanNewer' = chanNewer \cup \{ kWall \}) \\
-  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  ((missed? = ztrue \lor channelEnabled = zfalse) \implies
+  chanNewer' = chanNewer) \\
+  ((missed? = ztrue \land channelEnabled = ztrue) \implies
+  chanUnseen' = chanUnseen \cup \{ kWall \}) \\
+  ((missed? = zfalse \lor channelEnabled = zfalse) \implies
+  chanUnseen' = chanUnseen) \\
+  (missed? = zfalse \implies
+  chanDormant' = chanDormant \setminus \{ kWall \}) \\
+  (missed? = ztrue \implies chanDormant' = chanDormant) \\
   wallLive' = ztrue \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -1551,6 +1609,7 @@ have a valid session when it fires the deferred notification.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1626,6 +1685,7 @@ session when it fires the deferred notification.
   (channelEnabled = ztrue \implies
   chanNewer' = chanNewer \cup \{ kTalkMsg \}) \\
   (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  chanDormant' = chanDormant \setminus \{ kTalkMsg \} \\
   wallLive' = wallLive \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -1635,6 +1695,8 @@ session when it fires the deferred notification.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1738,6 +1800,9 @@ Called after any state change that affects what the status bar shows.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1805,6 +1870,9 @@ that is correctly recorded, and---kept as the now-dead root cause
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1902,6 +1970,9 @@ send.  Nothing about the send's outcome is known yet.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -1982,6 +2053,9 @@ from being open concurrently regardless of site.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2043,6 +2117,9 @@ raised to record the debt.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2105,6 +2182,9 @@ $staleWithdrawHit$ uses for the talk channel's reordering defect.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2129,7 +2209,7 @@ synchronous and atomic.
   \Delta NotificationState
   \where
   pendingAge' = pendingAge \\
-  session = sessNone \\
+  (session = sessNone \lor session = sessCaptured) \\
   natsConn = natsConnected \\
   pendingNotify = zfalse \\
   session' = sessCaptured \\
@@ -2174,6 +2254,9 @@ synchronous and atomic.
   mesgOn' = mesgOn \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2247,6 +2330,9 @@ system, the same function.
   mesgOn' = mesgOn \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2296,7 +2382,6 @@ stale-snapshot test as $NotifyBelt$'s.
   barStale' = barStale \\
   beltPnSnapshot' = beltPnSnapshot \\
   staleWithdrawHit' = staleWithdrawHit \\
-  capPnSnapshot' = capPnSnapshot \\
   wallLive' = wallLive \\
   chanNewer' = chanNewer \\
   chanHeld' = chanHeld \\
@@ -2307,6 +2392,9 @@ stale-snapshot test as $NotifyBelt$'s.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2361,7 +2449,6 @@ defect, at a different site.
   beltPnSnapshot' = beltPnSnapshot \\
   raceLost' = raceLost \\
   staleWithdrawHit' = staleWithdrawHit \\
-  capPnSnapshot' = capPnSnapshot \\
   wallLive' = wallLive \\
   chanNewer' = chanNewer \\
   chanHeld' = chanHeld \\
@@ -2372,6 +2459,9 @@ defect, at a different site.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2416,7 +2506,6 @@ defect, at a different site.
   beltPnSnapshot' = beltPnSnapshot \\
   raceLost' = raceLost \\
   staleWithdrawHit' = staleWithdrawHit \\
-  capPnSnapshot' = capPnSnapshot \\
   wallLive' = wallLive \\
   chanNewer' = chanNewer \\
   chanHeld' = chanHeld \\
@@ -2427,6 +2516,9 @@ defect, at a different site.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2834,6 +2926,9 @@ This is the slow path---no MCP involvement.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2896,7 +2991,8 @@ queue.  With a single wall item, the cursor stays at zero.
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
   staleWithdrawHit' = staleWithdrawHit \\
-  currentIndex' = currentIndex \\
+  (currentIndex < \# queueItems' \implies currentIndex' = currentIndex) \\
+  (currentIndex \geq \# queueItems' \implies currentIndex' = 0) \\
   wallLive' = wallLive \\
   chanNewer' = chanNewer \\
   chanHeld' = chanHeld \\
@@ -2907,6 +3003,9 @@ queue.  With a single wall item, the cursor stays at zero.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -2966,6 +3065,9 @@ queue.  With a single wall item, the cursor stays at zero.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3006,7 +3108,8 @@ reverts.  Because the description is driven by a count that
 the marker set once the count reaches zero.
 
 \begin{schema}{MailArrive}
-  \Delta NotificationState
+  \Delta NotificationState \\
+  missed? : ZBOOL
   \where
   pendingAge' = pendingAge \\
   unreadCount < maxUnreadCount \\
@@ -3042,9 +3145,17 @@ the marker set once the count reaches zero.
   capPnSnapshot' = capPnSnapshot \\
   raceLost' = raceLost \\
   staleWithdrawHit' = staleWithdrawHit \\
-  (channelEnabled = ztrue \implies
+  ((missed? = zfalse \land channelEnabled = ztrue) \implies
   chanNewer' = chanNewer \cup \{ kMail \}) \\
-  (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  ((missed? = ztrue \lor channelEnabled = zfalse) \implies
+  chanNewer' = chanNewer) \\
+  ((missed? = ztrue \land channelEnabled = ztrue) \implies
+  chanUnseen' = chanUnseen \cup \{ kMail \}) \\
+  ((missed? = zfalse \lor channelEnabled = zfalse) \implies
+  chanUnseen' = chanUnseen) \\
+  (missed? = zfalse \implies
+  chanDormant' = chanDormant \setminus \{ kMail \}) \\
+  (missed? = ztrue \implies chanDormant' = chanDormant) \\
   wallLive' = wallLive \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -3054,6 +3165,7 @@ the marker set once the count reaches zero.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3108,6 +3220,9 @@ the marker set once the count reaches zero.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3176,6 +3291,8 @@ $ReceiveOverflow$.
   (channelEnabled = ztrue \implies
   chanNewer' = chanNewer \cup \{ kTalkInvite \}) \\
   (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  chanDormant' = chanDormant \setminus \{ kTalkInvite \} \\
+  invAge' = 0 \\
   wallLive' = wallLive \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -3185,6 +3302,7 @@ $ReceiveOverflow$.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3255,6 +3373,8 @@ $talk.tex$, where a full queue drops its head before appending.
   (channelEnabled = ztrue \implies
   chanNewer' = chanNewer \cup \{ kTalkInvite \}) \\
   (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  chanDormant' = chanDormant \setminus \{ kTalkInvite \} \\
+  invAge' = 0 \\
   wallLive' = wallLive \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -3264,6 +3384,7 @@ $talk.tex$, where a full queue drops its head before appending.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3312,6 +3433,7 @@ $talk.tex$, where a full queue drops its head before appending.
   (channelEnabled = ztrue \implies
   chanNewer' = chanNewer \cup \{ kTalkMsg \}) \\
   (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  chanDormant' = chanDormant \setminus \{ kTalkMsg \} \\
   wallLive' = wallLive \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -3321,6 +3443,8 @@ $talk.tex$, where a full queue drops its head before appending.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3383,6 +3507,9 @@ and $talkConnected$, yet preserves $talkDesc$.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3439,6 +3566,8 @@ session'').
   (channelEnabled = ztrue \implies
   chanNewer' = chanNewer \cup \{ kTalkInvite \}) \\
   (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  chanDormant' = chanDormant \setminus \{ kTalkInvite \} \\
+  invAge' = 0 \\
   wallLive' = wallLive \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -3448,6 +3577,7 @@ session'').
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3630,6 +3760,9 @@ marker stays, now backed only by the surviving invites.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3734,6 +3867,9 @@ returns to zero.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3805,6 +3941,9 @@ discard such a frame rather than acting on its user field alone.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3878,10 +4017,6 @@ $MarkerConsistent$ and $HintNamesSession$.
   lastNotifyResult' = lastNotifyResult \\
   pendingNotify' = pendingNotify \\
   notifyLost' = notifyLost \\
-  inFlight' = inFlight \\
-  beltPnSnapshot' = beltPnSnapshot \\
-  capPnSnapshot' = capPnSnapshot \\
-  raceLost' = raceLost \\
   wallLive' = wallLive \\
   chanNewer' = chanNewer \\
   chanHeld' = chanHeld \\
@@ -3892,6 +4027,9 @@ $MarkerConsistent$ and $HintNamesSession$.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -3958,6 +4096,9 @@ the description, not the activity.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4029,6 +4170,9 @@ zero.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4094,6 +4238,9 @@ with the invariant.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4369,7 +4516,16 @@ for $\Xi$ to range over, so the equalities are written out once, here.)
 \end{schema}
 
 $LiveKind$ is the ``non-empty'' half of owed: it holds when the thing a
-summary of kind $k?$ would describe still exists.  $OwedKind$ adds the
+summary of kind $k?$ would describe still exists and is eligible to be
+announced.  For a wall, $wallLive$ means that the current wall is a
+teammate's: $WallPost$ clears it, because a session's own wall is never
+summarised, and a teammate's wall it replaced is no longer there to announce.
+For an invite, $invAge$ is the age of the \emph{newest} invite
+(\texttt{has\_live\_invite} is true while any invite is younger than the
+time-to-live, so the newest decides); every invite arrival resets it, and
+$InviteAgeTick$ advances it.  It is separate from the base clock
+$pendingAge$, which ages the whole pending set and is not reset by an
+invite that replaces an existing entry.  $OwedKind$ adds the
 ``newer than last-sent'' half.
 
 \begin{schema}{LiveKind}
@@ -4377,7 +4533,7 @@ summary of kind $k?$ would describe still exists.  $OwedKind$ adds the
   wallLive : ZBOOL \\
   talkPending : USER \pfun SESSIONKEY \\
   talkBare : \power USER \\
-  pendingAge : \nat \\
+  invAge : \nat \\
   talkQueued : \nat \\
   k? : EventKind
   \where
@@ -4385,7 +4541,7 @@ summary of kind $k?$ would describe still exists.  $OwedKind$ adds the
   (k? = kWall \land wallLive = ztrue) \lor \\
   (k? = kTalkInvite \land \\
   \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \land \\
-  \quad pendingAge < maxInviteAge) \lor \\
+  \quad invAge < maxInviteAge) \lor \\
   (k? = kTalkMsg \land talkQueued > 0)
 \end{schema}
 
@@ -4413,58 +4569,49 @@ window.
 
 The arrival operations of Section~\ref{sec:marker} and of the
 Receive Flow Operations each gained one line, $chanNewer' = chanNewer \cup
-\{ k \}$, guarded by $channelEnabled = ztrue$; $WallPost$ sets
-$wallLive$ but not $chanNewer$, since a session's own wall is not
-summarised.  The three capture operations $CaptureSession$,
-$RecaptureSession$ and $CaptureSessionFlushBegin$ gained
-$chanInit' = zfalse$: a client that has just sent \texttt{initialize} has
-not yet sent \texttt{notifications/initialized}.  Nothing else about them
-changed, and there is no capture path beside them.
+\{ k \}$, guarded by $channelEnabled = ztrue$, and clear $k$ from
+$chanDormant$ (an arrival is a fresh trigger for the sender).  $MailArrive$
+and $KVWallReceive$ gained an input $missed?$: an arrival whose relay push
+was lost in a connection gap sets $chanUnseen$ instead of $chanNewer$.  The
+base effect is the same either way.  $WallPost$ clears $wallLive$.  The
+three capture operations $CaptureSession$, $RecaptureSession$ and
+$CaptureSessionFlushBegin$ gained $chanInit' = zfalse$: a client that has
+just sent \texttt{initialize} has not yet sent
+\texttt{notifications/initialized}.  $RecaptureSession$'s guard is widened
+from $session = sessNone$ to $session \in \{ sessNone, sessCaptured \}$,
+because \texttt{capture\_session()} runs on \emph{every} \texttt{initialize},
+including a second one while the stored session is healthy; with the session
+already captured the operation is a self-loop on every base component, so it
+adds no base state.  The widening covers the no-flush case only; a
+re-\texttt{initialize} with the session captured and $pendingNotify = ztrue$
+is not modelled, and is an obligation (Section~\ref{sec:chanobligations}).
+There is no capture path beside these.  $AdvanceTalk$ gained a pair of
+equations for $currentIndex'$ (the cursor stays if it still names a slot of
+the shorter queue, and wraps to zero otherwise), which it had omitted.
+
+$MailArriveAtCap$ is the arrival whose count stays flat: a new mail when the
+unread count is already at its cap.  The count does not move, the sequence
+does, and the arrival marks $chanNewer$.  (Mail is ordered by a high-water
+sequence, not by the count, for exactly this reason.)
 
 $WallExpire$ is the one new base operation: the relay expires a wall, so a
-summary of it would describe the past.  $RelayReconnected$ is the
-reconnect catch-up: the listener reads durable state and marks as newer
-whichever of mail and wall exist.  Talk frames are core NATS only and are
-not recovered, so $reconn?$ never contains a talk kind.
+summary of it would describe the past.
+
+$chanUnseen$ holds the mail and wall arrivals whose push was lost: the
+durable state is newer than the last-sent record, but the sender has not
+noticed.  $RelayReconnected$ is the reconnect catch-up: it turns
+$chanUnseen$ into $chanNewer$ and nothing else.  It does \emph{not} mark a
+kind merely because that kind is live, since a mail already announced and
+still unread is live and not newer.  Talk frames are core NATS only and are
+not recovered, so $chanUnseen$ never contains a talk kind.  A reconnect is a
+fresh trigger, so it also clears $chanDormant$.  A send of kind $k$ reads the
+durable state afresh, so it absorbs an unseen $k$ ($EmitChannel$).
 
 \begin{schema}{WallExpire}
-  \Delta NotificationState
+  BaseUnchanged
   \where
   wallLive = ztrue \\
   wallLive' = zfalse \\
-  natsConn' = natsConn \\
-  kvProvisioned' = kvProvisioned \\
-  talkSubscribed' = talkSubscribed \\
-  session' = session \\
-  toolContext' = toolContext \\
-  wallDesc' = wallDesc \\
-  talkDesc' = talkDesc \\
-  readDesc' = readDesc \\
-  wallDescChanged' = wallDescChanged \\
-  talkDescChanged' = talkDescChanged \\
-  unreadCount' = unreadCount \\
-  talkPending' = talkPending \\
-  talkBare' = talkBare \\
-  talkQueued' = talkQueued \\
-  talkConnected' = talkConnected \\
-  pendingAge' = pendingAge \\
-  queueItems' = queueItems \\
-  queueKinds' = queueKinds \\
-  queueTexts' = queueTexts \\
-  currentIndex' = currentIndex \\
-  fileExists' = fileExists \\
-  fileUnreadCount' = fileUnreadCount \\
-  fileItems' = fileItems \\
-  barLine2' = barLine2 \\
-  barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult \\
-  staleWithdrawHit' = staleWithdrawHit \\
-  pendingNotify' = pendingNotify \\
-  notifyLost' = notifyLost \\
-  inFlight' = inFlight \\
-  beltPnSnapshot' = beltPnSnapshot \\
-  capPnSnapshot' = capPnSnapshot \\
-  raceLost' = raceLost \\
   chanNewer' = chanNewer \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -4474,6 +4621,9 @@ not recovered, so $reconn?$ never contains a talk kind.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4481,17 +4631,14 @@ not recovered, so $reconn?$ never contains a talk kind.
   pollRogue' = pollRogue
 \end{schema}
 
-\begin{schema}{RelayReconnected}
-  BaseUnchanged \\
-  reconn? : \power EventKind
+\begin{schema}{MailArriveAtCap}
+  BaseUnchanged
   \where
-  natsConn = natsConnected \\
-  reconn? \subseteq \{ kMail, kWall \} \\
-  (kMail \in reconn? \implies unreadCount > 0) \\
-  (kWall \in reconn? \implies wallLive = ztrue) \\
+  unreadCount = maxUnreadCount \\
   (channelEnabled = ztrue \implies
-  chanNewer' = chanNewer \cup reconn?) \\
+  chanNewer' = chanNewer \cup \{ kMail \}) \\
   (channelEnabled = zfalse \implies chanNewer' = chanNewer) \\
+  chanDormant' = chanDormant \setminus \{ kMail \} \\
   wallLive' = wallLive \\
   chanHeld' = chanHeld \\
   chanRetried' = chanRetried \\
@@ -4501,12 +4648,90 @@ not recovered, so $reconn?$ never contains a talk kind.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
   pollRogue' = pollRogue
 \end{schema}
+
+\begin{schema}{RelayReconnected}
+  BaseUnchanged
+  \where
+  natsConn = natsConnected \\
+  chanNewer' = chanNewer \cup chanUnseen \\
+  chanUnseen' = \emptyset \\
+  chanDormant' = \emptyset \\
+  wallLive' = wallLive \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{InviteAgeTick}
+  BaseUnchanged
+  \where
+  (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \\
+  invAge < maxInviteAge \\
+  invAge' = invAge + 1 \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{ToolCallRun}
+  BaseUnchanged
+  \where
+  chanDormant \neq \emptyset \\
+  chanDormant' = \emptyset \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+$ToolCallRun$ is a tool call: the sender runs on one, so a kind that has
+exhausted its retries ($chanDormant$) may try again.
 
 \subsection{The client and the user: initialised, mesg, polling}
 
@@ -4525,6 +4750,9 @@ not recovered, so $reconn?$ never contains a talk kind.
   mesgOn' = mesgOn \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4546,6 +4774,9 @@ not recovered, so $reconn?$ never contains a talk kind.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4567,6 +4798,9 @@ not recovered, so $reconn?$ never contains a talk kind.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4588,6 +4822,9 @@ not recovered, so $reconn?$ never contains a talk kind.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4609,6 +4846,9 @@ not recovered, so $reconn?$ never contains a talk kind.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4630,6 +4870,9 @@ not recovered, so $reconn?$ never contains a talk kind.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4659,6 +4902,9 @@ scheduled to run them.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4680,6 +4926,9 @@ scheduled to run them.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4697,7 +4946,9 @@ scheduled to run them.
   \where
   chanInit = ztrue \\
   mesgOn = ztrue \\
+  k? \notin chanDormant \\
   chanNewer' = chanNewer \setminus \{ k? \} \\
+  chanUnseen' = chanUnseen \setminus \{ k? \} \\
   chanHeld' = chanHeld \setminus \{ k? \} \\
   chanRetried' = chanRetried \setminus \{ k? \} \\
   kindClosed' = kindClosed \cup \{ k? \} \\
@@ -4708,6 +4959,8 @@ scheduled to run them.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   pollOn' = pollOn \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4722,12 +4975,15 @@ scheduled to run them.
   \where
   chanInit = ztrue \\
   mesgOn = ztrue \\
+  k? \notin chanDormant \\
   (k? \notin chanRetried \implies \\
   \quad chanHeld' = chanHeld \cup \{ k? \} \land \\
-  \quad chanRetried' = chanRetried \cup \{ k? \}) \\
+  \quad chanRetried' = chanRetried \cup \{ k? \} \land \\
+  \quad chanDormant' = chanDormant) \\
   (k? \in chanRetried \implies \\
   \quad chanHeld' = chanHeld \setminus \{ k? \} \land \\
-  \quad chanRetried' = chanRetried \setminus \{ k? \}) \\
+  \quad chanRetried' = chanRetried \setminus \{ k? \} \land \\
+  \quad chanDormant' = chanDormant \cup \{ k? \}) \\
   (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
   (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
   wallLive' = wallLive \\
@@ -4737,6 +4993,8 @@ scheduled to run them.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4751,6 +5009,7 @@ scheduled to run them.
   chanInit = ztrue \\
   mesgOn = ztrue \\
   (k? \in kindClosed \lor winSent = rateLimit) \\
+  k? \notin chanDormant \\
   k? \notin chanHeld \\
   chanHeld' = chanHeld \cup \{ k? \} \\
   timerArmed' = ztrue \\
@@ -4762,6 +5021,9 @@ scheduled to run them.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4781,7 +5043,7 @@ scheduled to run them.
   (k? = kWall \land wallLive = ztrue) \lor \\
   (k? = kTalkInvite \land \\
   \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \land \\
-  \quad pendingAge < maxInviteAge) \lor \\
+  \quad invAge < maxInviteAge) \lor \\
   (k? = kTalkMsg \land talkQueued > 0)) \\
   chanHeld' = chanHeld \setminus \{ k? \} \\
   chanRetried' = chanRetried \setminus \{ k? \} \\
@@ -4794,6 +5056,9 @@ scheduled to run them.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4821,6 +5086,9 @@ scheduled to run them.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4856,6 +5124,9 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
@@ -4880,13 +5151,16 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   (k? = kWall \land wallLive = ztrue) \lor \\
   (k? = kTalkInvite \land \\
   \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \land \\
-  \quad pendingAge < maxInviteAge) \lor \\
+  \quad invAge < maxInviteAge) \lor \\
   (k? = kTalkMsg \land talkQueued > 0)) \\
   chanStale' = ztrue \\
   wallLive' = wallLive \\
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanOverrate' = chanOverrate \\
@@ -4912,6 +5186,9 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4936,6 +5213,9 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4958,6 +5238,9 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   chanInit' = chanInit \\
   timerArmed' = timerArmed \\
   pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
@@ -4977,7 +5260,8 @@ exhaustively \emph{within scopes}, and not exhaustively over the four kinds
 together.  This scope was accepted on the strength of the measurements above;
 the commands that reproduce it are given below, and every claim in this
 section is a claim about those scopes and no wider.
-Two reductions make the checks exhaustive.  First, $USER$ is shrunk to one,
+
+Three reductions make the checks exhaustive.  First, $USER$ is shrunk to one,
 as in Section~\ref{sec:markerfix2}, and $RSLOT$ to one, so $rateLimit = 1$.
 Second, ProB's \texttt{-scope} predicate prunes the components the channel
 neither reads nor writes: the display queue, the status file and bar, the
@@ -4986,9 +5270,13 @@ $lastNotifyResult$ and the two snapshots), the talk subscription and
 connection, and the (defect-only) $talkBare$.  A pruned state is
 \emph{discovered} but not expanded, so an operation whose post-state is
 pruned shows as covered in the census and its successors are not explored.
-Third, each run admits two kinds, \texttt{chanNewer <: \{k1, k2\}}: the
-mail and wall pair, the two talk kinds, and mail with invites.  The kinds
-interact only through the rate window, which each pair shares.
+Third, each run admits two kinds, \texttt{chanNewer <: \{k1, k2\}} (and
+likewise \texttt{chanUnseen}): the mail and wall pair (A), the two talk kinds
+(B), and mail with invites (C).  The kinds interact only through the rate
+window, which each pair shares.  Each pair also pins the base components its
+kinds do not read: A pins $talkPending = \emptyset \land talkQueued = 0$, B
+pins $unreadCount = 0 \land wallLive = zfalse$, C pins $wallLive = zfalse
+\land talkQueued = 0$.
 
 \begin{verbatim}
 SCOPE="idleMarker = talkDescDefault & readDescDefault = talkDescDefault &
@@ -4998,7 +5286,8 @@ SCOPE="idleMarker = talkDescDefault & readDescDefault = talkDescDefault &
   lastNotifyResult = notifyDropped & beltPnSnapshot = zfalse &
   capPnSnapshot = zfalse & talkSubscribed = zfalse &
   talkConnected = zfalse & talkBare = {} & pollOn = zfalse &
-  chanNewer <: {kMail, kWall}"
+  chanNewer <: {kMail, kWall} & chanUnseen <: {kMail, kWall} &
+  talkPending = {} & talkQueued = 0"
 probcli docs/notification.tex -model_check -noltl -coverage \
   -p DEFAULT_SETSIZE 2 -card USER 1 -card SOURCEKEY 1 \
   -card SESSIONKEY 1 -card QSLOT 1 -card USLOT 1 -card ASLOT 1 \
@@ -5017,20 +5306,25 @@ with the specification.  Nothing is claimed beyond the scope.
 \begin{center}
 \begin{tabular}{lrrl}
   run & states & transitions & result \\ \hline
-  mail, wall & 14{,}748 & 271{,}324 & no invariant violation, no deadlock \\
-  invite, message & 6{,}536 & 115{,}868 & no invariant violation, no deadlock \\
-  mail, invite & 6{,}660 & 117{,}292 & no invariant violation, no deadlock \\
-  mail, with $pendingNotify$ free & 9{,}520 & 140{,}180 &
-    no invariant violation, no deadlock \\
+  A: mail, wall & 128{,}508 & 2{,}621{,}590 & no violation, no deadlock \\
+  B: invite, message & 24{,}040 & 492{,}592 & no violation, no deadlock \\
+  C: mail, invite & 48{,}156 & 973{,}070 & no violation, no deadlock \\
+  D: mail, $pendingNotify$ free & 17{,}472 & 291{,}534 &
+    no violation, no deadlock \\
+  P: mail, polling free & 2{,}544 & 43{,}272 & no violation, no deadlock \\
 \end{tabular}
 \end{center}
 
-The last run drops the $pendingNotify$, $inFlight$, $lastNotifyResult$ and
-snapshot pins, and pins the wall and the talk kinds away, so that the shared
+Run D drops the $pendingNotify$, $inFlight$, $lastNotifyResult$ and
+snapshot pins and pins the wall and the talk kinds away, so that the shared
 capture operations are exercised beside the channel: $CaptureSession$,
 $CaptureSessionFlushBegin$, $CaptureSessionFlushOk$ and
 $CaptureSessionFlushFail$ all fire, with $chanInit$ reset at the first and
-the sender unaffected.
+the sender unaffected.  Run P drops the $pollOn = zfalse$ pin, so that
+$PollStart$, $PollPull$ and $PollStop$ fire (1{,}268 times each) and their
+successor states are expanded; in the other runs the pin prunes the state
+$PollStart$ reaches, and polling is covered only by P.  Mail is the one kind
+in P, because the poll operations touch no channel component but $pollOn$.
 
 \paragraph{Check 1: no silent drop.}  $chanLost = zfalse$ is an invariant,
 and holds in every run above.  $EmitChannelUnrecorded$ is a sender that sends
@@ -5042,80 +5336,96 @@ goal $chanLost = ztrue$ finds the drop in two operations after
 initialisation:
 \begin{center}
 $MailArrive$, $EmitChannelUnrecorded(kMail)$.
-\end{center}  The real $EmitChannel$ requires
-$chanInit = ztrue$; the mail that arrived first stays owed and is sent by the
-first run of the sender after $ClientInitialized$.
+\end{center}
+The real $EmitChannel$ requires $chanInit = ztrue$; the mail that arrived
+first stays owed and is sent by the first run of the sender after
+$ClientInitialized$.
 
 \paragraph{Check 2: never stale.}  An owed event describes a thing that
 exists, because $owed$ includes $live$; the content of the check is that the
 sender consults $live$ at the moment of sending.  $EmitChannelStale$ does
 not.  With $chanStale = zfalse$ deleted and goal $chanStale = ztrue$, ProB
-finds the five-operation trace $CaptureSession$, $MailArrive$, $ReadMail$,
-$ClientInitialized$, $EmitChannelStale(kMail)$: the mail was read before the
-client was ready, and the naive sender announces it anyway.  With the
-invariant restored the same goal is unreachable in every run above.
-A held kind is dropped at the timer's firing for the same reason
-($TimerDrop$).
+finds the five-operation trace $CaptureSession$, $ClientInitialized$,
+$MailArrive$, $ReadMail$, $EmitChannelStale(kMail)$: the mail was read
+before the sender ran, and the naive sender announces it anyway.  With the
+invariant restored the same goal is unreachable in every run above.  A held
+kind is dropped at the timer's firing for the same reason ($TimerDrop$).
 
 \paragraph{Check 3: rate bound.}  $winSent \leq rateLimit$ and
 $chanOverrate = zfalse$ are invariants.  $EmitChannelBurst$ sends with no
 window test; with $chanOverrate = zfalse$ deleted and goal $chanOverrate =
-ztrue$, ProB finds $CaptureSession$, $MailArrive$, $EnsureConnected$,
-$KVWallReceive$, $ClientInitialized$, $EmitChannel(kMail)$,
-$EmitChannelBurst(kWall)$ (seven operations): a second event inside the window, which at
-$rateLimit = 1$ is the first one too many.  That the counter tracks real
-time is an obligation (Section~\ref{sec:chanobligations}).
+ztrue$, ProB finds $CaptureSession$, $ClientInitialized$, $MailArrive$,
+$EmitChannel(kMail)$, $MailArriveAtCap$, $EmitChannelBurst(kMail)$: a second
+event inside the window, which at $rateLimit = 1$ is the first one too many.
+That the counter tracks real time is an obligation
+(Section~\ref{sec:chanobligations}).
 
-\paragraph{Check 4: enabledness.}  If some kind is owed, its window is open,
-the client is initialised and mesg is on, then $EmitChannel$ is enabled:
+\paragraph{Check 4: enabledness.}  If some kind is owed, is not dormant, its
+window is open, the client is initialised and mesg is on, then $EmitChannel$
+is enabled:
 \begin{center}
-$\mathrm{G}\,(\mathit{inScope} \land \exists k \bullet \mathit{owed}(k) \land
-k \notin kindClosed \land winSent < rateLimit$ \\
-$\quad \land\; chanInit = ztrue \land mesgOn = ztrue
+$\mathrm{G}\,(\mathit{inScope} \land \exists k \bullet k \in chanNewer
+\land \mathit{live}(k) \land k \notin chanDormant$ \\
+$\quad \land\; k \notin kindClosed \land winSent < rateLimit
+\land chanInit = ztrue \land mesgOn = ztrue
 \implies e(EmitChannel))$
 \end{center}
-is \textsc{true} for the mail and wall pair (99{,}684 product states) and for
-the two talk kinds (48{,}946).  The property says that no guard and no invariant of
-the state schema gets in the sender's way: the sender is run by an arrival,
-an initialisation, a mesg change, a reconnect, a tool call or the timer,
-and whichever runs it finds it enabled.
+is \textsc{true} for the two talk kinds (227{,}926 product states) and for the
+mail and wall pair (882{,}198 product states).  The property says that no guard and no
+invariant of the state schema gets in the sender's way.  The $chanDormant$
+conjunct is the one condition the sender itself imposes: a kind that has
+exhausted its retries waits for an arrival, a tool call or a reconnect
+(check~7).
 
-\paragraph{Check 5: bounded reachability.}
+\paragraph{Check 5: bounded reachability.}  For each kind $k$ in the run,
 \begin{center}
-$\mathrm{AG}\,(\mathit{inScope} \land \exists k \bullet \mathit{owed}(k)
-\implies$ \\
-$\quad \mathrm{EF}\; \forall k \bullet k \in chanNewer \implies
-\lnot\, \mathit{live}(k))$
+$\mathrm{AG}\,(\mathit{inScope} \land natsConn \neq natsClosed \land
+k \in chanNewer \land \mathit{live}(k)
+\implies \mathrm{EF}\; k \notin chanNewer)$
 \end{center}
-is \textsc{true} for the same two runs (CTL, 44 and 25 seconds).  Checks~4
-and~5 assume that sends eventually succeed.  Without that assumption both
-are false in the way one would expect: $EmitChannelTimeout$ can be taken for
-ever, and the model does not forbid it.  The checks establish that no state
-is a dead end for \emph{reasons internal to the sender}: the client, mesg,
-the window and the timer can each be arranged to let an owed event out.  The
-client's initialisation is the one condition outside the sender's
-control; $ClientInitialized$ is available whenever $session = sessCaptured$,
-and the capture operations reach it.
+is \textsc{true} for runs A and B (CTL; 500 seconds and 173 seconds).  The
+conclusion is stronger than the form this paragraph first had, and
+deliberately so.  That form accepted any state in which nothing was owed,
+and from an owed mail one can always reach such a state by reading it, or
+from an owed wall by expiring it, or from an owed invite by draining it, none
+of which delivers anything.  Here the conclusion is $k \notin chanNewer$, and
+the only operations that remove a kind from $chanNewer$ are the sender's
+sends: $EmitChannel$ and its three defective twins.  Reaching it therefore
+means that the owed event was \emph{sent}.  A path that merely makes the
+event no longer owed does not satisfy it.
+
+Checks~4 and~5 assume that sends eventually succeed.  Check~5 is existential
+(\textsc{ef}), so it says that a path to a send exists from every owed
+state, not that every run takes it: $EmitChannelTimeout$ can be taken for
+ever and the model does not forbid it, and a channel whose every send times
+out delivers nothing.  What the check rules out is a state from which no
+send is possible, whatever the client, mesg, the window and the timer do.
+The premise excludes $natsConn = natsClosed$.  The first form of this check
+passed that state and the stronger one does not: after $CloseConnection$ at
+start-up with $session = sessNone$, no capture operation is enabled, so
+$chanInit$ can never become true.  ProB found it as a nine-step
+counterexample (closed connection, tool context, a missed mail, a read, a
+pushed mail).  A closed connection is the shutdown state of the model, so the
+premise excludes it and the prose says so.
 
 \paragraph{Check 6: independence.}  $channelEnabled$ is read only to mark
-$chanNewer$, and no channel operation changes a base component, so the base
-states reachable with the channel on and off should be the same.  The check
-is run rather than argued.  The same run is made twice, once with
-$channelEnabled = ztrue$ and once with $zfalse$, with the base states of
-both runs dumped (\texttt{-sstxt}) and projected onto the base components
-(the channel components and ghosts removed); the two sets of projections are
-compared.  The pruning must not depend on the setting, so the mail and wall
-pair is run with $talkPending = \emptyset \land talkQueued = 0$ added to the
-scope in both runs, and the talk pair with $unreadCount = 0 \land wallLive =
-zfalse$.  The result is the same for both: with the channel on and with it
-off, the base projections of the discovered states are \emph{identical}.  For
-mail and wall, 478 projections from 88{,}854 discovered states (channel on;
-12{,}988 analysed) and from 2{,}136 (channel off; 328 analysed); for the two
-talk kinds, 212 projections from 38{,}116 (4{,}776 analysed) and from 884
-(120 analysed).  The channel multiplies the number of states about forty
-times and adds no base state, and removes none.
+$chanNewer$ and $chanUnseen$, and no channel operation changes a base
+component, so the base states reachable with the channel on and off should be
+the same.  The check is run rather than argued.  The same run is made twice,
+once with $channelEnabled = ztrue$ and once with $zfalse$, with the base
+states of both runs dumped (\texttt{-sstxt}) and projected onto the base
+components (the channel components and ghosts removed); the two sets of
+projections are compared.  The pruning must not depend on the setting, so
+both runs carry the same scope, with $channelEnabled$ added.  The result is
+the same for both pairs: the base projections of the discovered states are
+\emph{identical}.  Pair A: 478 projections from 880{,}096 discovered states
+(channel on; 128{,}188 analysed) and 478 from 2{,}136 (channel off; 328
+analysed).  Pair B: 212 projections from 226{,}308 (23{,}832 analysed) and
+212 from 1{,}652 (216 analysed).  The channel multiplies the number of
+states by two orders of magnitude and adds no base state and removes none.
 
-\paragraph{Check 7: no scheduled work, and no timer unless one is held.}
+\paragraph{Check 7: no scheduled work, no timer unless one is held, no
+retry without a trigger.}
 $timerArmed = ztrue \iff chanHeld \neq \emptyset$ is an invariant, stated
 as two implications, and holds in every run.  It is not true by
 construction: each operation that changes $chanHeld$ sets $timerArmed'$
@@ -5129,42 +5439,109 @@ only if a send that empties $chanHeld$ cancels the timer.  There is one
 timer, a single boolean, and $TimerDrop$ and $TimerGated$ require
 $timerArmed = ztrue$, so the deferred send is enabled only while a kind is
 held.  The first timeout of a kind adds it to $chanRetried$ and re-arms
-it; the second removes that kind from $chanHeld$ and $chanRetried$ and no
-other ($EmitChannelTimeout$ mentions only $k?$).
+it; the second removes that kind from $chanHeld$ and $chanRetried$, adds it
+to $chanDormant$, and changes no other kind.
+
+A dormant kind is still owed, but $EmitChannel$, $EmitChannelTimeout$ and
+$HoldChannel$ all require $k \notin chanDormant$: neither a timer firing nor
+a repeated run retries it.  Only three operations remove a kind from
+$chanDormant$, and they are the three triggers of the design: an arrival of
+that kind (pushed, not a missed one), $ToolCallRun$, and $RelayReconnected$.
+This is what stops the two-attempt cycle from restarting without a new
+trigger.
 
 The remaining operations are enabled by exactly the events the design
 allows:
 \begin{center}
 \begin{tabular}{ll}
-  $MailArrive$, $KVWallReceive$, $WallPost$, $TalkInviteArrive$,
-    $TalkMessageArrive$, $NatsTalkCallback$ & a relay push or tool call \\
+  $MailArrive$, $MailArriveAtCap$, $KVWallReceive$, $WallPost$,
+    $TalkInviteArrive$, $TalkMessageArrive$, $NatsTalkCallback$ &
+    a relay push or tool call \\
   $RelayReconnected$ & a reconnect \\
   $ClientInitialized$ & the client \\
-  $MesgOn$, $MesgOff$ & a tool call \\
+  $MesgOn$, $MesgOff$, $ToolCallRun$ & a tool call \\
   $PollStart$, $PollStop$ & the user, \texttt{/biff:read} \\
   $PollPull$ & enabled only while $pollOn = ztrue$ \\
   $EmitChannel$, $EmitChannelTimeout$, $HoldChannel$ & the sender's runs \\
   $TimerDrop$, $TimerGated$ & enabled only while $timerArmed = ztrue$ \\
-  $KindWindowElapse$, $RateWindowAge$ & the environment's clock \\
+  $KindWindowElapse$, $RateWindowAge$, $InviteAgeTick$, $WallExpire$ &
+    the environment's clock \\
 \end{tabular}
 \end{center}
 $PollPullUnrequested$ is the twin that pulls with $pollOn = zfalse$;
 deleting $pollRogue = zfalse$ and setting goal $pollRogue = ztrue$ finds it
-in one operation.  A pull with polling off is therefore
-excluded by the guard of $PollPull$ and by nothing else, and it is what the
-polling test owes.
+in one operation.  A pull with polling off is therefore excluded by the guard
+of $PollPull$ and by nothing else, and it is what the polling test owes.
+
+\paragraph{Findings of the first review round.}  A reviewer found six defects
+in the model as first submitted.  Each is demonstrated by a short operation
+sequence that ProB's constraint-based search (\texttt{-cbc\_sequence}) finds
+on the earlier text and does not find on this one, or the reverse where the
+defect was an operation that could not be taken.  \emph{Earlier} is the
+specification as first submitted.
+\begin{center}
+\small
+\begin{tabular}{p{0.52\textwidth}cc}
+  defect & earlier & now \\ \hline
+  reconnect re-announces an already announced mail:
+    $CaptureSession$, $ClientInitialized$, $EnsureConnected$, $MailArrive$,
+    $EmitChannel$, $RelayReconnected$, $KindWindowElapse$, $EmitChannel$ &
+    found & not found \\
+  the same with a second, missed arrival before the reconnect:
+    $\ldots$, $MailArrive$, $EmitChannel$, $MailArrive$,
+    $RelayReconnected$, $KindWindowElapse$, $EmitChannel$ (at $USLOT = 2$) &
+    n/a & found \\
+  three timeouts of one kind with no trigger between:
+    $CaptureSession$, $ClientInitialized$, $MailArrive$,
+    $EmitChannelTimeout$ three times &
+    found & not found \\
+  a tool call between the second and third timeout &
+    n/a & found \\
+  an own wall announced after replacing an owed teammate wall:
+    $\ldots$, $MesgOff$, $KVWallReceive$, $WallPost$, $MesgOn$,
+    $EmitChannel$ & found & not found \\
+  a re-invite after the clock expired the first is announced:
+    $TalkInviteArrive$, $AgeTick$ (now $InviteAgeTick$), $TalkInviteArrive$,
+    $ClientInitialized$, $EmitChannel$ & not found & found \\
+  $RecaptureSession$ with the session captured:
+    $CaptureSession$, $EnsureConnected$, $ClientInitialized$,
+    $RecaptureSession$ & not found & found \\
+  an event sent after the second \texttt{initialize}, before the next
+    $ClientInitialized$: the same, then $MailArrive$, $EmitChannel$ &
+    not found & not found \\
+  the same with $ClientInitialized$ after the recapture &
+    not found & found \\
+  $AdvanceTalk$ on a talk item in the last slot of a two-item queue
+    (at $QSLOT = 2$, $SOURCEKEY = 2$):
+    $\ldots$, $KVWallReceive$, $NatsTalkCallback$, $AdvanceTalk$ &
+    not found & found \\
+\end{tabular}
+\end{center}
+The sixth defect, $AdvanceTalk$, was introduced by the generator that added
+the channel's frame equations to every base operation: it pinned
+$currentIndex'$ where the original left it to the state invariant.  It is
+fixed by the equations the reviewer proposed, and the generator now adds frame
+equations for the channel components only, so no base operation differs from
+its original text.  Two further checks cover the fifth: the LTL formula
+$\mathrm{G}\,(\mathit{inScope} \implies ([RecaptureSession] \implies
+\mathrm{X}\; chanInit = zfalse))$ and $\mathrm{G}\,(\mathit{inScope} \land
+chanInit = zfalse \implies \lnot\, e(EmitChannel))$ are both \textsc{true} (the
+mail-only scope, 4.8 seconds): between the capture and the next
+$ClientInitialized$ no owed event can be sent.  One case remains a test
+obligation, not a modelled one: a second \texttt{initialize} while the
+session is captured and $pendingNotify = ztrue$ (the flush path).
 
 \paragraph{Coverage.}  Across the runs every operation of this section
 fires, except the five defective twins, which are enabled in no reachable
-state by design.  $RecaptureSession$ is reported uncovered in every run, as it
-is in the base specification, and for the same reason
-(Section~\ref{sec:sessionloss}): it needs $session = sessNone$ with
-$natsConn = natsConnected$ and $pendingNotify = zfalse$, a state that only
-the dead $Unrecorded$ twins produce.  A breadth-first search for that state
-under the wall-only scope exhausted 45{,}240 states without finding it.  The
-channel's one line in $RecaptureSession$, $chanInit' = zfalse$, is the same
-line as in $CaptureSession$ and $CaptureSessionFlushBegin$, both of which
-fire, and is exercised there.
+state by design.  $RecaptureSession$, uncovered in the base specification
+(it was enabled only after the dead $Unrecorded$ twins), now fires in every
+run, because its guard admits a captured session.  $WallExpire$,
+$RelayReconnected$, $ToolCallRun$, $InviteAgeTick$ and $MailArriveAtCap$ all
+fire.  $MailArriveAtCap$ is the flat-count arrival: at the one-slot scope the
+unread count is already at its cap of one, a new mail arrives, the count does
+not move, and the arrival is still marked, which is the case a count-based
+detector misses.  A partial read, where two of four are read and two arrive,
+is not modelled ($ReadMail$ empties the count), and is a test obligation.
 
 \paragraph{Reproducing a counterexample.}  Check~1, as the others:
 \begin{verbatim}
@@ -5178,8 +5555,16 @@ probcli v.tex -model_check -noltl -mc_mode breadth-first \
 The same line deletes $chanStale$, $chanOverrate$ and the first implication
 about $timerArmed$ (with the line's own text in place of the pattern).
 $pollRogue = zfalse$ is the last invariant and carries no trailing
-separator; delete it and the separator before it.
-
+separator; delete it and the separator before it.  A sequence of the
+previous paragraph:
+\begin{verbatim}
+probcli docs/notification.tex -p DEFAULT_SETSIZE 2 -card USER 1 \
+  -card SOURCEKEY 1 -card SESSIONKEY 1 -card QSLOT 1 -card USLOT 1 \
+  -card ASLOT 1 -card PSLOT 1 -card RSLOT 2 \
+  -cbc_sequence 'CaptureSession;ClientInitialized;EnsureConnected;MailArrive;
+    EmitChannel;RelayReconnected;KindWindowElapse;EmitChannel'
+\end{verbatim}
+(no solution).
 
 \subsection{What the implementation owes}
 \label{sec:chanobligations}
@@ -5194,16 +5579,25 @@ it.  A test is owed for the refusal as well as for the success.
     \texttt{notifications/initialized}; one is sent when it arrives
     ($EmitChannel$, $ClientInitialized$).  A second \texttt{initialize}
     clears the gate until the next \texttt{notifications/initialized}
-    ($CaptureSession$, $RecaptureSession$, $CaptureSessionFlushBegin$).
-    The sender adds no capture path of its own.
+    ($CaptureSession$, $RecaptureSession$, $CaptureSessionFlushBegin$),
+    including a second \texttt{initialize} while the stored session is
+    healthy ($RecaptureSession$ with $session = sessCaptured$).  A second
+    \texttt{initialize} with $pendingNotify = ztrue$ and the session
+    captured is not modelled and is owed as a test.  The sender adds no
+    capture path of its own.
   \item \emph{Mesg.}  With mesg off nothing is sent and the record is
     unchanged; when mesg comes on, whatever is still true is sent, one event
     per kind ($MesgOff$, $MesgOn$, $EmitChannel$).
   \item \emph{Owed is derived, per kind.}  Mail by the high-water mark with
-    the count flat or flapping; a wall key once, and never the session's own
-    wall ($WallPost$ marks nothing); invites and talk messages by
-    monotone arrival counters that a drain, a move from queued to pending or
-    an overflow never lowers (the arrival operations).
+    the count flat or flapping ($MailArriveAtCap$ models a flat count at the
+    cap; a partial read and a stale fetch are not modelled and are owed as
+    tests); a wall key once, and never the session's own wall: posting a wall
+    replaces the current wall, so an unannounced teammate wall it replaced
+    is no longer announced either ($WallPost$ clears $wallLive$);
+    invites and talk messages by monotone arrival counters that a drain, a
+    move from queued to pending or an overflow never lowers (the arrival
+    operations).  An invite that replaces an expired one is fresh: its age is
+    its own, not the retained entry's ($invAge$, $InviteAgeTick$).
   \item \emph{Never stale.}  The state is read again at send time: mail
     read, wall expired, invite older than the time-to-live and message queue
     drained are not sent ($OwedKind$, $LiveKind$; the twin
@@ -5231,12 +5625,18 @@ it.  A test is owed for the refusal as well as for the success.
     re-arms that kind once, the second releases that kind alone.  Other held
     kinds keep their own openings, and the timer is re-armed for the earliest
     of them.
-  \item \emph{Retry.}  After a second timeout the kind is still owed; the next
-    arrival, tool call or reconnect runs the sender again.  This is what
-    bounded reachability (check~5) relies on.
-  \item \emph{Reconnect.}  The catch-up marks mail and wall that exist, never a
-    talk frame, and does nothing when the channel is disabled
-    ($RelayReconnected$).
+  \item \emph{Retry.}  After a second timeout the kind is still owed but is
+    not retried: only a later arrival of that kind, a tool call or a
+    reconnect runs the sender for it again, and a timer firing never does
+    ($EmitChannelTimeout$, $chanDormant$, $ToolCallRun$).  Without this
+    the two-attempt cycle restarts for ever.
+  \item \emph{Reconnect.}  The catch-up announces only what is newer than
+    the last-sent record: it compares the durable high-water (mail) or wall
+    identity with the record, and marks nothing for state it has already
+    announced, however live that state is.  It never marks a talk frame and
+    does nothing when the channel is disabled ($RelayReconnected$,
+    $chanUnseen$).  Both cases need a test: a reconnect with a missed
+    arrival, and a reconnect with state already announced.
   \item \emph{Dormancy.}  With channel mode off no kind is ever marked, so
     no channel frame is ever sent (the invariant
     $channelEnabled = zfalse \implies chanNewer = \emptyset$).
