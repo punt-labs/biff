@@ -34,7 +34,7 @@ from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.server.display_queue import DisplayItem
-from biff.server.tool_list_send import ListChanged
+from biff.server.tool_list_send import EpisodeLog, ListChanged
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
 from biff.talk_types import TalkNotification, TalkPhase
 from biff.tty import format_address
@@ -156,7 +156,7 @@ class _HandshakeDelivery:
     async def flush_owed(self) -> None:
         """Retry a notification a single connection still owes (DES-087)."""
         async with self._lock:
-            if self._link is not None and self._pending_notify:
+            if self._link and self._pending_notify and self._link.ready():
                 await self._notify_standalone()
 
     def serve_single_connection(self, link: ChannelLink) -> None:
@@ -979,6 +979,9 @@ async def _active_tick(
     return last_count, last_wall, last_talk
 
 
+_TICKS = EpisodeLog(logger)
+
+
 async def _safe_tick(
     mcp: FastMCP[ServerState],
     state: ServerState,
@@ -994,25 +997,20 @@ async def _safe_tick(
     on the next interval.  ``CancelledError`` is re-raised so shutdown
     propagates correctly.
 
-    Logged at DEBUG, not WARNING: the poller ticks every ~2s, so a
-    NATS wedge would spam a warning per tick.  The relay's
-    ``_ConnectionHealth`` is the single source of onset/recovery
-    warnings — it logs the wedge once, not once per tick.
+    A failing tick logs one WARNING when it starts failing and one INFO when
+    it recovers (``EpisodeLog``), not one line per ~2s tick; the relay's
+    ``_ConnectionHealth`` still logs a NATS wedge on its own.
     """
     try:
-        return await _active_tick(
-            mcp,
-            state,
-            last_count,
-            last_wall,
-            last_talk,
-            gate=gate,
+        tick = await _active_tick(
+            mcp, state, last_count, last_wall, last_talk, gate=gate
         )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.debug("Poller tick failed, will retry", exc_info=True)
+    except Exception as exc:
+        logger.debug("Poller tick failed", exc_info=True)
+        _TICKS.failed("Poller tick", exc)
         return last_count, last_wall, last_talk
+    _TICKS.recovered("Poller tick")
+    return tick
 
 
 class _WakeOutcome(Enum):

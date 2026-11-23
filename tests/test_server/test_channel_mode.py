@@ -14,6 +14,7 @@ import os
 from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import partial
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
@@ -22,6 +23,7 @@ import anyio
 import pytest
 from mcp.server.connection import Connection
 from mcp.server.session import ServerSession
+from mcp.server.stdio import stdio_server
 from mcp.shared.exceptions import MCPError
 from mcp.shared.jsonrpc_dispatcher import JSONRPCDispatcher
 from mcp.shared.message import SessionMessage
@@ -34,6 +36,7 @@ from mcp.types import (
 from typer.testing import CliRunner
 
 from biff.__main__ import app
+from biff.models import Message
 from biff.server import channel, channel_server
 from biff.server.app import _SessionCaptureMiddleware, create_server
 from biff.server.channel import (
@@ -49,16 +52,23 @@ from biff.server.channel_server import (
 )
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions
-from biff.server.tools._descriptions import _active_tick, _InboxPokeGate
+from biff.server.tools._descriptions import (
+    _active_tick,
+    _InboxPokeGate,
+    refresh_read_messages,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    from anyio import AsyncFile
     from anyio.abc import ObjectReceiveStream, ObjectSendStream
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
     from mcp.shared.transport_context import TransportContext
 
 runner = CliRunner()
+
+_KAI_SESSION = "kai:tty1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,15 +278,20 @@ class TestSingleConnectionDelivery:
         assert delivery._session is stalled_session
         assert delivery._pending_notify
 
-    async def test_a_code_bug_is_not_swallowed(self) -> None:
+    async def test_a_code_bug_is_logged_and_stays_owed_not_raised(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         delivery = _descriptions.handshake_delivery
         delivery.serve_single_connection(ChannelLink())
         broken = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
         broken.send_tool_list_changed = AsyncMock(side_effect=RuntimeError("bug"))
         await delivery.capture_session(broken)
-
-        with pytest.raises(RuntimeError, match="bug"):
+        with caplog.at_level(logging.WARNING):
             await delivery.notify()
+
+        assert delivery._pending_notify
+        assert delivery._session is broken
+        assert [r.exc_info is not None for r in caplog.records] == [True]
 
     async def test_repeated_failure_logs_once_then_recovery_once(
         self, caplog: pytest.LogCaptureFixture
@@ -297,7 +312,7 @@ class TestSingleConnectionDelivery:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
         assert len(warnings) == 1
-        assert "Tool list change, session kept" in warnings[0].getMessage()
+        assert "Tool list change (session kept)" in warnings[0].getMessage()
         assert "TimeoutError" in warnings[0].getMessage()
         assert len(infos) == 1
 
@@ -628,6 +643,10 @@ class TestTeardownWindow:
 class TestOwedDebtIsRetried:
     """A timed-out send is retried by the poller, not only by the next change."""
 
+    @pytest.fixture(autouse=True)
+    def _no_backoff(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.0)
+
     @staticmethod
     def _flaky() -> MagicMock:
         session = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
@@ -718,7 +737,7 @@ class TestSessionCapture:
 
         assert "not captured" in caplog.text
 
-    async def test_a_failed_capture_is_not_suppressed(self) -> None:
+    async def test_a_failed_flush_does_not_fail_the_handshake(self) -> None:
         context = self._context(session_error=False)
         context.fastmcp_context.session.protocol_version = "2025-11-25"
         context.fastmcp_context.session.send_tool_list_changed = AsyncMock(
@@ -727,10 +746,12 @@ class TestSessionCapture:
         _descriptions.handshake_delivery.serve_single_connection(ChannelLink())
         _descriptions.handshake_delivery._pending_notify = True
 
-        with pytest.raises(RuntimeError, match="bug"):
-            await _SessionCaptureMiddleware().on_initialize(
-                context, AsyncMock(return_value=None)
-            )
+        await _SessionCaptureMiddleware().on_initialize(
+            context, AsyncMock(return_value=None)
+        )
+
+        assert _descriptions.handshake_delivery._session is not None
+        assert _descriptions.handshake_delivery._pending_notify
 
 
 class TestFailureLogging:
@@ -746,9 +767,9 @@ class TestFailureLogging:
             link.delivered("Channel event")
 
         assert "Tool list" not in caplog.text
-        assert caplog.text.count("Channel event not delivered") == 1
-        assert "TimeoutError: slow" in caplog.text
-        assert caplog.text.count("Channel event delivered again") == 1
+        assert caplog.text.count("Channel event failed") == 1
+        assert "TimeoutError('slow')" in caplog.text
+        assert caplog.text.count("Channel event recovered") == 1
 
     async def test_default_mode_logs_the_cause(
         self, caplog: pytest.LogCaptureFixture, stalled_session: MagicMock
@@ -760,14 +781,19 @@ class TestFailureLogging:
 
         assert [r.exc_info is not None for r in caplog.records] == [True]
 
-    async def test_default_mode_does_not_swallow_a_code_bug(self) -> None:
+    async def test_default_mode_logs_a_code_bug_and_does_not_raise(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         delivery = _descriptions.handshake_delivery
         broken = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
         broken.send_tool_list_changed = AsyncMock(side_effect=RuntimeError("bug"))
         await delivery.capture_session(broken)
-
-        with pytest.raises(RuntimeError, match="bug"):
+        with caplog.at_level(logging.WARNING):
             await delivery.notify()
+
+        assert delivery._session is None
+        assert delivery._pending_notify
+        assert [r.exc_info is not None for r in caplog.records] == [True]
 
     async def test_malformed_input_names_the_error_truncated(
         self, caplog: pytest.LogCaptureFixture
@@ -818,3 +844,140 @@ class TestShutdown:
 
         with pytest.raises(anyio.EndOfStream):
             from_server.receive_nowait()
+
+
+def _state_with_counting_relay(state: ServerState) -> tuple[AsyncMock, AsyncMock]:
+    unread = AsyncMock(return_value=MagicMock(count=0))
+    wall = AsyncMock(return_value=None)
+    state.relay.get_unread_summary = unread  # type: ignore[method-assign]
+    state.relay.get_wall = wall  # type: ignore[method-assign]
+    return unread, wall
+
+
+class TestAFailingFlushDoesNotSkipTheTick:
+    async def test_the_rest_of_the_tick_runs_and_one_warning_is_logged(
+        self, state: ServerState, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        delivery = _descriptions.handshake_delivery
+        link = ChannelLink()
+        link.observe(anyio.create_memory_object_stream[SessionMessage](1)[0])
+        delivery.serve_single_connection(link)
+        broken = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
+        broken.send_tool_list_changed = AsyncMock(side_effect=TypeError("bug"))
+        await delivery.capture_session(broken)
+        delivery._pending_notify = True
+        unread, wall = _state_with_counting_relay(state)
+        gate = _InboxPokeGate(backstop_interval=30.0)
+
+        with caplog.at_level(logging.WARNING):
+            for _ in range(3):
+                await _descriptions._safe_tick(
+                    create_server(state), state, -1, ("x", "y"), ((), -1, ""), gate=gate
+                )
+
+        assert unread.await_count >= 3
+        assert wall.await_count == 3
+        assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+
+    async def test_an_unexpected_tick_failure_is_a_latched_warning(
+        self,
+        state: ServerState,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        async def broken(*_args: object, **_kwargs: object) -> None:
+            msg = "tick bug"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(_descriptions, "_active_tick", broken)
+        gate = _InboxPokeGate(backstop_interval=30.0)
+        with caplog.at_level(logging.WARNING):
+            for _ in range(3):
+                await _descriptions._safe_tick(
+                    create_server(state), state, -1, ("x", "y"), ((), -1, ""), gate=gate
+                )
+
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+
+class TestRefreshNeverFailsTheCallersResult:
+    async def test_a_code_bug_in_the_notify_does_not_fail_the_refresh(
+        self, state: ServerState
+    ) -> None:
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hi")
+        )
+        delivery = _descriptions.handshake_delivery
+        broken = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
+        broken.send_tool_list_changed = AsyncMock(side_effect=TypeError("bug"))
+        await delivery.capture_session(broken)
+
+        assert await refresh_read_messages(create_server(state), state)
+        assert delivery._pending_notify
+
+
+class TestWedgedClient:
+    async def test_the_timeout_warning_is_not_empty(
+        self, caplog: pytest.LogCaptureFixture, stalled_session: MagicMock
+    ) -> None:
+        delivery = _descriptions.handshake_delivery
+        delivery.serve_single_connection(ChannelLink())
+        await delivery.capture_session(stalled_session)
+        with caplog.at_level(logging.WARNING):
+            await delivery.notify()
+
+        assert "TimeoutError()" in caplog.text
+
+    async def test_flush_backs_off_after_a_timeout(
+        self, monkeypatch: pytest.MonkeyPatch, stalled_session: MagicMock
+    ) -> None:
+        delivery = _descriptions.handshake_delivery
+        delivery.serve_single_connection(ChannelLink())
+        now = [100.0]
+        monkeypatch.setattr(channel, "time", SimpleNamespace(monotonic=lambda: now[0]))
+        await delivery.capture_session(stalled_session)
+        await delivery.notify()
+
+        await delivery.flush_owed()
+        assert stalled_session.send_tool_list_changed.await_count == 1
+
+        now[0] += channel.CHANNEL_BACKOFF + 1
+        await delivery.flush_owed()
+        assert stalled_session.send_tool_list_changed.await_count == 2
+
+
+class TestTransportCrash:
+    async def test_a_stdin_failure_is_logged_before_it_propagates(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class Stdin:
+            def __aiter__(self) -> Stdin:
+                return self
+
+            async def __anext__(self) -> str:
+                await anyio.sleep(0.05)
+                raise OSError(5, "Input/output error")
+
+        class Stdout:
+            async def write(self, text: str) -> int:
+                return len(text)
+
+            async def flush(self) -> None:
+                return None
+
+        monkeypatch.setattr(
+            channel_server,
+            "stdio_server",
+            partial(
+                stdio_server,
+                stdin=cast("AsyncFile[str]", Stdin()),
+                stdout=cast("AsyncFile[str]", Stdout()),
+            ),
+        )
+        with (
+            caplog.at_level(logging.ERROR, logger=channel_server.logger.name),
+            pytest.raises(Exception),  # noqa: B017
+        ):
+            await ChannelServer[object]("biff").serve_channel_stdio()
+
+        assert "channel stdio transport failed" in caplog.text

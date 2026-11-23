@@ -10,17 +10,23 @@
   section with only `url` still means `nats`.
 - Channel mode for the Claude Code plugin (DES-087). `plugin.json` sets
   `BIFF_CHANNEL_MODE=1` in the `tty` server's `env`; `biff mcp` reads it once
-  and removes it from its environment. In that mode the server advertises
-  `experimental["claude/channel"]` and serves stdio on the handshake-only
-  loop, so Claude Code registers it as a channel: the 2026-07-28 probe gets
-  -32601, `initialize` succeeds, and a later 2026-07-28 request is refused.
-  The server logs `channel_mode=on|off` at start and the negotiated
-  `protocolVersion` when a client attaches. In channel mode a tool-list
-  send that timed out, or that the SDK dropped on a closed stream, keeps the
-  stored session and stays owed, and repeated failure logs once. `ChannelServer.channel_link`
-  is the send capability for the channel sender; a 2026-07-28 request after
-  `initialize` and malformed client input are logged. Every other
-  caller of `biff mcp` is unchanged. FastMCP is pinned to `<4.3`.
+  and removes it from its environment (a value other than `1` is logged). In
+  that mode the server advertises `experimental["claude/channel"]` and serves
+  stdio on the handshake-only loop, so Claude Code registers it as a channel:
+  the 2026-07-28 probe gets -32601, `initialize` succeeds, and a later
+  2026-07-28 request is refused and logged. `ChannelServer.channel_link` is the
+  send capability for the channel sender; it detects a closed stream, a dropped
+  write and the end of client input. In channel mode a tool-list notification
+  that timed out or was dropped keeps the stored session and stays owed, the
+  poller retries it each tick (backing off 30 s after a failure), and a failure
+  logs once with its cause. The server logs `channel_mode=on|off` at start, the
+  negotiated `protocolVersion`, malformed client input and transport crashes.
+  FastMCP is pinned to `<4.3`.
+- Outside channel mode the loop, capabilities and subscriptions are unchanged.
+  A failed tool-list send still clears the stored session, but a bug in it can
+  no longer fail the tool call that triggered it, its warning carries the cause,
+  a failing poller tick logs one WARNING per episode instead of a DEBUG line per
+  tick, and a handshake session that cannot be read is logged.
 - Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
   fails on any import that breaks the DES-088 package layers and is not in
   `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs

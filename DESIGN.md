@@ -8546,25 +8546,48 @@ summaries; invite summaries that say to accept; no rate limit. Each is
 rejected in the design document.
 
 **Mechanism (channel mode).** `ChannelServer.serve_channel_stdio()`, in
-`server/channel_server.py`, copies `serve_loop`'s body (a `JSONRPCDispatcher`,
-a `Connection.for_loop`, a `ServerRunner`) so it holds the `Connection`, binds it
-to a `ChannelLink` (`server/channel.py`), and closes the write stream itself on
-exit. It lives there rather than in `server/entrypoints.py` so that module's OO
-and coupling baselines do not regress (DES-088's ratchets). `ChannelLink.send`
-is the one send capability: it writes through the connection's outbound, which
-raises on a closed stream where `Connection.notify` swallows it, and bounds the
-write with a timeout. The `server/discover` probe goes to the runner, which
-answers -32601 at a handshake version; any other request carrying the 2026-07-28
-envelope is refused with -32600. Observed on Claude Code 2.1.330 (PL-1348): the
-probe fails, `initialize` succeeds at 2025-11-25, and both launch orders work.
-The SDK's dispatcher swallows a write onto a closed stream, so `ChannelLink`
-wraps the connection's write stream (`ObservedWriteStream`) and records the
-failure; `ChannelLink.send` and the standalone tool-list send both consult it.
-In channel mode `_HandshakeDelivery.serve_single_connection(link)` makes a
-timed-out or dropped standalone send keep the stored session and stay owed
-(the log says so, once per episode); any other exception propagates
-(`docs/notification.tex` is unchanged by this step; its send-failure
-transitions describe the default).
+`server/channel_server.py`, copies `serve_loop`'s body (a `JSONRPCDispatcher`, a
+`Connection.for_loop`, a `ServerRunner`) so that it can wrap both stream ends,
+and closes the write stream itself on exit, even if the connection cleanup
+raises. It lives there rather than in `server/entrypoints.py` so that module's
+OO and coupling baselines do not regress (DES-088's ratchets). A transport crash
+(stdin `OSError`, broken stdout) is logged with its traceback before it
+propagates. The `server/discover` probe goes to the runner, which answers -32601
+at a handshake version; any other request carrying the 2026-07-28 envelope is
+refused with -32600, logged once per distinct method. Observed on Claude Code
+2.1.330 (PL-1348): the probe fails, `initialize` succeeds at 2025-11-25, and
+both launch orders work.
+
+The SDK's dispatcher swallows a write onto a closed stream and, after client
+end of input, drops writes without touching the stream until its handlers
+finish. So `ChannelLink` (owned by `ChannelServer.channel_link`) wraps the write
+stream (`ObservedWriteStream`, which records a failed write) and the read
+stream (`ObservedReadStream`, which closes the link when client input ends).
+`ChannelLink.send` writes a `notifications/claude/channel` frame to the
+`ObservedWriteStream` directly, bounded by a timeout; a normal return means the
+frame was handed to the stdout writer task, not that the client read it. It
+raises `ChannelUnavailableError` on a closed link.
+
+In channel mode `_HandshakeDelivery.serve_single_connection(link)` makes every
+tool-list send consult the link, in the standalone path and in the in-request
+path. A send that timed out, failed, or was dropped by the SDK keeps the stored
+session and stays owed. The poller retries owed notifications at the start of
+each tick (`flush_owed`), backing off `CHANNEL_BACKOFF` (30 s) after a failure
+so a client that stopped reading does not stall every tick for the 3 s send
+timeout. When the poller naps (idle over 120 s) the retry runs every 30 s or on
+a wake: late, not lost. A failing send logs once per episode with its cause and
+traceback and once on recovery (`EpisodeLog`).
+
+What changes outside channel mode (HTTP, `--user` stdio, opencode, codex, the
+CLI). The loop, the capabilities and the 2026-07-28 subscriptions are
+unchanged. A failed tool-list send still clears the stored session and sets the
+debt, but `ListChanged` now catches every exception, so a code bug in a
+notification cannot fail the refresh that triggered it (the refresh functions'
+documented contract). Its warning now carries the traceback and the cause. A
+failing poller tick now logs one WARNING per episode (`EpisodeLog`) instead of
+a DEBUG line per tick. A handshake session that cannot be read is now logged.
+`docs/notification.tex` is unchanged by this step; its send-failure
+transitions describe the default.
 
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
 **Amends.** DES-080, for the Claude Code plugin only; DES-061's rule that a

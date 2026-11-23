@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections.abc import Callable, Mapping, MutableMapping
 from types import TracebackType
 from typing import Protocol, Self
@@ -13,6 +14,8 @@ import anyio
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCNotification
 
+from biff.server.tool_list_send import EpisodeLog
+
 logger = logging.getLogger(__name__)
 
 CHANNEL_MODE_VARIABLE = "BIFF_CHANNEL_MODE"
@@ -20,6 +23,7 @@ CHANNEL_CAPABILITY = "claude/channel"
 CHANNEL_METHOD = "notifications/claude/channel"
 
 CHANNEL_SEND_TIMEOUT = 3.0
+CHANNEL_BACKOFF = 30.0
 
 
 class ChannelUnavailableError(Exception):
@@ -194,13 +198,15 @@ class ChannelLink:
     """
 
     _stream: ObservedWriteStream | None
-    _failing: set[str]
+    _log: EpisodeLog
+    _retry_after: float
 
     def __new__(cls) -> Self:
         """Create a link with no stream attached."""
         self = super().__new__(cls)
         self._stream = None
-        self._failing = set()
+        self._log = EpisodeLog(logger)
+        self._retry_after = 0.0
         return self
 
     @property
@@ -255,18 +261,21 @@ class ChannelLink:
             msg = "a write to the client was dropped"
             raise ChannelUnavailableError(msg)
 
+    def ready(self) -> bool:
+        """Whether a retry that nothing asked for may run now.
+
+        After a failure the poller waits ``CHANNEL_BACKOFF`` seconds, so a
+        client that stopped reading does not stall every tick for the send
+        timeout.
+        """
+        return time.monotonic() >= self._retry_after
+
     def delivered(self, what: str) -> None:
         """Record that *what* was sent, logging recovery once after a failure."""
-        if what in self._failing:
-            self._failing.discard(what)
-            logger.info("%s delivered again", what)
+        self._retry_after = 0.0
+        self._log.recovered(what)
 
     def failed(self, what: str, exc: Exception) -> None:
-        """Log that *what* was not delivered: once per episode, naming the cause."""
-        if what in self._failing:
-            logger.debug("%s still not delivered: %r", what, exc)
-            return
-        self._failing.add(what)
-        logger.warning(
-            "%s not delivered: %s: %s; will retry", what, type(exc).__name__, exc
-        )
+        """Log that *what* failed, once per episode, and start the back-off."""
+        self._retry_after = time.monotonic() + CHANNEL_BACKOFF
+        self._log.failed(what, exc)

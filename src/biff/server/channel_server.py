@@ -117,6 +117,9 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
                     finally:
                         # The client must see EOF; this loop does not close it.
                         await write_stream.aclose()
+        except Exception:
+            logger.exception("channel stdio transport failed")
+            raise
         finally:
             reset_transport(token)
 

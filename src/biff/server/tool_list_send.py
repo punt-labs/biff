@@ -1,4 +1,4 @@
-"""Send the legacy ``tools/list_changed`` notification and judge the outcome."""
+"""Send the legacy ``tools/list_changed`` notification; log failures per episode."""
 
 from __future__ import annotations
 
@@ -7,10 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, NamedTuple, Self
 
-import anyio
 from mcp.shared.subscriptions import ToolsListChanged
-
-from biff.server.channel import ChannelUnavailableError
 
 if TYPE_CHECKING:
     from mcp.server.subscriptions import SubscriptionBus
@@ -19,13 +16,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# A send that cannot reach the client; anything else is a bug and propagates.
-_UNDELIVERABLE = (
-    TimeoutError,
-    anyio.BrokenResourceError,
-    anyio.ClosedResourceError,
-    ChannelUnavailableError,
-)
+_WHAT = "Tool list change (session kept)"
+
+
+class EpisodeLog:
+    """Log a repeating failure once when it starts and once when it ends.
+
+    A poller or a flush retries every few seconds, so a warning per attempt
+    would bury the log.  The onset line names the cause and carries its
+    traceback; later attempts log at DEBUG; the first success logs recovery.
+    """
+
+    _logger: logging.Logger
+    _failing: set[str]
+
+    def __new__(cls, log: logging.Logger) -> Self:
+        """Create a log with no failure in progress."""
+        self = super().__new__(cls)
+        self._logger = log
+        self._failing = set()
+        return self
+
+    def failed(self, what: str, exc: Exception) -> None:
+        """Record that *what* failed with *exc*."""
+        if what in self._failing:
+            self._logger.debug("%s still failing: %r", what, exc)
+            return
+        self._failing.add(what)
+        self._logger.warning("%s failed: %r; will retry", what, exc, exc_info=exc)
+
+    def recovered(self, what: str) -> None:
+        """Record that *what* worked, logging recovery if it had failed."""
+        if what in self._failing:
+            self._failing.discard(what)
+            self._logger.info("%s recovered", what)
 
 
 class SendOutcome(NamedTuple):
@@ -38,10 +62,11 @@ class SendOutcome(NamedTuple):
 class ListChanged:
     """One ``notifications/tools/list_changed`` send and the verdict on it.
 
-    Without a *link* (DES-061) a failed send leaves the session to be forgotten.
-    With one (channel mode, DES-087) the connection lasts the process's life,
-    so a timeout or a write the SDK dropped keeps the session and the debt,
-    logged once per episode with its cause.
+    A send never raises: the refresh that triggers it has already succeeded,
+    and its result must not depend on a client that stopped listening.  Without
+    a *link* (DES-061) a failed send leaves the session to be forgotten.  With
+    one (channel mode, DES-087) the connection lasts the process's life, so the
+    session and the debt are kept, logged once per episode with the cause.
     """
 
     _timeout: float
@@ -70,14 +95,14 @@ class ListChanged:
                 await push()
             if link is not None:
                 link.require_open()
-        except _UNDELIVERABLE as exc:
+        except Exception as exc:
             if link is None:
                 logger.warning(
                     "Tool list change failed; session cleared", exc_info=True
                 )
                 return SendOutcome(delivered=False, keep_session=False)
-            link.failed("Tool list change, session kept", exc)
+            link.failed(_WHAT, exc)
             return SendOutcome(delivered=False, keep_session=True)
         if link is not None:
-            link.delivered("Tool list change, session kept")
+            link.delivered(_WHAT)
         return SendOutcome(delivered=True, keep_session=True)

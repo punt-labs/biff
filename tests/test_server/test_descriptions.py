@@ -2688,7 +2688,7 @@ class TestNotifySendTimeout:
     ``_NOTIFY_SEND_TIMEOUT`` is the liveness measure layered on top of that
     proof — bounding the lock hold turns a stalled transport into the same
     recorded drop a genuine send failure already produces (the timeout is
-    caught by the same ``except Exception`` the failure path uses), rather
+    caught by the same handler as a transport failure in ``ListChanged``), rather
     than starving the poller and every belt-path tool call indefinitely.
     """
 
