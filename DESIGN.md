@@ -8510,7 +8510,12 @@ user starts it.
 Biff does no background or scheduled work except connection liveness
 (keepalive and wedge detection) and the deferred send of one arrival the rate
 limit held back: at most one `call_later` at a time, armed only while an
-arrival is held and ending when none is, never recurring. The poller's wall-countdown, invite-expiry and unread-backstop jobs
+arrival is held and ending when none is, never recurring. Each firing, per
+held kind, sends it, drops it because nothing is owed, releases it with its
+record unchanged because mesg is off or the client is not initialised, or
+times out (re-armed once; a second timeout drops that kind alone). A send that
+empties the held set cancels the timer (`docs/notification.tex`, Channel
+Delivery). The poller's wall-countdown, invite-expiry and unread-backstop jobs
 are removed: each value is computed when read, push is the detection path, and
 a relay reconnect (`NatsRelay._on_reconnect`) re-runs the summarizer to catch
 mail that core NATS did not replay. Mail is ordered by `inbox_high_water`
