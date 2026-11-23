@@ -4215,7 +4215,109 @@ could never complete.
 \label{sec:channel}
 %%----------------------------------------------------------------------
 
-WIP intro.
+The preceding sections model a delivery path that DES-087
+(\texttt{docs/design-channels.md}) leaves in place for display and no
+longer relies on for delivery: the tool-description markers and
+\texttt{tools/list\_changed}.  In the Claude~Code plugin the delivery path
+is now a \emph{channel}: biff turns each arrival into a short summary and
+sends it as a \texttt{notifications/claude/channel} event, and the model
+acts on it without a prompt.  There is no second path running alongside.
+Polling exists only when the user starts it with \texttt{/biff:read
+<interval>}, and the server does no background or scheduled work except
+connection liveness and the deferred send of an arrival the rate limit held
+back.  This section models the channel and checks the properties the design
+claims for it.
+
+\subsection{What is modelled}
+
+Four kinds of arrival are summarised, $EventKind = kMail \mid kWall \mid
+kTalkInvite \mid kTalkMsg$.  For each kind the sender keeps the current
+state of the thing it describes and a record of the last state it sent, and
+advances the record only after a send completes.  An event is
+\emph{owed} for a kind when the current state is newer than the record and
+is non-empty:
+\begin{eqnarray*}
+  owed(k) & \defs & k \in chanNewer \land live(k).
+\end{eqnarray*}
+The first conjunct is $chanNewer$, a component of the state.  The second is
+$LiveKind$ (Section~\ref{sec:chanhelpers}), read off the base state:
+\begin{center}
+\begin{tabular}{ll}
+  $kMail$ & $unreadCount > 0$ \\
+  $kWall$ & $wallLive = ztrue$ \\
+  $kTalkInvite$ & an invite is pending and $pendingAge < maxInviteAge$ \\
+  $kTalkMsg$ & $talkQueued > 0$ \\
+\end{tabular}
+\end{center}
+so a mail that has been read, a wall that has expired, an invite that has
+aged out and a drained message queue are never announced.
+
+\paragraph{Abstractions.}
+\begin{itemize}
+  \item \emph{Marks.}  In the code the current state and the record are
+    integers that never fall (a high-water sequence, an arrival counter, a
+    set of wall keys).  The sender assigns the record from the value it read
+    before the send, and only the order of the two matters, so the model
+    keeps one bit per kind, $k \in chanNewer \iff current(k) >
+    lastSent(k)$.  An arrival sets it; a completed send clears it.  The
+    abstraction is exact only if the send is atomic, which the model assumes:
+    one step reads the current state, sends and records.  An arrival that
+    lands \emph{during} a send must survive it, so the record must take the
+    value read before the send, not the value at completion; that is an
+    obligation on the implementation (Section~\ref{sec:chanobligations}),
+    not something this model can show.
+  \item \emph{Windows.}  Each kind has a thirty-second window
+    ($kindClosed$ holds the kinds whose window is closed) and a send also
+    counts against $rateLimit$ events in a sliding ten-minute window
+    ($winSent$).  $rateLimit$ is $\# RSLOT$, so ProB shrinks it with
+    \texttt{-card RSLOT}.  $KindWindowElapse$ and $RateWindowAge$ are the
+    clock: they say that time passes, nondeterministically, and nothing in
+    biff runs them.  The invariant $winSent \leq rateLimit$ is a statement
+    about the counter; that the counter tracks real time is a unit-test
+    obligation.
+  \item \emph{The invite clock} is the existing $pendingAge$.  Under DES-087
+    the periodic sweep that advanced it is gone, so $AgeTick$ here stands for
+    the passage of time; what the sender needs from it is that an invite
+    older than the time-to-live is not live.
+\end{itemize}
+
+\paragraph{Ghost components.}  $chanLost$, $chanStale$, $chanOverrate$ and
+$pollRogue$ are ghosts: no operation of the real sender writes them and
+each is held at $zfalse$ by an invariant of $NotificationState$.  Each is
+written by exactly one defective twin (Section~\ref{sec:chantwins}), so the
+breach it records can be reproduced as a ProB counterexample by deleting the
+invariant, as Section~\ref{sec:sessionloss} does for $notifyLost$.
+$channelEnabled$ is a ghost of a different kind.  It says whether the plugin
+turned channel mode on.  It appears in no guard and in no post-state of a
+base component; its only use is that an arrival marks $chanNewer$ when it is
+$ztrue$ and leaves it empty when it is $zfalse$ (the invariant
+$channelEnabled = zfalse \implies chanNewer = \emptyset$), so that with it
+$zfalse$ the sender is never enabled and the channel is dormant.  It is
+unconstrained in $Init$, so ProB starts in both configurations; the checks
+fix it with \texttt{-scope}.
+
+\paragraph{Assumption: sends eventually succeed.}  Checks~4 and~5 below say
+that an owed event can be sent and that every owed state can reach a state
+with nothing owed.  They hold only along runs in which a send that is
+attempted is eventually not a timeout, that clients eventually send
+\texttt{notifications/initialized}, and that time passes.  The model contains
+$EmitChannelTimeout$, which can repeat without end; the checks quantify over
+the run that does not take it.  A channel whose every send times out
+delivers nothing, and no specification of the sender can change that.
+
+\paragraph{No parallel capture path.}  $chanInit$ is the sender's view of
+\texttt{notifications/initialized}.  It is set by $ClientInitialized$, which
+requires $session = sessCaptured$, and cleared by the three existing capture
+operations: $CaptureSession$ and $RecaptureSession$ (the two entries of
+\texttt{capture\_session()}) and $CaptureSessionFlushBegin$ (the flush that
+either of them performs).  $CaptureSessionFlushOk$,
+$CaptureSessionFlushFail$ and their $Unrecorded$ twin are unchanged.  The
+design does not flush owed events at capture, because a flush inside
+\texttt{initialize} can reach the client before it registers the channel;
+the sender waits for $ClientInitialized$.  The sender does not read
+$session$: in channel mode a timed-out send keeps the stdio session,
+so a session cleared by the older \texttt{tools/list\_changed} paths does not
+silence it.
 
 
 \subsection{Helper schemas}
@@ -4309,8 +4411,8 @@ window.
 
 \subsection{The base side: arrival, expiry, reconnect}
 
-The arrival operations of Sections~\ref{sec:marker} and
-\ref{sec:receive} each gained one line, $chanNewer' = chanNewer \cup
+The arrival operations of Section~\ref{sec:marker} and of the
+Receive Flow Operations each gained one line, $chanNewer' = chanNewer \cup
 \{ k \}$, guarded by $channelEnabled = ztrue$; $WallPost$ sets
 $wallLive$ but not $chanNewer$, since a session's own wall is not
 summarised.  The three capture operations $CaptureSession$,
@@ -4740,6 +4842,7 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   OwedKind \\
   WindowOpen
   \where
+  chanInit = zfalse \\
   mesgOn = ztrue \\
   chanNewer' = chanNewer \setminus \{ k? \} \\
   chanHeld' = chanHeld \setminus \{ k? \} \\
@@ -4748,8 +4851,7 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   winSent' = winSent + 1 \\
   (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
   (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
-  (chanInit = zfalse \implies chanLost' = ztrue) \\
-  (chanInit = ztrue \implies chanLost' = chanLost) \\
+  chanLost' = ztrue \\
   wallLive' = wallLive \\
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
@@ -4774,18 +4876,13 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   winSent' = winSent + 1 \\
   (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
   (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
-  (\lnot ((k? = kMail \land unreadCount > 0) \lor \\
+  \lnot ((k? = kMail \land unreadCount > 0) \lor \\
   (k? = kWall \land wallLive = ztrue) \lor \\
   (k? = kTalkInvite \land \\
   \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \land \\
   \quad pendingAge < maxInviteAge) \lor \\
-  (k? = kTalkMsg \land talkQueued > 0)) \implies chanStale' = ztrue) \\
-  (((k? = kMail \land unreadCount > 0) \lor \\
-  (k? = kWall \land wallLive = ztrue) \lor \\
-  (k? = kTalkInvite \land \\
-  \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \land \\
-  \quad pendingAge < maxInviteAge) \lor \\
-  (k? = kTalkMsg \land talkQueued > 0)) \implies chanStale' = chanStale) \\
+  (k? = kTalkMsg \land talkQueued > 0)) \\
+  chanStale' = ztrue \\
   wallLive' = wallLive \\
   mesgOn' = mesgOn \\
   chanInit' = chanInit \\
@@ -4807,10 +4904,8 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   chanRetried' = chanRetried \setminus \{ k? \} \\
   (chanHeld' = \emptyset \implies timerArmed' = zfalse) \\
   (chanHeld' \neq \emptyset \implies timerArmed' = ztrue) \\
-  ((k? \in kindClosed \lor winSent = rateLimit) \implies
-  chanOverrate' = ztrue) \\
-  ((k? \notin kindClosed \land winSent < rateLimit) \implies
-  chanOverrate' = chanOverrate) \\
+  (k? \in kindClosed \lor winSent = rateLimit) \\
+  chanOverrate' = ztrue \\
   wallLive' = wallLive \\
   kindClosed' = kindClosed \\
   winSent' = winSent \\
@@ -4830,8 +4925,9 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   \where
   chanInit = ztrue \\
   mesgOn = ztrue \\
+  chanHeld = \{ k? \} \\
   chanNewer' = chanNewer \setminus \{ k? \} \\
-  chanHeld' = chanHeld \setminus \{ k? \} \\
+  chanHeld' = \emptyset \\
   chanRetried' = chanRetried \setminus \{ k? \} \\
   kindClosed' = kindClosed \cup \{ k? \} \\
   winSent' = winSent + 1 \\
@@ -4871,7 +4967,286 @@ feasible, and Section~\ref{sec:chanchecks} does so.
 \subsection{Checks}
 \label{sec:chanchecks}
 
-WIP checks.
+\paragraph{Scope.}  The channel multiplies the state space of a model that
+is already large: the base specification at the smallest cards had not
+finished after eight minutes of processor time and a gigabyte of memory,
+and with the channel components added an exhaustive run over all four kinds
+did not finish either (it had discovered $9 \times 10^5$ states and was
+still growing when it was stopped).  The model is therefore checked
+exhaustively \emph{within scopes}, and not exhaustively over the four kinds
+together.
+Two reductions make the checks exhaustive.  First, $USER$ is shrunk to one,
+as in Section~\ref{sec:markerfix2}, and $RSLOT$ to one, so $rateLimit = 1$.
+Second, ProB's \texttt{-scope} predicate prunes the components the channel
+neither reads nor writes: the display queue, the status file and bar, the
+tool-list-changed machinery ($pendingNotify$, $inFlight$,
+$lastNotifyResult$ and the two snapshots), the talk subscription and
+connection, and the (defect-only) $talkBare$.  A pruned state is
+\emph{discovered} but not expanded, so an operation whose post-state is
+pruned shows as covered in the census and its successors are not explored.
+Third, each run admits two kinds, \texttt{chanNewer <: \{k1, k2\}}: the
+mail and wall pair, the two talk kinds, and mail with invites.  The kinds
+interact only through the rate window, which each pair shares.
+
+\begin{verbatim}
+SCOPE="idleMarker = talkDescDefault & readDescDefault = talkDescDefault &
+  wallDescDefault = talkDescDefault & size(queueItems) <= 1 &
+  fileExists = zfalse & barStale = ztrue & fileItems = [] &
+  barLine2 = idleMarker & pendingNotify = zfalse & inFlight = {} &
+  lastNotifyResult = notifyDropped & beltPnSnapshot = zfalse &
+  capPnSnapshot = zfalse & talkSubscribed = zfalse &
+  talkConnected = zfalse & talkBare = {} & pollOn = zfalse &
+  chanNewer <: {kMail, kWall}"
+probcli docs/notification.tex -model_check -noltl -coverage \
+  -p DEFAULT_SETSIZE 2 -card USER 1 -card SOURCEKEY 1 \
+  -card SESSIONKEY 1 -card QSLOT 1 -card USLOT 1 -card ASLOT 1 \
+  -card PSLOT 1 -card RSLOT 1 \
+  -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000 -scope "$SCOPE"
+\end{verbatim}
+
+The constants $idleMarker$ and the three descriptions are pinned equal, which
+removes a factor of eight that ProB would otherwise add by enumerating them
+independently.  The \texttt{-scope} predicate cuts what ProB expands, not what
+it counts, so the LTL and CTL formulas below carry the same predicate in
+their premise: an unexpanded state has no successors, and a formula that
+says ``$e(EmitChannel)$'' of it would fail for a reason that is nothing to do
+with the specification.  Nothing is claimed beyond the scope.
+
+\begin{center}
+\begin{tabular}{lrrl}
+  run & states & transitions & result \\ \hline
+  mail, wall & 14{,}748 & 271{,}324 & no invariant violation, no deadlock \\
+  invite, message & 6{,}536 & 115{,}868 & no invariant violation, no deadlock \\
+  mail, invite & 6{,}660 & 117{,}292 & no invariant violation, no deadlock \\
+  mail, with $pendingNotify$ free & 9{,}520 & 140{,}180 &
+    no invariant violation, no deadlock \\
+\end{tabular}
+\end{center}
+
+The last run drops the $pendingNotify$, $inFlight$, $lastNotifyResult$ and
+snapshot pins, and pins the wall and the talk kinds away, so that the shared
+capture operations are exercised beside the channel: $CaptureSession$,
+$CaptureSessionFlushBegin$, $CaptureSessionFlushOk$ and
+$CaptureSessionFlushFail$ all fire, with $chanInit$ reset at the first and
+the sender unaffected.
+
+\paragraph{Check 1: no silent drop.}  $chanLost = zfalse$ is an invariant,
+and holds in every run above.  $EmitChannelUnrecorded$ is a sender that sends
+whenever something is owed and the window is open, with no initialisation
+gate and no path that sends later: exactly the spike server of the evidence
+table, which logged \texttt{session=False} for its first wall and sent
+nothing.  Deleting the invariant from $NotificationState$ and setting the
+goal $chanLost = ztrue$ finds the drop in two operations after
+initialisation:
+\begin{center}
+$MailArrive$, $EmitChannelUnrecorded(kMail)$.
+\end{center}  The real $EmitChannel$ requires
+$chanInit = ztrue$; the mail that arrived first stays owed and is sent by the
+first run of the sender after $ClientInitialized$.
+
+\paragraph{Check 2: never stale.}  An owed event describes a thing that
+exists, because $owed$ includes $live$; the content of the check is that the
+sender consults $live$ at the moment of sending.  $EmitChannelStale$ does
+not.  With $chanStale = zfalse$ deleted and goal $chanStale = ztrue$, ProB
+finds the five-operation trace $CaptureSession$, $MailArrive$, $ReadMail$,
+$ClientInitialized$, $EmitChannelStale(kMail)$: the mail was read before the
+client was ready, and the naive sender announces it anyway.  With the
+invariant restored the same goal is unreachable in every run above.
+A held kind is dropped at the timer's firing for the same reason
+($TimerDrop$).
+
+\paragraph{Check 3: rate bound.}  $winSent \leq rateLimit$ and
+$chanOverrate = zfalse$ are invariants.  $EmitChannelBurst$ sends with no
+window test; with $chanOverrate = zfalse$ deleted and goal $chanOverrate =
+ztrue$, ProB finds $CaptureSession$, $MailArrive$, $EnsureConnected$,
+$KVWallReceive$, $ClientInitialized$, $EmitChannel(kMail)$,
+$EmitChannelBurst(kWall)$ (seven operations): a second event inside the window, which at
+$rateLimit = 1$ is the first one too many.  That the counter tracks real
+time is an obligation (Section~\ref{sec:chanobligations}).
+
+\paragraph{Check 4: enabledness.}  If some kind is owed, its window is open,
+the client is initialised and mesg is on, then $EmitChannel$ is enabled:
+\begin{center}
+$\mathrm{G}\,(\mathit{inScope} \land \exists k \bullet \mathit{owed}(k) \land
+k \notin kindClosed \land winSent < rateLimit$ \\
+$\quad \land\; chanInit = ztrue \land mesgOn = ztrue
+\implies e(EmitChannel))$
+\end{center}
+is \textsc{true} for the mail and wall pair (99{,}684 product states) and for
+the two talk kinds (48{,}946).  The property says that no guard and no invariant of
+the state schema gets in the sender's way: the sender is run by an arrival,
+an initialisation, a mesg change, a reconnect, a tool call or the timer,
+and whichever runs it finds it enabled.
+
+\paragraph{Check 5: bounded reachability.}
+\begin{center}
+$\mathrm{AG}\,(\mathit{inScope} \land \exists k \bullet \mathit{owed}(k)
+\implies$ \\
+$\quad \mathrm{EF}\; \forall k \bullet k \in chanNewer \implies
+\lnot\, \mathit{live}(k))$
+\end{center}
+is \textsc{true} for the same two runs (CTL, 44 and 25 seconds).  Checks~4
+and~5 assume that sends eventually succeed.  Without that assumption both
+are false in the way one would expect: $EmitChannelTimeout$ can be taken for
+ever, and the model does not forbid it.  The checks establish that no state
+is a dead end for \emph{reasons internal to the sender}: the client, mesg,
+the window and the timer can each be arranged to let an owed event out.  The
+client's initialisation is the one condition outside the sender's
+control; $ClientInitialized$ is available whenever $session = sessCaptured$,
+and the capture operations reach it.
+
+\paragraph{Check 6: independence.}  $channelEnabled$ is read only to mark
+$chanNewer$, and no channel operation changes a base component, so the base
+states reachable with the channel on and off should be the same.  The check
+is run rather than argued.  The same run is made twice, once with
+$channelEnabled = ztrue$ and once with $zfalse$, with the base states of
+both runs dumped (\texttt{-sstxt}) and projected onto the base components
+(the channel components and ghosts removed); the two sets of projections are
+compared.  The pruning must not depend on the setting, so the mail and wall
+pair is run with $talkPending = \emptyset \land talkQueued = 0$ added to the
+scope in both runs, and the talk pair with $unreadCount = 0 \land wallLive =
+zfalse$.  The result is the same for both: with the channel on and with it
+off, the base projections of the discovered states are \emph{identical}.  For
+mail and wall, 478 projections from 88{,}854 discovered states (channel on;
+12{,}988 analysed) and from 2{,}136 (channel off; 328 analysed); for the two
+talk kinds, 212 projections from 38{,}116 (4{,}776 analysed) and from 884
+(120 analysed).  The channel multiplies the number of states about forty
+times and adds no base state, and removes none.
+
+\paragraph{Check 7: no scheduled work, and no timer unless one is held.}
+$timerArmed = ztrue \iff chanHeld \neq \emptyset$ is an invariant, stated
+as two implications, and holds in every run.  It is not true by
+construction: each operation that changes $chanHeld$ sets $timerArmed'$
+itself, and the twin $EmitChannelNoCancel$, which sends the last held kind
+and leaves the timer as it was, breaks it.  Deleting the first implication
+and setting the goal $timerArmed = ztrue \land chanHeld = \emptyset$ finds
+$CaptureSession$, $ClientInitialized$, $MailArrive$,
+$EmitChannelTimeout(kMail)$, $EmitChannelNoCancel(kMail)$.  DES-087 says
+that with nothing held no timer exists; this model says that it holds
+only if a send that empties $chanHeld$ cancels the timer.  There is one
+timer, a single boolean, and $TimerDrop$ and $TimerGated$ require
+$timerArmed = ztrue$, so the deferred send is enabled only while a kind is
+held.  The first timeout of a kind adds it to $chanRetried$ and re-arms
+it; the second removes that kind from $chanHeld$ and $chanRetried$ and no
+other ($EmitChannelTimeout$ mentions only $k?$).
+
+The remaining operations are enabled by exactly the events the design
+allows:
+\begin{center}
+\begin{tabular}{ll}
+  $MailArrive$, $KVWallReceive$, $WallPost$, $TalkInviteArrive$,
+    $TalkMessageArrive$, $NatsTalkCallback$ & a relay push or tool call \\
+  $RelayReconnected$ & a reconnect \\
+  $ClientInitialized$ & the client \\
+  $MesgOn$, $MesgOff$ & a tool call \\
+  $PollStart$, $PollStop$ & the user, \texttt{/biff:read} \\
+  $PollPull$ & enabled only while $pollOn = ztrue$ \\
+  $EmitChannel$, $EmitChannelTimeout$, $HoldChannel$ & the sender's runs \\
+  $TimerDrop$, $TimerGated$ & enabled only while $timerArmed = ztrue$ \\
+  $KindWindowElapse$, $RateWindowAge$ & the environment's clock \\
+\end{tabular}
+\end{center}
+$PollPullUnrequested$ is the twin that pulls with $pollOn = zfalse$;
+deleting $pollRogue = zfalse$ and setting goal $pollRogue = ztrue$ finds it
+in one operation.  A pull with polling off is therefore
+excluded by the guard of $PollPull$ and by nothing else, and it is what the
+polling test owes.
+
+\paragraph{Coverage.}  Across the runs every operation of this section
+fires, except the five defective twins, which are enabled in no reachable
+state by design.  $RecaptureSession$ is reported uncovered in every run, as it
+is in the base specification, and for the same reason
+(Section~\ref{sec:sessionloss}): it needs $session = sessNone$ with
+$natsConn = natsConnected$ and $pendingNotify = zfalse$, a state that only
+the dead $Unrecorded$ twins produce.  A breadth-first search for that state
+under the wall-only scope exhausted 45{,}240 states without finding it.  The
+channel's one line in $RecaptureSession$, $chanInit' = zfalse$, is the same
+line as in $CaptureSession$ and $CaptureSessionFlushBegin$, both of which
+fire, and is exercised there.
+
+\paragraph{Reproducing a counterexample.}  Check~1, as the others:
+\begin{verbatim}
+sed '/^  chanLost = zfalse \\\\$/d' docs/notification.tex > v.tex
+probcli v.tex -model_check -noltl -mc_mode breadth-first \
+  -goal "chanLost = ztrue" -p DEFAULT_SETSIZE 2 -card USER 1 \
+  -card SOURCEKEY 1 -card SESSIONKEY 1 -card QSLOT 1 -card USLOT 1 \
+  -card ASLOT 1 -card PSLOT 1 -card RSLOT 1 -p MAX_INITIALISATIONS 16 \
+  -scope "channelEnabled = ztrue"
+\end{verbatim}
+The same line deletes $chanStale$, $chanOverrate$ and the first implication
+about $timerArmed$ (with the line's own text in place of the pattern).
+$pollRogue = zfalse$ is the last invariant and carries no trailing
+separator; delete it and the separator before it.
+
+
+\subsection{What the implementation owes}
+\label{sec:chanobligations}
+
+A zero-GAP audit of this section against the \texttt{ChannelEmitter} tests
+is not yet possible: the emitter is not written.  The constraints below are
+what its tests (PL-1350) owe; each names the schema or invariant that states
+it.  A test is owed for the refusal as well as for the success.
+
+\begin{enumerate}
+  \item \emph{Initialisation gate.}  No event before
+    \texttt{notifications/initialized}; one is sent when it arrives
+    ($EmitChannel$, $ClientInitialized$).  A second \texttt{initialize}
+    clears the gate until the next \texttt{notifications/initialized}
+    ($CaptureSession$, $RecaptureSession$, $CaptureSessionFlushBegin$).
+    The sender adds no capture path of its own.
+  \item \emph{Mesg.}  With mesg off nothing is sent and the record is
+    unchanged; when mesg comes on, whatever is still true is sent, one event
+    per kind ($MesgOff$, $MesgOn$, $EmitChannel$).
+  \item \emph{Owed is derived, per kind.}  Mail by the high-water mark with
+    the count flat or flapping; a wall key once, and never the session's own
+    wall ($WallPost$ marks nothing); invites and talk messages by
+    monotone arrival counters that a drain, a move from queued to pending or
+    an overflow never lowers (the arrival operations).
+  \item \emph{Never stale.}  The state is read again at send time: mail
+    read, wall expired, invite older than the time-to-live and message queue
+    drained are not sent ($OwedKind$, $LiveKind$; the twin
+    $EmitChannelStale$).  A held kind that is no longer owed when the timer
+    fires is dropped without a send ($TimerDrop$).
+  \item \emph{Record.}  The record advances only after a completed send, and
+    to the value read \emph{before} the send, so that an arrival during the
+    send survives it; it is unchanged by a timeout ($EmitChannel$,
+    $EmitChannelTimeout$).  The model cannot show the second half, because it
+    treats a send as one step.
+  \item \emph{Rate.}  One event per kind per thirty seconds and
+    $rateLimit$ in a sliding ten minutes, tested with a fake clock; arrivals
+    in a window coalesce into the next event ($WindowOpen$, $HoldChannel$;
+    the twin $EmitChannelBurst$).
+  \item \emph{One timer.}  At most one timer; armed only while a kind is
+    held; cancelled when the last held kind is sent by another path, which
+    is the case the twin $EmitChannelNoCancel$ leaves out.  A held kind
+    always has the timer ($HoldChannel$, $EmitChannel$, the invariant on
+    $timerArmed$).
+  \item \emph{Firing.}  For each held kind a firing sends it ($EmitChannel$),
+    drops it because nothing is owed ($TimerDrop$), releases it because mesg
+    is off or the client is not initialised, leaving it owed for the next
+    run of the sender ($TimerGated$, which is the one outcome DES-087 does
+    not name), or times out ($EmitChannelTimeout$): the first timeout
+    re-arms that kind once, the second releases that kind alone.  Other held
+    kinds keep their own openings, and the timer is re-armed for the earliest
+    of them.
+  \item \emph{Retry.}  After a second timeout the kind is still owed; the next
+    arrival, tool call or reconnect runs the sender again.  This is what
+    bounded reachability (check~5) relies on.
+  \item \emph{Reconnect.}  The catch-up marks mail and wall that exist, never a
+    talk frame, and does nothing when the channel is disabled
+    ($RelayReconnected$).
+  \item \emph{Dormancy.}  With channel mode off no kind is ever marked, so
+    no channel frame is ever sent (the invariant
+    $channelEnabled = zfalse \implies chanNewer = \emptyset$).
+  \item \emph{Polling.}  Nothing polls until the user starts it; a pull
+    happens only while $pollOn$; stopping ends it ($PollStart$,
+    $PollPull$, $PollStop$; the twin $PollPullUnrequested$).
+  \item \emph{Session independence.}  A session cleared by a failed
+    \texttt{tools/list\_changed} send does not silence the channel: the
+    sender does not read $session$.
+  \item \emph{No other scheduled work.}  The only timer is the deferred send
+    (the table in Section~\ref{sec:chanchecks}, check~7).
+\end{enumerate}
 
 
 %%----------------------------------------------------------------------
