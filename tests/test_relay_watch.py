@@ -137,7 +137,7 @@ class TestWatch:
             atomic_write(tmp_path / "sessions.json", "{}\n")
             await seen.next()
 
-    async def test_unrelated_files_and_reads_do_not_wake(
+    async def test_reads_and_the_lock_do_not_wake(
         self, relay: LocalRelay, tmp_path: Path
     ) -> None:
         await relay.deliver(Message(from_user="eric", to_user="kai", body="old"))
@@ -147,9 +147,10 @@ class TestWatch:
             # so the delivery above is reported once; let it land, then count.
             await asyncio.sleep(_QUIET)
             seen.count = 0
-            (tmp_path / "unread.json").write_text("{}\n")
-            atomic_write(tmp_path / "status.json", "{}\n")
             await relay.fetch_user_inbox("kai")  # a read opens and closes the file
+            await relay.get_unread_summary("kai:tty1")
+            with (tmp_path / ".lock").open("a"):  # the lock file exists already
+                pass
             await asyncio.sleep(_QUIET)
         assert seen.count == 0
 
@@ -185,7 +186,8 @@ class TestAnotherProcess:
         "from biff.relay import LocalRelay\n"
         "relay = LocalRelay(Path(sys.argv[1]))\n"
         "now = datetime.now(UTC)\n"
-        "post = WallPost(text='w', from_user='eric', expires_at=now + timedelta(hours=1))\n"
+        "end = now + timedelta(hours=1)\n"
+        "post = WallPost(text='w', from_user='eric', expires_at=end)\n"
         "async def run():\n"
         "    await relay.deliver(Message(from_user='eric', to_user='kai', body='x'))\n"
         "    await relay.set_wall(post)\n"

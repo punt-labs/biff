@@ -865,11 +865,10 @@ class TestPollInbox:
         await state_with_path.relay.set_wall(wall)
 
         task = asyncio.create_task(poll_inbox(mcp, state_with_path))
-        # Let poller pick up the wall
-        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        # The first pass picks up the wall
         tool = await mcp.get_tool("wall")
         assert tool is not None
-        assert "[WALL]" in (tool.description or "")
+        await _until(lambda: "[WALL]" in (tool.description or ""))
 
         # Clear the wall
         await state_with_path.relay.set_wall(None)
