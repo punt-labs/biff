@@ -52,7 +52,7 @@ handlers fire notifications via the MCP request context (belt path),
 while a background poller fires them via a stored
 \texttt{ServerSession} reference (suspenders path).  NATS subscription
 callbacks and KV watchers only wake the poller from napping; the
-poller detects the changes on its next active tick and fires the
+poller detects the changes on the wake they cause and fires the
 notification from the MCP server's own coroutine context.
 
 The session reference is captured eagerly during the server's lifespan
@@ -61,8 +61,8 @@ background poller begins---this is what closes the biff-8g0 defect
 class, in which the poller could wake before any session had ever been
 captured.  NATS callbacks and KV watchers do not fire notifications
 directly---they are unreliable from background coroutine
-contexts---but they wake the poller from napping, so the next active
-tick (2~seconds) detects the changes via its own reads and attempts
+contexts---but they wake the poller, so the pass that wake starts
+detects the changes via its own reads and attempts
 the notification.
 
 \emph{Whether that attempt succeeds is a separate question from
@@ -195,6 +195,16 @@ a write outstanding between the two.
 \begin{zed}
   EventKind ::= kMail | kWall | kTalkInvite | kTalkMsg
 \end{zed}
+
+\begin{zed}
+  WatchState ::= watchLive | watchDead | watchMissed
+\end{zed}
+
+The local relay's filesystem watch (Section~\ref{sec:timers}): delivering
+events ($watchLive$); stopped, replaced or cut off from its directory, with
+nothing missed yet ($watchDead$); or stopped with a mailbox write that no
+event announced ($watchMissed$).  It is a ghost of the NATS-free relay: the
+NATS-backed server has no such watch and stays at $watchLive$.
 
 The four kinds of arrival the Claude~Code plugin turns into channel
 events (Section~\ref{sec:channel}): new mail, a wall posted by someone
@@ -358,7 +368,8 @@ the status bar, and the last notification outcome.
   chanLost : ZBOOL \\
   chanStale : ZBOOL \\
   chanOverrate : ZBOOL \\
-  pollRogue : ZBOOL
+  pollRogue : ZBOOL \\
+  watchState : WatchState
   \where
   \dom queueKinds = \ran queueItems \\
   \dom queueTexts = \ran queueItems \\
@@ -476,8 +487,7 @@ admits it precisely so the defect can be reached and then proved
 unreachable.
 
 \paragraph{The pending-invite clock.}  $pendingAge$ is an abstract clock
-for the pending set, bounded by $maxInviteAge$.  It advances on poller
-ticks ($AgeTick$) while any invite is pending and is pinned to zero
+for the pending set, bounded by $maxInviteAge$.  It advances ($AgeTick$) while any invite is pending and is pinned to zero
 whenever no invite is pending---the invariant
 $(\dom talkPending = \emptyset \land talkBare = \emptyset) \implies
 pendingAge = 0$ says exactly this, so a fresh invite always starts its
@@ -544,7 +554,8 @@ factor at two rather than one per user.
   chanLost' = zfalse \\
   chanStale' = zfalse \\
   chanOverrate' = zfalse \\
-  pollRogue' = zfalse
+  pollRogue' = zfalse \\
+  watchState' = watchLive
 \end{schema}
 
 The initial state has $session' = sessNone$ and
@@ -631,7 +642,8 @@ $CaptureSessionFlushOk$, and $CaptureSessionFlushFail$.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 After $CaptureSession$, the system has $session = sessCaptured$
@@ -714,7 +726,8 @@ without requiring a fresh capture first.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Close Connection}
@@ -777,7 +790,8 @@ by itself invalidate it; only a failed \emph{send} does
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -865,7 +879,8 @@ handler.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{LeaveToolContext}
@@ -922,7 +937,8 @@ handler.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 A tool handler is therefore modelled as $EnterToolContext$, followed by
@@ -1020,7 +1036,8 @@ $NotifyBeltSendFail$ are its two possible commits.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 $NotifyBelt$ is the send-succeeds commit.  It always flushes---clearing
@@ -1089,7 +1106,8 @@ that write happened.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 $NotifyBeltSendFail$ is the corrected failure commit: the send raised
@@ -1157,7 +1175,8 @@ written.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{NotifyBeltSendFailUnrecorded}
@@ -1215,7 +1234,8 @@ written.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Suspenders Path (No Tool Context), idealised}
@@ -1223,7 +1243,7 @@ written.
 Background poller: no request context, so the eagerly captured
 session reference is used to send the notification instead.  NATS
 callbacks do not use this path directly---they set description-changed
-flags that the poller detects on its next tick.  This schema is the
+flags that the poller detects on the wake they cause.  This schema is the
 \emph{idealised} suspenders path, kept for continuity with the earlier
 drafts: it assumes the send always succeeds whenever
 $session = sessCaptured$.  Section~\ref{sec:sessionloss} replaces this
@@ -1285,7 +1305,8 @@ actually has.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Total Notification}
@@ -1303,7 +1324,7 @@ claim is false: a suspenders send can fail independently of NATS
 connectivity, and root cause~\#1 (Section~\ref{sec:sessionloss}) is
 exactly the case in which the resulting drop was, until the fix given
 there, never recorded and never recovered.  NATS callbacks still defer
-to the poller and wake it from napping so that the next active tick
+to the poller and wake it so that its next pass
 \emph{attempts} the notification promptly; whether that attempt
 succeeds is the question Section~\ref{sec:sessionloss} answers.
 
@@ -1382,7 +1403,8 @@ tool context and a live NATS connection.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Talk Start (Tool Handler)}
@@ -1447,7 +1469,8 @@ notifications.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{External Message Deliver (CLI)}
@@ -1514,7 +1537,8 @@ handles the receive-side effects.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -1532,8 +1556,8 @@ update the wall description, modify the display queue, or fire an MCP
 notification directly---sending notifications from a background task
 is unreliable for the same reason as NATS subscription callbacks.
 
-After being woken, the poller performs its next active tick (every
-2~seconds), reads the wall value from KV, detects any change, applies
+After being woken, the poller runs a pass (there is no periodic tick;
+Section~\ref{sec:timers}), reads the wall value from KV, detects any change, applies
 this schema to update the wall description and display queue, and then
 fires the notification from the MCP server's coroutine context.
 
@@ -1614,7 +1638,8 @@ have a valid session when it fires the deferred notification.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{NATS Talk Callback}
@@ -1628,8 +1653,8 @@ callback is unreliable because Claude~Code intermittently ignores
 them (different coroutine context from the MCP server).
 
 Instead, the callback sets $talkDescChanged' = ztrue$ and the
-background poller ($PollTick$) detects the change on its next tick
-and fires the notification from the MCP server's own coroutine
+background poller ($PollTick$) detects the change on the wake the callback
+causes and fires the notification from the MCP server's own coroutine
 context.  This is the same pattern wall uses: state mutation is
 decoupled from notification delivery.
 
@@ -1701,7 +1726,8 @@ session when it fires the deferred notification.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Message Push Callback}
@@ -1807,14 +1833,17 @@ Called after any state change that affects what the status bar shows.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Poll Tick (Background Poller)}
 \label{sec:polltick}
 
-The 2-second background poller tick.  Runs outside tool context.  This
-schema is the \emph{idle} case only---nothing has changed, so there is
+A background poller wake.  Runs outside tool context.  The poller has no
+periodic tick (Section~\ref{sec:timers}); this schema is the wake that finds
+nothing changed, such as a liveness check on a healthy connection, and it is
+the \emph{idle} case only---nothing has changed, so there is
 nothing to attempt.  Section~\ref{sec:sessionloss} gives the three
 operations that cover the remaining case, $wallDescChanged = ztrue \lor
 talkDescChanged = ztrue$: a successful suspenders send, a failed one
@@ -1877,7 +1906,8 @@ that is correctly recorded, and---kept as the now-dead root cause
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -1977,7 +2007,8 @@ send.  Nothing about the send's outcome is known yet.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 $PollTickNotifyOk$ commits a successful send: releases $siteSuspenders$
@@ -2060,7 +2091,8 @@ from being open concurrently regardless of site.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 $PollTickNotifyFail$ is the corrected failure commit: the send fails,
@@ -2125,7 +2157,8 @@ raised to record the debt.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 $PollTickNotifyFailUnrecorded$ is root cause~\#1 itself, kept as the
@@ -2190,7 +2223,8 @@ $staleWithdrawHit$ uses for the talk channel's reordering defect.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Recovery: a mid-session reconnect}
@@ -2262,7 +2296,8 @@ synchronous and atomic.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Capture/Reconnect Flush}
@@ -2338,7 +2373,8 @@ system, the same function.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 $CaptureSessionFlushOk$: the flush send succeeds, delivering whatever
@@ -2400,7 +2436,8 @@ stale-snapshot test as $NotifyBelt$'s.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 $CaptureSessionFlushFail$ is round~2's fix at this site: the flush send
@@ -2468,7 +2505,8 @@ defect, at a different site.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{CaptureSessionFlushFailUnrecorded}
@@ -2525,7 +2563,8 @@ defect, at a different site.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 Root cause~\#1's second consequence, restated precisely now that the
@@ -2935,7 +2974,8 @@ This is the slow path---no MCP involvement.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -3012,7 +3052,8 @@ queue.  With a single wall item, the cursor stays at zero.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{AdvanceWall}
@@ -3074,7 +3115,8 @@ queue.  With a single wall item, the cursor stays at zero.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -3172,7 +3214,8 @@ the marker set once the count reaches zero.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{ReadMail}
@@ -3229,7 +3272,8 @@ the marker set once the count reaches zero.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Talk Channel (invite, message, drain)}
@@ -3309,7 +3353,8 @@ $ReceiveOverflow$.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 The pending set is bounded by $maxPending$ ($\# PSLOT$), exactly as the
@@ -3391,7 +3436,8 @@ $talk.tex$, where a full queue drops its head before appending.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{TalkMessageArrive}
@@ -3451,7 +3497,8 @@ $talk.tex$, where a full queue drops its head before appending.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 The defect (biff-9la, observed live).  The drain that ends a talk---the
@@ -3516,7 +3563,8 @@ and $talkConnected$, yet preserves $talkDesc$.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 The coupled defect.  A second, independent fault records an invite
@@ -3584,7 +3632,8 @@ session'').
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -3769,7 +3818,8 @@ marker stays, now backed only by the surviving invites.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Withdrawing a pending invite (ntWithdraw frame)}
@@ -3876,7 +3926,8 @@ returns to zero.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{A withdrawal that names the wrong session (WithdrawForeign)}
@@ -3950,7 +4001,8 @@ discard such a frame rather than acting on its user field alone.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{The withdrawal gap, as a dead operation (WithdrawStale)}
@@ -4036,7 +4088,8 @@ $MarkerConsistent$ and $HintNamesSession$.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Expiring a pending invite (time-to-live)}
@@ -4044,9 +4097,9 @@ $MarkerConsistent$ and $HintNamesSession$.
 The second mechanism covers the inviter who never sends a withdrawal---a
 crash, a dropped connection, an abandoned session.  No frame arrives, so
 $WithdrawArrive$ is never enabled for that invite; the only thing that
-changes is the clock.  $AgeTick$ models the passage of time on a poller
-tick: while any invite is pending and the clock is below its bound, the
-clock advances by one.  It touches nothing else---not the pending set, not
+changes is the clock.  $AgeTick$ models the passage of time up to the
+invite's deadline wake (Section~\ref{sec:timers}): while any invite is
+pending and the clock is below its bound, the clock advances by one.  It touches nothing else---not the pending set, not
 the description, not the activity.
 
 \begin{schema}{AgeTick}
@@ -4105,7 +4158,8 @@ the description, not the activity.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 $ExpirePendingInvite$ then reaps an invite once its clock has reached the
@@ -4179,7 +4233,8 @@ zero.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Accepting an invite}
@@ -4247,7 +4302,8 @@ with the invariant.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -4344,7 +4400,7 @@ $WithdrawArrive$ and $ExpirePendingInvite$ are the two transitions that
 remove a pending invite without the recipient's acceptance, and they are
 enabled under different conditions: $WithdrawArrive$ on receipt of an
 \emph{ntWithdraw} frame \emph{whose key matches the pending invite}, from an
-inviter who cancels; $ExpirePendingInvite$ on a poller tick once the clock
+inviter who cancels; $ExpirePendingInvite$ on the deadline wake once the clock
 has reached $maxInviteAge$.  The second is
 what covers exactly the biff-9la scenario---an invite from a peer who
 never returns and never withdraws: only the time-to-live path clears it,
@@ -4425,7 +4481,9 @@ aged out and a drained message queue are never announced.
     about the counter; that the counter tracks real time is a unit-test
     obligation.
   \item \emph{The invite clock} is the existing $pendingAge$.  Under DES-087
-    the periodic sweep that advanced it is gone, so $AgeTick$ here stands for
+    the periodic sweep that advanced it is gone and a one-shot deadline wake,
+    armed only while an invite is pending, takes its place
+    (Section~\ref{sec:timers}); $AgeTick$ here stands for
     the passage of time; what the sender needs from it is that an invite
     older than the time-to-live is not live.
 \end{itemize}
@@ -4630,7 +4688,8 @@ durable state afresh, so it absorbs an unseen $k$ ($EmitChannel$).
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{MailArriveAtCap}
@@ -4656,7 +4715,8 @@ durable state afresh, so it absorbs an unseen $k$ ($EmitChannel$).
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{RelayReconnected}
@@ -4680,7 +4740,8 @@ durable state afresh, so it absorbs an unseen $k$ ($EmitChannel$).
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{InviteAgeTick}
@@ -4705,7 +4766,8 @@ durable state afresh, so it absorbs an unseen $k$ ($EmitChannel$).
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{ToolCallRun}
@@ -4729,7 +4791,8 @@ durable state afresh, so it absorbs an unseen $k$ ($EmitChannel$).
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 $ToolCallRun$ is a tool call: the sender runs on one, so a kind that has
@@ -4759,7 +4822,8 @@ exhausted its retries ($chanDormant$) may try again.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{MesgOff}
@@ -4783,7 +4847,8 @@ exhausted its retries ($chanDormant$) may try again.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{MesgOn}
@@ -4807,7 +4872,8 @@ exhausted its retries ($chanDormant$) may try again.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{PollStart}
@@ -4831,7 +4897,8 @@ exhausted its retries ($chanDormant$) may try again.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{PollStop}
@@ -4855,7 +4922,8 @@ exhausted its retries ($chanDormant$) may try again.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{PollPull}
@@ -4879,7 +4947,8 @@ exhausted its retries ($chanDormant$) may try again.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Time passes}
@@ -4911,7 +4980,8 @@ scheduled to run them.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{RateWindowAge}
@@ -4935,7 +5005,8 @@ scheduled to run them.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{The sender}
@@ -4967,7 +5038,8 @@ scheduled to run them.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{EmitChannelTimeout}
@@ -5001,7 +5073,8 @@ scheduled to run them.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{HoldChannel}
@@ -5030,7 +5103,8 @@ scheduled to run them.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{TimerDrop}
@@ -5065,7 +5139,8 @@ scheduled to run them.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{TimerGated}
@@ -5095,7 +5170,8 @@ scheduled to run them.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Defective twins}
@@ -5132,7 +5208,8 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   channelEnabled' = channelEnabled \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{EmitChannelStale}
@@ -5166,7 +5243,8 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{EmitChannelBurst}
@@ -5194,7 +5272,8 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{EmitChannelNoCancel}
@@ -5222,7 +5301,8 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{PollPullUnrequested}
@@ -5246,7 +5326,8 @@ feasible, and Section~\ref{sec:chanchecks} does so.
   channelEnabled' = channelEnabled \\
   chanLost' = chanLost \\
   chanStale' = chanStale \\
-  chanOverrate' = chanOverrate
+  chanOverrate' = chanOverrate \\
+  watchState' = watchState
 \end{schema}
 
 \subsection{Checks}
@@ -5308,16 +5389,22 @@ with the specification.  Nothing is claimed beyond the scope.
 \begin{center}
 \begin{tabular}{lrrl}
   run & states & transitions & result \\ \hline
-  A: mail, wall & 128{,}508 & 2{,}621{,}590 & no violation, no deadlock \\
-  B: invite, message & 24{,}040 & 492{,}592 & no violation, no deadlock \\
-  C: mail, invite & 48{,}156 & 973{,}070 & no violation, no deadlock \\
-  D: mail, $pendingNotify$ free & 17{,}304 & 298{,}954 &
+  A: mail, wall & 128{,}508 & 2{,}750{,}089 & no violation, no deadlock \\
+  B: invite, message & 24{,}040 & 516{,}623 & no violation, no deadlock \\
+  C: mail, invite & 48{,}156 & 1{,}021{,}217 & no violation, no deadlock \\
+  D: mail, $pendingNotify$ free & 17{,}304 & 316{,}249 &
     no violation, no deadlock \\
-  E: D, $channelEnabled = ztrue$ & 16{,}472 & 286{,}842 &
+  E: D, $channelEnabled = ztrue$ & 16{,}472 & 303{,}305 &
     no violation, no deadlock \\
-  P: mail, polling free & 2{,}544 & 43{,}272 & no violation, no deadlock \\
+  P: mail, polling free & 2{,}544 & 45{,}807 & no violation, no deadlock \\
 \end{tabular}
 \end{center}
+
+Every run carries $watchState = watchLive$ in its scope, so the operations of
+Section~\ref{sec:timers} are enabled and their successors are pruned: the
+analysed states are those of the earlier runs, and the transition counts grew
+by the edges into pruned states.  Section~\ref{sec:timerchecks} frees
+$watchState$.
 
 Run D drops the $pendingNotify$, $inFlight$, $lastNotifyResult$ and
 snapshot pins and pins the wall and the talk kinds away, so that the shared
@@ -5469,7 +5556,10 @@ allows:
   $EmitChannel$, $EmitChannelTimeout$, $HoldChannel$ & the sender's runs \\
   $TimerDrop$, $TimerGated$ & enabled only while $timerArmed = ztrue$ \\
   $KindWindowElapse$, $RateWindowAge$, $InviteAgeTick$, $WallExpire$ &
-    the environment's clock \\
+    the environment's clock, or the deadline wake (Section~\ref{sec:timers}) \\
+  $WatchDie$, $LocalArriveBlind$ & the environment (the local watch) \\
+  $LocalWatchRebuild$, $LocalWatchRecover$ &
+    the local watch's liveness check, every 60\,s \\
 \end{tabular}
 \end{center}
 $PollPullUnrequested$ is the twin that pulls with $pollOn = zfalse$;
@@ -5811,7 +5901,8 @@ keeps the debt.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{CaptureSessionFlushFailChannel}
@@ -5869,7 +5960,8 @@ keeps the debt.
   chanLost' = chanLost \\
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{FlushOwedOk}
@@ -5929,7 +6021,8 @@ keeps the debt.
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
   capPnSnapshot' = capPnSnapshot \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{FlushOwedFail}
@@ -5989,7 +6082,8 @@ keeps the debt.
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
   capPnSnapshot' = capPnSnapshot \\
-  pollRogue' = pollRogue
+  pollRogue' = pollRogue \\
+  watchState' = watchState
 \end{schema}
 
 \begin{schema}{FlushOwedFailUnrecorded}
@@ -6049,8 +6143,235 @@ keeps the debt.
   chanStale' = chanStale \\
   chanOverrate' = chanOverrate \\
   capPnSnapshot' = capPnSnapshot \\
+  pollRogue' = pollRogue \\
+  watchState' = watchState
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Timers and the Local Watch}
+\label{sec:timers}
+%%----------------------------------------------------------------------
+
+DES-087 allows the server no recurring work except connection liveness, and
+one-shot wakes armed only while something with an expiry is displayed.  The
+poller used to run on a two-second tick that re-rendered the wall countdown,
+aged and expired talk invites and recomputed the unread count as a backstop;
+it no longer does.  Three earlier passages describe that tick and are read
+here as follows.
+
+\paragraph{$AgeTick$, $InviteAgeTick$ and $WallExpire$ are the passage of
+time.}  They were the poller's sweep.  They are now the deadline wake, and the
+model keeps them as environment transitions: time passes, and a wake follows.
+A deadline wake is armed exactly when something with an expiry is displayed:
+\begin{eqnarray*}
+  armed(\mathit{invite}) & \defs & \dom talkPending \neq \emptyset \lor
+    talkBare \neq \emptyset \\
+  armed(\mathit{wall}) & \defs & wallLive = ztrue
+\end{eqnarray*}
+and these are the guards of $AgeTick$ (with $pendingAge < maxInviteAge$),
+$ExpirePendingInvite$ (with $pendingAge = maxInviteAge$) and $WallExpire$.
+Nothing is armed while nothing is displayed, so there is no timer to cancel and
+none that runs on a cadence.  Check~S below states this as enabledness: while
+the wake is armed, the transition that clears the item is enabled, and a
+displayed wall or invite is never left with nothing that can clear it.
+
+\paragraph{$PollTick$ is a wake with nothing new.}  Section~\ref{sec:polltick}
+describes it as the two-second tick.  It is now any wake that finds nothing
+changed: the liveness check on a healthy connection or watch, or a wake whose
+cause was already handled.  It is a stutter step, which is why no timer is
+modelled for it: nothing that happens on a healthy connection depends on it.
+The unread-count backstop recompute is gone.  An arrival is detected by the
+push that announces it, and the one case in which a push can be lost is the
+local watch below.
+
+\paragraph{The local relay's watch.}  A local relay has no push.  The server
+watches the relay's data directory, and an event wakes the poller.  The watch
+can die: its thread stops, its directory is replaced by a new one, or the
+platform stops reporting events.  $watchState$ models this with the three
+values of $WatchState$.  $WatchDie$ is the environment's transition, and
+$LocalArriveBlind$ is a mailbox write while the watch is not live, which sets
+$chanUnseen$ as a missed relay push does: the durable state is newer than the
+last sent record and nothing noticed.  The only recurring transition on this
+relay is the liveness check, every sixty seconds, tracked on elapsed time so
+that steady wakes cannot starve it.  It verifies the watch's thread, its
+directory (device and inode) and a canary entry that an event must report.
+When a check fails it rebuilds the watch.  $LocalWatchRebuild$ is that
+rebuild; $LocalWatchRecover$ is the rebuild after a missed arrival, whose first
+pass reads the mailbox and so turns $chanUnseen$ into $chanNewer$, exactly as
+$RelayReconnected$ does after a NATS reconnect.  A fresh trigger also clears
+$chanDormant$ for those kinds.
+
+\begin{schema}{WatchDie}
+  BaseUnchanged
+  \where
+  watchState = watchLive \\
+  watchState' = watchDead \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
   pollRogue' = pollRogue
 \end{schema}
+
+\begin{schema}{LocalArriveBlind}
+  BaseUnchanged
+  \where
+  watchState \in \{ watchDead, watchMissed \} \\
+  watchState' = watchMissed \\
+  (channelEnabled = ztrue \implies chanUnseen' = chanUnseen \cup \{ kMail \}) \\
+  (channelEnabled = zfalse \implies chanUnseen' = chanUnseen) \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{LocalWatchRebuild}
+  BaseUnchanged
+  \where
+  watchState = watchDead \\
+  watchState' = watchLive \\
+  wallLive' = wallLive \\
+  chanNewer' = chanNewer \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  chanUnseen' = chanUnseen \\
+  chanDormant' = chanDormant \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+\begin{schema}{LocalWatchRecover}
+  BaseUnchanged
+  \where
+  watchState = watchMissed \\
+  watchState' = watchLive \\
+  chanNewer' = chanNewer \cup chanUnseen \\
+  chanUnseen' = \emptyset \\
+  chanDormant' = chanDormant \setminus chanUnseen \\
+  wallLive' = wallLive \\
+  chanHeld' = chanHeld \\
+  chanRetried' = chanRetried \\
+  kindClosed' = kindClosed \\
+  winSent' = winSent \\
+  mesgOn' = mesgOn \\
+  chanInit' = chanInit \\
+  timerArmed' = timerArmed \\
+  pollOn' = pollOn \\
+  invAge' = invAge \\
+  channelEnabled' = channelEnabled \\
+  chanLost' = chanLost \\
+  chanStale' = chanStale \\
+  chanOverrate' = chanOverrate \\
+  pollRogue' = pollRogue
+\end{schema}
+
+The NATS-backed server has no such watch, and its checks leave $watchState$
+at $watchLive$, so $WatchDie$ is enabled in the model for the local relay only.
+The liveness check on a healthy watch changes nothing and is not an operation.
+Every operation of this section leaves the base components and every channel
+component it does not name as it was (Section~\ref{sec:chanhelpers}).
+
+\paragraph{The timer ruling.}  DES-087 allows, and this specification models,
+exactly these transitions that no arrival, user action or environment event
+causes:
+\begin{center}
+\begin{tabular}{ll}
+  connection liveness (NATS subscription check, 5\,s) &
+    $RelayReconnected$ and the re-subscribe of
+    \texttt{nats-relay.tex}, a stutter on a healthy connection \\
+  local watch liveness (60\,s) & $LocalWatchRebuild$, $LocalWatchRecover$ \\
+  session heartbeat (60\,s) & no state of this model (the relay's session
+    record) \\
+  one deadline wake, armed only while displayed & $AgeTick$,
+    $ExpirePendingInvite$, $WallExpire$ \\
+  the deferred send of one held arrival & $TimerDrop$, $TimerGated$ \\
+  the retry of an owed \texttt{tools/list\_changed}, armed only while owed &
+    $FlushOwedOk$, $FlushOwedFail$ \\
+\end{tabular}
+\end{center}
+Every other operation is enabled by an arrival, a tool call, the user or the
+client.  The table of Check~7 (Section~\ref{sec:chanchecks}) lists them.  The
+statement is a classification of operations by their guards, and the guards
+carry it: no guard of the operations in the second block reads anything but
+the state of the thing displayed, and none is enabled in a state with nothing
+displayed.  Whether the implementation arms nothing else is a test
+obligation, and \texttt{tests/test\_server/test\_no\_background\_jobs.py}
+asserts it for a server with no arrivals.
+
+\subsection{Checks}
+\label{sec:timerchecks}
+
+\paragraph{Check W: a dead watch never stays dead.}  $watchState$ can be
+$watchDead$ or $watchMissed$ and no arrival is needed to leave it: the
+liveness check is enabled in both.  With the pruning of
+Section~\ref{sec:chanchecks} lifted from $watchState$, the CTL formula
+\begin{center}
+$\mathrm{AG}\,(\mathit{inScope} \implies \mathrm{EF}\; watchState =
+watchLive)$
+\end{center}
+is checked in the scope of run~D with $watchState$ free (109~s) and is
+\textsc{true}.  It is \textsc{false}, with a counterexample of length~46, in a
+copy whose two rebuild operations cannot fire (guard $watchState = watchLive
+\land watchState = watchDead$): with the poll gone and no liveness check, a
+message that arrives while the watch is dead is never read.
+
+\paragraph{Check S: a displayed wall or invite is never left uncleared.}
+\begin{center}
+$\mathrm{G}\,(\mathit{inScope} \land wallLive = ztrue \implies
+e(WallExpire))$ \\
+$\mathrm{G}\,(\mathit{inScope} \land toolContext = zfalse \land
+\dom talkPending \neq \emptyset \land pendingAge < maxInviteAge \implies
+e(AgeTick))$ \\
+$\mathrm{G}\,(\mathit{inScope} \land toolContext = zfalse \land
+\dom talkPending \neq \emptyset \land pendingAge = maxInviteAge \implies
+e(ExpirePendingInvite))$
+\end{center}
+say that the wake that clears the item is always enabled while it is armed.
+The first formula is checked in the scope of run~A restricted to the wall kind
+($chanNewer \subseteq \{ kWall \}$, $unreadCount = 0$); the full run~A scope
+did not finish in the time given to it.  The second and third are checked in the
+scope of run~B.  All three are \textsc{true}, with all states of the scope
+visited.  A copy that makes $WallExpire$ unsatisfiable falsifies the first.  A copy that guards $AgeTick$ with $pendingAge < 0$ falsifies the
+second (a counterexample of length~4), and a copy that guards
+$ExpirePendingInvite$ with $pendingAge = maxInviteAge + 1$ falsifies the third
+(length~5), so the formulas can fail.
 
 %%----------------------------------------------------------------------
 \section{System Properties}
@@ -6183,7 +6504,7 @@ clear on its own.  Under the invariant $MarkerConsistent$ that reading is
 superseded: a pending invite must also be removable by $WithdrawArrive$---an
 \emph{ntWithdraw} frame from the inviter \emph{whose session key matches the
 stored invite}---or by $ExpirePendingInvite$---a time-to-live expiry aged out
-on a poller tick---so that the talk channel is self-clearing.  The key
+at its deadline wake---so that the talk channel is self-clearing.  The key
 qualification on $WithdrawArrive$ is not incidental: a withdrawal matched on
 the inviter's user identity alone would, under the transport's lack of
 cross-session ordering, let a stale withdrawal from one session delete a live
