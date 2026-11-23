@@ -17,7 +17,7 @@ from biff.usage import McpUsageMiddleware
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
-    from biff.server.state import ServerState
+    from biff.server.state import RepoToggle, ServerState
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,9 @@ class McpServerOptions:
     prefix: Path
     transport: Literal["stdio", "http"] = "stdio"
 
-    def create_server(self, *, default_user: str | None = None) -> FastMCP[ServerState]:
+    def create_server(
+        self, toggle: RepoToggle, *, default_user: str | None = None
+    ) -> FastMCP[ServerState]:
         """Resolve configuration and build an unbound MCP server."""
         resolved = load_mcp_config(
             user_override=self.user or default_user,
@@ -59,14 +61,18 @@ class McpServerOptions:
             prefix=self.prefix,
         )
 
-        return McpServerBuilder(resolved, self.user, self.transport).create_server()
+        return McpServerBuilder(
+            resolved, self.user, self.transport, toggle
+        ).create_server()
 
     def _observed_server(self, ctx: typer.Context) -> FastMCP[ServerState]:
-        if (invocation := ctx.find_object(McpInvocation)) is not None:
-            server = self.create_server(default_user=invocation.user)
-            server.add_middleware(McpUsageMiddleware(invocation.usage))
-            return server
-        return self.create_server()
+        invocation = ctx.find_object(McpInvocation)
+        if invocation is None:
+            msg = "the root CLI callback did not register an MCP invocation"
+            raise RuntimeError(msg)
+        server = self.create_server(invocation.toggle, default_user=invocation.user)
+        server.add_middleware(McpUsageMiddleware(invocation.usage))
+        return server
 
     @classmethod
     def serve(

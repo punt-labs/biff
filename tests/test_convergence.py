@@ -29,6 +29,7 @@ import pytest
 from typer.testing import CliRunner
 
 from biff.__main__ import app
+from biff._cli_runtime import CliInvocation
 from biff.ci_workflow import check_ci_workflow
 from biff.enablement import RepoEnablement
 from biff.git_hooks import GIT_HOOKS, resolve_hooks_dir
@@ -234,12 +235,12 @@ class TestEnableNonRevertingAcrossDependabot:
     """Guarantee 2: re-enable never reverts a bump, always repairs a bad pin."""
 
     def test_newer_pin_survives_reenable(self, repo: Path) -> None:
-        RepoEnablement(repo).enable()
+        RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
         target = _set_pin(repo, _NEWER_LINE)
         committed = target.read_text()
 
         assert check_ci_workflow(repo) is True
-        change = RepoEnablement(repo).enable()
+        change = RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
 
         assert change.ci_workflow_changed is False
         assert target.read_text() == committed
@@ -252,12 +253,12 @@ class TestEnableNonRevertingAcrossDependabot:
     def test_older_or_unversioned_pin_is_repaired(
         self, repo: Path, bad_line: str
     ) -> None:
-        RepoEnablement(repo).enable()
+        RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
         template_line = _setup_uv_line((repo / _WORKFLOW).read_text())
         target = _set_pin(repo, bad_line)
 
         assert check_ci_workflow(repo) is False
-        change = RepoEnablement(repo).enable()
+        change = RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
 
         assert change.ci_workflow_changed is True
         assert _setup_uv_line(target.read_text()) == template_line
@@ -279,15 +280,15 @@ class TestEnableConvergesRepoArtifacts:
         assert lines.count(_IMPORT_LINE) == 1
 
     def test_enable_writes_full_artifact_set(self, repo: Path) -> None:
-        RepoEnablement(repo).enable()
+        RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
         self._assert_enabled(repo)
         assert check_ci_workflow(repo) is True
 
     def test_reenable_is_a_noop(self, repo: Path) -> None:
-        RepoEnablement(repo).enable()
+        RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
         before = _Tree(repo)
 
-        change = RepoEnablement(repo).enable()
+        change = RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
 
         assert change.ci_workflow_changed is False
         assert change.git_hooks_changed == ()
@@ -297,8 +298,8 @@ class TestEnableConvergesRepoArtifacts:
     def test_disable_removes_artifacts_and_leaves_guide_dormant(
         self, repo: Path
     ) -> None:
-        RepoEnablement(repo).enable()
-        RepoEnablement(repo).disable()
+        RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
+        RepoEnablement(repo, CliInvocation.plugin_registry()).disable()
 
         hooks_dir = resolve_hooks_dir(repo)
         assert hooks_dir is not None
@@ -314,7 +315,7 @@ class TestNotifyWorkflowFloatsBiff:
     """Guarantee 4: a release reaches consumer CI with no per-repo re-enable."""
 
     def test_deployed_workflow_has_no_punt_biff_pin(self, repo: Path) -> None:
-        RepoEnablement(repo).enable()
+        RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
         text = (repo / _WORKFLOW).read_text()
 
         assert "uvx --from punt-biff " in text
@@ -324,8 +325,8 @@ class TestNotifyWorkflowFloatsBiff:
         )
 
     def test_reenable_never_introduces_a_pin(self, repo: Path) -> None:
-        RepoEnablement(repo).enable()
-        RepoEnablement(repo).enable()
+        RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
+        RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
         assert "punt-biff==" not in (repo / _WORKFLOW).read_text()
 
 
@@ -348,7 +349,7 @@ class TestInstallAndEnableAreDisjoint:
         )
 
         def run_enable() -> None:
-            RepoEnablement(repo).enable()
+            RepoEnablement(repo, CliInvocation.plugin_registry()).enable()
 
         enable_home, enable_repo = measure(run_enable)
 

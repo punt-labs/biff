@@ -18,7 +18,8 @@ from nats.errors import ConnectionClosedError
 
 from biff.models import BiffConfig, UserSession
 from biff.server.app import _run_kv_watch
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
+from tests._state import create_state
 
 _TEST_REPO = "_test-kv-watch"
 

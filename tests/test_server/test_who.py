@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from fastmcp.client.transports import FastMCPTransport
 from mcp.types import TextContent
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
-from biff.server.state import create_state
 from biff.testing.caller import StampedClient, caller_for
+from tests._state import create_state
 
 
 async def _who(tmp_path: Path, launched_by: str) -> str:
@@ -35,13 +34,6 @@ async def _who(tmp_path: Path, launched_by: str) -> str:
     block = result.content[0]
     assert isinstance(block, TextContent)
     return block.text
-
-
-@pytest.fixture(autouse=True)
-def _no_git_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hide the host's git user.name so only the OS-user floor can fill MGR."""
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-    monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 
 
 async def test_who_shows_the_os_user_floor(tmp_path: Path) -> None:

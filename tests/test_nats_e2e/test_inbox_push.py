@@ -17,10 +17,11 @@ from fastmcp.client.transports import FastMCPTransport
 from biff.models import BiffConfig, Message
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
 from biff.server.tools._descriptions import nap_interval_for
 from biff.testing import NotificationTracker
 from biff.testing.caller import StampedClient
+from tests._state import create_state
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

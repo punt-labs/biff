@@ -17,6 +17,7 @@ from punt_observe.logging import Role
 from typer.testing import CliRunner
 
 from biff.__main__ import app
+from biff._cli_runtime import CliInvocation
 from biff.enablement import RepoEnablement
 from biff.logging_config import configure_logging
 from biff.nats_relay import NatsRelay
@@ -121,7 +122,7 @@ def durable_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
 def test_checkout_outcome_changed_then_unchanged(
     operation: str, private_repo: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    manager = RepoEnablement(private_repo)
+    manager = RepoEnablement(private_repo, CliInvocation.plugin_registry())
     if operation == "disable":
         manager.enable()
     caplog.set_level(logging.INFO, logger="biff.enablement")
@@ -147,7 +148,7 @@ def test_checkout_outcome_changed_then_unchanged(
 def test_enable_reports_marker_or_guide_only_changes(
     artifact: str, private_repo: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    manager = RepoEnablement(private_repo)
+    manager = RepoEnablement(private_repo, CliInvocation.plugin_registry())
     manager.enable()
     (private_repo / ".punt-labs/biff" / artifact).unlink()
     caplog.clear()
@@ -167,7 +168,7 @@ def test_marker_symlinks_report_changed_without_touching_targets(
     private_repo: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    manager = RepoEnablement(private_repo)
+    manager = RepoEnablement(private_repo, CliInvocation.plugin_registry())
     manager.enable()
     marker = private_repo / ".punt-labs/biff/enabled"
     marker.unlink()
@@ -204,7 +205,7 @@ def test_enable_error_does_not_log_success_or_exception_content(
         ),
         pytest.raises(OSError),
     ):
-        RepoEnablement(private_repo).enable()
+        RepoEnablement(private_repo, CliInvocation.plugin_registry()).enable()
     assert not [r for r in caplog.records if r.name == "biff.enablement"]
     assert "private" not in caplog.text
 

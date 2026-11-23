@@ -18,7 +18,8 @@ from biff.chunking import chunk_message
 from biff.formatting import _NO_PRINTABLE_TEXT
 from biff.models import PLAN_MAX_LENGTH, BiffConfig, Message, UserSession
 from biff.server.app import create_server
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
+from tests._state import create_state
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP

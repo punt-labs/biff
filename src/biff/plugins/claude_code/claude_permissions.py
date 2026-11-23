@@ -72,17 +72,24 @@ class PermissionChange:
 
     ``changed`` lists the rules added (grant) or removed (revoke); an empty
     tuple with no ``error`` means the file already matched. ``error`` explains
-    why the file was left untouched.
+    why the file was left untouched, and ``fix`` says what the operator does
+    about it.
     """
 
     changed: tuple[str, ...] = ()
     error: str = ""
+    fix: str = ""
 
     def lines(self, verb: str) -> list[str]:
         """Return one report line per changed rule, the refusal, or none."""
         if self.error:
             return [f"Permissions not changed: {self.error}"]
         return [f"Permission {verb} .claude/settings.json: {r}" for r in self.changed]
+
+    @classmethod
+    def refused(cls, error: str) -> PermissionChange:
+        """Return the change for a file left untouched because of *error*."""
+        return cls(error=error, fix="Fix .claude/settings.json")
 
 
 @final
@@ -111,12 +118,13 @@ class ProjectPermissions:
 
     def grant(self) -> PermissionChange:
         """Append each missing biff rule and drop legacy ones; return the added."""
-        return self._update(BIFF_RULES, add=True, strip=_LEGACY_RULES)
+        return self._update(self._root, BIFF_RULES, add=True, strip=_LEGACY_RULES)
 
     def revoke(self, rules: Iterable[str] | None = None) -> PermissionChange:
         """Remove *rules* (default: every biff and legacy rule); return them."""
         if rules is None:
             return self._update(
+                self._root,
                 {
                     tier: (*owned, *_LEGACY_RULES.get(tier, ()))
                     for tier, owned in BIFF_RULES.items()
@@ -125,6 +133,7 @@ class ProjectPermissions:
             )
         selected = set(rules)
         return self._update(
+            self._root,
             {
                 tier: tuple(r for r in owned if r in selected)
                 for tier, owned in BIFF_RULES.items()
@@ -132,208 +141,234 @@ class ProjectPermissions:
             add=False,
         )
 
+    @staticmethod
     def _update(
-        self,
+        root: Path,
         rules: dict[str, tuple[str, ...]],
         *,
         add: bool,
         strip: dict[str, tuple[str, ...]] | None = None,
     ) -> PermissionChange:
         """Apply the grant or revoke under the lock, reporting any refusal."""
-        if self._root.resolve() == Path.home().resolve():
-            return PermissionChange(
-                error="the repo is the home directory, whose .claude/"
+        if root.resolve() == Path.home().resolve():
+            return PermissionChange.refused(
+                "the repo is the home directory, whose .claude/"
                 "settings.json is user-global"
             )
         if not any(rules.values()):
             return PermissionChange()
         try:
-            root_fd = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
             try:
-                dir_fd = _open_claude_dir(root_fd, create=add)
+                dir_fd = ProjectPermissions._open_claude_dir(root_fd, create=add)
                 if dir_fd is None:
                     return PermissionChange()
                 try:
                     return PermissionChange(
-                        changed=_locked_apply(dir_fd, rules, add=add, strip=strip or {})
+                        changed=ProjectPermissions._locked_apply(
+                            dir_fd, rules, add=add, strip=strip or {}
+                        )
                     )
                 finally:
                     os.close(dir_fd)
             finally:
                 os.close(root_fd)
         except ValueError as exc:
-            return PermissionChange(error=str(exc))
+            return PermissionChange.refused(str(exc))
         except OSError as exc:
-            return PermissionChange(error=exc.strerror or type(exc).__name__)
+            return PermissionChange.refused(exc.strerror or type(exc).__name__)
 
+    @staticmethod
+    def _refuse_link(exc: OSError, name: str) -> ValueError:
+        """Translate an ``O_NOFOLLOW`` refusal into a user-facing reason."""
+        if exc.errno == errno.ELOOP:
+            return ValueError(f"{name} is a symlink; refusing to edit through it")
+        if exc.errno == errno.ENOTDIR:
+            return ValueError(f"{name} is not a directory")
+        raise exc
 
-def _refuse_link(exc: OSError, name: str) -> ValueError:
-    """Translate an ``O_NOFOLLOW`` refusal into a user-facing reason."""
-    if exc.errno == errno.ELOOP:
-        return ValueError(f"{name} is a symlink; refusing to edit through it")
-    if exc.errno == errno.ENOTDIR:
-        return ValueError(f"{name} is not a directory")
-    raise exc
-
-
-def _open_claude_dir(root_fd: int, *, create: bool) -> int | None:
-    """Open ``.claude`` without following a link; ``None`` if absent on revoke."""
-    if create:
-        with contextlib.suppress(FileExistsError):
-            os.mkdir(".claude", 0o755, dir_fd=root_fd)
-    flags = os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW
-    try:
-        return os.open(".claude", flags, dir_fd=root_fd)
-    except FileNotFoundError:
+    @staticmethod
+    def _open_claude_dir(root_fd: int, *, create: bool) -> int | None:
+        """Open ``.claude`` without following a link; ``None`` if absent on revoke."""
         if create:
-            raise
-        return None
-    except OSError as exc:
-        # Linux reports O_DIRECTORY|O_NOFOLLOW on a link as ENOTDIR, not ELOOP.
-        if stat.S_ISLNK(
-            os.stat(".claude", dir_fd=root_fd, follow_symlinks=False).st_mode
-        ):
-            exc.errno = errno.ELOOP
-        raise _refuse_link(exc, ".claude") from exc
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(".claude", 0o755, dir_fd=root_fd)
+        flags = os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW
+        try:
+            return os.open(".claude", flags, dir_fd=root_fd)
+        except FileNotFoundError:
+            if create:
+                raise
+            return None
+        except OSError as exc:
+            # Linux reports O_DIRECTORY|O_NOFOLLOW on a link as ENOTDIR, not ELOOP.
+            if stat.S_ISLNK(
+                os.stat(".claude", dir_fd=root_fd, follow_symlinks=False).st_mode
+            ):
+                exc.errno = errno.ELOOP
+            raise ProjectPermissions._refuse_link(exc, ".claude") from exc
 
+    @staticmethod
+    def _locked_apply(
+        dir_fd: int,
+        rules: dict[str, tuple[str, ...]],
+        *,
+        add: bool,
+        strip: dict[str, tuple[str, ...]],
+    ) -> tuple[str, ...]:
+        """Run :func:`_apply` holding the shared lock in ``.claude``."""
+        if not add and not ProjectPermissions._exists(dir_fd, _SETTINGS):
+            return ()
+        # Refuse a bad file before creating the lock, so a refusal leaves nothing
+        # behind; the locked pass below re-validates.
+        settings = ProjectPermissions._read(dir_fd)[0]
+        for tier in (*rules, *strip):
+            ProjectPermissions._rule_list(settings, tier, create=False)
+        try:
+            lock = os.open(
+                _LOCK, os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600, dir_fd=dir_fd
+            )
+        except OSError as exc:
+            raise ProjectPermissions._refuse_link(exc, f".claude/{_LOCK}") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(lock).st_mode):
+                msg = f".claude/{_LOCK} is not a regular file"
+                raise ValueError(msg)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return ProjectPermissions._apply(dir_fd, rules, add=add, strip=strip)
+        finally:
+            os.close(lock)
 
-def _locked_apply(
-    dir_fd: int,
-    rules: dict[str, tuple[str, ...]],
-    *,
-    add: bool,
-    strip: dict[str, tuple[str, ...]],
-) -> tuple[str, ...]:
-    """Run :func:`_apply` holding the shared lock in ``.claude``."""
-    if not add and not _exists(dir_fd, _SETTINGS):
-        return ()
-    # Refuse a bad file before creating the lock, so a refusal leaves nothing
-    # behind; the locked pass below re-validates.
-    settings = _read(dir_fd)[0]
-    for tier in (*rules, *strip):
-        _rule_list(settings, tier, create=False)
-    try:
-        lock = os.open(_LOCK, os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600, dir_fd=dir_fd)
-    except OSError as exc:
-        raise _refuse_link(exc, f".claude/{_LOCK}") from exc
-    try:
-        if not stat.S_ISREG(os.fstat(lock).st_mode):
-            msg = f".claude/{_LOCK} is not a regular file"
-            raise ValueError(msg)
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        return _apply(dir_fd, rules, add=add, strip=strip)
-    finally:
-        os.close(lock)
+    @staticmethod
+    def _exists(dir_fd: int, name: str) -> bool:
+        try:
+            os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        return True
 
+    @staticmethod
+    def _apply(
+        dir_fd: int,
+        rules: dict[str, tuple[str, ...]],
+        *,
+        add: bool,
+        strip: dict[str, tuple[str, ...]],
+    ) -> tuple[str, ...]:
+        """Edit each tier's list in place and write it back if it changed.
 
-def _exists(dir_fd: int, name: str) -> bool:
-    try:
-        os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return False
-    return True
+        *strip* names legacy rules removed silently on a grant: they are not
+        reported in the result, which lists only what the caller asked for.
+        """
+        settings, mode = ProjectPermissions._read(dir_fd)
+        is_dirty = ProjectPermissions._strip(settings, strip)
+        changed: tuple[str, ...] = ()
+        for tier, owned in rules.items():
+            have = ProjectPermissions._rule_list(settings, tier, create=add)
+            changed += ProjectPermissions._edit(have, owned, add=add)
+        if changed or is_dirty:
+            ProjectPermissions._write(
+                dir_fd, json.dumps(settings, indent=2) + "\n", mode
+            )
+        return changed
 
+    @staticmethod
+    def _strip(settings: dict[str, object], strip: dict[str, tuple[str, ...]]) -> bool:
+        """Drop each tier's legacy rules; return whether any was present."""
+        is_dirty = False
+        for tier, legacy in strip.items():
+            have = ProjectPermissions._rule_list(settings, tier, create=False)
+            kept = [rule for rule in have if rule not in legacy]
+            is_dirty = is_dirty or len(kept) != len(have)
+            have[:] = kept
+        return is_dirty
 
-def _apply(
-    dir_fd: int,
-    rules: dict[str, tuple[str, ...]],
-    *,
-    add: bool,
-    strip: dict[str, tuple[str, ...]],
-) -> tuple[str, ...]:
-    """Edit each tier's list in place and write it back if it changed.
-
-    *strip* names legacy rules removed silently on a grant: they are not
-    reported in the result, which lists only what the caller asked for.
-    """
-    settings, mode = _read(dir_fd)
-    changed: tuple[str, ...] = ()
-    is_dirty = False
-    for tier, legacy in strip.items():
-        have = _rule_list(settings, tier, create=False)
-        kept = [rule for rule in have if rule not in legacy]
-        is_dirty = is_dirty or len(kept) != len(have)
-        have[:] = kept
-    for tier, owned in rules.items():
-        have = _rule_list(settings, tier, create=add)
+    @staticmethod
+    def _edit(
+        have: list[object], owned: tuple[str, ...], *, add: bool
+    ) -> tuple[str, ...]:
+        """Add the missing *owned* rules to *have*, or remove the present ones."""
         if add:
             added = tuple(rule for rule in owned if rule not in have)
             have.extend(added)
-            changed += added
-        else:
-            removed = tuple(rule for rule in owned if rule in have)
-            have[:] = [rule for rule in have if rule not in removed]
-            changed += removed
-    if changed or is_dirty:
-        _write(dir_fd, json.dumps(settings, indent=2) + "\n", mode)
-    return changed
+            return added
+        removed = tuple(rule for rule in owned if rule in have)
+        have[:] = [rule for rule in have if rule not in removed]
+        return removed
 
+    @staticmethod
+    def _read(dir_fd: int) -> tuple[dict[str, object], int]:
+        """Return the parsed settings and file mode; ``{}`` when absent.
 
-def _read(dir_fd: int) -> tuple[dict[str, object], int]:
-    """Return the parsed settings and file mode; ``{}`` when absent.
+        Refuses a symlink, a non-regular file, and a non-object.
+        """
+        try:
+            fd = os.open(
+                _SETTINGS, os.O_RDONLY | os.O_NONBLOCK | _NOFOLLOW, dir_fd=dir_fd
+            )
+        except FileNotFoundError:
+            return {}, _NEW_FILE_MODE
+        except OSError as exc:
+            raise ProjectPermissions._refuse_link(exc, _SETTINGS) from exc
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                msg = ".claude/settings.json is not a regular file"
+                raise ValueError(msg)
+            raw = handle.read()
+        return ProjectPermissions._parse(raw), stat.S_IMODE(info.st_mode)
 
-    Refuses a symlink, a non-regular file, and a non-object.
-    """
-    try:
-        fd = os.open(_SETTINGS, os.O_RDONLY | os.O_NONBLOCK | _NOFOLLOW, dir_fd=dir_fd)
-    except FileNotFoundError:
-        return {}, _NEW_FILE_MODE
-    except OSError as exc:
-        raise _refuse_link(exc, _SETTINGS) from exc
-    with os.fdopen(fd, "rb") as handle:
-        info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode):
-            msg = ".claude/settings.json is not a regular file"
+    @staticmethod
+    def _parse(raw: bytes) -> dict[str, object]:
+        """Decode a settings file; refuse bad UTF-8, bad JSON and a non-object."""
+        try:
+            data: object = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            msg = f".claude/settings.json is not valid JSON ({exc.msg})"
+            raise ValueError(msg) from exc
+        except UnicodeDecodeError as exc:
+            msg = ".claude/settings.json is not valid UTF-8"
+            raise ValueError(msg) from exc
+        if not isinstance(data, dict):
+            msg = ".claude/settings.json is not a JSON object"
             raise ValueError(msg)
-        raw = handle.read()
-    try:
-        data: object = json.loads(raw.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        msg = f".claude/settings.json is not valid JSON ({exc.msg})"
-        raise ValueError(msg) from exc
-    except UnicodeDecodeError as exc:
-        msg = ".claude/settings.json is not valid UTF-8"
-        raise ValueError(msg) from exc
-    if not isinstance(data, dict):
-        msg = ".claude/settings.json is not a JSON object"
-        raise ValueError(msg)
-    return cast("dict[str, object]", data), stat.S_IMODE(info.st_mode)
+        return cast("dict[str, object]", data)
 
+    @staticmethod
+    def _rule_list(
+        settings: dict[str, object], tier: str, *, create: bool = True
+    ) -> list[object]:
+        """Return ``permissions.<tier>``, created if absent and *create*.
 
-def _rule_list(
-    settings: dict[str, object], tier: str, *, create: bool = True
-) -> list[object]:
-    """Return ``permissions.<tier>``, created if absent and *create*.
+        A ``permissions`` or tier list of the wrong type is the user's data, so it
+        is reported rather than overwritten. Containers created here are only
+        written when a rule changes.
+        """
+        permissions = settings.setdefault("permissions", {})
+        if not isinstance(permissions, dict):
+            msg = ".claude/settings.json 'permissions' is not an object"
+            raise ValueError(msg)
+        tiers = cast("dict[str, object]", permissions)
+        rules = tiers.setdefault(tier, []) if create else tiers.get(tier, [])
+        if not isinstance(rules, list):
+            msg = f".claude/settings.json 'permissions.{tier}' is not a list"
+            raise ValueError(msg)
+        return cast("list[object]", rules)
 
-    A ``permissions`` or tier list of the wrong type is the user's data, so it
-    is reported rather than overwritten. Containers created here are only
-    written when a rule changes.
-    """
-    permissions = settings.setdefault("permissions", {})
-    if not isinstance(permissions, dict):
-        msg = ".claude/settings.json 'permissions' is not an object"
-        raise ValueError(msg)
-    tiers = cast("dict[str, object]", permissions)
-    rules = tiers.setdefault(tier, []) if create else tiers.get(tier, [])
-    if not isinstance(rules, list):
-        msg = f".claude/settings.json 'permissions.{tier}' is not a list"
-        raise ValueError(msg)
-    return cast("list[object]", rules)
-
-
-def _write(dir_fd: int, text: str, mode: int) -> None:
-    """Replace ``settings.json`` atomically inside the pinned ``.claude``."""
-    tmp = f".settings.json.{secrets.token_hex(8)}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
-    fd = os.open(tmp, flags, 0o600, dir_fd=dir_fd)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fchmod(handle.fileno(), mode)
-            os.fsync(handle.fileno())
-        os.replace(tmp, _SETTINGS, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp, dir_fd=dir_fd)
-        raise
+    @staticmethod
+    def _write(dir_fd: int, text: str, mode: int) -> None:
+        """Replace ``settings.json`` atomically inside the pinned ``.claude``."""
+        tmp = f".settings.json.{secrets.token_hex(8)}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
+        fd = os.open(tmp, flags, 0o600, dir_fd=dir_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fchmod(handle.fileno(), mode)
+                os.fsync(handle.fileno())
+            os.replace(tmp, _SETTINGS, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp, dir_fd=dir_fd)
+            raise

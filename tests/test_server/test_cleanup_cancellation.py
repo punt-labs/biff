@@ -10,8 +10,8 @@ import pytest
 
 from biff.models import BiffConfig
 from biff.server import app
-from biff.server.state import create_state
 from biff.session_registry import register_session
+from tests._state import create_state
 
 
 async def test_cleanup_preserves_cancellation_when_teardown_fails() -> None:

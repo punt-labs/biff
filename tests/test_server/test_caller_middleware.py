@@ -124,8 +124,8 @@ async def test_malformed_caller_is_named_error(
 async def test_create_server_strips_and_refuses_on_a_real_tool(tmp_path: Path) -> None:
     from biff.models import BiffConfig
     from biff.server.app import create_server
-    from biff.server.state import create_state
     from biff.testing.caller import StampedClient
+    from tests._state import create_state
 
     state = create_state(
         BiffConfig(user="rmh", repo_name="test"), tmp_path, dormant=True

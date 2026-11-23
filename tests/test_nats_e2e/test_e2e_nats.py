@@ -243,7 +243,7 @@ class TestTtyNameAutoAssign:
         """Lifespan auto-assigns ttyN; /who shows it instead of hex."""
         from biff.models import BiffConfig
         from biff.server.app import create_server
-        from biff.server.state import create_state
+        from tests._state import create_state
 
         repo = "_test-nats-e2e"
         kai_cfg = BiffConfig(user="kai", repo_name=repo, relay_url=nats_server)
@@ -301,7 +301,7 @@ class TestTtyNameAutoAssign:
         from biff.models import BiffConfig
         from biff.nats_relay import NatsRelay
         from biff.server.app import create_server
-        from biff.server.state import create_state
+        from tests._state import create_state
 
         repo = "_test-nats-e2e"
         kai_cfg = BiffConfig(user="kai", repo_name=repo, relay_url=nats_server)
@@ -346,7 +346,7 @@ class TestTtyNameAutoAssign:
         """tty_name persists after heartbeat updates last_active."""
         from biff.models import BiffConfig
         from biff.server.app import create_server
-        from biff.server.state import create_state
+        from tests._state import create_state
 
         repo = "_test-nats-e2e"
         kai_cfg = BiffConfig(user="kai", repo_name=repo, relay_url=nats_server)
@@ -382,7 +382,7 @@ class TestTtyNameAutoAssign:
         from biff.models import BiffConfig
         from biff.nats_relay import NatsRelay
         from biff.server.app import create_server
-        from biff.server.state import create_state
+        from tests._state import create_state
 
         repo = "_test-nats-e2e"
         kai_cfg = BiffConfig(user="kai", repo_name=repo, relay_url=nats_server)
@@ -424,7 +424,7 @@ class TestTtyNameAutoAssign:
         """Direct KV read confirms tty_name is persisted."""
         from biff.models import BiffConfig
         from biff.server.app import create_server
-        from biff.server.state import create_state
+        from tests._state import create_state
 
         repo = "_test-nats-e2e"
         kai_cfg = BiffConfig(user="kai", repo_name=repo, relay_url=nats_server)
@@ -514,8 +514,8 @@ class TestTalkSelfEchoFilter:
         """A frame with from_key == session_key must NOT enter the held state."""
         from biff.models import BiffConfig
         from biff.server.app import create_server
-        from biff.server.state import create_state
         from biff.server.tools._descriptions import _reset_session
+        from tests._state import create_state
 
         _reset_session()
         repo = f"_test-selfecho-{id(self)}"
@@ -561,8 +561,8 @@ class TestTalkSelfEchoFilter:
         """A frame targeted at this session enters the held state."""
         from biff.models import BiffConfig
         from biff.server.app import create_server
-        from biff.server.state import create_state
         from biff.server.tools._descriptions import _reset_session
+        from tests._state import create_state
 
         _reset_session()
         repo = f"_test-selfecho-accept-{id(self)}"

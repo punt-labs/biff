@@ -11,6 +11,7 @@ from biff.relay import Relay
 from biff.session_handle import SessionHandleStore
 from biff.session_registry import register_session, write_marker
 from biff.session_routing import SessionRouting
+from biff.tty import get_hostname, get_pwd
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +77,7 @@ async def open_session_from_payload(
     """
     from biff._stdlib import biff_data_dir  # noqa: PLC0415
     from biff.config import RELAY_URL_UNSET, load_mcp_config  # noqa: PLC0415
-    from biff.server.state import create_state  # noqa: PLC0415
+    from biff.relay_select import RelaySelector  # noqa: PLC0415
     from biff.session_routing import SessionIdError  # noqa: PLC0415
 
     raw = data.get("session_id")
@@ -93,17 +94,17 @@ async def open_session_from_payload(
         start=Path(cwd) if isinstance(cwd, str) and cwd else None,
     )
     config = resolved.config
-    state = create_state(config, resolved.data_dir, tty=routing.routing_id)
+    relay = RelaySelector(config, resolved.data_dir).select(dormant=False)
     data_root = biff_data_dir()
     try:
         return await SessionOpener(
-            relay=state.relay,
+            relay=relay,
             config=config,
             repo_common_root=resolved.repo_common_root,
             unread_dir=data_root / "unread",
             handles=SessionHandleStore(data_root / "sessions"),
-            hostname=state.hostname,
-            pwd=state.pwd,
+            hostname=get_hostname(),
+            pwd=get_pwd(),
         ).open(routing)
     finally:
-        await state.relay.close()
+        await relay.close()

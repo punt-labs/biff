@@ -14,9 +14,9 @@ from typer.testing import CliRunner
 from biff.__main__ import app
 from biff.models import BiffConfig
 from biff.server.app import create_server
-from biff.server.state import create_state
 from biff.testing.caller import StampedClient
 from biff.usage import McpUsageMiddleware, UsageCapture
+from tests._state import create_state
 
 
 @pytest.fixture

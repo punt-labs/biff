@@ -22,8 +22,9 @@ from mcp.types import TextContent
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
-from biff.server.state import ServerState, create_state
+from biff.server.state import ServerState
 from biff.testing.caller import StampedClient, bound_to, caller_for
+from tests._state import create_state
 
 if TYPE_CHECKING:
     from fastmcp import Client

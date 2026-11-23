@@ -9,6 +9,10 @@ import typer
 from punt_observe.logging import Role
 
 from biff.logging_config import configure_logging
+from biff.plugins.claude_code.installer import ClaudeCodeInstaller
+from biff.plugins.contract import PluginRegistry
+from biff.repo_toggle import EnablementToggle
+from biff.server.state import RepoToggle
 from biff.usage import UsageCapture
 
 _ROLES = {"mcp": Role.MCP, "serve": Role.MCP, "hook": Role.HOOK}
@@ -16,10 +20,11 @@ _ROLES = {"mcp": Role.MCP, "serve": Role.MCP, "hook": Role.HOOK}
 
 @dataclass(frozen=True, slots=True)
 class McpInvocation:
-    """Options and usage pipeline owned by the root CLI context."""
+    """Options, usage pipeline and repo toggle owned by the root CLI context."""
 
     user: str | None
     usage: UsageCapture
+    toggle: RepoToggle
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,9 +51,21 @@ class CliInvocation:
         usage = UsageCapture.open(enabled=not self.no_telemetry)
         ctx.call_on_close(usage.telemetry.shutdown)
         if role is Role.MCP:
-            ctx.obj = McpInvocation(self.user, usage)
+            ctx.obj = McpInvocation(self.user, usage, self.repo_toggle())
         else:
             usage.record_cli_invocation(command)
+
+    @staticmethod
+    def plugin_registry() -> PluginRegistry:
+        """Register every AI tool's installer.  The one place that names adapters."""
+        registry = PluginRegistry()
+        registry.register("claude-code", ClaudeCodeInstaller())
+        return registry
+
+    @staticmethod
+    def repo_toggle() -> RepoToggle:
+        """Return the enable/disable toggle the MCP ``biff`` tool runs."""
+        return EnablementToggle(CliInvocation.plugin_registry())
 
     @staticmethod
     def validate_repl_output(*, json_output: bool, quiet_output: bool) -> None:
