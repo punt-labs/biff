@@ -11,8 +11,11 @@
   loop, so Claude Code registers it as a channel: the 2026-07-28 probe gets
   -32601, `initialize` succeeds, and a later 2026-07-28 request is refused.
   The server logs `channel_mode=on|off` at start and the negotiated
-  `protocolVersion` when a client attaches. A timed-out tool-list send in
-  channel mode keeps the stored session instead of clearing it. Every other
+  `protocolVersion` when a client attaches. In channel mode a tool-list
+  send that timed out, or that the SDK dropped on a closed stream, keeps the
+  stored session and stays owed, and repeated failure logs once. `ChannelServer.channel_link`
+  is the send capability for the channel sender; a 2026-07-28 request after
+  `initialize` and malformed client input are logged. Every other
   caller of `biff mcp` is unchanged. FastMCP is pinned to `<4.3`.
 - Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
   fails on any import that breaks the DES-088 package layers and is not in

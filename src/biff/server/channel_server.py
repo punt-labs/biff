@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from functools import cached_property
+from typing import TYPE_CHECKING, Self
 
 import anyio
 from fastmcp.server.context import reset_transport, set_transport
@@ -39,6 +39,11 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
     ``pyproject.toml`` pins FastMCP's minor version.
     """
 
+    @cached_property
+    def channel_link(self) -> ChannelLink:
+        """The link to the live client, for whatever sends channel events."""
+        return ChannelLink()
+
     def run_stdio(self) -> None:
         """Serve stdio, as a channel when the plugin asked for it.
 
@@ -48,12 +53,12 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
         channel_mode = take_channel_mode()
         logger.info("MCP stdio: channel_mode=%s", "on" if channel_mode else "off")
         if channel_mode:
-            anyio.run(self.serve_channel_stdio, ChannelLink())
+            anyio.run(self.serve_channel_stdio)
         else:
             self.run(transport="stdio")
 
-    async def serve_channel_stdio(self, link: ChannelLink) -> None:
-        """Serve stdio as a Claude Code channel, binding the connection to *link*.
+    async def serve_channel_stdio(self) -> None:
+        """Serve stdio as a Claude Code channel, attaching it to ``channel_link``.
 
         Claude Code opens with a 2026-07-28 ``server/discover`` probe and does
         not register a 2026-07-28 server as a channel, so this serves the
@@ -63,10 +68,11 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
         loop.
         """
         server = self._mcp_server
+        link = self.channel_link
         options = server.create_initialization_options(
             experimental_capabilities={CHANNEL_CAPABILITY: {}}
         )
-        _descriptions.handshake_delivery.keep_session = True
+        _descriptions.handshake_delivery.serve_single_connection(link)
         token = set_transport("stdio")
         try:
             async with (
@@ -74,18 +80,20 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
                 stdio_server() as (read_stream, write_stream),
             ):
                 dispatcher: JSONRPCDispatcher[TransportContext] = JSONRPCDispatcher(
-                    read_stream, write_stream, inline_methods=frozenset({"initialize"})
+                    read_stream,
+                    link.observe(write_stream),
+                    inline_methods=frozenset({"initialize"}),
+                    on_stream_exception=_log_malformed_input,
                 )
                 connection = Connection.for_loop(dispatcher)
                 runner = ServerRunner(
                     server, connection, lifespan_state, init_options=options
                 )
-                link.bind(connection)
                 try:
                     gate = _HandshakeOnly(runner)
                     await dispatcher.run(gate.on_request, runner.on_notify)
                 finally:
-                    link.unbind()
+                    link.detach()
                     await aclose_shielded(connection)
                     # The client must see EOF, and this loop does not close it.
                     await write_stream.aclose()
@@ -93,11 +101,23 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
             reset_transport(token)
 
 
-@dataclass(frozen=True, slots=True)
-class _HandshakeOnly:
+async def _log_malformed_input(exc: Exception) -> None:
+    """Log a line the client sent that is not valid JSON-RPC."""
+    logger.warning("Ignored malformed client input: %s", type(exc).__name__)
+
+
+class _HandshakeOnly[LifespanT]:
     """Refuse requests that carry the 2026-07-28 envelope, and log the handshake."""
 
-    runner: ServerRunner[Any]
+    _runner: ServerRunner[LifespanT]
+    _refusal_logged: bool
+
+    def __new__(cls, runner: ServerRunner[LifespanT]) -> Self:
+        """Gate *runner*; the first refusal is logged, later ones are not."""
+        self = super().__new__(cls)
+        self._runner = runner
+        self._refusal_logged = False
+        return self
 
     async def on_request(
         self,
@@ -109,12 +129,20 @@ class _HandshakeOnly:
         meta = params.get("_meta") if params else None
         has_envelope = isinstance(meta, dict) and PROTOCOL_VERSION_META_KEY in meta
         if has_envelope and method not in _PASSED_TO_RUNNER:
+            if not self._refusal_logged:
+                self._refusal_logged = True
+                logger.warning("Refused 2026-07-28 request: method=%s", method)
             msg = "this connection serves the handshake era; 2026-07-28 is refused"
             raise MCPError(code=INVALID_REQUEST, message=msg)
-        result = await self.runner.on_request(dctx, method, params)
+        try:
+            result = await self._runner.on_request(dctx, method, params)
+        except Exception:
+            if method == "initialize":
+                logger.exception("MCP initialize failed")
+            raise
         if method == "initialize":
             logger.info(
                 "MCP handshake: protocolVersion=%s channel_mode=on",
-                self.runner.connection.protocol_version,
+                self._runner.connection.protocol_version,
             )
         return result

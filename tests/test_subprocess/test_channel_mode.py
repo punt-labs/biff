@@ -16,21 +16,23 @@ import threading
 import time
 from collections.abc import Generator, Mapping
 from pathlib import Path
-from typing import IO, Any
+from typing import IO
 
 import pytest
+from mcp import types
+from mcp.types import INVALID_REQUEST, JSONRPCError, JSONRPCMessage, JSONRPCResponse
 
 pytestmark = pytest.mark.subprocess
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TIMEOUT = 20.0
 _METHOD_NOT_FOUND = -32601
-_MODERN_META: dict[str, Any] = {
+_MODERN_META: dict[str, object] = {
     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
     "io.modelcontextprotocol/clientInfo": {"name": "probe", "version": "0"},
     "io.modelcontextprotocol/clientCapabilities": {},
 }
-_INITIALIZE: dict[str, Any] = {
+_INITIALIZE: dict[str, object] = {
     "protocolVersion": "2025-11-25",
     "capabilities": {"roots": {}, "elicitation": {}},
     "clientInfo": {"name": "claude-code", "version": "2.1.330"},
@@ -71,7 +73,7 @@ class _Server:
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        self._frames: queue.Queue[dict[str, Any] | None] = queue.Queue()
+        self._frames: queue.Queue[JSONRPCMessage | None] = queue.Queue()
         threading.Thread(target=self._pump, daemon=True).start()
         self._next_id = 0
 
@@ -79,19 +81,23 @@ class _Server:
         stdout: IO[str] | None = self._proc.stdout
         assert stdout is not None
         for line in stdout:
-            self._frames.put(json.loads(line))
+            self._frames.put(
+                types.jsonrpc_message_adapter.validate_json(line, by_name=False)
+            )
         self._frames.put(None)
 
     def request(
         self, method: str, params: Mapping[str, object]
-    ) -> dict[str, Any] | None:
+    ) -> JSONRPCResponse | JSONRPCError | None:
         """Send one request and return its response; ``None`` on end of stream."""
         self._next_id += 1
         self.send(
             {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
         )
         while (frame := self._frames.get(timeout=_TIMEOUT)) is not None:
-            if frame.get("id") == self._next_id:
+            if isinstance(frame, JSONRPCResponse | JSONRPCError) and (
+                frame.id == self._next_id
+            ):
                 return frame
         return None
 
@@ -101,9 +107,10 @@ class _Server:
         stdin.write(json.dumps(message) + "\n")
         stdin.flush()
 
-    def initialize(self) -> dict[str, Any]:
+    def initialize(self) -> JSONRPCResponse:
+        """Run the handshake and return the ``initialize`` response."""
         response = self.request("initialize", _INITIALIZE)
-        assert response is not None
+        assert isinstance(response, JSONRPCResponse)
         self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         return response
 
@@ -153,16 +160,16 @@ class TestChannelMode:
         self, channel_server: _Server
     ) -> None:
         probe = channel_server.request("server/discover", {"_meta": _MODERN_META})
-        assert probe is not None
-        assert probe["error"]["code"] == _METHOD_NOT_FOUND
+        assert isinstance(probe, JSONRPCError)
+        assert probe.error.code == _METHOD_NOT_FOUND
 
-        result = channel_server.initialize()["result"]
+        result = channel_server.initialize().result
 
         assert result["protocolVersion"] == "2025-11-25"
         assert result["capabilities"]["experimental"] == {"claude/channel": {}}
 
     def test_initialize_first_also_works(self, channel_server: _Server) -> None:
-        result = channel_server.initialize()["result"]
+        result = channel_server.initialize().result
 
         assert result["capabilities"]["experimental"] == {"claude/channel": {}}
 
@@ -171,9 +178,9 @@ class TestChannelMode:
     ) -> None:
         channel_server.initialize()
         tools = channel_server.request("tools/list", {})
-        assert tools is not None
+        assert isinstance(tools, JSONRPCResponse)
 
-        names = {tool["name"] for tool in tools["result"]["tools"]}
+        names = {tool["name"] for tool in tools.result["tools"]}
         assert {"who", "write", "read_messages"} <= names
 
     def test_startup_record_names_the_version_and_the_mode(
@@ -193,8 +200,8 @@ class TestChannelMode:
 
         response = channel_server.request("tools/list", {"_meta": _MODERN_META})
 
-        assert response is not None
-        assert "error" in response
+        assert isinstance(response, JSONRPCError)
+        assert response.error.code == INVALID_REQUEST
 
     def test_stdin_close_exits_cleanly_and_closes_the_write_stream(
         self, channel_server: _Server
@@ -212,11 +219,11 @@ class TestWithoutChannelMode:
     def test_probe_is_answered(self, plain_server: _Server) -> None:
         probe = plain_server.request("server/discover", {"_meta": _MODERN_META})
 
-        assert probe is not None
-        assert "2026-07-28" in probe["result"]["supportedVersions"]
+        assert isinstance(probe, JSONRPCResponse)
+        assert "2026-07-28" in probe.result["supportedVersions"]
 
     def test_capability_is_absent(self, plain_server: _Server) -> None:
-        result = plain_server.initialize()["result"]
+        result = plain_server.initialize().result
 
         assert "claude/channel" not in result["capabilities"].get("experimental", {})
 

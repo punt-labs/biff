@@ -34,7 +34,9 @@ from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.plugins.claude_code.unread_file import write_unread_file
+from biff.server.channel import ChannelLink
 from biff.server.display_queue import DisplayItem
+from biff.server.tool_list_send import notify_tool_list
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
 from biff.talk_state import TalkState
 from biff.talk_types import TalkNotification, TalkPhase
@@ -118,6 +120,9 @@ class _HandshakeDelivery:
 
     _session: ServerSession | None = None
     _pending_notify: bool = False
+    # Channel mode serves one connection for the process's life: a failed send
+    # keeps its session, and a write the SDK dropped stays owed (DES-087).
+    _link: ChannelLink | None = None
     # Channel mode serves one connection for the process's life, so a failed
     # send must not forget the only session there will ever be (DES-087).
     keep_session: bool = False
@@ -164,20 +169,17 @@ class _HandshakeDelivery:
                     self._pending_notify = False
                 self._session = ctx.session
 
+    def serve_single_connection(self, link: ChannelLink) -> None:
+        """Serve one connection for the process's life, observed through *link*."""
+        self._link = link
+
     async def _notify_standalone(self) -> None:
         self._pending_notify = True
-        if self._session is not None:
-            try:
-                async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-                    await self._session.send_tool_list_changed()
-                self._pending_notify = False
-            except Exception:
-                logger.warning("Standalone tool list change failed", exc_info=True)
-                self._forget_session()
-
-    def _forget_session(self) -> None:
-        """Drop the stored session after a failed send, unless channel mode."""
-        self._session = self._session if self.keep_session else None
+        if self._session is None:
+            return
+        sent = await notify_tool_list(self._session, _NOTIFY_SEND_TIMEOUT, self._link)
+        self._pending_notify = not sent.delivered
+        self._session = self._session if sent.keep_session else None
 
 
 handshake_delivery = _HandshakeDelivery()

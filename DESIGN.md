@@ -8552,10 +8552,14 @@ write with a timeout. The `server/discover` probe goes to the runner, which
 answers -32601 at a handshake version; any other request carrying the 2026-07-28
 envelope is refused with -32600. Observed on Claude Code 2.1.330 (PL-1348): the
 probe fails, `initialize` succeeds at 2025-11-25, and both launch orders work.
-In channel mode `_HandshakeDelivery.keep_session` stops `_notify_standalone`
-clearing the stored session after a failed send, a timeout included: the one
-connection lives as long as the process (`docs/notification.tex` is unchanged
-by this step; its send-failure transitions describe the default).
+The SDK's dispatcher swallows a write onto a closed stream, so `ChannelLink`
+wraps the connection's write stream (`ObservedWriteStream`) and records the
+failure; `ChannelLink.send` and the standalone tool-list send both consult it.
+In channel mode `_HandshakeDelivery.serve_single_connection(link)` makes a
+timed-out or dropped standalone send keep the stored session and stay owed
+(the log says so, once per episode); any other exception propagates
+(`docs/notification.tex` is unchanged by this step; its send-failure
+transitions describe the default).
 
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
 **Amends.** DES-080, for the Claude Code plugin only; DES-061's rule that a

@@ -102,6 +102,7 @@
   "biff.server.tools.tty": "server",
   "biff.server.tools.wall": "server",
   "biff.server.tools.who": "server",
+  "biff.server.tool_list_send": "server",
   "biff.server.transport_runtime": "server",
   "biff.session_handle": "engine",
   "biff.session_id": "kernel",
