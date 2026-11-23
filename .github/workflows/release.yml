@@ -84,30 +84,65 @@ jobs:
   test-install:
     needs: testpypi
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - name: Install from TestPyPI
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Fetch and verify this run's wheel from TestPyPI
+        # Verify before installing: a wheel can carry .pth files that run at
+        # every Python start, so nothing from TestPyPI is installed until its
+        # bytes match this run's build. skip-existing keeps reruns working;
+        # the hash comparison keeps them honest. No package code runs here.
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          for attempt in 1 2 3 4 5; do
-            echo "Attempt $attempt: installing punt-biff==$VERSION from TestPyPI..."
-            if uv pip install --system \
-              --index-url https://test.pypi.org/simple/ \
-              --extra-index-url https://pypi.org/simple/ \
-              --index-strategy unsafe-best-match \
-              "punt-biff==$VERSION"; then
-              echo "Successfully installed punt-biff==$VERSION"
-              exit 0
-            fi
-            echo "Attempt $attempt failed, waiting 30s..."
-            sleep 30
-          done
-          echo "Failed to install punt-biff==$VERSION after 5 attempts"
-          exit 1
+          python - "${GITHUB_REF_NAME#v}" <<'EOF'
+          import hashlib, json, pathlib, sys, time, urllib.error, urllib.request
+          version = sys.argv[1]
+          url = f"https://test.pypi.org/pypi/punt-biff/{version}/json"
+          built = {d.name: hashlib.sha256(d.read_bytes()).hexdigest()
+                   for d in pathlib.Path("dist").iterdir()}
+          served = {}
+          for attempt in range(1, 11):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as resp:
+                      served = {f["filename"]: f for f in json.load(resp)["urls"]}
+                  if set(built) <= set(served):
+                      break
+                  print(f"Attempt {attempt}: TestPyPI lists {sorted(served)}; waiting")
+              except (urllib.error.URLError, TimeoutError) as err:
+                  print(f"Attempt {attempt}: {err}; waiting")
+              time.sleep(30)
+          else:
+              sys.exit(f"::error::TestPyPI never listed {sorted(built)} for {version}")
+          for name, digest in built.items():
+              if served[name]["digests"]["sha256"] != digest:
+                  sys.exit(f"::error::TestPyPI {name} is not this run's build; bump the version")
+          wheel = next(n for n in built if n.endswith(".whl"))
+          with urllib.request.urlopen(served[wheel]["url"], timeout=60) as resp:
+              data = resp.read()
+          if hashlib.sha256(data).hexdigest() != built[wheel]:
+              sys.exit(f"::error::downloaded {wheel} does not match this run's build")
+          dest = pathlib.Path("verified") / wheel
+          dest.parent.mkdir()
+          dest.write_bytes(data)
+          print(f"Verified {sorted(built)}; downloaded {wheel}")
+          EOF
+      - name: Install the verified wheel alone
+        # --no-deps: nothing but punt-biff may come from TestPyPI, where anyone
+        # can publish a higher version of a dependency's name.
+        run: uv pip install --system --no-deps verified/*.whl
+      - name: Install its dependencies from PyPI only
+        # The requirement list comes from the installed package's own metadata,
+        # so it never drifts from pyproject.toml.
+        run: |
+          python -c "import importlib.metadata as m; print('\n'.join(m.requires('punt-biff') or []))" > requirements.txt
+          cat requirements.txt
+          uv pip install --system --index-url https://pypi.org/simple/ -r requirements.txt
       - name: Verify CLI
         run: biff --help
 
