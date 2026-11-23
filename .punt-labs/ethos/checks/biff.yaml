@@ -1,0 +1,78 @@
+name: biff
+description: Advisory file checks on edit; blocking ratchets at commit and full gate at handoff.
+checks:
+  - name: ruff-lint-edit
+    stage: edit
+    files: ["**/*.py", "**/*.pyi"]
+    adapter: uv
+    uv: [ruff, check, "{file}"]
+    on_fail: advisory
+    timeout: 10s
+  - name: ruff-format-edit
+    stage: edit
+    files: ["**/*.py", "**/*.pyi"]
+    adapter: uv
+    uv: [ruff, format, --check, "{file}"]
+    on_fail: advisory
+    timeout: 10s
+  - name: shellcheck-edit
+    stage: edit
+    files: ["**/*.sh"]
+    run: [shellcheck, "{file}"]
+    on_fail: advisory
+    timeout: 10s
+  - name: ruff-lint-commit
+    stage: commit
+    files: ["**/*.py", "**/*.pyi"]
+    adapter: uv
+    uv: [ruff, check, "{files}"]
+    on_fail: block
+    timeout: 30s
+  - name: ruff-format-commit
+    stage: commit
+    files: ["**/*.py", "**/*.pyi"]
+    adapter: uv
+    uv: [ruff, format, --check, "{files}"]
+    on_fail: block
+    timeout: 30s
+  - name: shellcheck-commit
+    stage: commit
+    files: ["**/*.sh"]
+    run: [shellcheck, "{files}"]
+    on_fail: block
+    timeout: 30s
+  - name: shellcheck-embedded-commit
+    stage: commit
+    files: ["devin-plugin/hooks.json"]
+    adapter: make
+    target: lint
+    on_fail: block
+    timeout: 30s
+  - name: oo-ratchet
+    stage: commit
+    files: ["src/**/*.py", ".oo-baseline.json", "Makefile", "pyproject.toml", "uv.lock"]
+    adapter: make
+    target: check-oo
+    on_fail: block
+    timeout: 120s
+  - name: coupling-ratchet
+    stage: commit
+    files: ["src/**/*.py", ".oo-coupling-baseline.json", "Makefile", "pyproject.toml", "uv.lock"]
+    adapter: make
+    target: check-coupling
+    on_fail: block
+    timeout: 120s
+  - name: suppressions-ratchet
+    stage: commit
+    files: ["src/**/*.py", ".suppression-baseline.json", "Makefile", "pyproject.toml", "uv.lock"]
+    adapter: make
+    target: check-suppressions
+    on_fail: block
+    timeout: 120s
+  - name: full-gate
+    stage: handoff
+    files: all
+    adapter: make
+    target: check
+    on_fail: block
+    timeout: 5m
