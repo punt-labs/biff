@@ -390,24 +390,6 @@ propagation or an outage, not the release: rerun the job. A failed check
 against the installed package or the pulled image means the published
 version is broken: yank or ship a fix, never retag.
 
-## Release checks
-
-A `v*` tag runs `.github/workflows/release.yml`. Nothing is promoted until
-the exact artifact that ships has done real work installed outside the
-checkout:
-
-| Stage | Job | What it proves |
-|-------|-----|----------------|
-| Candidate wheel | `test-install` | `tools/verify_testpypi.py` matches TestPyPI's bytes to this run's build, then `scripts/smoke-release.sh candidate` installs that wheel (dependencies from PyPI only) into a fresh venv, `HOME` and git repo and sends and reads a message through the installed CLI and the installed `biff mcp` server over stdio. |
-| Candidate relay image | `relay-image-candidate`, `relay-image-test` | The image is built once and pushed as `biff-relay:<version>-candidate`; tier 3b runs against that digest (`BIFF_RELAY_IMAGE`) on amd64 and arm64 runners. |
-| Promotion | `pypi`, `docker` | PyPI upload waits on both candidate checks; the release image tag is a retag of the tested digest, never a rebuild. |
-| Published package | `published-smoke` | `scripts/smoke-release.sh published` installs `punt-biff==<version>` from production PyPI on Linux and macOS and repeats the CLI and MCP round trip. |
-| Published relay image | `published-image-smoke` | Pulls `biff-relay:<version>`, checks it is the candidate digest, and runs tier 3b's presence and messaging tests against it (the full tier ran on that digest before promotion). |
-
-Run the candidate check locally with `make smoke-release`. A failed
-post-release check means the published version is broken: yank or ship a
-fix, never retag.
-
 ## Fixture model
 
 Every tier above unit provides `kai` and `eric` fixtures — two users
