@@ -39,9 +39,9 @@ from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
 from biff.server.caller_policy import CallerPolicy
 from biff.server.mcp_protocol import NotificationServer
 from biff.server.relay_lifecycle import RelayLifecycle
+from biff.server.sentinel_reaper import build_logout_event, reap_sentinels
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions, register_all_tools
-from biff.session_lock import routing_lock
 from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
@@ -238,83 +238,6 @@ def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
             _report_cleanup_failure(_UNEXPECTED_CLEANUP_ERROR)
 
 
-async def _reap_sentinels(state: ServerState) -> None:
-    """Process sentinel files, writing logout events and deleting sessions.
-
-    When a biff server receives SIGTERM/SIGINT, the signal handler writes
-    a sentinel file containing the session key.  This function processes
-    those sentinels on startup and whenever the poller wakes (a watch on the
-    sentinel directory wakes it when one appears):
-
-    1. Fetch the session from KV (still present — 3-day TTL)
-    2. Append a wtmp logout event with ``last_active`` as the timestamp
-    3. Delete the KV entry
-    4. Remove the sentinel file
-
-    This is the primary logout mechanism for the common case (graceful
-    shutdown via signal).  The orphan detector handles the fallback case
-    (SIGKILL, OOM, power loss — no sentinel written).
-    """
-    d = sentinel_dir(state.config.repo_name)
-    if not d.exists():
-        return
-    # Under identity routing a resumed session carries the SAME key as its
-    # just-exited incarnation ({user}:{session_id} is stable across resume),
-    # so a leftover sentinel for our own key must NOT be reaped — we are
-    # already registered live under it, and reaping would log us out, release
-    # the alias we just reclaimed, and delete our own KV row.
-    for sentinel in d.iterdir():
-        if not sentinel.is_file():
-            continue
-        try:
-            session_key = sentinel.read_text().strip()
-        except OSError:
-            continue
-        if session_key == state.session_key:
-            # Our own prior incarnation — consume the sentinel without a
-            # logout, reservation release, or KV delete.
-            sentinel.unlink(missing_ok=True)
-            continue
-        with routing_lock(session_key.partition(":")[2]) as acquired:
-            if acquired and await _reap_dead_session(state, session_key):
-                sentinel.unlink(missing_ok=True)
-
-
-async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
-    """Log out, release the alias, and delete the KV row for a dead session.
-
-    Returns ``True`` when the KV row was deleted (the caller should remove the
-    sentinel), ``False`` when the delete failed (keep the sentinel to retry).
-    """
-    # Write logout event before deleting the session.  The KV entry is still
-    # present (3-day TTL), so we can fetch session data for an accurate
-    # last-seen timestamp.
-    session: UserSession | None = None
-    try:
-        session = await state.relay.get_session(session_key)
-        if session is not None:
-            await state.relay.append_wtmp(_build_logout_event(session_key, session))
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to write sentinel logout")
-    # Release TTY name reservation before deleting session (DES-035).
-    # Separate try block so a wtmp failure doesn't leak the name reservation.
-    if session is not None and session.tty_name:
-        try:
-            await state.relay.release_tty_name(session.user, session.tty_name)
-        except Exception:
-            logger.warning(
-                "Failed to release TTY name %s during sentinel reap",
-                session.tty_name,
-                exc_info=True,
-            )
-    try:
-        await state.relay.delete_session(session_key)
-    except Exception:
-        logger.warning("Failed to reap sentinel", exc_info=True)
-        return False
-    return True
-
-
 async def _refresh_org_repos(state: ServerState) -> None:
     """Re-discover org repos and update state if changed.
 
@@ -394,22 +317,6 @@ def _kv_key_to_session_key(kv_key: str, repo_name: str) -> str | None:
     if parts[1] in RESERVED_KV_NAMESPACES:
         return None
     return f"{parts[1]}:{parts[2]}"
-
-
-def _build_logout_event(session_key: str, cached: UserSession) -> SessionEvent:
-    """Build a logout ``SessionEvent`` from a cached session."""
-    return SessionEvent(
-        session_key=session_key,
-        event="logout",
-        user=cached.user,
-        tty=cached.tty,
-        tty_name=cached.tty_name,
-        hostname=cached.hostname,
-        pwd=cached.pwd,
-        timestamp=cached.last_active,
-        plan=cached.plan,
-        repo=cached.repo,
-    )
 
 
 async def _run_kv_watch(
@@ -573,7 +480,7 @@ async def _handle_kv_delete(
         logger.debug("No cached session on DEL, skipping wtmp")
         return
     try:
-        await relay.append_wtmp(_build_logout_event(session_key, cached))
+        await relay.append_wtmp(build_logout_event(session_key, cached))
     except Exception:
         logger.warning("Failed to append wtmp logout", exc_info=True)
 
@@ -1109,6 +1016,43 @@ async def _running_lifespan(
             await _finish_cleanup(_startup_cleanup(state, live))
 
 
+def _spawn_poller(
+    live: _LiveSession, mcp: FastMCP[ServerState], state: ServerState, *, attempt: int
+) -> None:
+    """Start the poller; if it dies, log it and start another after a backoff.
+
+    The poller also reaps shutdown sentinels: it runs on every wake, and a
+    watch on the sentinel directory wakes it, so there is no reaper timer.
+    It outlives the requests that may start it, and nothing else would
+    restart it, so a death must not leave the markers silently stale.
+    """
+    shutdown = live.shutdown
+    poll = _descriptions.poll_inbox(
+        mcp,
+        state,
+        shutdown=shutdown,
+        reap=lambda: reap_sentinels(state),
+        watch_dirs=(sentinel_dir(state.config.repo_name),),
+    )
+    task = asyncio.create_task(poll, context=Context())
+    live.reaper = task
+    live.tasks.append(task)
+
+    def restart() -> None:
+        if shutdown.is_set() or live.shutdown is not shutdown:
+            return  # shut down, or re-pointed to a new session
+        _spawn_poller(live, mcp, state, attempt=attempt + 1)
+
+    def died(done: asyncio.Task[None]) -> None:
+        if done.cancelled() or (exc := done.exception()) is None:
+            return
+        delay = min(_POLLER_RESTART_DELAY * 2**attempt, _POLLER_RESTART_CAP)
+        logger.error("Poller task died; restarting in %.1fs", delay, exc_info=exc)
+        asyncio.get_running_loop().call_later(delay, restart)
+
+    task.add_done_callback(died)
+
+
 class _LiveSession:
     """The session-keyed resources attached on the first identified call.
 
@@ -1247,42 +1191,6 @@ class _LiveSession:
         self.shutdown = asyncio.Event()
         self.attached = False
 
-    def _spawn_poller(
-        self, mcp: FastMCP[ServerState], state: ServerState, *, attempt: int
-    ) -> None:
-        """Start the poller; if it dies, log it and start another after a backoff.
-
-        The poller also reaps shutdown sentinels: it runs on every wake, and a
-        watch on the sentinel directory wakes it, so there is no reaper timer.
-        It outlives the requests that may start it, and nothing else would
-        restart it, so a death must not leave the markers silently stale.
-        """
-        shutdown = self.shutdown
-        poll = _descriptions.poll_inbox(
-            mcp,
-            state,
-            shutdown=shutdown,
-            reap=lambda: _reap_sentinels(state),
-            watch_dirs=(sentinel_dir(state.config.repo_name),),
-        )
-        task = asyncio.create_task(poll, context=Context())
-        self.reaper = task
-        self.tasks.append(task)
-
-        def restart() -> None:
-            if shutdown.is_set() or self.shutdown is not shutdown:
-                return  # shut down, or re-pointed to a new session
-            self._spawn_poller(mcp, state, attempt=attempt + 1)
-
-        def died(done: asyncio.Task[None]) -> None:
-            if done.cancelled() or (exc := done.exception()) is None:
-                return
-            delay = min(_POLLER_RESTART_DELAY * 2**attempt, _POLLER_RESTART_CAP)
-            logger.error("Poller task died; restarting in %.1fs", delay, exc_info=exc)
-            asyncio.get_running_loop().call_later(delay, restart)
-
-        task.add_done_callback(died)
-
     async def _register_and_start(
         self, mcp: FastMCP[ServerState], state: ServerState
     ) -> None:
@@ -1295,12 +1203,12 @@ class _LiveSession:
         await _descriptions.refresh_wall(mcp, state)
 
         # Reap sentinels FIRST so orphan detection sees clean KV state.
-        await _reap_sentinels(state)
+        await reap_sentinels(state)
         sessions = await state.relay.get_sessions()
         await _append_login_event(state, final_name)
         await _close_orphaned_logins(state, sessions)
 
-        self._spawn_poller(mcp, state, attempt=0)
+        _spawn_poller(self, mcp, state, attempt=0)
         self.tasks.append(asyncio.create_task(_heartbeat_loop(state, self.shutdown)))
         self.tasks.append(asyncio.create_task(_kv_watcher_loop(state, self.shutdown)))
 

@@ -478,14 +478,9 @@ class LocalRelay:
         broadcast mailbox — no session lookup, persists offline.
         """
         self._validate_user(message.from_user)
-        if ":" in message.to_user:
-            # Targeted delivery -- TTY inbox
-            self._validate_user(message.to_user.split(":")[0])
-            path = self._inbox_path_for_key(message.to_user)
-        else:
-            # Broadcast -- single user mailbox, no session lookup
-            self._validate_user(message.to_user)
-            path = self._user_inbox_path(message.to_user)
+        to = message.to_user  # user:tty is a session's mailbox, a bare user's
+        self._validate_user(to.split(":")[0])  # is the broadcast one
+        path = (self._inbox_path_for_key if ":" in to else self._user_inbox_path)(to)
         with self._lock():
             if any(m.id == message.id for m in self._read_inbox_file(path)):
                 return  # same id twice is one message, as JetStream dedups it
@@ -494,10 +489,9 @@ class LocalRelay:
             # existing file would not change the directory).  The old text is
             # carried through as it is, so a line this version cannot parse is
             # never dropped by a delivery.
-            old = path.read_text() if path.exists() else ""
-            if old and not old.endswith("\n"):
-                old += "\n"
-            atomic_write(path, old + message.model_dump_json() + "\n")
+            path.touch(mode=0o600)  # the mailbox exists from here, empty if new
+            old = path.read_text().splitlines()
+            atomic_write(path, "\n".join([*old, message.model_dump_json()]) + "\n")
             path.chmod(0o600)
 
     async def fetch(self, session_key: str) -> list[Message]:
@@ -625,11 +619,7 @@ class LocalRelay:
         return await self.get_sessions()
 
     async def delete_session(self, session_key: str) -> None:
-        """Remove a session from storage, under the directory lock."""
-        self._delete_session_locked(session_key)
-
-    def _delete_session_locked(self, session_key: str) -> None:
-        """Delete a session holding the directory lock.
+        """Remove a session from storage, under the directory lock.
 
         The read-modify-write of ``sessions.json`` must not interleave with
         another process's :meth:`update_session`, or the later rename loses its
@@ -707,7 +697,8 @@ class LocalRelay:
             with routing_lock(session_key.partition(":")[2]) as acquired:
                 if not acquired:
                     continue
-                self._delete_session_locked(session_key)
+                with self._lock():
+                    self.delete_session_sync(session_key)
                 sentinel.unlink(missing_ok=True)
 
     # -- Session history (wtmp) --

@@ -8518,15 +8518,17 @@ empties the held set cancels the timer (`docs/notification.tex`, Channel
 Delivery). The poller's wall-countdown, invite-expiry and unread-backstop jobs
 and the 2-second sentinel reaper are removed. Operator ruling (2026-11-23): the
 server may keep exactly (a) connection liveness, being the NATS 5-second
-subscription check, the local relay's 60-second watch check (which verifies the
-watch's emitters and directory inode and rebuilds it, logging onset and
-recovery) and the session heartbeat (60 seconds, which also carries the
+subscription check, the local relay's 60-second watch check (tracked on elapsed
+time, so steady wakes cannot starve it; it verifies the watch's threads, the
+directory's device and inode, and a canary entry that an event must report, and
+rebuilds the watch, logging onset and recovery) and the session heartbeat (60 seconds, which also carries the
 throttled org-repo refresh and keeps the session alive in the relay), and (b)
 one-shot deadline wakes armed only while something with an expiry is displayed:
 the earliest displayed wall `expires_at` and the earliest held talk invite
 arrival plus its TTL, so an expired wall or invite clears with no other event.
 No other cadence is allowed. Shutdown sentinels are reaped at start and on every
-poller wake, and a watch on the sentinel directory wakes it. Push is the
+poller wake, and a watch on the sentinel directory wakes it. A poller
+that dies is restarted with a backoff and an ERROR log each time. Push is the
 detection path for arrivals, and a relay reconnect (`NatsRelay._on_reconnect`) re-runs the summarizer to catch
 mail that core NATS did not replay. Mail is ordered by `inbox_high_water`
 (never used as a count), talk arrivals by monotonic `TalkState` counters, and

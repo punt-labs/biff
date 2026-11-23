@@ -85,6 +85,7 @@
   "biff.server.launch": "server",
   "biff.server.mcp_protocol": "server",
   "biff.server.relay_lifecycle": "server",
+  "biff.server.sentinel_reaper": "server",
   "biff.server.state": "server",
   "biff.server.tools": "server",
   "biff.server.tools._activity": "server",

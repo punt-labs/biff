@@ -8,6 +8,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from watchdog.events import (
+    DirCreatedEvent,
+    DirModifiedEvent,
+    FileCreatedEvent,
+    FileDeletedEvent,
+    FileModifiedEvent,
+    FileMovedEvent,
+    FileSystemEvent,
+)
 
 from biff.local_watch import ArrivalHandler, LocalWatch
 from biff.models import Message, WallPost
@@ -74,6 +83,39 @@ class TestIsArrivalFile:
         assert not ArrivalHandler.is_arrival_file(name)
 
 
+class TestWhatCountsAsAnArrival:
+    """The filter, on synthetic events: a real filesystem reports on its own time."""
+
+    def _handler(self) -> ArrivalHandler:
+        loop = asyncio.new_event_loop()
+        loop.close()
+        return ArrivalHandler(loop, lambda: None)
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            FileModifiedEvent("/relay/.lock"),
+            FileModifiedEvent("/relay/unread.json"),
+            FileCreatedEvent("/relay/wall.json.12.tmp"),
+            DirCreatedEvent("/relay/sub"),
+        ],
+    )
+    def test_these_do_not_wake(self, event: FileSystemEvent) -> None:
+        assert not self._handler().is_arrival(event)
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            FileCreatedEvent("/relay/userinbox-kai.jsonl"),
+            FileMovedEvent("/relay/wall.json.12.tmp", "/relay/wall.json"),
+            FileDeletedEvent("/relay/sessions.json"),
+            DirModifiedEvent("/relay"),
+        ],
+    )
+    def test_these_wake(self, event: FileSystemEvent) -> None:
+        assert self._handler().is_arrival(event)
+
+
 class TestWatch:
     async def test_targeted_message_wakes(self, relay: LocalRelay) -> None:
         seen = _Counter()
@@ -136,23 +178,6 @@ class TestWatch:
         with LocalWatch(relay.data_dir, seen):
             atomic_write(tmp_path / "sessions.json", "{}\n")
             await seen.next()
-
-    async def test_reads_and_the_lock_do_not_wake(
-        self, relay: LocalRelay, tmp_path: Path
-    ) -> None:
-        await relay.deliver(Message(from_user="eric", to_user="kai", body="old"))
-        seen = _Counter()
-        with LocalWatch(relay.data_dir, seen):
-            # FSEvents replays the last seconds of history when a watch starts,
-            # so the delivery above is reported once; let it land, then count.
-            await asyncio.sleep(_QUIET)
-            seen.count = 0
-            await relay.fetch_user_inbox("kai")  # a read opens and closes the file
-            await relay.get_unread_summary("kai:tty1")
-            with (tmp_path / ".lock").open("a"):  # the lock file exists already
-                pass
-            await asyncio.sleep(_QUIET)
-        assert seen.count == 0
 
     async def test_no_wake_after_the_watch_exits(self, relay: LocalRelay) -> None:
         seen = _Counter()

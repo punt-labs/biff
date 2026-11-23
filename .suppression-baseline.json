@@ -74,9 +74,12 @@
       "noqa": 1
     },
     "src/biff/server/app.py": {
-      "noqa": 7,
+      "noqa": 6,
       "type_ignore": 5,
       "pyright_ignore": 8
+    },
+    "src/biff/server/sentinel_reaper.py": {
+      "noqa": 1
     },
     "src/biff/server/tools/_descriptions.py": {
       "noqa": 12,
@@ -135,5 +138,5 @@
       "per_file_ignores": 4
     }
   },
-  "updated_at": "2026-11-23T16:37:23Z"
+  "updated_at": "2026-11-23T18:31:37Z"
 }

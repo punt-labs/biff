@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 import sys
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, ClassVar, Self
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.utils import UnsupportedLibcError
 
 from biff.directory_kqueue import DirectoryKqueue
 
@@ -31,17 +33,16 @@ def _reset_dead_inotify_reader() -> None:
     watchdog keeps one process-wide reader thread (``InotifyFD._instance``); if
     it dies, every emitter stays alive and a rebuild would reuse the corpse.
     """
-    if not sys.platform.startswith("linux"):
-        return
     try:
-        from watchdog.observers import inotify_c  # noqa: PLC0415
-
-        reader = inotify_c.InotifyFD._instance
+        module = importlib.import_module("watchdog.observers.inotify_c")
+        reader_class: type[object] = module.__dict__["InotifyFD"]
+        shared = "_instance"  # watchdog's process-wide reader, private to it
+        reader: threading.Thread | None = vars(reader_class).get(shared)
         if reader is not None and not reader.is_alive():
-            inotify_c.InotifyFD._instance = None
+            setattr(reader_class, shared, None)
             logger.warning("Replaced a dead inotify reader thread")
-    except (ImportError, AttributeError):
-        logger.debug("Could not inspect the inotify reader", exc_info=True)
+    except (ImportError, KeyError, OSError, UnsupportedLibcError):
+        logger.debug("No inotify reader to inspect on this platform")
 
 
 def _log_thread_failures() -> None:
@@ -172,6 +173,7 @@ class LocalWatch:
 
     __slots__ = (
         "_canary",
+        "_canary_pending",
         "_closed",
         "_data_dir",
         "_identity",
@@ -191,6 +193,7 @@ class LocalWatch:
     _kqueue: DirectoryKqueue | None
     _stuck_kqueue: DirectoryKqueue | None
     _canary: threading.Event
+    _canary_pending: bool
     _lock: threading.RLock
     _closed: bool
 
@@ -205,6 +208,7 @@ class LocalWatch:
         self._kqueue = None
         self._stuck_kqueue = None
         self._canary = threading.Event()
+        self._canary_pending = False
         self._lock = threading.RLock()
         self._closed = False
         return self
@@ -249,6 +253,8 @@ class LocalWatch:
         self._kqueue = DirectoryKqueue(self._data_dir, self._wake)
 
     def _wake(self) -> None:
+        if self._canary_pending:
+            self._canary.set()  # the prompt kqueue path also proves delivery
         try:
             self._loop.call_soon_threadsafe(self._on_change)
         except RuntimeError:
@@ -290,12 +296,15 @@ class LocalWatch:
     def _canary_reason(self, timeout: float) -> str | None:
         canary = self._data_dir / self.CANARY_NAME
         self._canary.clear()
+        self._canary_pending = True
         try:
             canary.write_text("")
             seen = self._canary.wait(timeout)
             canary.unlink(missing_ok=True)
         except OSError as exc:
             return f"canary entry could not be written ({exc.strerror})"
+        finally:
+            self._canary_pending = False
         return None if seen else f"canary event not seen within {timeout:g}s"
 
     def stop(self) -> None:

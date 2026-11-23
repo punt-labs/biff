@@ -176,6 +176,13 @@ def _nats_state(tmp_path: Path) -> ServerState:
     )
 
 
+def _assert_only(delays: list[float], interval: float) -> None:
+    """Assert every timer is the remainder of one *interval* of elapsed time."""
+    assert delays
+    assert all(0 < d <= interval for d in delays), delays
+    assert max(delays) > interval - 5.0, delays
+
+
 class TestNoTimers:
     """With no arrivals the poller schedules nothing but the liveness check."""
 
@@ -190,9 +197,7 @@ class TestNoTimers:
         finally:
             await _stop(task)
         assert spy.delays
-        assert {round(d) for d in spy.delays} == {
-            round(_descriptions._WATCH_LIVENESS_INTERVAL)
-        }
+        _assert_only(spy.delays, _descriptions._WATCH_LIVENESS_INTERVAL)
 
     async def test_nats_poller_schedules_only_the_liveness_reconcile(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -208,9 +213,7 @@ class TestNoTimers:
         finally:
             await _stop(task)
         assert spy.delays
-        assert {round(d) for d in spy.delays} == {
-            round(_descriptions._SUB_RECONCILE_INTERVAL)
-        }
+        _assert_only(spy.delays, _descriptions._SUB_RECONCILE_INTERVAL)
 
     async def test_a_displayed_wall_arms_one_deadline_wake_and_clearing_it_ends_it(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
@@ -236,9 +239,7 @@ class TestNoTimers:
             spy.delays.clear()
             state.wake.wake()  # re-arm the wait; nothing is displayed now
             await _idle(task, lambda: True, spins=200)
-            assert {round(d) for d in spy.delays} == {
-                round(_descriptions._WATCH_LIVENESS_INTERVAL)
-            }
+            _assert_only(spy.delays, _descriptions._WATCH_LIVENESS_INTERVAL)
         finally:
             await _stop(task)
 

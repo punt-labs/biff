@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import multiprocessing as mp
+import select
 import sys
 import threading
 import time
@@ -19,6 +20,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
+from watchdog.observers import Observer
 
 import biff.directory_kqueue as dk
 import biff.local_watch as local_watch
@@ -66,6 +68,10 @@ def _state(tmp_path: Path, name: str = "relay") -> ServerState:
         pwd="/p",
         unread_path=tmp_path / "status" / f"{name}.json",
     )
+
+
+def _deaf(*_a: object) -> None:
+    """Swallow an event or a wake, as a stalled watcher would."""
 
 
 class TestCancelledPollerLeavesNoWatch:
@@ -165,7 +171,7 @@ class TestWatchFailureReporting:
     async def test_the_real_cause_of_a_failed_start_is_raised(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        real = local_watch.Observer
+        real = Observer
 
         class Failing(real):  # type: ignore[valid-type,misc]
             def start(self) -> None:
@@ -184,7 +190,7 @@ class TestWatchFailureReporting:
             msg = "too many open files"
             raise OSError(24, msg)
 
-        monkeypatch.setattr(dk.select, "kqueue", boom)
+        monkeypatch.setattr(select, "kqueue", boom)
         before = len(list(Path("/dev/fd").iterdir()))
         for _ in range(10):
             with pytest.raises(OSError, match="too many"):
@@ -197,9 +203,8 @@ class TestWatchFailureReporting:
         with LocalWatch(tmp_path, lambda: None) as healthy:
             assert healthy.unhealthy_reason(canary_timeout=15.0) is None
         # Every thread is alive and the directory is right, but no event comes.
-        monkeypatch.setattr(
-            local_watch.ArrivalHandler, "on_any_event", lambda *_a: None
-        )
+        monkeypatch.setattr(local_watch.ArrivalHandler, "on_any_event", _deaf)
+        monkeypatch.setattr(LocalWatch, "_wake", _deaf)  # kqueue path
         with LocalWatch(tmp_path, lambda: None) as deaf:
             reason = deaf.unhealthy_reason(canary_timeout=1.0)
         assert reason is not None
@@ -337,23 +342,24 @@ class TestWallDeadlineFollowsTheRelay:
 
 
 class TestTalkListenWaitsOnAnEvent:
-    async def test_an_arrival_wakes_the_waiter_at_once(self, tmp_path: Path) -> None:
+    async def test_a_wake_resumes_the_waiter_at_once(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
-        waiter = asyncio.create_task(state.talk.wait_for_traffic(timeout=10.0))
+        waiter = asyncio.create_task(state.wake.nudged(10.0))
         await asyncio.sleep(0.05)
         started = time.monotonic()
-        state.talk.receive(
-            {
-                "type": "invite",
-                "from": "eric",
-                "from_key": "eric:abcd",
-                "to_key": state.session_key,
-                "body": "hi",
-            }
-        )
+        state.wake.wake()
         assert await waiter is True
         assert time.monotonic() - started < 0.2  # not a 0.25 s poll
 
-    async def test_a_timeout_reports_no_traffic(self, tmp_path: Path) -> None:
+    async def test_waiting_consumes_nothing_the_poller_needs(
+        self, tmp_path: Path
+    ) -> None:
         state = _state(tmp_path)
-        assert await state.talk.wait_for_traffic(timeout=0.05) is False
+        waiter = asyncio.create_task(state.wake.nudged(10.0))
+        await asyncio.sleep(0.05)
+        state.wake.wake()
+        await waiter
+        assert state.wake.is_set  # the poller still sees its wake
+
+    async def test_a_timeout_reports_no_wake(self, tmp_path: Path) -> None:
+        assert await _state(tmp_path).wake.nudged(0.05) is False

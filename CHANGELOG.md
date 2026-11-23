@@ -35,7 +35,11 @@
   with a filesystem watch (`watchdog`, a new dependency; on macOS also a
   kqueue on the directory, which uses a fixed number of descriptors however
   many mailboxes exist). Mailboxes are now written by rename. A failing poller
-  pass logs a warning and is retried on the liveness wake. `set_poll_interval`
+  pass logs a warning and is retried on the liveness wake. A poller that dies is
+  restarted with a backoff. The watch check also proves delivery end to end with a
+  canary entry and names the failed check in its warning. Removing sentinel
+  files and registering sessions can no longer lose a session: the reap takes the
+  relay directory lock. `set_poll_interval`
   now only records the cadence `/biff:read` schedules; the server runs no timer
   for it.
 - **Behavior change: the local relay is the default.** A repo with no relay

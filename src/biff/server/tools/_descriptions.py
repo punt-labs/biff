@@ -902,9 +902,8 @@ class _Seen:
         deadline that cannot be cleared never spins the loop.  ``None`` means
         wait for a wake with no timer at all.
         """
-        wait = min(math.inf if liveness is None else liveness, deadline)
-        if self.failed:
-            wait = math.inf if liveness is None else liveness
+        base = math.inf if liveness is None else liveness
+        wait = base if self.failed else min(base, deadline)
         return None if wait == math.inf else max(wait, _MIN_WAIT)
 
 

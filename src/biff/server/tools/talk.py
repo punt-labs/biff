@@ -22,6 +22,7 @@ Talk is NATS-only.  LocalRelay and DormantRelay return an error message.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -269,7 +270,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         # so an active conversation with an empty queue keeps waiting for the
         # partner's next frame instead of returning at once.  An arrival wakes
         # the wait; nothing polls.
-        await state.talk.wait_for_traffic(float(timeout))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + float(timeout)
+        while not state.talk.has_pending_traffic and loop.time() < deadline:
+            await state.wake.nudged(deadline - loop.time())
         drain = state.talk.drain_for_agent()
         published = await _publish_agent_auto_accept(state, drain)
         await refresh_talk(mcp, state)

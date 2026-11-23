@@ -50,14 +50,16 @@ class WakeSignal:
     finishes rather than once per arrival.
     """
 
-    __slots__ = ("_event",)
+    __slots__ = ("_event", "_listeners")
 
     _event: asyncio.Event
+    _listeners: set[asyncio.Future[None]]
 
     def __new__(cls) -> Self:
         """Create an unset signal."""
         self = super().__new__(cls)
         self._event = asyncio.Event()
+        self._listeners = set()
         return self
 
     @property
@@ -66,8 +68,27 @@ class WakeSignal:
         return self._event.is_set()
 
     def wake(self) -> None:
-        """Ask the poller to run its next pass now."""
+        """Ask the poller to run its next pass now; nudge any :meth:`nudged`."""
         self._event.set()
+        for listener in self._listeners:
+            if not listener.done():
+                listener.set_result(None)
+
+    async def nudged(self, timeout: float) -> bool:
+        """Wait up to *timeout* seconds for the next :meth:`wake`; whether it came.
+
+        Unlike :meth:`wait` this consumes nothing, so a tool call can wait for
+        an arrival (``talk_listen``) while the poller keeps its own wake.
+        """
+        listener: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._listeners.add(listener)
+        try:
+            await asyncio.wait_for(listener, timeout)
+        except TimeoutError:
+            return False
+        finally:
+            self._listeners.discard(listener)
+        return True
 
     def watching(self, relay: Relay, *extra: Path) -> WatchKeeper:
         """Return the keeper of the watches that wake this signal.
