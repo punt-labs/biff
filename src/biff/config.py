@@ -333,16 +333,16 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
     yaml_shared = load_yaml_config(repo_root)
     yaml_local = load_yaml_local(repo_root)
     merged = merge_config(yaml_shared, yaml_local)
-    relay = relay_config.resolve_relay(
+    relay = relay_config.RelayLayers.of(
         [("config.yaml", yaml_shared), ("config.local.yaml", yaml_local)]
-    )
+    ).resolve()
     peers, orgs = _extract_peers(merged)
     # Derive orgs from the remote only when the peers.orgs key is ABSENT from
     # the merged config. An explicit empty list (peers.orgs: []) is honored:
     # it means "no org discovery."
     if not _has_orgs_key(merged):
         orgs = _owner_orgs(repo_root)
-    shared_relay = relay_config.relay_section(yaml_shared)
+    shared_relay = relay_config.RelayFile.parse("config.yaml", yaml_shared)
     # Both gates read yaml_shared alone, never the merged config -- see
     # _ConfigFields.relay_committed for why.  The opt-in gate defaults closed:
     # absent or any non-True value means no.
@@ -354,8 +354,8 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         peers=peers,
         orgs=orgs,
         poll_interval=_extract_poll_interval(merged),
-        relay_allow_env_override=shared_relay.get("allow_env_override") is True,
-        relay_committed=relay_config.relay_declared(yaml_shared),
+        relay_allow_env_override=shared_relay.allows_env_override(),
+        relay_committed=shared_relay.declares(),
     )
 
 
@@ -619,7 +619,7 @@ def _load_base_config(
     data_dir = (
         data_dir_override
         if data_dir_override is not None
-        else _relay_config().local_relay_location(repo_root).path
+        else _relay_config().RelayLocation.of(repo_root).path
     )
 
     return _BaseConfig(

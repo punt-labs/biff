@@ -399,6 +399,19 @@ class LocalRelay:
         self._heartbeat_missing_warned: set[str] = set()
 
     @staticmethod
+    def _ensure_dir(data_dir: Path) -> None:
+        """Create *data_dir* 0700, tightening it if it already exists.
+
+        The per-user relay root (``.../biff/relay``) is tightened too; any
+        other parent of a custom data directory is left as it is.
+        """
+        root = data_dir.parent
+        in_relay_root = root.name == "relay" and root.parent.name == "biff"
+        for path in (root, data_dir) if in_relay_root else (data_dir,):
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.chmod(0o700)
+
+    @staticmethod
     def _validate_user(user: str) -> str:
         """Reject usernames that could escape the data directory."""
         if not user or "/" in user or "\\" in user or ".." in user:
@@ -448,25 +461,20 @@ class LocalRelay:
         broadcast mailbox — no session lookup, persists offline.
         """
         self._validate_user(message.from_user)
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-
+        self._ensure_dir(self._data_dir)
         if ":" in message.to_user:
-            # Targeted delivery — TTY inbox
-            user_part = message.to_user.split(":")[0]
-            self._validate_user(user_part)
+            # Targeted delivery -- TTY inbox
+            self._validate_user(message.to_user.split(":")[0])
             path = self._inbox_path_for_key(message.to_user)
-            if any(m.id == message.id for m in self._read_inbox_file(path)):
-                return  # same id twice is one message, as JetStream dedups it
-            with path.open("a") as f:
-                f.write(message.model_dump_json() + "\n")
         else:
-            # Broadcast — single user mailbox, no session lookup
+            # Broadcast -- single user mailbox, no session lookup
             self._validate_user(message.to_user)
             path = self._user_inbox_path(message.to_user)
-            if any(m.id == message.id for m in self._read_inbox_file(path)):
-                return
-            with path.open("a") as f:
-                f.write(message.model_dump_json() + "\n")
+        if any(m.id == message.id for m in self._read_inbox_file(path)):
+            return  # same id twice is one message, as JetStream dedups it
+        with path.open("a") as f:
+            f.write(message.model_dump_json() + "\n")
+        path.chmod(0o600)
 
     async def fetch(self, session_key: str) -> list[Message]:
         """Get unread messages for a session, oldest first."""
@@ -474,20 +482,7 @@ class LocalRelay:
 
     async def mark_read(self, session_key: str, ids: Sequence[uuid.UUID]) -> None:
         """Mark messages as read.  Rewrites the session's inbox atomically."""
-        id_set = set(ids)
-        if not id_set:
-            return
-        messages = self._read_inbox(session_key)
-        updated: list[Message] = []
-        changed = False
-        for msg in messages:
-            if msg.id in id_set and not msg.read:
-                updated.append(msg.model_copy(update={"read": True}))
-                changed = True
-            else:
-                updated.append(msg)
-        if changed:
-            self._write_inbox(session_key, updated)
+        self._mark_read(self._inbox_path_for_key(session_key), ids)
 
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:
         """Count unread messages across TTY and user inboxes."""
@@ -505,21 +500,19 @@ class LocalRelay:
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[uuid.UUID]) -> None:
         """Mark messages as read in the user's broadcast mailbox."""
-        id_set = set(ids)
-        if not id_set:
-            return
-        path = self._user_inbox_path(user)
-        messages = self._read_inbox_file(path)
-        updated: list[Message] = []
-        changed = False
-        for msg in messages:
-            if msg.id in id_set and not msg.read:
-                updated.append(msg.model_copy(update={"read": True}))
-                changed = True
-            else:
-                updated.append(msg)
-        if changed:
-            self._write_inbox_file(path, updated)
+        self._mark_read(self._user_inbox_path(user), ids)
+
+    @staticmethod
+    def _mark_read(path: Path, ids: Sequence[uuid.UUID]) -> None:
+        """Rewrite the inbox at *path* with the messages *ids* marked read."""
+        wanted = set(ids)
+        messages = LocalRelay._read_inbox_file(path)
+        updated = [
+            m.model_copy(update={"read": True}) if m.id in wanted and not m.read else m
+            for m in messages
+        ]
+        if updated != messages:
+            LocalRelay._write_inbox_file(path, updated)
 
     async def get_user_unread_count(self, user: str) -> int:
         """Count unread messages in the user's broadcast mailbox."""
@@ -638,10 +631,11 @@ class LocalRelay:
         read-modify-write on the shared sessions file.
         """
         self._validate_session_key(session_key)
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_dir(self._data_dir)
         safe = session_key.replace(":", "-")
         sentinel = self._data_dir / f"remove-{safe}"
         sentinel.write_text(session_key)
+        sentinel.chmod(0o600)
 
     def reap_sentinels(self) -> None:
         """Process sentinel files, removing flagged sessions.
@@ -705,8 +699,9 @@ class LocalRelay:
         if wall is None:
             path.unlink(missing_ok=True)
         else:
-            self._data_dir.mkdir(parents=True, exist_ok=True)
+            self._ensure_dir(self._data_dir)
             atomic_write(path, wall.model_dump_json() + "\n")
+            path.chmod(0o600)
 
     async def get_wall(self, *, repo: str | None = None) -> WallPost | None:  # noqa: ARG002
         """Read the active wall, returning ``None`` if absent or expired."""
@@ -731,11 +726,12 @@ class LocalRelay:
 
     async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool:
         """Reserve a TTY name atomically via O_CREAT|O_EXCL lockfile."""
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_dir(self._data_dir)
         path = self._tty_lock_path(user, name)
         try:
             with path.open("x") as fd:
                 fd.write(session_key)
+            path.chmod(0o600)
             return True
         except FileExistsError:
             return False
@@ -757,6 +753,7 @@ class LocalRelay:
         path = self._tty_lock_path(user, name)
         if path.exists() and path.read_text() == session_key:
             path.write_text(session_key)
+            path.chmod(0o600)
 
     async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
         """Return the session key that holds *name*, or ``None``."""
@@ -816,8 +813,10 @@ class LocalRelay:
         error = validate_reclaimable_name(name)
         if error is not None:
             raise ValueError(error)
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        self._sid_hint_path(user, session_id).write_text(name)
+        self._ensure_dir(self._data_dir)
+        hint = self._sid_hint_path(user, session_id)
+        hint.write_text(name)
+        hint.chmod(0o600)
 
     async def disconnect(self) -> None:
         """No-op — filesystem relay has no connection to release."""
@@ -848,14 +847,11 @@ class LocalRelay:
         """Atomically rewrite an inbox file."""
         content = "".join(msg.model_dump_json() + "\n" for msg in messages)
         atomic_write(path, content)
+        path.chmod(0o600)
 
     def _read_inbox(self, session_key: str) -> list[Message]:
         """Read all messages from a session's TTY inbox."""
         return self._read_inbox_file(self._inbox_path_for_key(session_key))
-
-    def _write_inbox(self, session_key: str, messages: Sequence[Message]) -> None:
-        """Atomically rewrite a session's TTY inbox."""
-        self._write_inbox_file(self._inbox_path_for_key(session_key), messages)
 
     def _parse_sessions_file(self) -> dict[str, UserSession]:
         """Parse sessions.json, raising on corruption.
@@ -882,7 +878,7 @@ class LocalRelay:
     def _write_sessions(self, sessions: dict[str, UserSession]) -> None:
         """Atomically rewrite the sessions file."""
         data = {k: v.model_dump(mode="json") for k, v in sessions.items()}
-        atomic_write(
-            self._data_dir / "sessions.json",
-            json.dumps(data, indent=2) + "\n",
-        )
+        self._ensure_dir(self._data_dir)
+        path = self._data_dir / "sessions.json"
+        atomic_write(path, json.dumps(data, indent=2) + "\n")
+        path.chmod(0o600)

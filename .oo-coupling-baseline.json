@@ -466,7 +466,14 @@
     "public_names": 10.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
-    "avg_lcom": 0.942
+    "avg_lcom": 0.939
+  },
+  "src/biff/relay_config.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 8.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/biff/relay_select.py": {
     "efferent_coupling": 2.0,

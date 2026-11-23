@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from biff.config import _extract_peers, _extract_team  # pyright: ignore[reportPrivateUsage]
 from biff.models import RelayAuth
-from biff.relay_config import resolve_relay
+from biff.relay_config import RelayLayers
 
 
 def extract_biff_fields(
@@ -18,7 +18,7 @@ def extract_biff_fields(
     tuple[str, ...],
 ]:
     """Return team, relay url, relay auth, relay TLS mode, peers and orgs."""
-    relay = resolve_relay([("config", raw)])
+    relay = RelayLayers.of([("config", raw)]).resolve()
     peers, orgs = _extract_peers(raw)
     return (
         _extract_team(raw),
