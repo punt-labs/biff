@@ -21,7 +21,7 @@ _WORKFLOW = Path(".github") / "workflows" / "biff-notify.yml"
 @pytest.fixture(autouse=True)
 def _clean_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    for name in ("BIFF_RELAY_URL", "BIFF_RELAY_TOKEN", "GITHUB_ACTIONS"):
+    for name in ("BIFF_RELAY_URL", "BIFF_RELAY_TOKEN"):
         monkeypatch.delenv(name, raising=False)
 
 

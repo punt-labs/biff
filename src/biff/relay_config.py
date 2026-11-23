@@ -247,7 +247,8 @@ class RelayKey:
         r"https://git-manager\.devin\.ai/proxy/(?P<host>github\.com)/(?P<path>.+)"
     )
     _URL = re.compile(
-        r"[a-z][a-z0-9+.-]*://(?:[^/@]*@)?(?P<host>[^/:@]+)(?::\d+)?/(?P<path>.+)",
+        r"[a-z][a-z0-9+.-]*://(?:[^/@]*@)?(?P<host>[^/:@]+)"
+        r"(?::(?!(?:22|80|443|9418)/)(?P<port>\d+))?(?::\d+)?/(?P<path>.+)",
         re.IGNORECASE,
     )
     _SCP = re.compile(r"(?:[^@/]+@)?(?P<host>[^:/@]+):(?P<path>[^/].*)")
@@ -276,7 +277,9 @@ class RelayKey:
             return cls(
                 f"remote-{cls._digest(str(resolved))}", f"remote path {resolved}"
             )
-        where = f"{match['host']}/{match['path'].strip('/')}"
+        port = match.groupdict().get("port")
+        host = f"{match['host']}:{port}" if port else match["host"]
+        where = f"{host}/{match['path'].strip('/')}"
         parts = where.split("/")[1:]
         if len(parts) != 2 or not all(parts):
             return cls(f"remote-{cls._digest(where)}", f"remote URL hash of {where}")
@@ -330,7 +333,7 @@ class RelayLocation:
         """
         try:
             result = subprocess.run(
-                ["git", "config", "--get-regexp", r"^remote\..*\.url$"],  # noqa: S607
+                ["git", "config", "--local", "--get-regexp", r"^remote\..*\.url$"],  # noqa: S607
                 capture_output=True,
                 text=True,
                 check=False,

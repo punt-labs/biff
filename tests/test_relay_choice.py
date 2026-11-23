@@ -466,3 +466,33 @@ class TestFilesystemRemotes:
         one = _clone(tmp_path / "a", ("origin", f"{tmp_path}/Up.git"))
         two = _clone(tmp_path / "b", ("origin", f"{tmp_path}/up.git"))
         assert RelayLocation.of(one).path != RelayLocation.of(two).path
+
+
+class TestPortsAndGlobalRemotes:
+    def test_different_non_default_ports_are_different_servers(self) -> None:
+        one = RelayKey.of("ssh://git@git.example.com:2222/o/r.git")
+        two = RelayKey.of("ssh://git@git.example.com:2223/o/r.git")
+        assert one.name != two.name
+
+    @pytest.mark.parametrize(
+        "same",
+        [
+            "ssh://git@git.example.com:22/o/r.git",
+            "https://git.example.com:443/o/r",
+            "https://git.example.com/o/r.git",
+            "git@git.example.com:o/r.git",
+        ],
+    )
+    def test_default_ports_do_not_split_one_server(self, same: str) -> None:
+        assert RelayKey.of(same).name == RelayKey.of("git@git.example.com:o/r").name
+
+    def test_a_global_remote_is_not_a_repos_remote(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        global_config = tmp_path / "gitconfig"
+        global_config.write_text('[remote "origin"]\n\turl = git@github.com:o/r.git\n')
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+        one = _clone(tmp_path / "a")
+        two = _clone(tmp_path / "b")
+        assert "no remote" in RelayLocation.of(one).reason
+        assert RelayLocation.of(one).path != RelayLocation.of(two).path
