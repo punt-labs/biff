@@ -68,6 +68,18 @@ def _clear_claude_session_env(  # pyright: ignore[reportUnusedFunction]
 
 
 @pytest.fixture(autouse=True)
+def _not_in_github_actions(  # pyright: ignore[reportUnusedFunction]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strip ``GITHUB_ACTIONS`` so the suite behaves the same on a CI runner.
+
+    ``biff wall`` refuses to post from CI on the local relay; the tests that
+    exercise that refusal set the variable themselves.
+    """
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_description_globals() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
     """Clear ``_descriptions`` module globals around every test.
 
