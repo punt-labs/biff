@@ -39,8 +39,7 @@ from biff.server.caller_policy import CallerPolicy
 from biff.server.channel_server import ChannelServer
 from biff.server.poller_supervisor import (
     PollerSupervisor,
-    build_logout_event,
-    reap_sentinels,
+    SentinelReaper,
 )
 from biff.server.relay_lifecycle import RelayLifecycle
 from biff.server.state import ServerState
@@ -479,7 +478,7 @@ async def _handle_kv_delete(
         logger.debug("No cached session on DEL, skipping wtmp")
         return
     try:
-        await relay.append_wtmp(build_logout_event(session_key, cached))
+        await relay.append_wtmp(SentinelReaper.logout_event(session_key, cached))
     except Exception:
         logger.warning("Failed to append wtmp logout", exc_info=True)
 
@@ -1167,7 +1166,7 @@ class _LiveSession:
         await _descriptions.refresh_wall(mcp, state)
 
         # Reap sentinels FIRST so orphan detection sees clean KV state.
-        await reap_sentinels(state)
+        await SentinelReaper.reap(state)
         sessions = await state.relay.get_sessions()
         await _append_login_event(state, final_name)
         await _close_orphaned_logins(state, sessions)

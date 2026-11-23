@@ -58,16 +58,17 @@ async def test_env_session_registers_and_polls_with_no_tool_call(
         )
 
 
-def _background_tasks() -> set[str]:
-    """Names of the long-lived server tasks (not the poller's momentary waiters)."""
-    names: set[str] = set()
+def _background_tasks() -> list[str]:
+    """Names of the long-lived server tasks, one entry per task (so a second
+    poller shows), not the poller's momentary waiters."""
+    names: list[str] = []
     for task in asyncio.all_tasks():
         coro = task.get_coro()
         if isinstance(coro, types.CoroutineType) and "/biff/server/" in str(
             coro.cr_code.co_filename
         ):
-            names.add(coro.__qualname__)
-    return names
+            names.append(coro.__qualname__)
+    return sorted(names)
 
 
 async def test_a_stamped_call_for_the_same_session_does_not_register_again(

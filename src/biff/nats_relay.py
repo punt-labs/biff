@@ -1726,11 +1726,16 @@ class NatsRelay:
         """Pull and ack all messages from the user's broadcast inbox."""
         self._validate_user(user)
         js, _ = await self._ensure_connected()
-        return await self._fetch_from_subject(
+        fetched = await self._fetch_from_subject(
             js,
             subject=self._user_subject(user),
             durable=self._user_durable_name(user),
         )
+        if fetched:
+            # Consuming shared mail lowers every sibling session's count;
+            # nothing else tells them, now that no timer recomputes it.
+            await self._publish_inbox_notification(self._repo_name, user)
+        return fetched
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[UUID]) -> None:
         """No-op — messages are consumed (deleted) by :meth:`fetch_user_inbox`."""

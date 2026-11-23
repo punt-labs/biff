@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from biff.server.channel import ChannelLink
 
 _NOTIFY_SEND_TIMEOUT = 3.0
-_OWED_RECHECK = 1.0
 
 
 @dataclass
@@ -85,17 +84,20 @@ class HandshakeDelivery:
                 await self._notify_standalone()
 
     def seconds_until_retry(self) -> float | None:
-        """Seconds until an owed notification may be retried; ``None`` if none is.
+        """Seconds until an owed notification becomes sendable; ``None`` if none is.
 
-        The poller arms one one-shot wake for it (DES-087), so a debt on a
-        quiet relay is retried when the link's back-off ends, not at the next
-        liveness check.  A debt that is owed and retryable but cannot be sent
-        yet (no session captured inside the handshake window) is looked at again
-        after ``_OWED_RECHECK`` seconds.
+        The poller arms one one-shot wake for that moment (DES-087): the end of
+        the link's back-off or, with no session captured, of the handshake
+        window, whichever is later.  A debt that is sendable now has nothing to
+        wait for, and nothing is armed when nothing is owed.
         """
-        if not (self._link and self._pending_notify):
+        link = self._link
+        if not (link and self._pending_notify):
             return None
-        return self._link.seconds_until_ready() or _OWED_RECHECK
+        wait = link.seconds_until_ready()
+        if self._session is None:
+            wait = max(wait, link.window_remaining())
+        return wait or None
 
     def serve_single_connection(self, link: ChannelLink) -> None:
         """Serve one connection for the process's life, observed through *link*.

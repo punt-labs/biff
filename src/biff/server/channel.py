@@ -266,13 +266,13 @@ class ChannelLink:
             msg = "a write to the client was dropped"
             raise ChannelUnavailableError(msg)
 
-    def in_handshake_window(self) -> bool:
-        """Whether the server started too recently to expect ``initialize`` yet.
+    def window_remaining(self) -> float:
+        """Seconds until the server may expect ``initialize``; 0 once it may.
 
         Measured from when the link was created, which is before any startup
         notification can run, attached stream or not.
         """
-        return time.monotonic() - self._created_at < HANDSHAKE_WINDOW
+        return max(self._created_at + HANDSHAKE_WINDOW - time.monotonic(), 0.0)
 
     def ready(self) -> bool:
         """Whether a retry that nothing asked for may run now (after the back-off)."""

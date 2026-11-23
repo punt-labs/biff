@@ -19,6 +19,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.utils import UnsupportedLibcError
 
+from biff.abandoned_canaries import reclaim_abandoned_canaries
 from biff.directory_kqueue import DirectoryKqueue
 from biff.failure_log import EpisodeLog
 
@@ -249,6 +250,7 @@ class LocalWatch:
                 self._data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                 info = self._data_dir.stat()
                 self._identity = (info.st_dev, info.st_ino)
+                reclaim_abandoned_canaries(self._data_dir, self.CANARY_PREFIX)
                 self._canary_dir.mkdir(mode=0o700, exist_ok=True)
                 observer = Observer()
                 for path, loop, notify in (

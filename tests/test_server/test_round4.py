@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from contextlib import suppress
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -15,7 +16,9 @@ from mcp.shared.message import SessionMessage
 
 import biff.local_watch as local_watch
 from biff.local_watch import LocalWatch, WatchKeeper
-from biff.models import BiffConfig
+from biff.models import BiffConfig, Message
+from biff.nats_relay import NatsRelay
+from biff.relay import LocalRelay
 from biff.server import app, channel, poller_supervisor
 from biff.server.app import create_server
 from biff.server.channel import ChannelLink
@@ -25,7 +28,7 @@ from biff.server.tools import _descriptions
 from tests._state import create_state
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
 _MARK = "[biff: notifications"
@@ -300,3 +303,146 @@ class TestAnnouncingADebtWakesThePoller:
         await _descriptions._announce(state)
         outcome = await state.wake.wait(timeout=0.2, shutdown=None)
         assert not outcome.is_arrival
+
+
+class TestADebtInsideTheHandshakeWindowWakesOnce:
+    async def test_one_wake_at_the_window_end_and_no_ticks(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(channel, "HANDSHAKE_WINDOW", 2.5)
+        link = ChannelLink()
+        link.observe(anyio.create_memory_object_stream[SessionMessage](1)[0])
+        delivery = _descriptions.handshake_delivery
+        delivery.serve_single_connection(link)
+        delivery._pending_notify = True  # owed, and no session was captured
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        flushes: list[float] = []
+        real_flush = type(delivery).flush_owed
+
+        async def spy(self: object) -> None:
+            flushes.append(loop.time() - started)
+            await real_flush(delivery)
+
+        monkeypatch.setattr(type(delivery), "flush_owed", spy)
+        state = _state(tmp_path)
+        task = asyncio.create_task(_REAL_POLL(create_server(state), state))
+        await asyncio.sleep(3.2)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        early = [t for t in flushes if 0.3 < t < 2.3]
+        at_end = [t for t in flushes if 2.3 <= t < 2.9]
+        assert early == []  # no recheck inside the window
+        assert len(at_end) == 1  # one wake, when the window ends
+
+
+class TestAbandonedProbeDirectories:
+    async def test_a_dead_sessions_probe_is_reclaimed_and_a_live_ones_is_not(
+        self, tmp_path: Path
+    ) -> None:
+        import os
+
+        prefix = LocalWatch.CANARY_PREFIX
+        dead = tmp_path / f"{prefix}4194303-abc"  # no such process
+        live = tmp_path / f"{prefix}{os.getpid()}-other"
+        for d in (dead, live):
+            d.mkdir()
+        with LocalWatch(tmp_path, lambda: None):
+            pass
+        assert not dead.exists()
+        assert live.exists()
+
+
+class TestReadingSharedMailPokesTheSiblings:
+    @staticmethod
+    async def _fetch(fetched: list[Message]) -> AsyncMock:
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        poke = AsyncMock()
+        relay._ensure_connected = AsyncMock(return_value=(MagicMock(), MagicMock()))  # type: ignore[method-assign]
+        relay._fetch_from_subject = AsyncMock(return_value=fetched)  # type: ignore[method-assign]
+        relay._publish_inbox_notification = poke  # type: ignore[method-assign]
+        await relay.fetch_user_inbox("kai")
+        return poke
+
+    async def test_consuming_a_broadcast_pokes_the_users_other_sessions(self) -> None:
+        poke = await self._fetch([Message(from_user="eric", to_user="kai", body="hi")])
+        poke.assert_awaited_once_with("test", "kai")
+
+    async def test_an_empty_fetch_pokes_nobody(self) -> None:
+        poke = await self._fetch([])
+        poke.assert_not_awaited()
+
+
+class _CountingIds(list["uuid.UUID"]):
+    """A sequence of ids that counts how often it is iterated."""
+
+    iterations = 0
+
+    def __iter__(self) -> Iterator[uuid.UUID]:
+        type(self).iterations += 1
+        return super().__iter__()
+
+
+class TestMarkingReadBuildsTheIdSetOnce:
+    async def test_the_ids_are_iterated_once_for_the_whole_mailbox(
+        self, tmp_path: Path
+    ) -> None:
+        relay = LocalRelay(tmp_path)
+        messages = [
+            Message(from_user="eric", to_user="kai", body=str(i)) for i in range(40)
+        ]
+        for message in messages:
+            await relay.deliver(message)
+        ids = _CountingIds(m.id for m in messages[:5])
+        await relay.mark_read_user_inbox("kai", ids)
+        assert _CountingIds.iterations == 1
+
+
+class TestAFailedPassIsNotARecovery:
+    async def test_the_notice_stays_while_every_pass_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def failing(
+            _mcp: object, _state: object, seen: _descriptions._Seen, **_k: object
+        ) -> _descriptions._Seen:
+            return _descriptions._Seen(failed=True, wall_expires=seen.wall_expires)
+
+        monkeypatch.setattr(_descriptions, "_safe_tick", failing)
+        monkeypatch.setattr(_descriptions, "_WATCH_LIVENESS_INTERVAL", 0.2)
+        state = _state(tmp_path)
+        state.wake.health.degrade()
+        task = asyncio.create_task(_REAL_POLL(create_server(state), state))
+        await asyncio.sleep(1.0)  # several liveness passes, all of them failed
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        assert state.wake.health.is_degraded
+
+
+class TestACancelledSendStillWakesThePoller:
+    async def test_the_debt_it_leaves_arms_the_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        link = ChannelLink()
+        link.observe(anyio.create_memory_object_stream[SessionMessage](1)[0])
+        delivery = _descriptions.handshake_delivery
+        delivery.serve_single_connection(link)
+        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 30.0)
+        link.failed("send", TimeoutError())
+        state = _state(tmp_path)
+
+        async def owes_then_hangs(_bus: object = None) -> None:
+            delivery._pending_notify = True  # the debt is owed before the await
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(delivery, "notify", owes_then_hangs)
+        await state.wake.wait(timeout=0.0, shutdown=None)  # drain
+        task = asyncio.create_task(_descriptions._announce(state))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        outcome = await state.wake.wait(timeout=0.2, shutdown=None)
+        assert outcome.is_arrival

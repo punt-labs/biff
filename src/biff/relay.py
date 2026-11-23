@@ -552,7 +552,8 @@ class LocalRelay:
         """
         with self._lock():
             lines = self._lines(path)
-            marked = [self._marked(line, set(ids)) for line in lines]
+            wanted = set(ids)
+            marked = [self._marked(line, wanted) for line in lines]
             if marked != lines:
                 atomic_write(path, "\n".join(marked) + "\n")
                 path.chmod(0o600)

@@ -27,7 +27,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum, auto
-from typing import TYPE_CHECKING, NamedTuple, Protocol
+from typing import TYPE_CHECKING, NamedTuple, Protocol, Self
 
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.plugins.claude_code.unread_file import write_unread_file
@@ -209,9 +209,11 @@ async def _announce(state: ServerState) -> None:
     (not by the poller's own pass) is retried only if the poller learns of it
     and arms the one-shot wake for the end of the back-off.
     """
-    await handshake_delivery.notify(state.tool_events)
-    if handshake_delivery.seconds_until_retry() is not None:
-        state.wake.wake()
+    try:
+        await handshake_delivery.notify(state.tool_events)
+    finally:  # a cancelled send keeps its debt, so it must still wake the poller
+        if handshake_delivery.seconds_until_retry() is not None:
+            state.wake.wake()
 
 
 async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -> bool:
@@ -983,7 +985,6 @@ async def _safe_tick(
     return result
 
 
-@dataclass
 class _AlwaysOnSubs:
     """The poller's three always-on SUBs, with their re-subscribe latches.
 
@@ -992,24 +993,35 @@ class _AlwaysOnSubs:
     was replaced, and :meth:`close` unsubscribes them all.
     """
 
+    __slots__ = (
+        "_gate",
+        "_inbox",
+        "_inbox_latch",
+        "_state",
+        "_talk",
+        "_talk_latch",
+        "_wall",
+        "_wall_latch",
+    )
+
     _state: ServerState
     _gate: _InboxPokeGate
-    _talk_latch: TalkNotifyLatch = field(
-        default_factory=lambda: TalkNotifyLatch.for_resubscribe(logger)
-    )
-    _inbox_latch: TalkNotifyLatch = field(
-        default_factory=lambda: TalkNotifyLatch(
-            logger, _INBOX_NOTIFY_RESUBSCRIBE_MESSAGES
-        )
-    )
-    _wall_latch: TalkNotifyLatch = field(
-        default_factory=lambda: TalkNotifyLatch(
-            logger, _WALL_NOTIFY_RESUBSCRIBE_MESSAGES
-        )
-    )
-    _talk: SubscriptionBinding | None = None
-    _inbox: SubscriptionBinding | None = None
-    _wall: SubscriptionBinding | None = None
+    _talk_latch: TalkNotifyLatch
+    _inbox_latch: TalkNotifyLatch
+    _wall_latch: TalkNotifyLatch
+    _talk: SubscriptionBinding | None
+    _inbox: SubscriptionBinding | None
+    _wall: SubscriptionBinding | None
+
+    def __new__(cls, state: ServerState, gate: _InboxPokeGate) -> Self:
+        """Create the holder with no SUB bound yet."""
+        self = super().__new__(cls)
+        self._state, self._gate = state, gate
+        self._talk_latch = TalkNotifyLatch.for_resubscribe(logger)
+        self._inbox_latch = TalkNotifyLatch(logger, _INBOX_NOTIFY_RESUBSCRIBE_MESSAGES)
+        self._wall_latch = TalkNotifyLatch(logger, _WALL_NOTIFY_RESUBSCRIBE_MESSAGES)
+        self._talk = self._inbox = self._wall = None
+        return self
 
     async def start(self) -> None:
         """Bind each subscription; each assignment is a cancellation point."""
@@ -1161,7 +1173,9 @@ async def poll_inbox(
             # After the tick: its relay calls can trigger the wedge teardown
             # that orphans the SUBs, and reconciling here rebinds them at once.
             await subs.reconcile()
-            await _note_full_pass(mcp, state, (nats_due, watch_due, checks_nothing))
+            await _note_full_pass(
+                mcp, state, (nats_due, watch_due, checks_nothing), failed=seen.failed
+            )
     finally:
         await subs.close()
         # Close, don't just stop: a start still running on its worker thread
@@ -1171,14 +1185,19 @@ async def poll_inbox(
 
 
 async def _note_full_pass(
-    mcp: FastMCP[ServerState], state: ServerState, checked: tuple[bool, ...]
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    checked: tuple[bool, ...],
+    *,
+    failed: bool,
 ) -> None:
     """Record a pass that included a liveness check (any of *checked*).
 
-    A poller with no liveness check at all counts every pass.  The first such
-    pass of a restarted poller removes the "notifications stopped" notice.
+    A poller with no liveness check at all counts every pass.  A pass that
+    failed (*failed*) is not one.  The first such pass of a restarted poller
+    removes the "notifications stopped" notice.
     """
-    if any(checked) and state.wake.health.passed_liveness():
+    if any(checked) and not failed and state.wake.health.passed_liveness():
         await refresh_read_messages(mcp, state)
 
 

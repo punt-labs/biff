@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import inspect
 import json
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -105,7 +106,10 @@ async def _idle(
     The poller starts its watches on a thread, so first spin until *ready*
     says its first pass has run.
     """
+    deadline = time.monotonic() + 30.0  # a poller that never starts fails, not hangs
     while not ready():
+        assert not task.done(), "poller exited before its first pass"
+        assert time.monotonic() < deadline, "poller never ran its first pass"
         await asyncio.sleep(0)
     for _ in range(spins):
         await asyncio.sleep(0)

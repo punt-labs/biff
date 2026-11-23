@@ -567,7 +567,7 @@ class TestReapSentinels:
         monkeypatch.setattr(poller_supervisor, "sentinel_dir", _sentinels)
         _write_sentinel("_test-reap", state.session_key)
 
-        await poller_supervisor.reap_sentinels(state)
+        await poller_supervisor.SentinelReaper.reap(state)
 
         # Presence survives: KV row intact, alias retained.
         sessions = await state.relay.get_sessions()
@@ -606,7 +606,7 @@ class TestReapSentinels:
         monkeypatch.setattr(poller_supervisor, "sentinel_dir", _sentinels)
         _write_sentinel("_test-reap", f"kai:{dead_sid}")
 
-        await poller_supervisor.reap_sentinels(state)
+        await poller_supervisor.SentinelReaper.reap(state)
 
         sessions = await state.relay.get_sessions()
         assert all(s.tty != dead_sid for s in sessions), "dead session must be reaped"

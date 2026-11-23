@@ -251,7 +251,8 @@ class TestWatchFailureReporting:
         errors = [r for r in caplog.records if r.levelno >= logging.WARNING]
         debug = [r for r in caplog.records if r.levelno == logging.DEBUG]
         assert debug  # every retry is recorded
-        assert len(errors) >= 2  # the first error, then a periodic reminder
+        reminders = [r for r in errors if "still failing" in r.getMessage()]
+        assert reminders  # not only each cause's onset: a periodic reminder
         assert any("NotADirectoryError" in r.getMessage() for r in errors)
 
 

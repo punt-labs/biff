@@ -116,15 +116,21 @@ class TestReaperAcceptsOnlySentinels:
         delete = AsyncMock()
         monkeypatch.setattr(state.relay, "get_session", get)
         monkeypatch.setattr(state.relay, "delete_session", delete)
-        await poller_supervisor.reap_sentinels(state)
+        await poller_supervisor.SentinelReaper.reap(state)
         get.assert_not_awaited()
         delete.assert_not_awaited()
 
 
 class TestRestartPolicy:
     def test_the_delay_is_capped_and_cannot_overflow(self) -> None:
-        assert poller_supervisor.restart_delay(0) == poller_supervisor._RESTART_DELAY
-        assert poller_supervisor.restart_delay(5000) == poller_supervisor._RESTART_CAP
+        assert (
+            poller_supervisor.PollerSupervisor.restart_delay(0)
+            == poller_supervisor._RESTART_DELAY
+        )
+        assert (
+            poller_supervisor.PollerSupervisor.restart_delay(5000)
+            == poller_supervisor._RESTART_CAP
+        )
 
     async def test_a_pending_restart_cannot_fire_after_cleanup_began(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -16,7 +16,7 @@ from mcp.types import INTERNAL_ERROR
 from biff.models import BiffConfig, RelayConnectError
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
-from biff.server.poller_supervisor import reap_sentinels
+from biff.server.poller_supervisor import SentinelReaper
 from biff.server.state import ServerState
 from biff.session_routing import SessionRouting
 from biff.testing.caller import StampedClient, caller_for
@@ -127,7 +127,7 @@ async def test_a_failed_attach_is_logged_without_session_content(
     async def boom(*_a: object, **_k: object) -> None:
         raise RuntimeError("relay down")
 
-    monkeypatch.setattr("biff.server.app.reap_sentinels", boom)
+    monkeypatch.setattr(SentinelReaper, "reap", boom)
     async with StampedClient(
         FastMCPTransport(create_server(state)), caller=caller_for("sess-x"), mode=mode
     ) as client:
@@ -163,12 +163,12 @@ async def test_failed_startup_rolls_back_and_can_retry(
         side_effect=failure("private relay detail"),
         wraps=state.relay.update_session
         if stage == "update_session"
-        else reap_sentinels,
+        else SentinelReaper.reap,
     )
     target = (
         patch.object(state.relay, "update_session", failed)
         if stage == "update_session"
-        else patch("biff.server.app.reap_sentinels", failed)
+        else patch.object(SentinelReaper, "reap", failed)
     )
     with target:
         async with StampedClient(

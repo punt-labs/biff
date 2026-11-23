@@ -66,7 +66,7 @@ class ListChanged:
         if push is None:
             if link is None:
                 return SendOutcome(delivered=False, keep_session=False)
-            if not link.in_handshake_window():
+            if not link.window_remaining():
                 msg = "no session captured from the handshake"
                 link.failed(_WHAT, ChannelUnavailableError(msg))
             return SendOutcome(delivered=False, keep_session=True)

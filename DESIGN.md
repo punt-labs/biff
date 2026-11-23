@@ -8596,8 +8596,8 @@ not stall every pass for the 3 s send timeout. The poller has no fixed cadence, 
 retry runs on every wake: an arrival, the 5 s NATS subscription check, the 60 s
 local watch-liveness check, a deadline wake, and a one-shot wake the poller arms
 only while a notification is owed, at the moment the link's `CHANNEL_BACKOFF`
-ends (looked at again each second while it can be retried but not yet sent, as
-during the handshake window). A tool call
+ends or, while no session is captured, when the handshake window ends,
+whichever is later, and re-armed only when that moment changes. A tool call
 that leaves a debt wakes the poller so it can arm that wake. Nothing is armed
 when nothing is owed. A retry is therefore late by at most the back-off, not
 lost, and not by up to 60 s on a quiet local relay.
