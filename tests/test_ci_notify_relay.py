@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from typer.testing import CliRunner
 
 from biff.cli_context import CliContext
 from biff.commands.wall import wall
@@ -71,14 +70,14 @@ class TestNotifyWarning:
 
 
 class TestEnableWarns:
-    def test_enable_prints_the_warning(self, tmp_path: Path) -> None:
-        from biff.__main__ import app
+    def test_enable_prints_the_warning(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from biff.__main__ import enable
 
         repo = _repo(tmp_path)
-        with patch("biff.__main__.find_git_root", return_value=repo):
-            result = CliRunner().invoke(app, ["enable"])
-        assert result.exit_code == 0
-        assert "BIFF_RELAY_URL" in result.output
+        enable(start=repo)
+        assert "BIFF_RELAY_URL" in capsys.readouterr().out
 
 
 class TestWallInCi:
