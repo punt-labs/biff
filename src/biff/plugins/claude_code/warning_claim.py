@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final, Self, final
 
@@ -17,8 +17,11 @@ __all__ = ["WarningClaim"]
 logger = logging.getLogger(__name__)
 
 _UNSAFE: Final = re.compile(r"[^A-Za-z0-9_.-]")
-_PRUNE_AFTER: Final = 24 * 60 * 60.0
-"""Seconds after which a marker is stale: no session lasts its warning that long."""
+_WINDOW: Final = 60.0
+"""Seconds in which two hook runs count as one event."""
+
+_PRUNE_AFTER: Final = 600.0
+"""Seconds after which a marker is stale and removed."""
 
 
 @final
@@ -26,12 +29,14 @@ class WarningClaim:
     """A once-only claim on the warning for one hook payload.
 
     The installed ``biff`` plugin and a ``--plugin-dir`` ``biff-dev`` plugin
-    both run the SessionStart hook for the same session.  Each tries to create
-    one marker file, atomically; only the creator emits the warning.  The key
-    is ``CLAUDE_PID``, the payload's ``session_id`` and its ``source``, so a
-    compaction of the same session claims afresh.  A payload with no
-    ``session_id`` cannot be keyed and always wins.  Markers older than a day
-    are removed on each claim.
+    both run the SessionStart hook for the same session at the same moment.
+    Each tries to create one marker file, atomically; only the creator emits
+    the warning.  The key is ``CLAUDE_PID``, the payload's ``session_id`` and
+    ``source``, and a minute-wide time window, so a later compaction of the
+    same session, minutes after the first, claims afresh.  Runs that straddle
+    a window boundary may both warn, which is the harmless failure.  A payload
+    with no ``session_id`` cannot be keyed and always wins.  Markers are
+    removed after ten minutes.
     """
 
     __slots__ = ("_directory", "_key")
@@ -40,15 +45,25 @@ class WarningClaim:
     _key: str | None
 
     def __new__(
-        cls, directory: Path, env: Mapping[str, str], data: Mapping[str, object]
+        cls,
+        directory: Path,
+        env: Mapping[str, str],
+        data: Mapping[str, object],
+        now: Callable[[], float] = time.time,
     ) -> Self:
-        """Key a claim for the hook payload *data* under *directory*."""
+        """Key a claim for the hook payload *data* under *directory* at time *now*."""
         self = super().__new__(cls)
         self._directory = directory
         session = data.get("session_id")
         if isinstance(session, str) and session:
             pid = env.get("CLAUDE_PID", "")
-            parts = (pid if pid.isdecimal() else "0", session, str(data.get("source")))
+            window = str(int(now() // _WINDOW))
+            parts = (
+                pid if pid.isdecimal() else "0",
+                session,
+                str(data.get("source")),
+                window,
+            )
             self._key = _UNSAFE.sub("_", "-".join(parts))
         else:
             self._key = None

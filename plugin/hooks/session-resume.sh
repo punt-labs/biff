@@ -11,7 +11,6 @@ MARKER="$REPO_ROOT/.punt-labs/biff/enabled"
 command -v biff-hook >/dev/null 2>&1 || exit 0
 # The loaded plugin's name picks the poll command the warning names:
 # /biff:read for "biff", /biff-dev:read-dev for the --plugin-dir "biff-dev".
-PLUGIN_JSON="$(dirname "$0")/../.claude-plugin/plugin.json"
-BIFF_PLUGIN_NAME=$(sed -n 's/^[[:space:]]*"name":[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_JSON" 2>/dev/null | sed -n 1p)
+BIFF_PLUGIN_NAME=$("$(dirname "$0")/plugin-name.sh" 2>/dev/null)
 export BIFF_PLUGIN_NAME
 biff-hook claude-code session-resume 2>/dev/null || true

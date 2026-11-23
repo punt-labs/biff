@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -13,6 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
+from biff._stdlib import find_git_root
 from biff.plugins.claude_code import _hook_entry, hook
 from biff.plugins.claude_code.channel_gates import ChannelGate, ClosedGate, EnvGate
 from biff.plugins.claude_code.launch_flag import LaunchFlagGate
@@ -228,6 +230,20 @@ class TestWarningClaim:
         assert WarningClaim(tmp_path, env, {**base, "session_id": "t"}).take()
         assert WarningClaim(tmp_path, env, {**base, "source": "compact"}).take()
         assert WarningClaim(tmp_path, {"CLAUDE_PID": "1"}, base).take()
+
+    def test_two_compactions_minutes_apart_both_warn(self, tmp_path: Path) -> None:
+        env = {"CLAUDE_PID": "4242"}
+        data: dict[str, object] = {"session_id": "s", "source": "compact"}
+        first = WarningClaim(tmp_path, env, data, lambda: 1000.0)
+        later = WarningClaim(tmp_path, env, data, lambda: 1000.0 + 180)
+        assert first.take() is True
+        assert later.take() is True
+
+    def test_simultaneous_runs_warn_once(self, tmp_path: Path) -> None:
+        env = {"CLAUDE_PID": "4242"}
+        data: dict[str, object] = {"session_id": "s", "source": "compact"}
+        plugins = [WarningClaim(tmp_path, env, data, lambda: 1000.0) for _ in range(2)]
+        assert [plugin.take() for plugin in plugins] == [True, False]
 
     def test_marker_is_private(self, tmp_path: Path) -> None:
         env = {"CLAUDE_PID": "4242"}
@@ -477,10 +493,16 @@ class TestEntryPoint:
     def test_saved_poll_cadence_does_not_silence_the_warning(
         self, run: _Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        config = tmp_path / ".punt-labs" / "biff"
+        repo = tmp_path / "repo"
+        config = repo / ".punt-labs" / "biff"
         config.mkdir(parents=True)
+        subprocess.run(  # noqa: S603
+            ["git", "init", "--quiet", str(repo)],  # noqa: S607
+            check=True,
+        )
         (config / "config.local.yaml").write_text("poll_interval: 120\n")
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.chdir(repo)
+        assert find_git_root() == repo.resolve()
         assert "systemMessage" in run(["claude"])
 
     def test_dev_plugin_gets_its_own_poll_command(
