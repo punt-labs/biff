@@ -48,7 +48,7 @@ from biff.git_hooks import deploy_git_hooks, remove_git_hooks, resolve_hooks_dir
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from biff.plugins.contract import Installer, PermissionChange, PluginRegistry
+    from biff.plugins.contract import Installer, PermissionReport, PluginRegistry
 
 __all__ = ["DISABLED_MESSAGE", "ENABLED_MESSAGE", "EnablementChange", "RepoEnablement"]
 
@@ -81,7 +81,7 @@ class EnablementChange:
     ci_workflow_changed: bool
     git_hooks_changed: tuple[str, ...]
     git_hooks_resolved: bool
-    permissions: tuple[PermissionChange, ...] = ()
+    permissions: tuple[PermissionReport, ...] = ()
 
     @property
     def failed(self) -> bool:
@@ -248,7 +248,7 @@ class RepoEnablement:
 
     def _grant_all(
         self,
-    ) -> tuple[list[tuple[Installer, PermissionChange]], tuple[PermissionChange, ...]]:
+    ) -> tuple[list[tuple[Installer, PermissionReport]], tuple[PermissionReport, ...]]:
         """Preflight, then grant, every tool; return the grants or the refusals.
 
         A refusal at either step writes nothing further and revokes the grants
@@ -258,7 +258,7 @@ class RepoEnablement:
         refusals = tuple(
             c for c in (i.preflight(self._root) for i in installers) if c.error
         )
-        grants: list[tuple[Installer, PermissionChange]] = []
+        grants: list[tuple[Installer, PermissionReport]] = []
         if refusals:
             return grants, refusals
         for installer in installers:
@@ -269,6 +269,6 @@ class RepoEnablement:
             grants.append((installer, granted))
         return grants, ()
 
-    def _revoke(self, grants: list[tuple[Installer, PermissionChange]]) -> None:
+    def _revoke(self, grants: list[tuple[Installer, PermissionReport]]) -> None:
         for installer, granted in grants:
             installer.revoke(self._root, granted.changed)

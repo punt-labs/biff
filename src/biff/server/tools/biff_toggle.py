@@ -1,8 +1,8 @@
 """Activation toggle -- ``biff(action="enable"|"disable")``.
 
 Lets an agent turn biff on or off for the current repo from within a
-Claude Code session.  Both actions route through
-:class:`~biff.enablement.RepoEnablement`, the same definition the
+Claude Code session.  Both actions route through ``state.toggle``, which
+``cli`` builds from ``RepoEnablement``, the same definition the
 ``biff enable`` / ``biff disable`` CLI verbs use, so the two front-ends
 produce an identical committed result (DES-052).
 
@@ -20,8 +20,6 @@ creates commits.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
-
-from biff.enablement import RepoEnablement
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -60,13 +58,5 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "Error: not in a git repository."
 
         if action == "enable":
-            change = RepoEnablement(repo_root, state.plugins).enable()
-            if not change.git_hooks_resolved:
-                # Fail loud, identical to the CLI `biff enable` surface: enable
-                # wrote nothing (marker included), so never claim success.
-                from biff.git_hooks import HOOKS_DIR_UNRESOLVED_NOTICE  # noqa: PLC0415
-
-                return HOOKS_DIR_UNRESOLVED_NOTICE
-            return "\n".join(change.enable_report())
-        change = RepoEnablement(repo_root, state.plugins).disable()
-        return "\n".join(change.disable_report())
+            return state.toggle.enable(repo_root)
+        return state.toggle.disable(repo_root)

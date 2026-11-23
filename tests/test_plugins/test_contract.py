@@ -10,16 +10,23 @@ import pytest
 
 from biff.doctor import Diagnostics
 from biff.enablement import RepoEnablement
-from biff.plugins.contract import (
-    CheckResult,
-    Installer,
-    PermissionChange,
-    PluginRegistry,
-)
+from biff.plugins.contract import CheckResult, Installer, PluginRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
+
+
+@dataclass(frozen=True, slots=True)
+class _Report:
+    """A permission report a test tool returns."""
+
+    changed: tuple[str, ...] = ()
+    error: str = ""
+    fix: str = ""
+
+    def lines(self, verb: str) -> list[str]:
+        return [f"{verb}: {r}" for r in self.changed]
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,21 +38,19 @@ class _Tool:
     refuses: bool = False
     checks: tuple[CheckResult, ...] = field(default_factory=tuple)
 
-    def preflight(self, root: Path) -> PermissionChange:
+    def preflight(self, root: Path) -> _Report:
         self.log.append(f"{self.name}:preflight")
-        return PermissionChange()
+        return _Report()
 
-    def grant(self, root: Path) -> PermissionChange:
+    def grant(self, root: Path) -> _Report:
         self.log.append(f"{self.name}:grant")
         if self.refuses:
-            return PermissionChange(error="refused", fix=f"Fix {self.name}")
-        return PermissionChange(changed=(f"{self.name}-rule",), where=self.name)
+            return _Report(error="refused", fix=f"Fix {self.name}")
+        return _Report(changed=(f"{self.name}-rule",))
 
-    def revoke(
-        self, root: Path, rules: Iterable[str] | None = None
-    ) -> PermissionChange:
+    def revoke(self, root: Path, rules: Iterable[str] | None = None) -> _Report:
         self.log.append(f"{self.name}:revoke:{sorted(rules) if rules else rules}")
-        return PermissionChange(changed=tuple(rules or ()), where=self.name)
+        return _Report(changed=tuple(rules or ()))
 
     def register_guide(self, root: Path) -> bool:
         self.log.append(f"{self.name}:register")
@@ -148,6 +153,26 @@ class TestDisableThroughRegistry:
         assert log == ["a:revoke:None", "b:revoke:None", "a:unregister", "b:unregister"]
 
 
+_BIFF_CHECKS = (
+    "_check_gh_cli",
+    "_check_plugin_installed",
+    "_check_user_commands",
+    "_check_relay",
+    "_check_biff_file",
+    "_check_enabled",
+    "_check_git_hooks",
+    "_check_ci_workflow",
+)
+
+
+@pytest.fixture(autouse=True)
+def _biff_checks_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub biff's own checks so these tests touch no network, gh or home dir."""
+    passed = CheckResult(name="stub", passed=True, message="ok")
+    for name in _BIFF_CHECKS:
+        monkeypatch.setattr(f"biff.doctor.{name}", lambda: passed)
+
+
 class TestDoctorThroughRegistry:
     def test_tool_checks_are_printed_after_biffs(
         self, capsys: pytest.CaptureFixture[str]
@@ -159,7 +184,7 @@ class TestDoctorThroughRegistry:
         )
         Diagnostics(_registry(tool)).run()
         out = capsys.readouterr().out
-        assert out.index("Tool check: fine") > out.index("CI workflow")
+        assert out.index("Tool check: fine") > out.rindex("stub: ok")
 
     def test_required_tool_failure_fails_the_run(self) -> None:
         tool = _Tool(

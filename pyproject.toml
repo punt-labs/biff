@@ -270,6 +270,7 @@ application = [
     "biff.cli_session_host",
     "biff.cli_session_select",
     "biff.enablement",
+    "biff.repo_toggle",
     "biff.session_open",
     "biff.session_registry",
     "biff.talk_state",

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from typing import TYPE_CHECKING, Final, Self, final
 
 from biff.plugins.claude_code.claude_md import UNCLOSED_FENCE, ClaudeMdImport
-from biff.plugins.claude_code.claude_permissions import ProjectPermissions
+from biff.plugins.claude_code.claude_permissions import (
+    PermissionChange,
+    ProjectPermissions,
+)
 from biff.plugins.claude_code.statusline import SETTINGS_PATH, read_settings
-from biff.plugins.contract import CheckResult, PermissionChange
+from biff.plugins.contract import CheckResult
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -17,7 +19,6 @@ if TYPE_CHECKING:
 
 __all__ = ["ClaudeCodeInstaller"]
 
-_SETTINGS_FILE: Final = ".claude/settings.json"
 _GUIDE_IMPORT: Final = "@.punt-labs/biff/CLAUDE.md"
 
 
@@ -41,13 +42,13 @@ class ClaudeCodeInstaller:
 
     def grant(self, root: Path) -> PermissionChange:
         """Add biff's rules to the repo's ``.claude/settings.json``."""
-        return self._reported(ProjectPermissions(root).grant())
+        return ProjectPermissions(root).grant()
 
     def revoke(
         self, root: Path, rules: Iterable[str] | None = None
     ) -> PermissionChange:
         """Remove *rules* (default: all of biff's) from ``.claude/settings.json``."""
-        return self._reported(ProjectPermissions(root).revoke(rules))
+        return ProjectPermissions(root).revoke(rules)
 
     def register_guide(self, root: Path) -> bool:
         """Append the ``@`` import of biff's guide to the repo's ``CLAUDE.md``."""
@@ -64,10 +65,6 @@ class ClaudeCodeInstaller:
     @staticmethod
     def _guide(root: Path) -> ClaudeMdImport:
         return ClaudeMdImport(root / "CLAUDE.md", _GUIDE_IMPORT)
-
-    @staticmethod
-    def _reported(change: PermissionChange) -> PermissionChange:
-        return replace(change, where=_SETTINGS_FILE, fix=f"Fix {_SETTINGS_FILE}")
 
 
 def _check_statusline() -> CheckResult:

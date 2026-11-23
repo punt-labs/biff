@@ -7,7 +7,10 @@ from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from biff._cli_runtime import CliInvocation
-from biff.plugins.claude_code.claude_permissions import BIFF_RULES
+from biff.plugins.claude_code.claude_permissions import (
+    BIFF_RULES,
+    ProjectPermissions,
+)
 from biff.plugins.claude_code.installer import ClaudeCodeInstaller
 from biff.plugins.contract import Installer
 
@@ -32,11 +35,14 @@ class TestGrantAndRevoke:
     def test_grant_adds_every_rule_and_names_the_file(self, tmp_path: Path) -> None:
         change = ClaudeCodeInstaller().grant(tmp_path)
         assert change.changed == _ALL_RULES
-        assert change.where == ".claude/settings.json"
 
-    def test_grant_report_lines_match_the_enable_output(self, tmp_path: Path) -> None:
-        change = ClaudeCodeInstaller().grant(tmp_path)
-        assert change.lines("added to")[0] == (
+    def test_grant_report_lines_match_direct_use(self, tmp_path: Path) -> None:
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        direct = ProjectPermissions(tmp_path / "a").grant()
+        via_installer = ClaudeCodeInstaller().grant(tmp_path / "b")
+        assert via_installer.lines("added to") == direct.lines("added to")
+        assert via_installer.lines("added to")[0] == (
             "Permission added to .claude/settings.json: Bash(biff:*)"
         )
 

@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 from mcp.server.subscriptions import InMemorySubscriptionBus as NotificationBus
 
 from biff.models import BiffConfig
-from biff.plugins.contract import PluginRegistry
 from biff.relay import Relay
 from biff.relay_select import RelaySelector
 from biff.server.activity import ActivityTracker
@@ -20,6 +20,22 @@ from biff.server.display_queue import DisplayQueue
 from biff.session_routing import SessionRouting
 from biff.talk_state import TalkState
 from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
+
+
+class RepoToggle(Protocol):
+    """Turn biff on or off for a repo and report what changed as text.
+
+    ``cli`` builds the concrete toggle, so the MCP server needs no install
+    code of its own.
+    """
+
+    def enable(self, root: Path) -> str:
+        """Enable biff in *root* and return the report."""
+        ...
+
+    def disable(self, root: Path) -> str:
+        """Disable biff in *root* and return the report."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -37,9 +53,9 @@ class ServerState:
     # ``None`` inputs to ``repo_root`` (matching the loader's fallback), so the
     # field's runtime type is always ``Path`` and every reader is unconditional.
     repo_common_root: Path
-    # The installers the ``biff`` enable/disable tool runs.  Required: an empty
-    # registry silently skips every tool's permissions, so ``cli`` builds it.
-    plugins: PluginRegistry
+    # What the ``biff`` enable/disable tool runs.  Required: ``cli`` builds it
+    # with every tool's installer, so a state cannot skip their permissions.
+    toggle: RepoToggle
     activity: ActivityTracker = field(default_factory=ActivityTracker)
     display_queue: DisplayQueue = field(default_factory=DisplayQueue)
     tool_events: NotificationBus = field(default_factory=NotificationBus, compare=False)
@@ -131,7 +147,7 @@ def create_state(
     config: BiffConfig,
     data_dir: Path,
     *,
-    plugins: PluginRegistry,
+    toggle: RepoToggle,
     relay: Relay | None = None,
     unread_path: Path | None = None,
     unread_dir: Path | None = None,
@@ -178,5 +194,5 @@ def create_state(
         dormant=dormant,
         repo_root=repo_root,
         org_repos=org_repos or frozenset(),
-        plugins=plugins,
+        toggle=toggle,
     )

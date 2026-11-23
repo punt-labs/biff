@@ -44,7 +44,7 @@ async def test_unstamped_tools_use_startup_presence_only_when_opted_in(
             data_dir=None,
             relay_url="",
             prefix=tmp_path,
-        ).create_server(CliInvocation.plugin_registry())
+        ).create_server(CliInvocation.repo_toggle())
     state = cast("ServerState", factory.call_args.args[0])
     if enabled:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "changed-after-startup")

@@ -18,15 +18,14 @@ import json
 import os
 import secrets
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, cast, final
-
-from biff.plugins.contract import PermissionChange
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["BIFF_RULES", "ProjectPermissions"]
+__all__ = ["BIFF_RULES", "PermissionChange", "ProjectPermissions"]
 
 # Broad allow per surface with exact ask carve-outs (permissions.md §6): ask
 # beats allow, so the machine- and repo-mutating verbs keep prompting while new
@@ -65,6 +64,32 @@ _NEW_FILE_MODE: Final = 0o644
 _SETTINGS: Final = "settings.json"
 _LOCK: Final = ".settings.json.punt-import.lock"
 _NOFOLLOW: Final = os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+@dataclass(frozen=True, slots=True)
+class PermissionChange:
+    """What a grant or revoke did to the project's ``.claude/settings.json``.
+
+    ``changed`` lists the rules added (grant) or removed (revoke); an empty
+    tuple with no ``error`` means the file already matched. ``error`` explains
+    why the file was left untouched, and ``fix`` says what the operator does
+    about it.
+    """
+
+    changed: tuple[str, ...] = ()
+    error: str = ""
+    fix: str = ""
+
+    def lines(self, verb: str) -> list[str]:
+        """Return one report line per changed rule, the refusal, or none."""
+        if self.error:
+            return [f"Permissions not changed: {self.error}"]
+        return [f"Permission {verb} .claude/settings.json: {r}" for r in self.changed]
+
+    @classmethod
+    def refused(cls, error: str) -> PermissionChange:
+        """Return the change for a file left untouched because of *error*."""
+        return cls(error=error, fix="Fix .claude/settings.json")
 
 
 @final
@@ -126,8 +151,8 @@ class ProjectPermissions:
     ) -> PermissionChange:
         """Apply the grant or revoke under the lock, reporting any refusal."""
         if root.resolve() == Path.home().resolve():
-            return PermissionChange(
-                error="the repo is the home directory, whose .claude/"
+            return PermissionChange.refused(
+                "the repo is the home directory, whose .claude/"
                 "settings.json is user-global"
             )
         if not any(rules.values()):
@@ -149,9 +174,9 @@ class ProjectPermissions:
             finally:
                 os.close(root_fd)
         except ValueError as exc:
-            return PermissionChange(error=str(exc))
+            return PermissionChange.refused(str(exc))
         except OSError as exc:
-            return PermissionChange(error=exc.strerror or type(exc).__name__)
+            return PermissionChange.refused(exc.strerror or type(exc).__name__)
 
     @staticmethod
     def _refuse_link(exc: OSError, name: str) -> ValueError:
