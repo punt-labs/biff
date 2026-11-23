@@ -57,7 +57,11 @@ class TestIsArrivalFile:
         "name",
         [
             "unread.json",
-            "wall.tmp",
+            ".lock",
+            "wall.json.4242.tmp",
+            "sessions.json.4242.tmp",
+            "userinbox-kai.jsonl.4242.tmp",
+            "inbox-kai-tty1.jsonl.4242.tmp",
             "sessions.tmp",
             "inbox-kai-tty1.tmp",
             "ttyname-kai-a.lock",

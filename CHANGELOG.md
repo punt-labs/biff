@@ -4,6 +4,10 @@
 
 ### Added
 
+- `relay.type` in `config.yaml` / `config.local.yaml` chooses the relay:
+  `local` (the default), `demo` (the shared public relay, bundled
+  credentials) or `nats` (your own NATS server, with `relay.url`). A `relay`
+  section with only `url` still means `nats`.
 - Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
   fails on any import that breaks the DES-088 package layers and is not in
   `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs
@@ -19,12 +23,52 @@
 
 ### Changed
 
+- **Behavior change: the local relay is the default.** A repo with no relay
+  configured now uses the local filesystem relay (no network, no shared
+  credentials) instead of connecting to the public demo relay
+  (`tls://connect.ngs.global`). Sessions in such a repo no longer see
+  sessions on other machines. If you relied on the implicit demo relay, keep
+  it with one line of config in `.punt-labs/biff/config.yaml` or
+  `config.local.yaml`: `relay: {type: demo}`. Repos that already set
+  `relay.url` see no change. Supersedes the demo-relay default of DES-037
+  (DES-090).
+- The local relay keeps its files in `~/.punt-labs/biff/relay/<repo-key>/`
+  instead of `/tmp/biff/<directory-name>/`, private to you (directories `0700`,
+  files `0600`). They survive a reboot. `<repo-key>` is a slug plus a hash of
+  the remote's normalized identity (host, `owner/repo`, no trailing `/` or
+  `.git`), so ssh and https clones, and every worktree, of one repo share one
+  relay while different repos never do; a repo with no remote is keyed by its
+  common root. Content in `/tmp/biff/` is not migrated.
+- The relay is chosen per config file: the highest file that sets `relay.type`
+  or `relay.url` decides, so a personal `url` beats a committed `type`.
+  Malformed relay config (not a mapping, non-string `url`, unknown key,
+  non-bool flag, `relays:`, `type: demo` or `local` with a `url`, credentials
+  or `tls_handshake_first`) now exits with a message naming the file.
+- `biff doctor` prints the local relay directory and why it is that directory,
+  and probes it for writability; `biff status` prints `relay: local (<dir>)`.
+  An unusable directory is reported with its path (one line in the CLI; an
+  error naming the path over MCP), not a traceback or "Internal server error".
+- A heartbeat failure on a non-NATS relay is logged at WARNING on the first
+  failure and on recovery.
+- The `biff_relay` MCP tool writes an explicit `type` and takes `relay_type`
+  (`local`, `demo`, `nats`).
+- `biff wall` run under GitHub Actions on the local relay now exits non-zero
+  naming `vars.BIFF_RELAY_URL`, instead of posting where no one reads it; `biff
+  enable` and `biff doctor` warn when `biff-notify.yml` is installed but the
+  repo resolves to the local relay.
+- `biff` CLI commands and `biff doctor` work on the local relay; they used to
+  refuse to run without a NATS relay URL.
 - Replace generated agents' per-edit `make check` hooks with advisory Ethos DES-085
   file checks, blocking commit checks, and the full gate at handoff.
   Requires ethos 5.2.0 or later (`ethos hook post-edit`).
 - Upgrade the dev dependency to `punt-oo-ratchet==0.5.0`, retaining existing
   OO, coupling and suppression policies and baselines. The design check now
   reads the declared layers instead of the four fixed ones.
+
+### Removed
+
+- The `--prefix` option of `biff mcp` and `biff serve`. Use `--data-dir` to
+  place the local relay elsewhere.
 
 ### Fixed
 

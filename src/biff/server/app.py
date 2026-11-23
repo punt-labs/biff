@@ -260,7 +260,6 @@ async def _reap_sentinels(state: ServerState) -> None:
     # so a leftover sentinel for our own key must NOT be reaped — we are
     # already registered live under it, and reaping would log us out, release
     # the alias we just reclaimed, and delete our own KV row.
-    live_keys = {state.session_key}
     for sentinel in d.iterdir():
         if not sentinel.is_file():
             continue
@@ -268,7 +267,7 @@ async def _reap_sentinels(state: ServerState) -> None:
             session_key = sentinel.read_text().strip()
         except OSError:
             continue
-        if session_key in live_keys:
+        if session_key == state.session_key:
             # Our own prior incarnation — consume the sentinel without a
             # logout, reservation release, or KV delete.
             sentinel.unlink(missing_ok=True)
@@ -345,13 +344,9 @@ async def _refresh_org_repos(state: ServerState) -> None:
         return
     object.__setattr__(state, "org_repos_refreshed_at", now)
     try:
-        org_results = await asyncio.gather(
-            *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
-        )
-        new_org_repos = frozenset[str]().union(*org_results)
-        if not new_org_repos:
-            return  # Transient empty result — keep stale data
-        if new_org_repos != state.org_repos:
+        new_org_repos = await state.relay.discover_repos_for_orgs(state.config.orgs)
+        # An empty result is transient: keep the stale data.
+        if new_org_repos and new_org_repos != state.org_repos:
             object.__setattr__(state, "org_repos", new_org_repos)
             logger.info("Org repos refreshed: %s", sorted(new_org_repos))
     except Exception:
@@ -370,19 +365,26 @@ async def _heartbeat_loop(
     — that field is the idle time ``/who`` and ``/finger`` display, and
     must only advance on a real tool call, not this unconditional tick.
     """
+    # NATS logs a wedge's onset and recovery itself (_ConnectionHealth), so its
+    # ticks stay at DEBUG; any other relay warns on the first failure and on
+    # recovery (levels[0]), and drops to DEBUG while it keeps failing.
+    levels = (logging.WARNING, logging.DEBUG)
+    if isinstance(state.relay, NatsRelay):
+        levels = (logging.DEBUG, logging.DEBUG)
+    failing = False
     while not shutdown.is_set():
-        try:
+        with suppress(TimeoutError):
             await asyncio.wait_for(shutdown.wait(), timeout=interval)
             return  # Shutdown requested
-        except TimeoutError:
-            pass
         try:
             await state.relay.heartbeat(state.session_key)
         except Exception:
-            # DEBUG, not WARNING: the loop ticks every 60s, so a NATS wedge
-            # would spam a warning per tick.  The relay's _ConnectionHealth
-            # logs the wedge onset/recovery once — it is the single source.
-            logger.debug("Heartbeat failed", exc_info=True)
+            logger.log(levels[failing], "Heartbeat failed", exc_info=True)
+            failing = True
+        else:
+            if failing:
+                logger.log(levels[0], "Heartbeat recovered")
+            failing = False
         await _refresh_org_repos(state)
 
 
@@ -989,23 +991,15 @@ async def _discover_org_repos(state: ServerState) -> None:
     """Discover repos for configured orgs (DES-034), before anything registers."""
     if not (state.config.orgs and isinstance(state.relay, NatsRelay)):
         return
-    logger.info("Org discovery: querying orgs=%s", state.config.orgs)
-    org_results = await asyncio.gather(
-        *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
-    )
-    org_repos = frozenset[str]().union(*org_results)
+    org_repos = await state.relay.discover_repos_for_orgs(state.config.orgs)
     # Counts as the first refresh attempt, so the first heartbeat tick's
     # _refresh_org_repos doesn't immediately re-query on top of this one.
     object.__setattr__(state, "org_repos_refreshed_at", time.monotonic())
-    logger.info("Org discovery: found %d repos", len(org_repos))
-    if org_repos:
-        # Mutate in-place so tool closures (which captured `state`
-        # during registration) see the updated visible_repos.
-        object.__setattr__(state, "org_repos", org_repos)
-    else:
-        logger.warning(
-            "Org discovery returned no repos — cross-repo visibility disabled",
-        )
+    # Mutate in-place so tool closures (which captured `state` during
+    # registration) see the updated visible_repos.
+    object.__setattr__(state, "org_repos", org_repos)
+    if not org_repos:
+        logger.warning("Org discovery found no repos — cross-repo visibility disabled")
 
 
 @asynccontextmanager
@@ -1201,7 +1195,7 @@ class _LiveSession:
 
         Runs with no call in flight: from :meth:`call` or at startup.
         """
-        if state.bound_session_id != caller.session_id and self.attached:
+        if state.bound_session_id != caller.session_id:
             # /clear or resume changed session_id in place: release the old
             # session before the server is pointed at the new one.
             await self._detach(state)
@@ -1222,6 +1216,10 @@ class _LiveSession:
             self.reaper = None
             if isinstance(exc, (RelayConnectError, TimeoutError)):
                 raise
+            if isinstance(exc, OSError):
+                # A file or directory biff needs is unusable: say which.
+                logger.error("cannot use a file: %s", exc, exc_info=exc)
+                raise MCPError(INTERNAL_ERROR, f"cannot use a file: {exc}") from None
             if isinstance(exc, Exception):
                 raise MCPError(INTERNAL_ERROR, "Internal server error") from None
             raise
@@ -1229,6 +1227,8 @@ class _LiveSession:
 
     async def _detach(self, state: ServerState) -> None:
         """Stop the attached session's tasks and release what it registered."""
+        if not self.attached:
+            return
         reaper = self.reaper
         tasks = [t for t in self.tasks if t is not reaper]
         old_key, old_tty_name = state.session_key, _descriptions.get_tty_name()

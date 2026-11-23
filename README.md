@@ -10,7 +10,7 @@
 
 <img src="https://raw.githubusercontent.com/punt-labs/biff/main/docs/biff.png" alt="The original biff mail notification app" width="116" align="right">
 
-Biff gives a software team, and the coding agents working with it, the Unix communication commands `who`, `finger`, `write`, `talk`, `wall`, `mesg`, `last` and `.plan`. You use them as slash commands in Claude Code, as `biff` subcommands in any terminal, or in biff's interactive shell. Sessions on different machines see each other through a NATS relay (a message server); biff ships with a shared demo relay. The name comes from the 1980 Berkeley mail notification program, part of the same BSD family as `talk` and `wall`.
+Biff gives a software team, and the coding agents working with it, the Unix communication commands `who`, `finger`, `write`, `talk`, `wall`, `mesg`, `last` and `.plan`. You use them as slash commands in Claude Code, as `biff` subcommands in any terminal, or in biff's interactive shell. Sessions on one machine find each other through a local relay (message files in your home directory) with no network, no account and no shared credentials. Sessions on different machines connect through a NATS relay (a message server) that you opt in to. The name comes from the 1980 Berkeley mail notification program, part of the same BSD family as `talk` and `wall`.
 
 **Platforms:** macOS, Linux
 
@@ -115,7 +115,8 @@ sh install.sh
 
 - **Claude Code slash commands** --- `/who`, `/write`, `/read`, `/talk`, `/wall` and the rest run inside Claude Code through biff's MCP server; there is no separate app
 - **CLI and interactive shell** --- every slash command has a `biff` subcommand; `biff` on its own starts a shell with history, tab completion and live notifications
-- **Cross-machine presence and messaging** --- sessions connect through a NATS relay over TLS
+- **Local by default** --- with no relay configured, your agents on one machine message each other through files under `~/.punt-labs/biff/relay/`, with no network
+- **Cross-machine presence and messaging** --- opt in to a NATS relay (the shared demo relay, the self-hosted Docker relay or your own NATS server) and sessions on different machines see each other over TLS
 - **Agents and humans in one list** --- agent sessions appear in `/who` next to people, set a `/plan`, and send and receive `/write` and `/talk`
 - **Status bar** --- an opt-in addition to your Claude Code status line showing unread count, wall broadcasts and talk messages
 - **Per-repo switch** --- `/biff enable` writes a committed marker file, so biff is on for everyone who clones the repo; a `.punt-labs/biff/config.yaml` file is optional
@@ -389,14 +390,15 @@ Without `-s`, a command runs as the first of: `BIFF_SESSION`; the Claude Code se
 
 Biff needs a git repo and a GitHub identity. It reads your username and display name from `gh auth`.
 
-Without a configuration file, biff uses the shared demo relay and finds peer repos in the GitHub organization that owns the repo's remote. Add a configuration file when you want a fixed team roster, your own relay, or a different set of peer repos. Commit it as `.punt-labs/biff/config.yaml`:
+Without a configuration file, biff uses the local relay: sessions on this machine find each other and nothing leaves it. Add a configuration file when you want a fixed team roster, cross-machine presence through a NATS relay, or a different set of peer repos. Commit it as `.punt-labs/biff/config.yaml`:
 
 ```yaml
 team:
   members: ["kai", "eric", "priya"]
 
-relay:
-  url: "tls://connect.ngs.global"
+relay:                          # optional: omit it to use the local relay
+  type: nats                    # local (the default), demo or nats
+  url: "tls://relay.example.com:4222"
 
 peers:
   orgs: ["my-org"]              # find repos with active sessions in this GitHub org
@@ -407,7 +409,7 @@ The `peers:` key makes `/who`, `/write` and `/finger` reach sessions in other re
 
 Mail is kept per repo, and `read` drains the mailbox of the repo you run it in. So `/write user` (no tty) delivers to the repo where that user has a session: yours if they have one here, otherwise their most recently used repo among those visible. A user with no session in any visible repo gets it in your repo's mailbox.
 
-Put per-user relay credentials (a token, NKeys seed or credentials file path) in the gitignored `.punt-labs/biff/config.local.yaml`, never in the committed file. See [Installing](docs/INSTALLING.md) for the schema, [relay configuration](docs/INSTALLING.md#relay-configuration) to run your own relay, and [environment-variable relay overrides](docs/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd) for the five `BIFF_RELAY_*` variables used in CI and containers.
+Put per-user relay credentials (a token, NKeys seed or credentials file path) in the gitignored `.punt-labs/biff/config.local.yaml`, never in the committed file. See [Installing](docs/INSTALLING.md) for the schema, [relay configuration](docs/INSTALLING.md#relay-configuration) to choose the demo relay, the Docker relay or your own NATS server, and [environment-variable relay overrides](docs/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd) for the five `BIFF_RELAY_*` variables used in CI and containers.
 
 What the two setup commands change:
 
