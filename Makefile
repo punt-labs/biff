@@ -25,6 +25,13 @@ help: ## Show available targets
 test: ## Run tests (unit + integration)
 	uv run pytest
 
+smoke-release: ## Build a wheel and smoke-test it installed in a clean environment
+	rm -rf .tmp/smoke-dist
+	uv build --wheel --out-dir .tmp/smoke-dist
+	bash scripts/smoke-release.sh candidate "$$(uv version --short)" .tmp/smoke-dist/*.whl
+
+.PHONY: smoke-release
+
 lint: check-comments check-docstrings ## Lint and format check (ruff + shellcheck)
 	uv run ruff check .
 	uv run ruff format --check .
