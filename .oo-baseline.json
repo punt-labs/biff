@@ -1057,8 +1057,8 @@
     "encapsulation_ratio": 0.333,
     "avg_params": 1.73,
     "max_complexity": 9.0,
-    "avg_complexity": 3.52,
-    "module_size": 800.0,
+    "avg_complexity": 3.5,
+    "module_size": 798.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 0.054,
     "init_violations": 1.0,
@@ -1087,6 +1087,32 @@
     "module_size": 62.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/biff/server/channel.py": {
+    "method_ratio": 0.968,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.61,
+    "max_complexity": 4.0,
+    "avg_complexity": 1.32,
+    "module_size": 158.0,
+    "classes_per_module": 3.0,
+    "class_to_func_ratio": 0.8,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/biff/server/channel_server.py": {
+    "method_ratio": 0.875,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 9.0,
+    "avg_complexity": 2.62,
+    "module_size": 121.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 0.667,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -1182,6 +1208,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/server/tool_list_send.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.33,
+    "max_complexity": 8.0,
+    "avg_complexity": 3.67,
+    "module_size": 54.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/server/tools/__init__.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
@@ -1209,14 +1248,14 @@
     "future_annotations": 1.0
   },
   "src/biff/server/tools/_descriptions.py": {
-    "method_ratio": 0.341,
+    "method_ratio": 0.381,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.52,
+    "avg_params": 1.49,
     "max_complexity": 12.0,
-    "avg_complexity": 2.98,
-    "module_size": 626.0,
+    "avg_complexity": 3.0,
+    "module_size": 624.0,
     "classes_per_module": 2.0,
-    "class_to_func_ratio": 0.206,
+    "class_to_func_ratio": 0.212,
     "init_violations": 1.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0

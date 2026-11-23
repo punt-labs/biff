@@ -37,7 +37,7 @@ from biff.caller_identity import CallerIdentity
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
 from biff.server.caller_policy import CallerPolicy
-from biff.server.mcp_protocol import NotificationServer
+from biff.server.channel_server import ChannelServer
 from biff.server.relay_lifecycle import RelayLifecycle
 from biff.server.sentinel_reaper import build_logout_event, reap_sentinels
 from biff.server.state import ServerState
@@ -146,9 +146,7 @@ class _SessionCaptureMiddleware(Middleware):
         call_next: CallNext[InitializeRequest, InitializeResult | None],
     ) -> InitializeResult | None:
         result = await call_next(context)
-        if (ctx := context.fastmcp_context) is not None:
-            with suppress(RuntimeError):
-                await _descriptions.handshake_delivery.capture_session(ctx.session)
+        await ChannelServer.capture_handshake_session(context.fastmcp_context)
         return result
 
 
@@ -1264,7 +1262,7 @@ class _LiveSession:
 
 def create_server(
     state: ServerState, *, default_caller: CallerIdentity | None = None
-) -> FastMCP[ServerState]:
+) -> ChannelServer[ServerState]:
     """Create a FastMCP server with all biff tools registered.
 
     The returned server is ready to run via ``mcp.run(transport=...)``.
@@ -1289,7 +1287,7 @@ def create_server(
             await live.start_declared(startup_policy)
             yield ctx
 
-    mcp = NotificationServer[ServerState](
+    mcp = ChannelServer[ServerState](
         "biff",
         instructions=(
             "Biff is a communication tool for software engineers. "

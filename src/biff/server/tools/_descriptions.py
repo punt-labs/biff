@@ -29,15 +29,14 @@ from datetime import UTC, datetime
 from enum import Enum, auto
 from typing import TYPE_CHECKING, NamedTuple, Protocol
 
-from mcp.shared.subscriptions import ToolsListChanged
 from mcp.types import ToolListChangedNotification
 from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 
 from biff.formatting import sanitized_sender, terminal_safe
-from biff.models import UnreadSummary, WallPost
 from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.relay_errors import RelayLog
 from biff.server.display_queue import DisplayItem
+from biff.server.tool_list_send import ListChanged
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
 from biff.talk_types import TalkNotification, TalkPhase
 from biff.tty import format_address
@@ -56,6 +55,8 @@ if TYPE_CHECKING:
     from mcp.server.session import ServerSession
     from mcp.server.subscriptions import SubscriptionBus
 
+    from biff.models import UnreadSummary, WallPost
+    from biff.server.channel import ChannelLink
     from biff.server.state import ServerState
     from biff.talk_state import TalkState
 
@@ -102,20 +103,15 @@ _WALL_NOTIFY_RESUBSCRIBE_MESSAGES = LatchMessages(
 _NOTIFY_SEND_TIMEOUT = 3.0
 
 
-async def _publish_tool_change(bus: SubscriptionBus) -> None:
-    try:
-        async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-            await bus.publish(ToolsListChanged())
-    except Exception:
-        logger.warning("Tool list subscription publish failed", exc_info=True)
-
-
 @dataclass
 class _HandshakeDelivery:
     """Track legacy notification debt under one lock (DES-061)."""
 
     _session: ServerSession | None = None
     _pending_notify: bool = False
+    # Channel mode serves one connection for the process's life: a failed send
+    # keeps its session, and a write the SDK dropped stays owed (DES-087).
+    _link: ChannelLink | None = None
     # Hold across send and debt update so a concurrent success cannot erase a drop.
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -134,45 +130,51 @@ class _HandshakeDelivery:
         Args:
             bus: Server event bus, or None to send the handshake notification only.
         """
-        if bus is not None:
-            await _publish_tool_change(bus)
-
         from fastmcp.server.dependencies import get_context  # noqa: PLC0415
 
         try:
             ctx = get_context()
         except RuntimeError:
             ctx = None
+        legacy = (
+            ctx is None or ctx.session.protocol_version not in MODERN_PROTOCOL_VERSIONS
+        )
+        # Owe the change before the first await: a cancellation at the bus
+        # checkpoint must not leave a changed description with no debt.
+        self._pending_notify = self._pending_notify or legacy
+        if bus is not None:
+            await ListChanged(_NOTIFY_SEND_TIMEOUT, None).publish(bus)
 
         if ctx is None:
             async with self._lock:
                 await self._notify_standalone()
-        elif ctx.session.protocol_version not in MODERN_PROTOCOL_VERSIONS:
+        elif legacy:
             async with self._lock:
-                try:
-                    async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-                        await ctx.send_notification(ToolListChangedNotification())
-                except Exception:
-                    logger.warning("Tool list push failed in request", exc_info=True)
-                    self._pending_notify = True
-                else:
-                    self._pending_notify = False
+                sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(
+                    lambda: ctx.send_notification(ToolListChangedNotification())
+                )
+                self._pending_notify = not sent.delivered
                 self._session = ctx.session
 
-    async def _notify_standalone(self) -> None:
-        if self._session is None:
-            self._pending_notify = True
-            return
+    async def flush_owed(self) -> None:
+        """Retry a notification a single connection still owes (DES-087)."""
+        async with self._lock:
+            if self._link and self._pending_notify and self._link.ready():
+                await self._notify_standalone()
 
-        try:
-            async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-                await self._session.send_tool_list_changed()
-        except Exception:
-            logger.warning("Could not send standalone tool list change", exc_info=True)
-            self._session = None
-            self._pending_notify = True
-        else:
-            self._pending_notify = False
+    def serve_single_connection(self, link: ChannelLink) -> None:
+        """Serve one connection for the process's life, observed through *link*.
+
+        The connection starts with no stored session; ``initialize`` captures it.
+        """
+        self._session, self._link = None, link
+
+    async def _notify_standalone(self) -> None:
+        self._pending_notify = True
+        push = self._session.send_tool_list_changed if self._session else None
+        sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(push)
+        self._pending_notify = not sent.delivered
+        self._session = self._session if sent.keep_session else None
 
 
 handshake_delivery = _HandshakeDelivery()
@@ -220,8 +222,11 @@ def set_biff_enabled(*, enabled: bool) -> None:
 
 def _reset_session() -> None:
     """Reset process globals for test isolation."""
-    global handshake_delivery, _tty_name, _biff_enabled, _spoken_wall_key
-    handshake_delivery = _HandshakeDelivery()
+    global handshake_delivery, _tty_name, _biff_enabled, _spoken_wall_key, _tick_log
+    handshake_delivery, _tick_log = (
+        _HandshakeDelivery(),
+        RelayLog(logger),
+    )
     _tty_name = ""
     _biff_enabled = True
     _spoken_wall_key = ("", "")
@@ -894,7 +899,6 @@ class _Seen:
     wall: tuple[str, str] = ("", "")
     talk: tuple[tuple[str, ...], int, str] = ((), -1, "")
     failed: bool = False  # the last pass raised; the liveness pass retries it
-    failures: RelayLog = field(default_factory=lambda: RelayLog(logger))
     wall_expires: datetime | None = None  # the relay's wall, not the display item
 
     def timeout(self, liveness: float | None, deadline: float) -> float | None:
@@ -978,7 +982,6 @@ async def _active_tick(
         wall=last_wall,
         talk=last_talk,
         wall_expires=current_wall.expires_at if current_wall else None,
-        failures=seen.failures,
     )
 
 
@@ -1002,6 +1005,9 @@ def _seconds_until_deadline(state: ServerState, seen: _Seen) -> float:
     return min((w for w in waits if w is not None), default=math.inf)
 
 
+_tick_log = RelayLog(logger)
+
+
 async def _safe_tick(
     mcp: FastMCP[ServerState],
     state: ServerState,
@@ -1023,9 +1029,9 @@ async def _safe_tick(
         raise
     except Exception as exc:
         logger.debug("Poller tick failed", exc_info=True)
-        seen.failures.failed("Poller tick", exc)  # onset, reminders, recovery
+        _tick_log.failed("Poller tick", exc)  # onset, reminders, recovery
         return replace(seen, failed=True)
-    seen.failures.recovered("Poller tick")
+    _tick_log.recovered("Poller tick")
     return result
 
 
@@ -1193,6 +1199,8 @@ async def poll_inbox(
                 seen = await _safe_tick(mcp, state, seen, gate=gate, due=due)
             if reap is not None:
                 await _safe_reap(reap)
+            # Owed notifications retry every iteration, not only on tick work.
+            await handshake_delivery.flush_owed()
             # After the tick: its relay calls can trigger the wedge teardown
             # that orphans the SUBs, and reconciling here rebinds them at once.
             await subs.reconcile()

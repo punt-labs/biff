@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import anyio
 import pytest
 
 from biff.models import BiffConfig, Message, UnreadSummary, WallPost
@@ -2055,7 +2056,7 @@ class TestStartupNotificationRace:
 
         fake_session = MagicMock(spec=ServerSession)
         fake_session.send_tool_list_changed = AsyncMock(
-            side_effect=RuntimeError("transport closed")
+            side_effect=anyio.ClosedResourceError("transport closed")
         )
         await _descriptions.handshake_delivery.capture_session(fake_session)
 
@@ -2086,7 +2087,7 @@ class TestMidSessionDropRecovery:
 
         dying_session = MagicMock(spec=ServerSession)
         dying_session.send_tool_list_changed = AsyncMock(
-            side_effect=RuntimeError("transport closed")
+            side_effect=anyio.ClosedResourceError("transport closed")
         )
         _descriptions.handshake_delivery._session = dying_session
 
@@ -2128,7 +2129,7 @@ class TestMidSessionDropRecovery:
 
         dying_session = MagicMock(spec=ServerSession)
         dying_session.send_tool_list_changed = AsyncMock(
-            side_effect=RuntimeError("transport closed")
+            side_effect=anyio.ClosedResourceError("transport closed")
         )
         _descriptions.handshake_delivery._session = dying_session
 
@@ -2172,7 +2173,7 @@ class TestMidSessionDropRecovery:
 
         dying_session = MagicMock(spec=ServerSession)
         dying_session.send_tool_list_changed = AsyncMock(
-            side_effect=RuntimeError("transport closed")
+            side_effect=anyio.ClosedResourceError("transport closed")
         )
         _descriptions.handshake_delivery._session = dying_session
 
@@ -2240,7 +2241,7 @@ class TestMidSessionDropRecovery:
 
         dying_session = MagicMock(spec=ServerSession)
         dying_session.send_tool_list_changed = AsyncMock(
-            side_effect=RuntimeError("transport closed")
+            side_effect=anyio.ClosedResourceError("transport closed")
         )
         _descriptions.handshake_delivery._session = dying_session
 
@@ -2273,7 +2274,7 @@ class TestMidSessionDropRecovery:
 
         dying_session = MagicMock(spec=ServerSession)
         dying_session.send_tool_list_changed = AsyncMock(
-            side_effect=RuntimeError("transport closed")
+            side_effect=anyio.ClosedResourceError("transport closed")
         )
         _descriptions.handshake_delivery._session = dying_session
 
@@ -2343,7 +2344,12 @@ class TestMidSessionDropRecovery:
         release_belt_send = asyncio.Event()
 
         class _SlowContext:
-            session = SimpleNamespace(protocol_version="2025-11-25")
+            session = SimpleNamespace(
+                protocol_version="2025-11-25",
+                send_tool_list_changed=AsyncMock(
+                    side_effect=anyio.ClosedResourceError("transport closed")
+                ),
+            )
 
             async def send_notification(self, notification: object) -> None:
                 belt_send_started.set()
@@ -2358,7 +2364,7 @@ class TestMidSessionDropRecovery:
 
         dying_session = MagicMock(spec=ServerSession)
         dying_session.send_tool_list_changed = AsyncMock(
-            side_effect=RuntimeError("transport closed")
+            side_effect=anyio.ClosedResourceError("transport closed")
         )
         _descriptions.handshake_delivery._session = dying_session
         suspenders_task = asyncio.create_task(refresh_read_messages(mcp, state))
@@ -2396,7 +2402,7 @@ class TestNotifySendTimeout:
     ``_NOTIFY_SEND_TIMEOUT`` is the liveness measure layered on top of that
     proof — bounding the lock hold turns a stalled transport into the same
     recorded drop a genuine send failure already produces (the timeout is
-    caught by the same ``except Exception`` the failure path uses), rather
+    caught by the same handler as a transport failure in ``ListChanged``), rather
     than starving the poller and every belt-path tool call indefinitely.
     """
 

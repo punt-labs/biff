@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,18 @@ async def test_env_session_registers_and_polls_with_no_tool_call(
         )
 
 
+def _background_tasks() -> set[str]:
+    """Names of the long-lived server tasks (not the poller's momentary waiters)."""
+    names: set[str] = set()
+    for task in asyncio.all_tasks():
+        coro = task.get_coro()
+        if isinstance(coro, types.CoroutineType) and "/biff/server/" in str(
+            coro.cr_code.co_filename
+        ):
+            names.add(coro.__qualname__)
+    return names
+
+
 async def test_a_stamped_call_for_the_same_session_does_not_register_again(
     state: ServerState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -65,9 +78,10 @@ async def test_a_stamped_call_for_the_same_session_does_not_register_again(
         FastMCPTransport(create_server(state)), caller=caller_for("env-sess")
     ) as client:
         await asyncio.sleep(1.0)  # the poller finishes starting its watches
-        before = len(asyncio.all_tasks())
+        before = _background_tasks()
         await client.call_tool("who", {})
-        assert len(asyncio.all_tasks()) == before
+        await asyncio.sleep(0.5)  # the poller's reaction to the call settles
+        assert _background_tasks() == before
 
 
 async def test_a_stamped_call_for_another_session_repoints_from_the_env_one(

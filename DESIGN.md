@@ -8557,6 +8557,72 @@ flags flushed during `initialize`; count-based mail detection; bodies in
 summaries; invite summaries that say to accept; no rate limit. Each is
 rejected in the design document.
 
+**Mechanism (channel mode).** `ChannelServer.serve_channel_stdio()`, in
+`server/channel_server.py`, copies `serve_loop`'s body (a `JSONRPCDispatcher`, a
+`Connection.for_loop`, a `ServerRunner`) so that it can wrap both stream ends,
+and closes the write stream itself on exit, even if the connection cleanup
+raises. It lives there rather than in `server/entrypoints.py` so that module's
+OO and coupling baselines do not regress (DES-088's ratchets). A transport crash
+(stdin `OSError`, broken stdout) is logged with its traceback before it
+propagates. The `server/discover` probe goes to the runner, which answers -32601
+at a handshake version; any other request carrying the 2026-07-28 envelope is
+refused with -32600, logged once per distinct method. Observed on Claude Code
+2.1.330 (PL-1348): the probe fails, `initialize` succeeds at 2025-11-25, and
+both launch orders work.
+
+The SDK's dispatcher swallows a write onto a closed stream and, after client
+end of input, drops writes without touching the stream until its handlers
+finish. So `ChannelLink` (owned by `ChannelServer.channel_link`) wraps the write
+stream (`ObservedWriteStream`, which records a failed write) and the read
+stream (`ObservedReadStream`, which closes the link when client input ends).
+`ChannelLink.send` writes a `notifications/claude/channel` frame to the
+`ObservedWriteStream` directly, bounded by a timeout; a normal return means the
+frame was handed to the stdout writer task, not that the client read it. It
+raises `ChannelUnavailableError` on a closed link.
+
+`biff mcp` takes `BIFF_CHANNEL_MODE` from the environment first thing, before
+the config load, so that load's git subprocesses never inherit it. A notify
+owes its debt before its first await, so a cancellation at the subscription-bus
+checkpoint or in the middle of the send leaves it owed.
+
+In channel mode `_HandshakeDelivery.serve_single_connection(link)` makes every
+tool-list send consult the link, in the standalone path and in the in-request
+path. A send that timed out, failed, or was dropped by the SDK keeps the stored
+session and stays owed. The poller retries owed notifications (`flush_owed`) on
+every iteration of its loop, outside the tick-work gate, backing off
+`CHANNEL_BACKOFF` (30 s) after a failure so a client that stopped reading does
+not stall every pass for the 3 s send timeout. The poller sleeps `poll_interval`
+seconds between iterations whether it is active or napping (napping skips only
+the relay poll, not the loop), so the retry runs every `poll_interval` seconds,
+on every wake, and, with `poll_interval <= 0`, on each 30 s fallback timeout:
+late, not lost.
+
+`EpisodeLog` (`src/biff/failure_log.py`, kernel layer, shared by the server and
+any relay or watcher code) keeps repeated failures readable without hiding a
+bug, because biff's log keeps INFO and above. A failure of a transport type (`TimeoutError`,
+`OSError`, the anyio closed/broken errors, `ChannelUnavailableError`; the poller
+adds every `nats.errors.Error`: `RELAY_ERRORS` in `src/biff/relay_errors.py`)
+latches per (label, type): one WARNING with the cause and traceback when the
+episode opens, a WARNING every 10 minutes while it stays open, DEBUG in between,
+and one WARNING when the label next succeeds. Any other exception is a code bug:
+it logs at ERROR with its traceback, once per distinct type, and again at ERROR
+every 10 minutes while it lasts, whatever episodes are open. A channel-mode
+retry with no handshake session is a failure of the same kind, opened only after
+`HANDSHAKE_WINDOW` (30 s) from when the link was created (before any startup
+notification can run, attached stream or not), so the normal start-up order
+(a notify before the stream attaches or before `initialize`) logs nothing. The poller uses
+`RelayLog` (`EpisodeLog` with `RELAY_ERRORS`).
+
+What changes outside channel mode (HTTP, `--user` stdio, opencode, codex, the
+CLI) is small: the loop, the capabilities and the 2026-07-28 subscriptions are
+unchanged, and a failed tool-list send still clears the stored session and sets
+the debt. A tool call cancelled in the middle of its in-request notification now
+leaves the debt owed (the flag is set before the send, as the standalone path
+already did). A failing poller tick also logs a WARNING (or an ERROR for a code
+bug) once per episode, besides its DEBUG traceback. A handshake session that
+cannot be read is logged. `docs/notification.tex` is unchanged by this step; its
+send-failure transitions describe the default.
+
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
 **Amends.** DES-080, for the Claude Code plugin only; DES-061's rule that a
 failed send clears the stored session, in channel mode; DES-038's always-on
