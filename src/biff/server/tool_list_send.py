@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING, NamedTuple, Self
 
 from mcp.shared.subscriptions import ToolsListChanged
 
-from biff.failure_log import EpisodeLog
-from biff.relay_errors import RELAY_ERRORS
 from biff.server.channel import ChannelUnavailableError
 
 if TYPE_CHECKING:
@@ -50,11 +48,6 @@ class ListChanged:
         self._link = link
         return self
 
-    @staticmethod
-    def poller_log(log: logging.Logger) -> EpisodeLog:
-        """Return an episode log for the poller, where a relay outage is expected."""
-        return EpisodeLog(log, RELAY_ERRORS)
-
     async def publish(self, bus: SubscriptionBus) -> None:
         """Publish the change to 2026-07-28 subscribers; a failure is only logged."""
         try:
@@ -70,17 +63,19 @@ class ListChanged:
         cannot happen, and in channel mode that is a failure like any other.
         """
         link = self._link
-        try:
-            if push is None:
+        if push is None:
+            if link is None:
+                return SendOutcome(delivered=False, keep_session=False)
+            if not link.in_handshake_window():
                 msg = "no session captured from the handshake"
-                raise ChannelUnavailableError(msg)
+                link.failed(_WHAT, ChannelUnavailableError(msg))
+            return SendOutcome(delivered=False, keep_session=True)
+        try:
             async with asyncio.timeout(self._timeout):
                 await push()
             if link is not None:
                 link.require_open()
         except Exception as exc:
-            if link is None and push is None:
-                return SendOutcome(delivered=False, keep_session=False)
             if link is None:
                 logger.warning(
                     "Tool list change failed; session cleared", exc_info=True

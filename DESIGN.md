@@ -8584,13 +8584,16 @@ late, not lost.
 any relay or watcher code) keeps repeated failures readable without hiding a
 bug, because biff's log keeps INFO and above. A failure of a transport type (`TimeoutError`,
 `OSError`, the anyio closed/broken errors, `ChannelUnavailableError`; the poller
-adds every `nats.errors.Error`, `RELAY_ERRORS` in `src/biff/relay_errors.py`)
+adds every `nats.errors.Error`: `RELAY_ERRORS` in `src/biff/relay_errors.py`)
 latches per (label, type): one WARNING with the cause and traceback when the
 episode opens, a WARNING every 10 minutes while it stays open, DEBUG in between,
 and one WARNING when the label next succeeds. Any other exception is a code bug:
 it logs at ERROR with its traceback, once per distinct type, and again at ERROR
 every 10 minutes while it lasts, whatever episodes are open. A channel-mode
-retry with no handshake session is a failure of the same kind.
+retry with no handshake session is a failure of the same kind, opened only after
+`HANDSHAKE_WINDOW` (30 s) from when the stream was attached, so the normal start-up
+order (a poller notify before `initialize`) logs nothing. The poller uses
+`RelayLog` (`EpisodeLog` with `RELAY_ERRORS`).
 
 What changes outside channel mode (HTTP, `--user` stdio, opencode, codex, the
 CLI) is small: the loop, the capabilities and the 2026-07-28 subscriptions are

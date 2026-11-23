@@ -7,10 +7,13 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import anyio
+import nats.errors
+import nats.js.errors
 import pytest
 
 from biff import failure_log
 from biff.failure_log import REMINDER_SECONDS, EpisodeLog
+from biff.relay_errors import RELAY_ERRORS, RelayLog
 from biff.server.channel import ChannelUnavailableError
 
 if TYPE_CHECKING:
@@ -199,3 +202,35 @@ class TestThePollerTreatsANatsOutageAsTransport:
             )
 
         assert [r.levelno for r in caplog.records] == [logging.WARNING] * 2
+
+
+class TestRelayErrors:
+    """``RELAY_ERRORS`` names what an unreachable relay raises."""
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            nats.errors.ConnectionClosedError(),
+            nats.errors.NoServersError(),
+            nats.errors.StaleConnectionError(),
+            nats.js.errors.ServiceUnavailableError(),
+            TimeoutError(),
+            OSError(),
+        ],
+    )
+    def test_an_outage_is_expected(self, error: Exception) -> None:
+        assert isinstance(error, RELAY_ERRORS)
+
+    @pytest.mark.parametrize("error", [KeyError("x"), TypeError("x"), RuntimeError()])
+    def test_a_code_bug_is_not(self, error: Exception) -> None:
+        assert not isinstance(error, RELAY_ERRORS)
+
+    def test_the_relay_log_warns_for_an_outage_and_errors_for_a_bug(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        log = RelayLog(_LOG)
+        with caplog.at_level(logging.DEBUG, logger=_LOG.name):
+            log.failed(_WHAT, nats.errors.NoServersError())
+            log.failed(_WHAT, KeyError("bug"))
+
+        assert [r.levelno for r in caplog.records] == [logging.WARNING, logging.ERROR]

@@ -1029,21 +1029,42 @@ class TestOwedDebtIsRetriedEveryPollerIteration:
 
 
 class TestNoSessionCapturedIsAFailureEpisode:
-    async def test_it_warns_once_then_reminds_and_recovers(
+    @staticmethod
+    def _owed_link(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        from biff import failure_log
+
+        delivery = _descriptions.handshake_delivery
+        now = [1000.0]
+        clock = SimpleNamespace(monotonic=lambda: now[0])
+        monkeypatch.setattr(failure_log, "time", clock)
+        monkeypatch.setattr(channel, "time", clock)
+        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.0)
+        link = ChannelLink()
+        link.observe(anyio.create_memory_object_stream[SessionMessage](1)[0])
+        delivery.serve_single_connection(link)
+        delivery._pending_notify = True
+        return now
+
+    async def test_nothing_is_logged_inside_the_handshake_window(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        delivery = _descriptions.handshake_delivery
+        self._owed_link(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            for _ in range(3):
+                await delivery.flush_owed()
+
+        assert caplog.records == []
+        assert delivery._pending_notify
+
+    async def test_after_the_window_it_warns_then_reminds_and_recovers(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         from biff import failure_log
 
         delivery = _descriptions.handshake_delivery
-        link = ChannelLink()
-        link.observe(anyio.create_memory_object_stream[SessionMessage](1)[0])
-        delivery.serve_single_connection(link)
-        delivery._pending_notify = True
-        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.0)
-        now = [1000.0]
-        monkeypatch.setattr(
-            failure_log, "time", SimpleNamespace(monotonic=lambda: now[0])
-        )
+        now = self._owed_link(monkeypatch)
+        now[0] += channel.HANDSHAKE_WINDOW + 1
         with caplog.at_level(logging.WARNING):
             for _ in range(3):
                 await delivery.flush_owed()

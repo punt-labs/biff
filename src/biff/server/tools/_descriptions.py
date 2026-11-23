@@ -31,8 +31,8 @@ from mcp.types import ToolListChangedNotification
 from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 
 from biff.formatting import sanitized_sender, terminal_safe
-from biff.models import UnreadSummary, WallPost
 from biff.plugins.claude_code.unread_file import write_unread_file
+from biff.relay_errors import RelayLog
 from biff.server.display_queue import DisplayItem
 from biff.server.tool_list_send import ListChanged
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from mcp.server.session import ServerSession
     from mcp.server.subscriptions import SubscriptionBus
 
+    from biff.models import UnreadSummary, WallPost
     from biff.server.channel import ChannelLink
     from biff.server.state import ServerState
     from biff.talk_state import TalkState
@@ -223,7 +224,7 @@ def _reset_session() -> None:
     global handshake_delivery, _tty_name, _biff_enabled, _spoken_wall_key, _tick_log
     handshake_delivery, _tick_log = (
         _HandshakeDelivery(),
-        ListChanged.poller_log(logger),
+        RelayLog(logger),
     )
     _tty_name = ""
     _biff_enabled = True
@@ -979,7 +980,7 @@ async def _active_tick(
     return last_count, last_wall, last_talk
 
 
-_tick_log = ListChanged.poller_log(logger)
+_tick_log = RelayLog(logger)
 
 
 async def _safe_tick(
@@ -997,9 +998,10 @@ async def _safe_tick(
     on the next interval.  ``CancelledError`` is re-raised so shutdown
     propagates correctly.
 
-    A failing tick also logs through ``EpisodeLog``: one WARNING per episode
-    of a transport failure (an ERROR, once per type, for a code bug) and one
-    WARNING on recovery, besides the DEBUG traceback of every failed tick.
+    A failing tick also logs through ``RelayLog``: one WARNING per episode
+    of a relay outage and one ERROR per distinct code bug, each repeated every
+    10 minutes while it lasts, and one WARNING on recovery, besides the DEBUG
+    traceback of every failed tick.
     """
     try:
         tick = await _active_tick(

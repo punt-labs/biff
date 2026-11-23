@@ -24,6 +24,7 @@ CHANNEL_METHOD = "notifications/claude/channel"
 
 CHANNEL_SEND_TIMEOUT = 3.0
 CHANNEL_BACKOFF = 30.0
+HANDSHAKE_WINDOW = 30.0
 
 
 class ChannelUnavailableError(Exception):
@@ -204,6 +205,7 @@ class ChannelLink:
     _stream: ObservedWriteStream | None
     _log: EpisodeLog
     _retry_after: float
+    _attached_at: float
 
     def __new__(cls) -> Self:
         """Create a link with no stream attached."""
@@ -211,6 +213,7 @@ class ChannelLink:
         self._stream = None
         self._log = EpisodeLog(logger, _EXPECTED)
         self._retry_after = 0.0
+        self._attached_at = 0.0
         return self
 
     @property
@@ -221,6 +224,7 @@ class ChannelLink:
     def observe(self, write_stream: _Sink) -> ObservedWriteStream:
         """Attach *write_stream* and return it wrapped for the dispatcher."""
         self._stream = ObservedWriteStream(write_stream)
+        self._attached_at = time.monotonic()
         return self._stream
 
     def observe_reads(self, read_stream: _Source) -> ObservedReadStream:
@@ -264,6 +268,10 @@ class ChannelLink:
         if not self.is_open:
             msg = "a write to the client was dropped"
             raise ChannelUnavailableError(msg)
+
+    def in_handshake_window(self) -> bool:
+        """Whether the client has had too little time to send ``initialize``."""
+        return time.monotonic() - self._attached_at < HANDSHAKE_WINDOW
 
     def ready(self) -> bool:
         """Whether a retry that nothing asked for may run now.
