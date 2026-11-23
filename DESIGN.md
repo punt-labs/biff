@@ -8540,6 +8540,23 @@ flags flushed during `initialize`; count-based mail detection; bodies in
 summaries; invite summaries that say to accept; no rate limit. Each is
 rejected in the design document.
 
+**Mechanism (channel mode).** `ChannelServer.serve_channel_stdio()`, in
+`server/channel_server.py`, copies `serve_loop`'s body (a `JSONRPCDispatcher`,
+a `Connection.for_loop`, a `ServerRunner`) so it holds the `Connection`, binds it
+to a `ChannelLink` (`server/channel.py`), and closes the write stream itself on
+exit. It lives there rather than in `server/entrypoints.py` so that module's OO
+and coupling baselines do not regress (DES-088's ratchets). `ChannelLink.send`
+is the one send capability: it writes through the connection's outbound, which
+raises on a closed stream where `Connection.notify` swallows it, and bounds the
+write with a timeout. The `server/discover` probe goes to the runner, which
+answers -32601 at a handshake version; any other request carrying the 2026-07-28
+envelope is refused with -32600. Observed on Claude Code 2.1.330 (PL-1348): the
+probe fails, `initialize` succeeds at 2025-11-25, and both launch orders work.
+In channel mode `_HandshakeDelivery.keep_session` stops `_notify_standalone`
+clearing the stored session after a failed send, a timeout included: the one
+connection lives as long as the process (`docs/notification.tex` is unchanged
+by this step; its send-failure transitions describe the default).
+
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
 **Amends.** DES-080, for the Claude Code plugin only; DES-061's rule that a
 failed send clears the stored session, in channel mode; DES-038's always-on

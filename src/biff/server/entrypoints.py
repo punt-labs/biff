@@ -15,8 +15,7 @@ from biff.server.transport_runtime import McpLifecycleHandler, McpServerBuilder
 from biff.usage import McpUsageMiddleware
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
-
+    from biff.server.channel_server import ChannelServer
     from biff.server.state import RepoToggle, ServerState
 
 logger = logging.getLogger(__name__)
@@ -50,7 +49,7 @@ class McpServerOptions:
 
     def create_server(
         self, toggle: RepoToggle, *, default_user: str | None = None
-    ) -> FastMCP[ServerState]:
+    ) -> ChannelServer[ServerState]:
         """Resolve configuration and build an unbound MCP server."""
         resolved = load_mcp_config(
             user_override=self.user or default_user,
@@ -65,7 +64,7 @@ class McpServerOptions:
             resolved, self.user, self.transport, toggle
         ).create_server()
 
-    def _observed_server(self, ctx: typer.Context) -> FastMCP[ServerState]:
+    def _observed_server(self, ctx: typer.Context) -> ChannelServer[ServerState]:
         invocation = ctx.find_object(McpInvocation)
         if invocation is None:
             msg = "the root CLI callback did not register an MCP invocation"
@@ -102,6 +101,5 @@ class McpServerOptions:
         prefix: _Prefix = _DEFAULT_PREFIX,
     ) -> None:
         """Start the biff MCP server (stdio transport)."""
-        server = cls(user, data_dir, relay_url, prefix)._observed_server(ctx)
         with McpLifecycleHandler.stdio():
-            server.run(transport="stdio")
+            cls(user, data_dir, relay_url, prefix)._observed_server(ctx).run_stdio()

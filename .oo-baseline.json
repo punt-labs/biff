@@ -1000,6 +1000,32 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/server/channel.py": {
+    "method_ratio": 0.833,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.67,
+    "max_complexity": 3.0,
+    "avg_complexity": 1.5,
+    "module_size": 42.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 0.667,
+    "init_violations": 1.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/biff/server/channel_server.py": {
+    "method_ratio": 0.5,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.5,
+    "max_complexity": 6.0,
+    "avg_complexity": 2.75,
+    "module_size": 87.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 0.5,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/server/display_queue.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1019,7 +1045,7 @@
     "avg_params": 3.75,
     "max_complexity": 3.0,
     "avg_complexity": 1.75,
-    "module_size": 86.0,
+    "module_size": 85.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
@@ -1105,11 +1131,11 @@
     "future_annotations": 1.0
   },
   "src/biff/server/tools/_descriptions.py": {
-    "method_ratio": 0.206,
+    "method_ratio": 0.229,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.08,
+    "avg_params": 2.03,
     "max_complexity": 14.0,
-    "avg_complexity": 3.27,
+    "avg_complexity": 3.24,
     "module_size": 628.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 0.156,

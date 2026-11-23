@@ -118,6 +118,9 @@ class _HandshakeDelivery:
 
     _session: ServerSession | None = None
     _pending_notify: bool = False
+    # Channel mode serves one connection for the process's life, so a failed
+    # send must not forget the only session there will ever be (DES-087).
+    keep_session: bool = False
     # Hold across send and debt update so a concurrent success cannot erase a drop.
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -162,19 +165,19 @@ class _HandshakeDelivery:
                 self._session = ctx.session
 
     async def _notify_standalone(self) -> None:
-        if self._session is None:
-            self._pending_notify = True
-            return
+        self._pending_notify = True
+        if self._session is not None:
+            try:
+                async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+                    await self._session.send_tool_list_changed()
+                self._pending_notify = False
+            except Exception:
+                logger.warning("Standalone tool list change failed", exc_info=True)
+                self._forget_session()
 
-        try:
-            async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-                await self._session.send_tool_list_changed()
-        except Exception:
-            logger.warning("Could not send standalone tool list change", exc_info=True)
-            self._session = None
-            self._pending_notify = True
-        else:
-            self._pending_notify = False
+    def _forget_session(self) -> None:
+        """Drop the stored session after a failed send, unless channel mode."""
+        self._session = self._session if self.keep_session else None
 
 
 handshake_delivery = _HandshakeDelivery()

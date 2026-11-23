@@ -88,7 +88,7 @@ def test_default_caller_has_no_new_flag() -> None:
     with patch.object(McpServerOptions, "_observed_server") as observed:
         result = runner.invoke(app, ["mcp", "--user", "devin"])
     assert result.exit_code == 0
-    observed.return_value.run.assert_called_once_with(transport="stdio")
+    observed.return_value.run_stdio.assert_called_once_with()
     result = runner.invoke(app, ["serve", "--default-caller"])
     assert result.exit_code != 0
     assert "No such option" in result.output

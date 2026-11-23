@@ -4,6 +4,16 @@
 
 ### Added
 
+- Channel mode for the Claude Code plugin (DES-087). `plugin.json` sets
+  `BIFF_CHANNEL_MODE=1` in the `tty` server's `env`; `biff mcp` reads it once
+  and removes it from its environment. In that mode the server advertises
+  `experimental["claude/channel"]` and serves stdio on the handshake-only
+  loop, so Claude Code registers it as a channel: the 2026-07-28 probe gets
+  -32601, `initialize` succeeds, and a later 2026-07-28 request is refused.
+  The server logs `channel_mode=on|off` at start and the negotiated
+  `protocolVersion` when a client attaches. A timed-out tool-list send in
+  channel mode keeps the stored session instead of clearing it. Every other
+  caller of `biff mcp` is unchanged. FastMCP is pinned to `<4.3`.
 - Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
   fails on any import that breaks the DES-088 package layers and is not in
   `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs

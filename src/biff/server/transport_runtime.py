@@ -17,8 +17,7 @@ from biff.server.caller_policy import CallerPolicy
 from biff.server.launch import McpLaunch
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
-
+    from biff.server.channel_server import ChannelServer
     from biff.server.state import RepoToggle, ServerState
 
 _logger = logging.getLogger(__name__)
@@ -38,7 +37,7 @@ class McpServerBuilder:
     _transport: str
     _toggle: RepoToggle
 
-    def create_server(self) -> FastMCP[ServerState]:
+    def create_server(self) -> ChannelServer[ServerState]:
         """Create unbound resources with the transport's default caller policy."""
         launch = McpLaunch(
             self._resolved,
