@@ -70,6 +70,36 @@ def _clear_claude_session_env(  # pyright: ignore[reportUnusedFunction]
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
 
+# Product settings biff reads from the environment. A developer or VM that
+# sets one (a blueprint exporting BIFF_RELAY_URL for the hosted relay) must
+# not change what the default suite tests; BIFF_TEST_* (opt-in hosted tiers)
+# and BIFF_RELAY_IMAGE (release image under test) are test inputs, kept.
+_AMBIENT_BIFF_SETTINGS = (
+    "BIFF_CHANNEL_MODE",
+    "BIFF_RELAY_NKEYS_SEED",
+    "BIFF_RELAY_TLS_HANDSHAKE_FIRST",
+    "BIFF_RELAY_TOKEN",
+    "BIFF_RELAY_URL",
+    "BIFF_RELAY_USER_CREDENTIALS",
+    "BIFF_SESSION",
+    "BIFF_TELEMETRY",
+)
+
+
+def strip_ambient_biff_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every ambient biff setting for the rest of the test."""
+    for name in _AMBIENT_BIFF_SETTINGS:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_biff_settings(  # pyright: ignore[reportUnusedFunction]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strip biff's own settings so every test starts from the defaults."""
+    strip_ambient_biff_settings(monkeypatch)
+
+
 @pytest.fixture(autouse=True)
 def _not_in_github_actions(  # pyright: ignore[reportUnusedFunction]
     monkeypatch: pytest.MonkeyPatch,
