@@ -32,6 +32,8 @@ jobs:
           name: coverage-${{ github.sha }}
           path: coverage.xml
           if-no-files-found: error
+          # A rerun of the same SHA replaces its own artifact.
+          overwrite: true
 
   # Run the installed CLI and MCP round-trip on both supported platforms.
   test-wheel:
