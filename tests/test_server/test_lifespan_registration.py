@@ -546,7 +546,7 @@ class TestReapSentinels:
         live session's presence: log it out, release the reclaimed alias, and
         delete its KV row.
         """
-        from biff.server import app as app_mod, sentinel_reaper
+        from biff.server import app as app_mod, poller_supervisor
         from biff.server.app import _write_sentinel
         from biff.session_registry import register_session
 
@@ -564,10 +564,10 @@ class TestReapSentinels:
             return tmp_path / "sentinels"
 
         monkeypatch.setattr(app_mod, "sentinel_dir", _sentinels)
-        monkeypatch.setattr(sentinel_reaper, "sentinel_dir", _sentinels)
+        monkeypatch.setattr(poller_supervisor, "sentinel_dir", _sentinels)
         _write_sentinel("_test-reap", state.session_key)
 
-        await sentinel_reaper.reap_sentinels(state)
+        await poller_supervisor.reap_sentinels(state)
 
         # Presence survives: KV row intact, alias retained.
         sessions = await state.relay.get_sessions()
@@ -582,7 +582,7 @@ class TestReapSentinels:
     ) -> None:
         """A sentinel for a DIFFERENT (dead) key is still reaped normally."""
         from biff.models import UserSession
-        from biff.server import app as app_mod, sentinel_reaper
+        from biff.server import app as app_mod, poller_supervisor
         from biff.server.app import _write_sentinel
         from biff.session_registry import register_session
 
@@ -603,10 +603,10 @@ class TestReapSentinels:
             return tmp_path / "sentinels"
 
         monkeypatch.setattr(app_mod, "sentinel_dir", _sentinels)
-        monkeypatch.setattr(sentinel_reaper, "sentinel_dir", _sentinels)
+        monkeypatch.setattr(poller_supervisor, "sentinel_dir", _sentinels)
         _write_sentinel("_test-reap", f"kai:{dead_sid}")
 
-        await sentinel_reaper.reap_sentinels(state)
+        await poller_supervisor.reap_sentinels(state)
 
         sessions = await state.relay.get_sessions()
         assert all(s.tty != dead_sid for s in sessions), "dead session must be reaped"

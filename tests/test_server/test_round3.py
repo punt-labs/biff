@@ -18,8 +18,9 @@ import biff.local_watch as local_watch
 from biff.local_watch import LocalWatch, WatchKeeper
 from biff.models import BiffConfig, Message
 from biff.relay import LocalRelay
-from biff.server import app, sentinel_reaper
+from biff.server import app, poller_supervisor
 from biff.server.app import create_server
+from biff.server.poller_supervisor import PollerSupervisor
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions
 from tests._state import create_state
@@ -109,21 +110,21 @@ class TestReaperAcceptsOnlySentinels:
         def sentinels_here(_repo: str) -> Path:
             return sentinels
 
-        monkeypatch.setattr(sentinel_reaper, "sentinel_dir", sentinels_here)
+        monkeypatch.setattr(poller_supervisor, "sentinel_dir", sentinels_here)
         state = _state(tmp_path)
         get = AsyncMock(return_value=None)
         delete = AsyncMock()
         monkeypatch.setattr(state.relay, "get_session", get)
         monkeypatch.setattr(state.relay, "delete_session", delete)
-        await sentinel_reaper.reap_sentinels(state)
+        await poller_supervisor.reap_sentinels(state)
         get.assert_not_awaited()
         delete.assert_not_awaited()
 
 
 class TestRestartPolicy:
     def test_the_delay_is_capped_and_cannot_overflow(self) -> None:
-        assert app._restart_delay(0) == app._POLLER_RESTART_DELAY
-        assert app._restart_delay(5000) == app._POLLER_RESTART_CAP
+        assert poller_supervisor.restart_delay(0) == poller_supervisor._RESTART_DELAY
+        assert poller_supervisor.restart_delay(5000) == poller_supervisor._RESTART_CAP
 
     async def test_a_pending_restart_cannot_fire_after_cleanup_began(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -136,11 +137,11 @@ class TestRestartPolicy:
             raise RuntimeError(msg)
 
         monkeypatch.setattr(_descriptions, "poll_inbox", dying)
-        monkeypatch.setattr(app, "_POLLER_RESTART_DELAY", 0.2)
+        monkeypatch.setattr(poller_supervisor, "_RESTART_DELAY", 0.2)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         state = _state(tmp_path)
         live = app._LiveSession()
-        app._spawn_poller(live, create_server(state), state, attempt=0)
+        PollerSupervisor(live, create_server(state), state).start()
         await asyncio.sleep(0.05)  # the first poller has died; a restart is pending
         live.shutdown.set()  # cleanup begins
         await asyncio.sleep(0.6)
@@ -157,14 +158,14 @@ class TestRestartPolicy:
             raise RuntimeError(msg)
 
         monkeypatch.setattr(_descriptions, "poll_inbox", dying)
-        monkeypatch.setattr(app, "_POLLER_RESTART_DELAY", 0.01)
-        monkeypatch.setattr(app, "_POLLER_DEGRADED_AFTER", 3)
+        monkeypatch.setattr(poller_supervisor, "_RESTART_DELAY", 0.01)
+        monkeypatch.setattr(poller_supervisor, "_DEGRADED_AFTER", 3)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         state = _state(tmp_path)
         mcp = create_server(state)
         live = app._LiveSession()
-        with caplog.at_level(logging.WARNING, logger="biff.server.app"):
-            app._spawn_poller(live, mcp, state, attempt=0)
+        with caplog.at_level(logging.WARNING, logger="biff.server.poller_supervisor"):
+            PollerSupervisor(live, mcp, state).start()
             tool = await mcp.get_tool("read_messages")
             assert tool is not None
             await _until(

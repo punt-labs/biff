@@ -411,14 +411,24 @@ class WatchKeeper:
         rebuilt = False
         for watch in self._watches:
             what = f"Local relay watch on {watch.data_dir}"
-            reason = watch.unhealthy_reason()
-            if reason is None:
+            cause = self._failure(watch)
+            if cause is None:
                 self._log.recovered(what)
                 continue
-            self._log.failed(what, RuntimeError(reason))
+            self._log.failed(what, cause)
             self._build(watch)
             rebuilt = True
         return rebuilt
+
+    @staticmethod
+    def _failure(watch: LocalWatch) -> Exception | None:
+        """Why *watch* is unhealthy, or ``None``; a bug in the check is a cause."""
+        try:
+            reason = watch.unhealthy_reason()
+        except Exception as exc:  # it must not end the poller: rebuild instead
+            logger.debug("Watch health check raised", exc_info=True)
+            return exc
+        return None if reason is None else RuntimeError(reason)
 
     async def acheck(self) -> bool:
         """Run :meth:`check` on a worker thread; ``False`` with nothing to watch."""

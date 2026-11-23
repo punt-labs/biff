@@ -8525,7 +8525,8 @@ rebuilds the watch, logging onset and recovery) and the session heartbeat (60 se
 throttled org-repo refresh and keeps the session alive in the relay), and (b)
 one-shot deadline wakes armed only while something with an expiry is displayed:
 the earliest displayed wall `expires_at` and the earliest held talk invite
-arrival plus its TTL, so an expired wall or invite clears with no other event.
+arrival plus its TTL, so an expired wall or invite clears with no other event, and one armed only while
+a tool-list notification is owed, at the end of the link's back-off.
 No other cadence is allowed. Shutdown sentinels are reaped at start and on every
 poller wake, and a watch on the sentinel directory wakes it. A poller
 that dies is restarted with a backoff and an ERROR log each time. Push is the
@@ -8591,11 +8592,25 @@ path. A send that timed out, failed, or was dropped by the SDK keeps the stored
 session and stays owed. The poller retries owed notifications (`flush_owed`) on
 every iteration of its loop, outside the tick-work gate, backing off
 `CHANNEL_BACKOFF` (30 s) after a failure so a client that stopped reading does
-not stall every pass for the 3 s send timeout. The poller sleeps `poll_interval`
-seconds between iterations whether it is active or napping (napping skips only
-the relay poll, not the loop), so the retry runs every `poll_interval` seconds,
-on every wake, and, with `poll_interval <= 0`, on each 30 s fallback timeout:
-late, not lost.
+not stall every pass for the 3 s send timeout. The poller has no fixed cadence, so the
+retry runs on every wake: an arrival, the 5 s NATS subscription check, the 60 s
+local watch-liveness check, a deadline wake, and a one-shot wake the poller arms
+only while a notification is owed, at the moment the link's `CHANNEL_BACKOFF`
+ends (looked at again each second while it can be retried but not yet sent, as
+during the handshake window). A tool call
+that leaves a debt wakes the poller so it can arm that wake. Nothing is armed
+when nothing is owed. A retry is therefore late by at most the back-off, not
+lost, and not by up to 60 s on a quiet local relay.
+
+If the poller dies, the supervisor in `server/app.py` restarts it after a capped
+backoff counted over the deaths in a row (`PollerHealth` in
+`server/poller_health.py`). A poller that completes a pass including a liveness
+check ends the count; a death before that counts, however long the run. From the
+`_POLLER_DEGRADED_AFTER`-th death on, and whenever a restart itself raises, the
+`read_messages` description carries a "notifications stopped" prefix that every
+refresh renders, and it is removed only when a restarted poller completes such a
+pass. A health check that raises is logged by the watch's episode log and
+rebuilds the watch; it does not end the poller.
 
 `EpisodeLog` (`src/biff/failure_log.py`, kernel layer, shared by the server and
 any relay or watcher code) keeps repeated failures readable without hiding a

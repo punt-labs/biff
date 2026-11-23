@@ -78,11 +78,14 @@
       "type_ignore": 5,
       "pyright_ignore": 8
     },
-    "src/biff/server/sentinel_reaper.py": {
+    "src/biff/server/handshake_delivery.py": {
+      "noqa": 1
+    },
+    "src/biff/server/poller_supervisor.py": {
       "noqa": 1
     },
     "src/biff/server/tools/_descriptions.py": {
-      "noqa": 12,
+      "noqa": 11,
       "pyright_ignore": 5
     },
     "src/biff/server/tools/biff_relay.py": {
@@ -138,5 +141,5 @@
       "per_file_ignores": 4
     }
   },
-  "updated_at": "2026-11-23T21:23:55Z"
+  "updated_at": "2026-11-23T22:43:59Z"
 }

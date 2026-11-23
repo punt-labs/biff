@@ -21,6 +21,7 @@ from biff.models import BiffConfig, Message, UnreadSummary, WallPost
 from biff.nats_relay import NatsRelay
 from biff.plugins.claude_code.unread_file import MAX_UNREAD_COUNT, write_unread_file
 from biff.relay import LocalRelay
+from biff.server import handshake_delivery
 from biff.server.app import create_server
 from biff.server.display_queue import DisplayItem, DisplayQueue
 from biff.server.state import ServerState
@@ -1972,7 +1973,7 @@ class TestStartupNotificationRace:
                 await asyncio.Event().wait()
             raise RuntimeError("bus unavailable")
 
-        monkeypatch.setattr(_descriptions, "_NOTIFY_SEND_TIMEOUT", 0.05)
+        monkeypatch.setattr(handshake_delivery, "_NOTIFY_SEND_TIMEOUT", 0.05)
         monkeypatch.setattr(state.tool_events, "publish", fail_publish)
         session = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
         await _descriptions.handshake_delivery.capture_session(session)
@@ -2419,7 +2420,7 @@ class TestNotifySendTimeout:
         # A short patched timeout, not a real wall-clock delay, keeps this
         # test fast — the hang below never resolves on its own, so only
         # the timeout ends the wait.
-        monkeypatch.setattr(_descriptions, "_NOTIFY_SEND_TIMEOUT", 0.05)
+        monkeypatch.setattr(handshake_delivery, "_NOTIFY_SEND_TIMEOUT", 0.05)
 
         never_set = asyncio.Event()
         wedged_session = MagicMock(spec=ServerSession)

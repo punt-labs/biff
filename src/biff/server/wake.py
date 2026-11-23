@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Self
 
 from biff.local_watch import LocalWatch, WatchKeeper
 from biff.relay import LocalRelay
+from biff.server.poller_health import PollerHealth
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -50,9 +51,10 @@ class WakeSignal:
     finishes rather than once per arrival.
     """
 
-    __slots__ = ("_event", "_listeners")
+    __slots__ = ("_event", "_health", "_listeners")
 
     _event: asyncio.Event
+    _health: PollerHealth
     _listeners: set[asyncio.Future[None]]
 
     def __new__(cls) -> Self:
@@ -60,7 +62,13 @@ class WakeSignal:
         self = super().__new__(cls)
         self._event = asyncio.Event()
         self._listeners = set()
+        self._health = PollerHealth()
         return self
+
+    @property
+    def health(self) -> PollerHealth:
+        """How the poller that this signal wakes is doing."""
+        return self._health
 
     @property
     def is_set(self) -> bool:

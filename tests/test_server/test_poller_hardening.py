@@ -29,7 +29,7 @@ from biff.commands._messaging import deliver_with_retry
 from biff.local_watch import LocalWatch, WatchKeeper
 from biff.models import BiffConfig, Message, UserSession, WallPost
 from biff.relay import LocalRelay
-from biff.server import app
+from biff.server import poller_supervisor
 from biff.server.app import create_server
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions
@@ -264,7 +264,7 @@ class TestPollerRestart:
     ) -> None:
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess")
-        monkeypatch.setattr(app, "_POLLER_RESTART_DELAY", 0.05)
+        monkeypatch.setattr(poller_supervisor, "_RESTART_DELAY", 0.05)
         runs: list[int] = []
 
         async def flaky_poller(*_a: object, **_k: object) -> None:
@@ -282,7 +282,7 @@ class TestPollerRestart:
             pwd="/p",
             unread_dir=tmp_path / "unread",
         )
-        with caplog.at_level(logging.ERROR, logger="biff.server.app"):
+        with caplog.at_level(logging.ERROR, logger="biff.server.poller_supervisor"):
             async with StampedClient(
                 FastMCPTransport(create_server(state)), caller=caller_for("sess")
             ):

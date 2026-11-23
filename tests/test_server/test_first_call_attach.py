@@ -16,7 +16,7 @@ from mcp.types import INTERNAL_ERROR
 from biff.models import BiffConfig, RelayConnectError
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
-from biff.server.sentinel_reaper import reap_sentinels
+from biff.server.poller_supervisor import reap_sentinels
 from biff.server.state import ServerState
 from biff.session_routing import SessionRouting
 from biff.testing.caller import StampedClient, caller_for

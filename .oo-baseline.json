@@ -663,12 +663,12 @@
     "future_annotations": 1.0
   },
   "src/biff/local_watch.py": {
-    "method_ratio": 0.926,
+    "method_ratio": 0.929,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.61,
+    "avg_params": 0.62,
     "max_complexity": 10.0,
-    "avg_complexity": 2.89,
-    "module_size": 288.0,
+    "avg_complexity": 2.9,
+    "module_size": 296.0,
     "classes_per_module": 3.0,
     "class_to_func_ratio": 0.6,
     "init_violations": 0.0,
@@ -1053,14 +1053,14 @@
     "future_annotations": 1.0
   },
   "src/biff/server/app.py": {
-    "method_ratio": 0.167,
+    "method_ratio": 0.184,
     "encapsulation_ratio": 0.333,
-    "avg_params": 1.73,
+    "avg_params": 1.72,
     "max_complexity": 9.0,
     "avg_complexity": 3.5,
-    "module_size": 798.0,
+    "module_size": 741.0,
     "classes_per_module": 2.0,
-    "class_to_func_ratio": 0.054,
+    "class_to_func_ratio": 0.061,
     "init_violations": 1.0,
     "public_attr_violations": 10.0,
     "future_annotations": 1.0
@@ -1092,11 +1092,11 @@
     "future_annotations": 1.0
   },
   "src/biff/server/channel.py": {
-    "method_ratio": 0.968,
+    "method_ratio": 0.969,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.61,
+    "avg_params": 0.59,
     "max_complexity": 4.0,
-    "avg_complexity": 1.32,
+    "avg_complexity": 1.31,
     "module_size": 158.0,
     "classes_per_module": 3.0,
     "class_to_func_ratio": 0.8,
@@ -1143,6 +1143,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/server/handshake_delivery.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.5,
+    "max_complexity": 7.0,
+    "avg_complexity": 3.67,
+    "module_size": 68.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/server/launch.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1169,6 +1182,32 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/server/poller_health.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 19.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/biff/server/poller_supervisor.py": {
+    "method_ratio": 0.545,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.27,
+    "max_complexity": 7.0,
+    "avg_complexity": 3.45,
+    "module_size": 128.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 0.167,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/server/relay_lifecycle.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1178,19 +1217,6 @@
     "module_size": 56.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
-    "init_violations": 0.0,
-    "public_attr_violations": 0.0,
-    "future_annotations": 1.0
-  },
-  "src/biff/server/sentinel_reaper.py": {
-    "method_ratio": 0.0,
-    "encapsulation_ratio": 1.0,
-    "avg_params": 1.75,
-    "max_complexity": 7.0,
-    "avg_complexity": 5.0,
-    "module_size": 65.0,
-    "classes_per_module": 0.0,
-    "class_to_func_ratio": 0.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -1248,14 +1274,14 @@
     "future_annotations": 1.0
   },
   "src/biff/server/tools/_descriptions.py": {
-    "method_ratio": 0.381,
+    "method_ratio": 0.275,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.49,
+    "avg_params": 1.63,
     "max_complexity": 12.0,
     "avg_complexity": 3.0,
-    "module_size": 624.0,
+    "module_size": 602.0,
     "classes_per_module": 2.0,
-    "class_to_func_ratio": 0.212,
+    "class_to_func_ratio": 0.171,
     "init_violations": 1.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -1484,10 +1510,10 @@
   "src/biff/server/wake.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.5,
+    "avg_params": 0.44,
     "max_complexity": 8.0,
-    "avg_complexity": 2.5,
-    "module_size": 70.0,
+    "avg_complexity": 2.33,
+    "module_size": 76.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

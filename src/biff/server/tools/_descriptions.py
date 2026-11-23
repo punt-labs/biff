@@ -29,14 +29,11 @@ from datetime import UTC, datetime
 from enum import Enum, auto
 from typing import TYPE_CHECKING, NamedTuple, Protocol
 
-from mcp.types import ToolListChangedNotification
-from mcp.types.version import MODERN_PROTOCOL_VERSIONS
-
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.relay_errors import RelayLog
 from biff.server.display_queue import DisplayItem
-from biff.server.tool_list_send import ListChanged
+from biff.server.handshake_delivery import HandshakeDelivery
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
 from biff.talk_types import TalkNotification, TalkPhase
 from biff.tty import format_address
@@ -52,17 +49,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from fastmcp import FastMCP
-    from mcp.server.session import ServerSession
-    from mcp.server.subscriptions import SubscriptionBus
 
     from biff.models import UnreadSummary, WallPost
-    from biff.server.channel import ChannelLink
     from biff.server.state import ServerState
     from biff.talk_state import TalkState
 
 logger = logging.getLogger(__name__)
 
 _READ_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
+_STOPPED_NOTICE = "[biff: notifications stopped — see the biff log] "
 
 # The poller's timers (DES-087).  Both are connection liveness, not a cadence
 # for finding arrivals — see ``WakeSignal.wait``:
@@ -100,84 +95,7 @@ _WALL_NOTIFY_RESUBSCRIBE_MESSAGES = LatchMessages(
     recovery="Wall-notify wake pokes recovered — re-subscribed",
 )
 
-_NOTIFY_SEND_TIMEOUT = 3.0
-
-
-@dataclass
-class _HandshakeDelivery:
-    """Track legacy notification debt under one lock (DES-061)."""
-
-    _session: ServerSession | None = None
-    _pending_notify: bool = False
-    # Channel mode serves one connection for the process's life: a failed send
-    # keeps its session, and a write the SDK dropped stays owed (DES-087).
-    _link: ChannelLink | None = None
-    # Hold across send and debt update so a concurrent success cannot erase a drop.
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-    async def capture_session(self, session: ServerSession) -> None:
-        """Capture the handshake session and flush any notification owed."""
-        if session.protocol_version in MODERN_PROTOCOL_VERSIONS:
-            return
-        async with self._lock:
-            self._session = session
-            if self._pending_notify:
-                await self._notify_standalone()
-
-    async def notify(self, bus: SubscriptionBus | None = None) -> None:
-        """Publish to modern subscribers and notify the handshake client.
-
-        Args:
-            bus: Server event bus, or None to send the handshake notification only.
-        """
-        from fastmcp.server.dependencies import get_context  # noqa: PLC0415
-
-        try:
-            ctx = get_context()
-        except RuntimeError:
-            ctx = None
-        legacy = (
-            ctx is None or ctx.session.protocol_version not in MODERN_PROTOCOL_VERSIONS
-        )
-        # Owe the change before the first await: a cancellation at the bus
-        # checkpoint must not leave a changed description with no debt.
-        self._pending_notify = self._pending_notify or legacy
-        if bus is not None:
-            await ListChanged(_NOTIFY_SEND_TIMEOUT, None).publish(bus)
-
-        if ctx is None:
-            async with self._lock:
-                await self._notify_standalone()
-        elif legacy:
-            async with self._lock:
-                sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(
-                    lambda: ctx.send_notification(ToolListChangedNotification())
-                )
-                self._pending_notify = not sent.delivered
-                self._session = ctx.session
-
-    async def flush_owed(self) -> None:
-        """Retry a notification a single connection still owes (DES-087)."""
-        async with self._lock:
-            if self._link and self._pending_notify and self._link.ready():
-                await self._notify_standalone()
-
-    def serve_single_connection(self, link: ChannelLink) -> None:
-        """Serve one connection for the process's life, observed through *link*.
-
-        The connection starts with no stored session; ``initialize`` captures it.
-        """
-        self._session, self._link = None, link
-
-    async def _notify_standalone(self) -> None:
-        self._pending_notify = True
-        push = self._session.send_tool_list_changed if self._session else None
-        sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(push)
-        self._pending_notify = not sent.delivered
-        self._session = self._session if sent.keep_session else None
-
-
-handshake_delivery = _HandshakeDelivery()
+handshake_delivery = HandshakeDelivery()
 
 
 # Set by the ``tty`` tool so the unread file includes the session name.
@@ -224,7 +142,7 @@ def _reset_session() -> None:
     """Reset process globals for test isolation."""
     global handshake_delivery, _tty_name, _biff_enabled, _spoken_wall_key, _tick_log
     handshake_delivery, _tick_log = (
-        _HandshakeDelivery(),
+        HandshakeDelivery(),
         RelayLog(logger),
     )
     _tty_name = ""
@@ -284,6 +202,18 @@ async def _sync_unread_file(
     )
 
 
+async def _announce(state: ServerState) -> None:
+    """Notify the client of a description change; wake the poller if that left a debt.
+
+    The poller sleeps until a wake or its timers, and a debt owed by a tool call
+    (not by the poller's own pass) is retried only if the poller learns of it
+    and arms the one-shot wake for the end of the back-off.
+    """
+    await handshake_delivery.notify(state.tool_events)
+    if handshake_delivery.seconds_until_retry() is not None:
+        state.wake.wake()
+
+
 async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -> bool:
     """Update the ``read_messages`` tool description with unread count.
 
@@ -326,18 +256,35 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
         logger.debug(
             "refresh_read_messages: unread summary fetch failed", exc_info=True
         )
+        await _show_poller_state(mcp, state)  # the notice needs no relay
         return False
     old_desc = tool.description
+    notice = _STOPPED_NOTICE if state.wake.health.is_degraded else ""
     if combined.count == 0:
-        tool.description = _READ_MESSAGES_BASE
+        tool.description = notice + _READ_MESSAGES_BASE
     else:
         tool.description = (
-            f"Check messages ({combined.count} unread). Marks all as read."
+            f"{notice}Check messages ({combined.count} unread). Marks all as read."
         )
     if tool.description != old_desc:
-        await handshake_delivery.notify(state.tool_events)
+        await _announce(state)
     await _sync_unread_file(state, summary=combined)
     return True
+
+
+async def _show_poller_state(mcp: FastMCP[ServerState], state: ServerState) -> None:
+    """Show or remove the notice that notifications stopped, keeping the rest.
+
+    Needs no relay call, so it works while the relay is the thing that is down.
+    """
+    tool = await mcp.get_tool("read_messages")
+    if tool is None:
+        return
+    old_desc = tool.description or ""
+    body = old_desc.removeprefix(_STOPPED_NOTICE)
+    tool.description = (_STOPPED_NOTICE if state.wake.health.is_degraded else "") + body
+    if tool.description != old_desc:
+        await _announce(state)
 
 
 async def refresh_wall(
@@ -401,7 +348,7 @@ async def refresh_wall(
             )
         )
     if tool.description != old_desc:
-        await handshake_delivery.notify(state.tool_events)
+        await _announce(state)
         # Voice new walls via vox (L1 integration — no-op if vox absent).
         # Only speak when the wall CONTENT changes, not when the countdown
         # timer updates the description. The description changes every tick
@@ -513,7 +460,7 @@ async def refresh_talk(mcp: FastMCP[ServerState], state: ServerState) -> None:
     old_desc = tool.description
     tool.description = _talk_description(state.talk)
     if tool.description != old_desc:
-        await handshake_delivery.notify(state.tool_events)
+        await _announce(state)
     await _sync_unread_file(state)
 
 
@@ -565,8 +512,8 @@ def _relay_pushes_inbox_notify(state: ServerState) -> bool:
     Only ``NatsRelay`` carries the always-on inbox-notify SUB (DES-062); a
     filesystem-backed ``LocalRelay`` has no push mechanism of any kind, so
     gating its unread recompute on a poke that will never arrive would
-    silently degrade detection to the ``nap_interval`` backstop with no
-    compensating benefit — ``LocalRelay.get_unread_summary`` is a cheap
+    leave it waiting on the watch, which wakes the poller for every arrival,
+    with no compensating benefit — ``LocalRelay.get_unread_summary`` is a cheap
     local read, not the JetStream ``stream_info`` round-trip DES-062 exists
     to save.
     """
@@ -1018,8 +965,9 @@ async def _safe_tick(
 ) -> _Seen:
     """Wrap ``_active_tick`` with error handling.
 
-    A relay error must not kill the poller.  The failure is logged at WARNING
-    once when it starts and once when the pass succeeds again; the pass is
+    A failed pass must not kill the poller.  A relay outage is logged at
+    WARNING once when it starts and once when the pass succeeds again; a code
+    bug is logged at ERROR with its traceback (see ``RelayLog``).  The pass is
     retried on the liveness wake (``_Seen.failed``).  ``CancelledError`` is
     re-raised so shutdown propagates correctly.
     """
@@ -1179,20 +1127,29 @@ async def poll_inbox(
         _SUB_RECONCILE_INTERVAL if _relay_pushes_inbox_notify(state) else None
     )
     watch = _Check(_WATCH_LIVENESS_INTERVAL if keeper.watching else None)
+    checks_nothing = nats.remaining() is None and watch.remaining() is None
     try:
         await asyncio.to_thread(keeper.start)
         await subs.start()
         state.wake.wake()  # the first pass
         while shutdown is None or not shutdown.is_set():
-            waits = [w for w in (nats.remaining(), watch.remaining()) if w is not None]
+            waits = [
+                w
+                for w in (
+                    nats.remaining(),
+                    watch.remaining(),
+                    handshake_delivery.seconds_until_retry(),
+                )
+                if w is not None
+            ]
             timeout = seen.timeout(
                 min(waits, default=None), _seconds_until_deadline(state, seen)
             )
             outcome = await state.wake.wait(timeout=timeout, shutdown=shutdown)
             if outcome.is_shutdown:
                 return
-            nats.due()
-            rebuilt = await keeper.acheck() if watch.due() else False
+            nats_due, watch_due = nats.due(), watch.due()
+            rebuilt = await keeper.acheck() if watch_due else False
             due = _seconds_until_deadline(state, seen) <= 0
             wanted = (outcome.is_arrival, gate.pending, seen.failed, rebuilt, due)
             if any(wanted):
@@ -1204,12 +1161,25 @@ async def poll_inbox(
             # After the tick: its relay calls can trigger the wedge teardown
             # that orphans the SUBs, and reconciling here rebinds them at once.
             await subs.reconcile()
+            await _note_full_pass(mcp, state, (nats_due, watch_due, checks_nothing))
     finally:
         await subs.close()
         # Close, don't just stop: a start still running on its worker thread
         # sees the watch closed and tears itself down instead of leaking.
         with suppress(Exception, asyncio.CancelledError):
             await asyncio.shield(asyncio.to_thread(keeper.stop))
+
+
+async def _note_full_pass(
+    mcp: FastMCP[ServerState], state: ServerState, checked: tuple[bool, ...]
+) -> None:
+    """Record a pass that included a liveness check (any of *checked*).
+
+    A poller with no liveness check at all counts every pass.  The first such
+    pass of a restarted poller removes the "notifications stopped" notice.
+    """
+    if any(checked) and state.wake.health.passed_liveness():
+        await refresh_read_messages(mcp, state)
 
 
 async def _safe_reap(reap: Callable[[], Awaitable[None]]) -> None:

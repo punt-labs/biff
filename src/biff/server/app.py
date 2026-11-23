@@ -14,7 +14,6 @@ import sys
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
-from contextvars import Context
 from datetime import UTC, datetime
 from traceback import extract_tb
 from typing import TYPE_CHECKING
@@ -38,8 +37,12 @@ from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
 from biff.server.caller_policy import CallerPolicy
 from biff.server.channel_server import ChannelServer
+from biff.server.poller_supervisor import (
+    PollerSupervisor,
+    build_logout_event,
+    reap_sentinels,
+)
 from biff.server.relay_lifecycle import RelayLifecycle
-from biff.server.sentinel_reaper import build_logout_event, reap_sentinels
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions, register_all_tools
 from biff.tty import build_session_key
@@ -115,10 +118,6 @@ def _remove_active_markers(state: ServerState) -> None:
 # Throttling this call to a slower cadence shrinks its share of
 # that shared budget without touching the wedge-detection machinery itself.
 _ORG_REPOS_REFRESH_INTERVAL = 600.0  # seconds
-_POLLER_RESTART_DELAY = 1.0  # seconds, doubled per consecutive death, capped
-_POLLER_RESTART_CAP = 60.0
-_POLLER_DEGRADED_AFTER = 5  # consecutive deaths before the user is told
-_STOPPED_NOTICE = "[biff: notifications stopped — see the biff log] "
 
 # Bound each best-effort NATS teardown call independently of nats-py's own
 # per-request timeout.  nats-py reconnects forever on a lost connection
@@ -1017,88 +1016,6 @@ async def _running_lifespan(
             await _finish_cleanup(_startup_cleanup(state, live))
 
 
-def _restart_delay(attempt: int) -> float:
-    """Return the backoff before restart number *attempt* (capped, no overflow)."""
-    return min(_POLLER_RESTART_DELAY * (1 << min(attempt, 16)), _POLLER_RESTART_CAP)
-
-
-async def _flag_notifications_stopped(
-    mcp: FastMCP[ServerState], state: ServerState
-) -> None:
-    """Tell the user, in the ``read_messages`` description, the poller is down."""
-    tool = await mcp.get_tool("read_messages")
-    if tool is not None and not (tool.description or "").startswith(_STOPPED_NOTICE):
-        tool.description = _STOPPED_NOTICE + (tool.description or "")
-        await _descriptions.handshake_delivery.notify(state.tool_events)
-
-
-def _log_poller_death(deaths: int, exc: BaseException) -> None:
-    """Log a poller death: a traceback at the first and at the escalation."""
-    if deaths in (1, _POLLER_DEGRADED_AFTER):
-        logger.error("Poller task died (%d in a row)", deaths, exc_info=exc)
-    elif deaths < _POLLER_DEGRADED_AFTER or deaths % 10 == 0:
-        logger.warning("Poller task died again (%d in a row): %s", deaths, exc)
-
-
-def _spawn_poller(
-    live: _LiveSession,
-    mcp: FastMCP[ServerState],
-    state: ServerState,
-    *,
-    attempt: int,
-) -> None:
-    """Start the poller; if it dies, log it and start another after a backoff.
-
-    The poller also reaps shutdown sentinels: it runs on every wake, and a
-    watch on the sentinel directory wakes it, so there is no reaper timer.
-    It outlives the requests that may start it, and nothing else would
-    restart it, so a death must not leave the markers silently stale.
-
-    The backoff grows with consecutive deaths and resets after a run longer
-    than its cap.  The first death and the ``_POLLER_DEGRADED_AFTER``-th get a
-    traceback; the user is told in the ``read_messages`` description from the
-    latter on; the rest are one-line warnings.
-    """
-    shutdown = live.shutdown
-    watched = (sentinel_dir(state.config.repo_name),)
-    poll = _descriptions.poll_inbox(
-        mcp,
-        state,
-        shutdown=shutdown,
-        reap=lambda: reap_sentinels(state),
-        watch_dirs=watched,
-    )
-    task = asyncio.create_task(poll, context=Context())
-    live.reaper = task
-    live.tasks.append(task)
-    started = time.monotonic()
-
-    def restart(deaths: int) -> None:
-        if shutdown.is_set() or live.shutdown is not shutdown:
-            return  # cleanup began, shut down, or re-pointed to a new session
-        try:
-            _spawn_poller(live, mcp, state, attempt=deaths)
-        except Exception:
-            logger.exception("Poller will not be restarted")
-
-    def died(done: asyncio.Task[None]) -> None:
-        if done.cancelled() or (exc := done.exception()) is None:
-            return
-        if shutdown.is_set():
-            return
-        deaths = 1 if time.monotonic() - started > _POLLER_RESTART_CAP else attempt + 1
-        _log_poller_death(deaths, exc)
-        if deaths == _POLLER_DEGRADED_AFTER:
-            live.tasks.append(
-                asyncio.create_task(_flag_notifications_stopped(mcp, state))
-            )
-        delay = _restart_delay(deaths - 1)
-        loop = asyncio.get_running_loop()
-        loop.call_later(delay, restart, deaths)
-
-    task.add_done_callback(died)
-
-
 class _LiveSession:
     """The session-keyed resources attached on the first identified call.
 
@@ -1255,7 +1172,7 @@ class _LiveSession:
         await _append_login_event(state, final_name)
         await _close_orphaned_logins(state, sessions)
 
-        _spawn_poller(self, mcp, state, attempt=0)
+        PollerSupervisor(self, mcp, state).start()
         self.tasks.append(asyncio.create_task(_heartbeat_loop(state, self.shutdown)))
         self.tasks.append(asyncio.create_task(_kv_watcher_loop(state, self.shutdown)))
 

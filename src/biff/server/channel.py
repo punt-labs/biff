@@ -202,17 +202,15 @@ class ChannelLink:
     ``TimeoutError``.
     """
 
-    _stream: ObservedWriteStream | None
+    _stream: ObservedWriteStream | None = None
     _log: EpisodeLog
-    _retry_after: float
+    _retry_after: float = 0.0
     _created_at: float
 
     def __new__(cls) -> Self:
         """Create a link with no stream attached."""
         self = super().__new__(cls)
-        self._stream = None
         self._log = EpisodeLog(logger, _EXPECTED)
-        self._retry_after = 0.0
         self._created_at = time.monotonic()
         return self
 
@@ -277,13 +275,12 @@ class ChannelLink:
         return time.monotonic() - self._created_at < HANDSHAKE_WINDOW
 
     def ready(self) -> bool:
-        """Whether a retry that nothing asked for may run now.
-
-        After a failure the poller waits ``CHANNEL_BACKOFF`` seconds, so a
-        client that stopped reading does not stall every tick for the send
-        timeout.
-        """
+        """Whether a retry that nothing asked for may run now (after the back-off)."""
         return time.monotonic() >= self._retry_after
+
+    def seconds_until_ready(self) -> float:
+        """Seconds until :meth:`ready`; 0 once it is."""
+        return max(self._retry_after - time.monotonic(), 0.0)
 
     def delivered(self, what: str) -> None:
         """Record that *what* was sent, logging recovery once after a failure."""

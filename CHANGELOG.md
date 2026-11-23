@@ -57,7 +57,12 @@
   kqueue on the directory, which uses a fixed number of descriptors however
   many mailboxes exist). Mailboxes are now written by rename. A failing poller
   pass logs a warning and is retried on the liveness wake. A poller that dies is
-  restarted with a backoff. The watch check also proves delivery end to end with a
+  restarted with a backoff; from the fifth death in a row, or when a restart
+  itself fails, the `read_messages` description says notifications stopped on
+  every refresh until a restarted poller completes a pass with a liveness check,
+  and a death before that check counts however long the run. An owed
+  notification on a quiet relay is retried when its back-off ends (one one-shot
+  wake, armed only while owed). The watch check also proves delivery end to end with a
   canary entry and names the failed check in its warning. Removing sentinel
   files and registering sessions can no longer lose a session: the reap takes the
   relay directory lock. `set_poll_interval`

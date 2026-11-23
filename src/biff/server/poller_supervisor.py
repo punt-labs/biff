@@ -1,20 +1,120 @@
-"""Reaping of shutdown sentinels left by sessions that exited."""
+"""Run the poller and the sentinel reaping it does; restart it when it dies."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import TYPE_CHECKING
+from contextvars import Context
+from typing import TYPE_CHECKING, Protocol, Self
 
 from biff._stdlib import sentinel_dir
 from biff.models import SessionEvent, UserSession
+from biff.server.tools import _descriptions
 from biff.session_lock import routing_lock
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from fastmcp import FastMCP
+
     from biff.server.state import ServerState
 
 logger = logging.getLogger(__name__)
+
+_RESTART_DELAY = 1.0  # seconds, doubled per consecutive death, capped
+_RESTART_CAP = 60.0
+_DEGRADED_AFTER = 5  # consecutive deaths before the user is told
+
+
+class LiveTasks(Protocol):
+    """What the supervisor needs of the session that owns the poller."""
+
+    shutdown: asyncio.Event
+    reaper: asyncio.Task[None] | None
+    tasks: list[asyncio.Task[None]]
+
+
+def restart_delay(attempt: int) -> float:
+    """Return the backoff before restart number *attempt* (capped, no overflow)."""
+    return min(_RESTART_DELAY * (1 << min(attempt, 16)), _RESTART_CAP)
+
+
+class PollerSupervisor:
+    """Start the poller; if it dies, log it and start another after a backoff.
+
+    The poller also reaps shutdown sentinels: it runs on every wake, and a
+    watch on the sentinel directory wakes it, so there is no reaper timer.
+    It outlives the requests that may start it, and nothing else would
+    restart it, so a death must not leave the markers silently stale.
+
+    The backoff grows with the deaths in a row (``state.wake.health``), which end
+    only when a poller completes a pass with a liveness check.  The first death
+    and the ``_DEGRADED_AFTER``-th get a traceback; from the latter on, and
+    whenever a restart itself raises, the ``read_messages`` description tells
+    the user that notifications stopped; the rest are one-line warnings.
+    """
+
+    __slots__ = ("_live", "_mcp", "_shutdown", "_state")
+
+    _live: LiveTasks
+    _mcp: FastMCP[ServerState]
+    _state: ServerState
+    _shutdown: asyncio.Event
+
+    def __new__(
+        cls, live: LiveTasks, mcp: FastMCP[ServerState], state: ServerState
+    ) -> Self:
+        """Supervise the poller of *live*'s current session."""
+        self = super().__new__(cls)
+        self._live, self._mcp, self._state = live, mcp, state
+        self._shutdown = live.shutdown
+        return self
+
+    def start(self) -> None:
+        """Start a poller and watch it."""
+        state = self._state
+        poll = _descriptions.poll_inbox(
+            self._mcp,
+            state,
+            shutdown=self._shutdown,
+            reap=lambda: reap_sentinels(state),
+            watch_dirs=(sentinel_dir(state.config.repo_name),),
+        )
+        task = asyncio.create_task(poll, context=Context())
+        self._live.reaper = task
+        self._live.tasks.append(task)
+        task.add_done_callback(self._died)
+
+    def _died(self, done: asyncio.Task[None]) -> None:
+        exc = None if done.cancelled() else done.exception()
+        if exc is not None and not self._shutdown.is_set():
+            self._failed(exc, degrade=False)
+
+    def _failed(self, exc: BaseException, *, degrade: bool) -> None:
+        """Record a death (or a failed restart), tell the user, retry later."""
+        deaths = self._state.wake.health.died()
+        if deaths in (1, _DEGRADED_AFTER):
+            logger.error("Poller task died (%d in a row)", deaths, exc_info=exc)
+        elif deaths < _DEGRADED_AFTER or deaths % 10 == 0:
+            logger.warning("Poller task died again (%d in a row): %s", deaths, exc)
+        if degrade or deaths >= _DEGRADED_AFTER:
+            self._state.wake.health.degrade()
+            self._live.tasks.append(asyncio.create_task(self._show_notice()))
+        asyncio.get_running_loop().call_later(restart_delay(deaths - 1), self._restart)
+
+    async def _show_notice(self) -> None:
+        """Render the notice into the description (a refresh shows it)."""
+        await _descriptions.refresh_read_messages(self._mcp, self._state)
+
+    def _restart(self) -> None:
+        """Start another poller unless cleanup began; a start that raises is retried."""
+        if self._shutdown.is_set() or self._live.shutdown is not self._shutdown:
+            return  # cleanup began, shut down, or re-pointed to a new session
+        try:
+            self.start()
+        except Exception as exc:
+            logger.exception("Poller restart failed")
+            self._failed(exc, degrade=True)
 
 
 def build_logout_event(session_key: str, cached: UserSession) -> SessionEvent:
