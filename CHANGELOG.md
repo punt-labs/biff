@@ -4,6 +4,10 @@
 
 ### Added
 
+- `relay.type` in `config.yaml` / `config.local.yaml` chooses the relay:
+  `local` (the default), `demo` (the shared public relay, bundled
+  credentials) or `nats` (your own NATS server, with `relay.url`). A `relay`
+  section with only `url` still means `nats`.
 - Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
   fails on any import that breaks the DES-088 package layers and is not in
   `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs
@@ -19,12 +23,33 @@
 
 ### Changed
 
+- **Behavior change: the local relay is the default.** A repo with no relay
+  configured now uses the local filesystem relay (no network, no shared
+  credentials) instead of connecting to the public demo relay
+  (`tls://connect.ngs.global`). Sessions in such a repo no longer see
+  sessions on other machines. If you relied on the implicit demo relay, keep
+  it with one line of config in `.punt-labs/biff/config.yaml` or
+  `config.local.yaml`: `relay: {type: demo}`. Repos that already set
+  `relay.url` see no change. Supersedes the demo-relay default of DES-037
+  (DES-090).
+- The local relay keeps its files in `~/.punt-labs/biff/relay/<repo-key>/`
+  instead of `/tmp/biff/<directory-name>/`. They survive a reboot, repos that
+  share a directory name no longer share a relay, and every clone and
+  worktree of one remote shares one relay. Content in `/tmp/biff/` is not
+  migrated.
+- `biff` CLI commands and `biff doctor` work on the local relay; they used to
+  refuse to run without a NATS relay URL.
 - Replace generated agents' per-edit `make check` hooks with advisory Ethos DES-085
   file checks, blocking commit checks, and the full gate at handoff.
   Requires ethos 5.2.0 or later (`ethos hook post-edit`).
 - Upgrade the dev dependency to `punt-oo-ratchet==0.5.0`, retaining existing
   OO, coupling and suppression policies and baselines. The design check now
   reads the declared layers instead of the four fixed ones.
+
+### Removed
+
+- The `--prefix` option of `biff mcp` and `biff serve`. Use `--data-dir` to
+  place the local relay elsewhere.
 
 ### Fixed
 

@@ -381,7 +381,7 @@ Implemented in biff-faz. Commit `3101515` (replace /on /off with /mesg y|n), PR 
 1. **LocalRelay** — Filesystem-based. JSONL inboxes in `{data_dir}/`. JSON session files. Works out of the box with no infrastructure. Repo-scoped by directory path.
 2. **NatsRelay** — NATS KV for sessions/presence, JetStream for messaging. Requires a NATS server. Enables cross-machine communication.
 
-Selection is automatic, driven by `config.relay_url` (`.punt-labs/biff/config.yaml` + `config.local.yaml`, per DES-037 — not a `.biff` file, which was removed in v1.13.1): set, use NatsRelay; unset, use LocalRelay. In practice `relay_url` is rarely unset — `_apply_demo_relay_default` fills it with the bundled demo relay whenever no explicit URL is configured, so NatsRelay against the demo relay is the effective default, not LocalRelay (`ServerState`'s relay-selection docstring in `src/biff/server/state.py`).
+Selection is automatic, driven by `config.relay_url` (`.punt-labs/biff/config.yaml` + `config.local.yaml`, per DES-037 — not a `.biff` file, which was removed in v1.13.1): set, use NatsRelay; unset, use LocalRelay. An unset `relay_url` is the default: DES-090 removed the fallback that filled in the bundled demo relay, so a repo with no relay configured uses LocalRelay, and the demo relay is the opt-in `relay: {type: demo}`.
 
 ### Message Semantics: POP (Read-Once)
 
@@ -4045,7 +4045,7 @@ guidance.
 ## DES-037: Zero-Config — Config Migration and Owner Derivation
 
 **Date:** 2026-04-12
-**Status:** SETTLED — implemented and shipped; `.biff` removed entirely in v1.13.1 (see CHANGELOG.md)
+**Status:** SETTLED — implemented and shipped; `.biff` removed entirely in v1.13.1 (see CHANGELOG.md); the demo-relay default is superseded by DES-090
 **Topic:** Move config to `.punt-labs/biff/`, YAML format, derive org
 scope from git remote, make explicit config optional
 **Related:** DES-007a (slug-based namespace), DES-012 (config file),
@@ -8626,3 +8626,131 @@ on the same Python file. The full gate measured 68.145 seconds and remains a
 delivery requirement. Generated hooks invoke `ethos hook post-edit` with a
 70-second harness timeout. Git and harness integration still require the new
 Ethos binary and installed hook shims; policy files alone do not install them.
+
+## DES-090: The Local Relay Is the Default; Demo and NATS Relays Are Opt-In
+
+**Date:** 2026-11-22
+**Status:** SETTLED
+**Topic:** Which relay a repo uses when none is configured, how a relay is
+chosen in `config.yaml`, and where the local relay keeps its files
+**Supersedes:** the demo-relay default in DES-037 (the "demo relay + bundled
+creds" fallback for an absent `relay` section) and in INS-007's "Demo Relay
+Default"
+**Related:** DES-037 (zero-config), DES-059 (self-hosted relay image), DES-038
+(three-layer delivery), DES-054 (repo common root), DES-088 (package layers)
+
+### Problem
+
+Most users first need their own agents on one machine to see and message each
+other, mainly under opencode, pi, Devin and other harnesses. DES-037 made a
+repo with no relay configured connect to the public demo NATS relay
+(`tls://connect.ngs.global`). That sent every new user's presence through a
+public relay, using credentials bundled in the package, before the user had
+chosen anything. The local filesystem relay (`LocalRelay`) already did the
+single-machine job, but it was reachable only through the empty-string trick
+`relay: url: ""` (or `--relay-url ""`), and it kept its files in
+`/tmp/biff/<directory-name>/`, which a reboot clears and which every repo with
+the same directory name shares.
+
+### Decision
+
+**1. No relay configured means the local relay.** `config.py` leaves
+`relay_url` unset when neither `config.yaml` nor `config.local.yaml` names a
+relay, and `RelaySelector` already turns an unset URL into `LocalRelay`. The
+fallback that filled in the demo URL is gone. The CLI (`cli_session_host`) now
+opens the relay the same selector chooses; it used to refuse to run without a
+NATS URL. `biff doctor` reports the local relay as needing no network.
+
+**2. A relay is chosen with `relay.type`.**
+
+```yaml
+relay:
+  type: local   # the default: no network, no credentials
+```
+
+```yaml
+relay:
+  type: demo    # the shared public NATS relay, bundled credentials
+```
+
+```yaml
+relay:
+  type: nats    # your own NATS server: the Docker image (DES-059) or any other
+  url: tls://relay.example.com:4222
+```
+
+A `relay` section with only `url` still means `nats`, so every existing
+explicit relay URL behaves as before. `url: ""` still selects the local relay.
+`type` wins over `url`: `config.local.yaml` merges over `config.yaml` key by
+key, so a personal `type: local` must beat a committed `url`. `type: nats`
+without a `url` and an unknown `type` exit with a message that names the
+problem. `relay.auth.*` and `relay.tls_handshake_first` apply to `nats` and
+`demo`, never to `local`. The `BIFF_RELAY_*` environment overrides are
+unchanged, including the gate that a committed `relay` section (now a `type` or
+a `url`) closes them unless it sets `allow_env_override: true`.
+
+**3. The local relay lives in `~/.punt-labs/biff/relay/<repo-key>/`.**
+`<repo-key>` is the sanitized `owner__repo` slug from the `origin` remote when
+there is one, and `<directory-name>-<first 8 hex of sha256(repo common
+root)>` when there is not. The directory is `biff_data_dir() / "relay"`, the
+same per-user root that already holds session handles, hint markers and
+sentinels. The `--prefix` option of `biff mcp` and `biff serve` is removed;
+`--data-dir` still overrides the directory.
+
+### Why this location
+
+| Option | Durable | Same-name repos stay apart | Worktrees and clones share one relay | Per-user |
+|--------|---------|----------------------------|--------------------------------------|----------|
+| `/tmp/biff/<directory-name>/` (before) | No: cleared on reboot | No | No: a linked worktree has its own directory name | No: `/tmp` is shared |
+| `~/.punt-labs/biff/relay/<directory-name>/` | Yes | No | No | Yes |
+| `~/.punt-labs/biff/relay/<repo-key>/` (chosen) | Yes | Yes | Yes | Yes |
+
+The remote slug is the same value NATS uses as the repo namespace
+(`repo_name`, DES-007a), so a repo reaches the same peers on the local relay
+and on NATS. Two clones of one remote, and every linked worktree, share one
+local relay. A repo with no remote has no stable name, so its key adds a
+digest of the absolute common root (DES-054) that every worktree of that
+checkout agrees on; two unrelated repos that share a directory name get
+different keys.
+
+Costs: undelivered messages and presence rows now survive a reboot, so a
+stale session or unread message can outlive its author; deleting the repo's
+directory under `~/.punt-labs/biff/relay/` resets it. Files are only as
+private as the home directory, which is stricter than `/tmp`. Content in
+`/tmp/biff/` is not migrated: it was reachable only with the empty-string
+trick, and it was cleared on reboot anyway.
+
+An XDG state directory was rejected: biff keeps everything else under
+`~/.punt-labs/biff/`, and a second root would split one user's state.
+
+### Cross-machine presence is opt-in
+
+A repo with no relay configured no longer appears on the public relay, and
+its sessions no longer see peers on other machines. Teams that want
+cross-machine presence commit `relay: {type: nats, url: ...}` (or `type:
+demo` for the shared public relay) as before. A repo that committed a
+`relay.url` sees no change. A repo that relied on the implicit demo relay
+changes behavior and needs `relay: {type: demo}` in `config.yaml` or
+`config.local.yaml` to keep it.
+
+Org discovery (DES-034) is a NATS feature; with the local relay it finds no
+other repos and the CLI skips it.
+
+### Alternatives rejected
+
+- **Keep the demo relay as the default and add `type: local`.** Keeps sending
+  every new user's presence to a public relay before they choose it, which is
+  the problem.
+- **A `local: true` flag next to `url`.** Two keys can contradict; one `type`
+  key cannot.
+- **Key the directory by the remote slug only.** Repos without a remote would
+  collide on their directory name.
+
+### Verification
+
+`tests/test_relay_choice.py` covers the default, each `type`, the unchanged
+URL-only form, the merge case, the environment gate and the directory keys.
+A wheel built from this branch, installed in a scratch virtual environment
+with an isolated `HOME` and no network relay, ran `biff status`
+(`relay: local (connected)`), `biff who` (two users listed) and a `biff
+write` that the second user read.

@@ -104,21 +104,47 @@ team:
   members: ["kai", "eric", "priya"]
 
 relay:
-  url: "tls://connect.ngs.global"
+  type: nats
+  url: "tls://your-nats-server:4222"
 ```
 
-The `members` list controls who appears in `/who`. The `relay` section configures the NATS server for cross-machine communication.
-
-Biff ships with a shared demo relay on Synadia Cloud so your team can start immediately.
+The `members` list controls who appears in `/who`. The `relay` section chooses how sessions find each other; leave it out to stay on the local relay.
 
 ## Relay Configuration
 
-The demo relay works out of the box. To run your own NATS server, set the URL in the committed `config.yaml`:
+With no `relay` section, biff uses the **local relay**: sessions on this machine find each other and exchange messages through files under `~/.punt-labs/biff/relay/<repo-key>/`. It needs no network, no server and no credentials. `<repo-key>` is the `owner__repo` name of the repo's `origin` remote, so every clone and worktree of one repo on this machine shares one relay. A repo with no remote gets its directory name plus a short digest of its path. To reset a repo's local relay, delete its directory. The relay is real time on the machine only; it never leaves it.
+
+Choose another relay with `relay.type` in `config.yaml` (shared) or `config.local.yaml` (yours). These are advanced setups, for sessions that must see each other across machines.
+
+| `relay.type` | Relay | Needs |
+|--------------|-------|-------|
+| `local` (the default) | Files on this machine | Nothing |
+| `demo` | The shared public NATS relay on Synadia Cloud, with credentials bundled in the package | Network access; it is shared with every other demo user |
+| `nats` | A NATS server you run: the [self-hosted Docker relay](self-hosted-relay.md) or any other | `relay.url`, and usually credentials |
 
 ```yaml
 relay:
+  type: demo
+```
+
+To use your own NATS server, set the type and URL in the committed `config.yaml`:
+
+```yaml
+relay:
+  type: nats
   url: "tls://your-nats-server:4222"
 ```
+
+A `relay` section with only `url` still means `type: nats`. `type: nats` without a `url`, or an unknown type, stops biff with a message naming the problem. When `type` is `local` or `demo`, a `url` in the same merged config is ignored: `config.local.yaml` merges over `config.yaml` key by key, so a personal `relay: {type: local}` overrides a committed `url`.
+
+**Upgrading from a version that defaulted to the demo relay.** A repo that set no relay used to connect to the demo relay. It now uses the local relay, and its sessions no longer see sessions on other machines. To keep the demo relay, add this to `.punt-labs/biff/config.yaml` (or to `config.local.yaml` for yourself only):
+
+```yaml
+relay:
+  type: demo
+```
+
+Repos that already set `relay.url` are unchanged.
 
 Authentication goes in the gitignored `.punt-labs/biff/config.local.yaml` instead — never in the committed file (pick at most one):
 
@@ -158,7 +184,7 @@ relay:
 
 Without `allow_env_override: true`, a committed `relay.url` always wins — an ambient env var (a stray `export`, a misconfigured systemd unit) cannot silently redirect a team's traffic to a different relay. A personal relay entry in the gitignored `config.local.yaml` does **not** close this gate — only a relay committed in the shared `config.yaml` does.
 
-**Auth requires a URL.** Setting one of the three auth vars without a resolved relay URL (from `BIFF_RELAY_URL` or the file layers) fails fast with a clear error, rather than silently sending that credential to the bundled demo relay.
+**Auth requires a URL.** Setting one of the three auth vars without a resolved relay URL (from `BIFF_RELAY_URL` or the file layers) fails fast with a clear error, rather than silently ignoring that credential on the local relay.
 
 **Human interactive use:** put `BIFF_RELAY_*` in that repo's `.envrc.local` (gitignored, direnv-scoped — unloaded automatically on `cd` out of the repo), not in a bare shell `export` or a shell profile such as `~/.zshrc`. A bare export is ambient for the rest of that shell session across every repo you `cd` into, which can leak one team's credential to another team's relay. See [relay-env-overrides.md](relay-env-overrides.md) for the full design rationale.
 
