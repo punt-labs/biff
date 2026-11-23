@@ -51,13 +51,13 @@ class LaunchFlagGate:
 
     _ancestors: Callable[[], frozenset[int]] | None
     _env: Mapping[str, str]
-    _policy: ManagedPolicy
+    _policy: ManagedPolicy | None
     _read_argv: ArgvReader
 
     def __new__(
         cls,
         env: Mapping[str, str],
-        policy: ManagedPolicy,
+        policy: ManagedPolicy | None,
         read_argv: ArgvReader | None = None,
         ancestors: Callable[[], frozenset[int]] | None = None,
     ) -> Self:
@@ -77,7 +77,15 @@ class LaunchFlagGate:
         """Return the closed gate when biff cannot be registered as a channel."""
         argv = self._argv()
         if argv is None:
-            return ()
+            return (
+                ClosedGate(
+                    reason=(
+                        "launch flags could not be checked, so channels may be off"
+                    ),
+                    fix="",
+                    notify_user=False,
+                ),
+            )
         if argv.is_print:
             return (
                 ClosedGate(
@@ -89,7 +97,11 @@ class LaunchFlagGate:
         if argv.dev_names_biff:
             return ()
         if argv.channels_name_biff:
-            if self._policy.lists_biff:
+            policy = self._policy
+            if policy is None or not policy.has_allowlist:
+                logger.info("channels allowlist not visible: it may be server-managed")
+                return ()
+            if policy.lists_biff:
                 return ()
             return (
                 ClosedGate(

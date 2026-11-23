@@ -104,6 +104,49 @@ class TestPlistSource:
         )
 
 
+class TestHostileSources:
+    """Malformed sources are skipped, never raised."""
+
+    def test_truncated_xml_plist(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "bad.plist"
+        path.write_text("<?xml version='1.0'?><plist><dict><key>a</key>")
+        with caplog.at_level("INFO"):
+            assert ManagedSources.plist(path) is None
+        assert "unreadable" in caplog.text
+
+    def test_array_root_plist(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "arr.plist"
+        path.write_bytes(plistlib.dumps(["x"]))
+        with caplog.at_level("INFO"):
+            assert ManagedSources.plist(path) is None
+        assert "not a dictionary" in caplog.text
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads any directory")
+    def test_unreadable_drop_in_directory_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _write(tmp_path, "managed-settings.json", {"channelsEnabled": True})
+        drop_in = tmp_path / "managed-settings.d"
+        drop_in.mkdir()
+        drop_in.chmod(0)
+        try:
+            with caplog.at_level("INFO"):
+                source = ManagedSources.directory(tmp_path)
+        finally:
+            drop_in.chmod(0o700)
+        assert source == {"channelsEnabled": True}
+        assert "managed-settings.d" in caplog.text
+
+    def test_has_allowlist(self) -> None:
+        assert ManagedPolicy(({"allowedChannelPlugins": []},)).has_allowlist
+        assert not ManagedPolicy(({"channelsEnabled": True},)).has_allowlist
+        assert not ManagedPolicy(()).has_allowlist
+
+
 class TestRanking:
     """First source with a policy key wins; managedSourcesBehavior merges."""
 
@@ -186,3 +229,4 @@ class TestGate:
         assert len(gates) == 1
         assert "channelsEnabled" in gates[0].reason
         assert "set channelsEnabled to true" in gates[0].fix
+        assert "server-managed" in gates[0].fix

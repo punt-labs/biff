@@ -16,12 +16,13 @@ DEV = "--dangerously-load-development-channels"
 BIFF = "plugin:biff@punt-labs"
 ENV = {"CLAUDE_PID": "4242"}
 LISTED = ManagedPolicy(({"allowedChannelPlugins": ["biff@punt-labs"]},))
-UNLISTED = ManagedPolicy(())
+UNLISTED = ManagedPolicy(({"allowedChannelPlugins": ["other@marketplace"]},))
+NO_ALLOWLIST = ManagedPolicy(())
 
 
 def _closed(
     argv: list[str] | Exception,
-    policy: ManagedPolicy = UNLISTED,
+    policy: ManagedPolicy | None = UNLISTED,
     *,
     env: dict[str, str] | None = None,
     ancestors: frozenset[int] = frozenset({4242}),
@@ -102,7 +103,15 @@ class TestJointGate:
     def test_channels_with_the_allowlist_is_open(self) -> None:
         assert _closed(["claude", "--channels", BIFF], LISTED) == ()
 
-    def test_channels_without_the_allowlist_is_closed(self) -> None:
+    @pytest.mark.parametrize("policy", [NO_ALLOWLIST, None])
+    def test_channels_with_no_visible_allowlist_is_silent(
+        self, policy: ManagedPolicy | None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("INFO"):
+            assert _closed(["claude", "--channels", BIFF], policy) == ()
+        assert "allowlist" in caplog.text
+
+    def test_channels_when_a_visible_allowlist_omits_biff_is_closed(self) -> None:
         (gate,) = _closed(["claude", "--channels", BIFF], UNLISTED)
         assert "Anthropic's own" in gate.reason
         assert "allowedChannelPlugins" in gate.reason
@@ -126,22 +135,29 @@ class TestJointGate:
 
 
 class TestUnknown:
-    """An unreadable or untrusted argv is unknown: silent and logged."""
+    """An unreadable or untrusted argv is unknown: the model only is told."""
+
+    @staticmethod
+    def _model_only(gate: ClosedGate) -> None:
+        assert not gate.notify_user
+        assert "launch flags could not be checked" in gate.reason
 
     @pytest.mark.parametrize("env", [{}, {"CLAUDE_PID": ""}, {"CLAUDE_PID": "abc"}])
     def test_no_usable_pid(
         self, env: dict[str, str], caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level("INFO"):
-            assert _closed(["claude"], env=env) == ()
+            (gate,) = _closed(["claude"], env=env)
         assert "launch_flag_unknown" in caplog.text
+        self._model_only(gate)
 
     def test_pid_that_is_not_an_ancestor(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level("INFO"):
-            assert _closed(["claude"], ancestors=frozenset({1})) == ()
+            (gate,) = _closed(["claude"], ancestors=frozenset({1}))
         assert "launch_flag_unknown" in caplog.text
+        self._model_only(gate)
 
     @pytest.mark.parametrize(
         "error",
@@ -151,8 +167,9 @@ class TestUnknown:
         self, error: Exception, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level("INFO"):
-            assert _closed(error) == ()
+            (gate,) = _closed(error)
         assert "launch_flag_unknown" in caplog.text
+        self._model_only(gate)
 
     def test_default_readers_use_a_real_ancestor(self) -> None:
         env = {"CLAUDE_PID": str(os.getppid())}

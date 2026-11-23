@@ -8501,7 +8501,10 @@ completes, and is rate limited by fixed constants.
 
 When a channel gate it can see is closed, the plugin's SessionStart hook warns
 the user and the model that channels are not live and tells them to poll with
-`/biff:read 2m`. `biff doctor`, run on demand, checks end to end by asking
+`/biff:read 2m`. The hook cannot see server-managed settings, so it warns on
+`--channels` only when a visible managed policy sets `allowedChannelPlugins`
+without biff, and an explicit local `channelsEnabled: false` still warns with a
+note that a server-managed setting may override it. `biff doctor`, run on demand, checks end to end by asking
 each running session over the relay to send a check event with a one-time
 token for the model to return through `channel_ack`, and names the gate to
 open. Polling, including the `unread-nudge` hook, stays dormant until the

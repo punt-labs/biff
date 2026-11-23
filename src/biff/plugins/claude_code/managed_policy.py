@@ -62,6 +62,11 @@ class ManagedPolicy:
         return self._effective.get("channelsEnabled")
 
     @property
+    def has_allowlist(self) -> bool:
+        """Whether a visible source sets ``allowedChannelPlugins`` at all."""
+        return isinstance(self._effective.get("allowedChannelPlugins"), list)
+
+    @property
     def lists_biff(self) -> bool:
         """Whether the effective ``allowedChannelPlugins`` names biff."""
         listed = self._effective.get("allowedChannelPlugins")
@@ -117,6 +122,10 @@ class ManagedPolicyGate:
         return (
             ClosedGate(
                 reason=f"managed settings set channelsEnabled to {value!r}",
-                fix="Ask your administrator to set channelsEnabled to true.",
+                fix=(
+                    "Ask your administrator to set channelsEnabled to true. "
+                    "A server-managed setting, which a hook cannot see, may "
+                    "override this one."
+                ),
             ),
         )

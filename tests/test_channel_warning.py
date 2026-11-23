@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Protocol, cast
+from typing import ClassVar, Protocol, cast
 from unittest.mock import patch
 
 import pytest
@@ -14,9 +16,12 @@ import pytest
 from biff.plugins.claude_code import _hook_entry, hook
 from biff.plugins.claude_code.channel_gates import ClosedGate, EnvGate
 from biff.plugins.claude_code.launch_flag import LaunchFlagGate
+from biff.plugins.claude_code.managed_policy import ManagedPolicy
 from biff.plugins.claude_code.managed_sources import ManagedSources
 from biff.plugins.claude_code.poll_setting import PollSetting
+from biff.plugins.claude_code.session_output import SessionOutput
 from biff.plugins.claude_code.startup_warning import StartupWarning
+from biff.plugins.claude_code.warning_claim import WarningClaim
 
 DEV = "--dangerously-load-development-channels"
 BIFF = "plugin:biff@punt-labs"
@@ -125,12 +130,108 @@ class TestStartupWarning:
         assert StartupWarning(gates, lambda: False).text() is not None
 
 
+class _CountingGate:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def closed(self) -> tuple[ClosedGate, ...]:
+        self.calls += 1
+        return (ClosedGate("counted", "fix"),)
+
+
+def _raises() -> bool:
+    msg = "yaml bad"
+    raise ValueError(msg)
+
+
+class TestGuardedAssembly:
+    """One failing part silences only itself."""
+
+    ENV: ClassVar[dict[str, str]] = {"DISABLE_TELEMETRY": "1"}
+
+    def test_policy_failure_leaves_env_and_launch_gates_working(self) -> None:
+        with patch.object(ManagedPolicy, "for_machine", side_effect=AttributeError):
+            text = StartupWarning.for_machine(self.ENV, "linux").text()
+        assert text is not None
+        assert "DISABLE_TELEMETRY is set" in text
+
+    def test_polling_failure_does_not_drop_the_warning(self) -> None:
+        gates = EnvGate.opt_outs(self.ENV)
+        text = StartupWarning(gates, _raises).text()
+        assert text is not None
+        assert "DISABLE_TELEMETRY is set" in text
+
+    def test_gates_are_evaluated_once_per_apply(self) -> None:
+        gate = _CountingGate()
+        StartupWarning((gate,)).apply(BASE, {"source": "startup"})
+        assert gate.calls == 1
+
+
+class TestSessionOutputFailure:
+    """A crash in the warning machinery still tells the model."""
+
+    def test_the_model_is_told_the_check_failed(self) -> None:
+        with patch.object(StartupWarning, "for_machine", side_effect=OSError("boom")):
+            out = SessionOutput.warned(BASE, {"source": "startup"})
+        assert "systemMessage" not in out
+        assert _text(out) == (
+            "Biff session starting. biff could not check whether channels are "
+            "live; if messages do not arrive, run /biff:read 2m."
+        )
+
+
+class TestWarningClaim:
+    """Two biff plugins in one session warn once."""
+
+    def test_only_the_first_claim_wins(self, tmp_path: Path) -> None:
+        env = {"CLAUDE_PID": "4242"}
+        data: dict[str, object] = {"session_id": "s", "source": "startup"}
+        first = WarningClaim(tmp_path, env, data)
+        second = WarningClaim(tmp_path, env, data)
+        assert first.take() is True
+        assert second.take() is False
+
+    def test_other_sessions_and_sources_claim_separately(self, tmp_path: Path) -> None:
+        env = {"CLAUDE_PID": "4242"}
+        base: dict[str, object] = {"session_id": "s", "source": "startup"}
+        assert WarningClaim(tmp_path, env, base).take()
+        assert WarningClaim(tmp_path, env, {**base, "session_id": "t"}).take()
+        assert WarningClaim(tmp_path, env, {**base, "source": "compact"}).take()
+        assert WarningClaim(tmp_path, {"CLAUDE_PID": "1"}, base).take()
+
+    def test_marker_is_private(self, tmp_path: Path) -> None:
+        env = {"CLAUDE_PID": "4242"}
+        WarningClaim(tmp_path, env, {"session_id": "s", "source": "x"}).take()
+        (marker,) = tmp_path.iterdir()
+        assert marker.stat().st_mode & 0o777 == 0o600
+
+    def test_no_session_id_cannot_dedupe(self, tmp_path: Path) -> None:
+        claim = WarningClaim(tmp_path, {}, {})
+        assert claim.take() and claim.take()
+
+    def test_old_markers_are_pruned(self, tmp_path: Path) -> None:
+        stale = tmp_path / "old"
+        stale.write_text("")
+        os.utime(stale, (0, 0))
+        WarningClaim(tmp_path, {}, {"session_id": "s"}).take()
+        assert not stale.exists()
+
+    def test_apply_emits_once(self, tmp_path: Path) -> None:
+        env = {"CLAUDE_PID": "4242"}
+        data: dict[str, object] = {"session_id": "s", "source": "startup"}
+        warning = StartupWarning(EnvGate.opt_outs({"DISABLE_TELEMETRY": "1"}))
+        first = warning.apply(BASE, data, WarningClaim(tmp_path, env, data).take)
+        second = warning.apply(BASE, data, WarningClaim(tmp_path, env, data).take)
+        assert "systemMessage" in first
+        assert second == BASE
+
+
 class TestApply:
     """User message on startup only; model context always."""
 
     def _apply(self, source: object) -> dict[str, object]:
         warning = StartupWarning(EnvGate.opt_outs({"DISABLE_TELEMETRY": "1"}))
-        return warning.apply(BASE, source=source)
+        return warning.apply(BASE, {"source": source})
 
     def test_startup_reaches_user_and_model(self) -> None:
         out = self._apply("startup")
@@ -147,14 +248,14 @@ class TestApply:
         assert "channels are not live" in specific["additionalContext"]
 
     def test_open_gates_leave_the_output_unchanged(self) -> None:
-        assert StartupWarning(()).apply(BASE, source="startup") == BASE
+        assert StartupWarning(()).apply(BASE, {"source": "startup"}) == BASE
 
     def test_input_is_not_mutated(self) -> None:
         self._apply("startup")
         assert "systemMessage" not in BASE
 
     def test_model_only_gate_sends_no_system_message_on_startup(self) -> None:
-        out = StartupWarning((_SilentGate(),)).apply(BASE, source="startup")
+        out = StartupWarning((_SilentGate(),)).apply(BASE, {"source": "startup"})
         assert "systemMessage" not in out
         assert "quiet reason" in json.dumps(out)
 
@@ -222,7 +323,8 @@ class TestWarningFailure:
             sys.modules, {"biff.plugins.claude_code.startup_warning": None}
         ):
             hook._run_session_start(resume=False)
-        assert _text(json.loads(capsys.readouterr().out)) == "Biff session starting."
+        text = _text(json.loads(capsys.readouterr().out))
+        assert text.startswith("Biff session starting. biff could not check")
 
 
 def _startup_input() -> dict[str, object]:
@@ -243,6 +345,7 @@ class _Run(Protocol):
         managed: dict[str, object] | None = None,
         event: str = "session-start",
         source: str = "startup",
+        same_session: bool = False,
     ) -> dict[str, object]: ...
 
 
@@ -263,8 +366,13 @@ def _no_poll(_cls: type[PollSetting]) -> PollSetting:
 
 
 @pytest.fixture
-def run(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> _Run:
+def run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> _Run:
     """Run the real entry point; only the process and file boundaries are faked."""
+    runs = [0]
     for name in (*FLAGS, *PROVIDERS, "DO_NOT_TRACK"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CLAUDE_PID", "4242")
@@ -279,7 +387,18 @@ def run(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> 
         managed: dict[str, object] | None = None,
         event: str = "session-start",
         source: str = "startup",
+        same_session: bool = False,
     ) -> dict[str, object]:
+        runs[0] += 0 if same_session else 1
+        claims = tmp_path / f"claims{runs[0]}"
+
+        def for_hook(
+            _cls: type[WarningClaim], env: Mapping[str, str], data: dict[str, object]
+        ) -> WarningClaim:
+            return WarningClaim(claims, env, data)
+
+        monkeypatch.setattr(WarningClaim, "for_hook", classmethod(for_hook))
+
         def read_argv(_pid: int) -> list[str]:
             return argv
 
@@ -334,14 +453,26 @@ class TestEntryPoint:
         out = run(["claude", DEV, BIFF], managed={"channelsEnabled": True})
         assert "systemMessage" not in out
 
-    def test_channels_flag_needs_the_allowlist(self, run: _Run) -> None:
+    def test_channels_flag_with_a_visible_allowlist_omitting_biff(
+        self, run: _Run
+    ) -> None:
         argv = ["claude", "--channels", BIFF]
-        assert "systemMessage" in run(argv, managed={"channelsEnabled": True})
-        listed: dict[str, object] = {
-            "channelsEnabled": True,
-            "allowedChannelPlugins": ["biff@punt-labs"],
-        }
+        omits: dict[str, object] = {"allowedChannelPlugins": ["other@marketplace"]}
+        listed: dict[str, object] = {"allowedChannelPlugins": ["biff@punt-labs"]}
+        assert "systemMessage" in run(argv, managed=omits)
         assert "systemMessage" not in run(argv, managed=listed)
+
+    def test_channels_flag_with_no_visible_allowlist_is_silent(self, run: _Run) -> None:
+        argv = ["claude", "--channels", BIFF]
+        assert "systemMessage" not in run(argv)
+        assert "systemMessage" not in run(argv, managed={"channelsEnabled": True})
+
+    def test_two_plugins_warn_once(self, run: _Run) -> None:
+        first = run(["claude"])
+        second = run(["claude"], same_session=True)
+        assert "systemMessage" in first
+        assert "systemMessage" not in second
+        assert "channels are not live" not in _text(second)
 
     def test_bedrock_env(self, run: _Run, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")

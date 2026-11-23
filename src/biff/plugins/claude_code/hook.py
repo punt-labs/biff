@@ -926,9 +926,7 @@ def _run_session_start(*, resume: bool) -> None:
     data = _read_hook_input()
     _open_session(data)
     context = handle_session_resume() if resume else handle_session_start(data)
-    _emit(
-        SessionOutput.warned(_hook_context("SessionStart", context), data.get("source"))
-    )
+    _emit(SessionOutput.warned(_hook_context("SessionStart", context), data))
 
 
 @_cc_app.command("session-start")
