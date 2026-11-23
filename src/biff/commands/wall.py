@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
-
-from pydantic import ValidationError
 
 from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
@@ -16,6 +15,18 @@ from biff.formatting import (
 )
 from biff.models import WallPost
 from biff.server.tools.wall import broadcast_wall_to_repos
+
+
+async def _show(ctx: CliContext) -> CommandResult:
+    """Return the active wall, or say there is none."""
+    current = await ctx.relay.get_wall()
+    if current is None:
+        return CommandResult(
+            text="No active wall.", json_data={"status": "inactive", "wall": None}
+        )
+    return CommandResult(
+        text=format_wall(current), json_data=current.model_dump(mode="json")
+    )
 
 
 async def wall(
@@ -30,33 +41,24 @@ async def wall(
 
     message = sanitize_wall_message(message)
     if not message:
-        current = await ctx.relay.get_wall()
-        if current is None:
-            return CommandResult(
-                text="No active wall.",
-                json_data={"status": "inactive", "wall": None},
+        return await _show(ctx)
+
+    try:
+        if os.environ.get("GITHUB_ACTIONS") and not ctx.config.relay_url:
+            # A CI runner is another machine: the local relay reaches no one.
+            raise ValueError(
+                "CI has no relay to post to: set the repository variable "
+                "BIFF_RELAY_URL (vars.BIFF_RELAY_URL) or commit a relay in "
+                ".punt-labs/biff/config.yaml"
             )
-        return CommandResult(
-            text=format_wall(current),
-            json_data=current.model_dump(mode="json"),
-        )
-
-    try:
-        ttl = parse_duration(duration)
-    except ValueError as exc:
-        return CommandResult(text=str(exc), json_data={"error": str(exc)}, error=True)
-
-    now = datetime.now(UTC)
-    message = message[:512]
-    try:
         post = WallPost(
-            text=message,
+            text=message[:512],
             from_user=ctx.user,
             from_tty="cli",
-            posted_at=now,
-            expires_at=now + ttl,
+            posted_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + parse_duration(duration),
         )
-    except ValidationError as exc:
+    except ValueError as exc:  # includes pydantic's ValidationError
         return CommandResult(text=str(exc), json_data={"error": str(exc)}, error=True)
 
     await broadcast_wall_to_repos(

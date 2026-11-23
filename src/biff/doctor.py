@@ -335,9 +335,7 @@ def _check_ci_workflow() -> CheckResult:
     from biff.ci_workflow import check_ci_workflow
 
     if check_ci_workflow(repo_root):
-        return CheckResult(
-            "CI workflow", True, "biff-notify.yml deployed", required=False
-        )
+        return LocalRelayCheck.ci_workflow(repo_root)
     return CheckResult(
         "CI workflow",
         False,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from biff.config import resolve_relay_config
 from biff.plugins.contract import CheckResult
 from biff.relay_config import RelayLocation
 
@@ -34,6 +35,40 @@ class LocalRelayCheck:
             "Relay",
             passed=True,
             message=f"local filesystem relay {location.path} ({location.reason})",
+        )
+
+    @staticmethod
+    def ci_workflow(repo_root: Path) -> CheckResult:
+        """Return the doctor check for a deployed, current CI notify workflow."""
+        warning = LocalRelayCheck.notify_warning(repo_root)
+        return CheckResult(
+            "CI workflow",
+            passed=warning is None,
+            message=warning or "biff-notify.yml deployed",
+            required=False,
+        )
+
+    @staticmethod
+    def enable_note(repo_root: Path) -> str:
+        """Return the warning ``biff enable`` prints, as a line, or nothing."""
+        warning = LocalRelayCheck.notify_warning(repo_root)
+        return "" if warning is None else f"Warning: {warning}\n"
+
+    @staticmethod
+    def notify_warning(repo_root: Path) -> str | None:
+        """Return why an installed CI notify workflow cannot deliver, or ``None``.
+
+        It cannot when the repo resolves to the local relay: a CI runner is
+        another machine, so the notification would reach no one.
+        """
+        workflow = repo_root / ".github" / "workflows" / "biff-notify.yml"
+        if resolve_relay_config(repo_root)[0] is not None or not workflow.is_file():
+            return None
+        return (
+            "biff-notify.yml is installed but this repo uses the local relay, so "
+            "CI notifications reach no one: set the repository variable "
+            "BIFF_RELAY_URL (vars.BIFF_RELAY_URL), or commit a relay in "
+            ".punt-labs/biff/config.yaml"
         )
 
     @staticmethod

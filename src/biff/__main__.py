@@ -134,20 +134,16 @@ def _print_version_and_exit(value: bool) -> None:
 def main(
     ctx: typer.Context,
     json_flag: Annotated[
-        bool,
-        typer.Option("--json", help="Output JSON instead of human-readable text."),
+        bool, typer.Option("--json", help="Output JSON instead of human-readable text.")
     ] = False,
     verbose: Annotated[
-        bool,
-        typer.Option("--verbose", "-v", help="Debug logging to stderr."),
+        bool, typer.Option("--verbose", "-v", help="Debug logging to stderr.")
     ] = False,
     quiet: Annotated[
-        bool,
-        typer.Option("--quiet", "-q", help="Suppress product command output."),
+        bool, typer.Option("--quiet", "-q", help="Suppress product command output.")
     ] = False,
     user: Annotated[
-        str | None,
-        typer.Option("--user", help="Identity override (e.g. for CI bots)."),
+        str | None, typer.Option("--user", help="Identity override (e.g. for CI bots).")
     ] = None,
     session: Annotated[
         str | None,
@@ -368,11 +364,7 @@ def _render_connected_drain(
 
 
 async def _send_connected_line(
-    ctx: CliContext,
-    line: str,
-    display: str,
-    *,
-    to_key: str,
+    ctx: CliContext, line: str, display: str, *, to_key: str
 ) -> bool:
     """Publish a typed talk line; return ``True`` when the loop should break.
 
@@ -1387,6 +1379,7 @@ def enable(
 
     from biff.enablement import RepoEnablement
     from biff.git_hooks import HOOKS_DIR_UNRESOLVED_NOTICE
+    from biff.relay_check import LocalRelayCheck
 
     change = RepoEnablement(repo_root, CliInvocation.plugin_registry()).enable()
     if not change.git_hooks_resolved:
@@ -1401,6 +1394,7 @@ def enable(
         print(f"Git hooks: {', '.join(change.git_hooks_changed)}")
     for line in change.enable_report():
         print(line)
+    print(LocalRelayCheck.enable_note(repo_root), end="")
     if change.failed:
         raise typer.Exit(code=1)
 
