@@ -79,7 +79,8 @@ class StartupWarning:
         once: Callable[[], bool] | None = None
         try:
             once = WarningClaim.for_hook(os.environ, data).take
-        except Exception:
+        except (OSError, RuntimeError):
+            # RuntimeError: Path.home() cannot find a home directory.
             logger.warning("warning claim unavailable", exc_info=True)
         return cls.for_machine().apply(output, data, once)
 

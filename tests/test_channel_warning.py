@@ -162,6 +162,26 @@ class TestCrashedGate:
         assert "warning claim" in caplog.text
 
 
+class TestClaimErrorsAreNarrow:
+    """Only an unavailable state directory is tolerated, not a programming error."""
+
+    def test_a_programming_error_in_for_hook_is_not_swallowed(self) -> None:
+        warning = StartupWarning(EnvGate.opt_outs({"DISABLE_TELEMETRY": "1"}))
+        with (
+            patch.object(StartupWarning, "for_machine", return_value=warning),
+            patch.object(WarningClaim, "for_hook", side_effect=TypeError("bug")),
+            pytest.raises(TypeError, match="bug"),
+        ):
+            StartupWarning.add_to(BASE, {"source": "startup"})
+
+    def test_a_programming_error_still_reaches_the_model_through_session_output(
+        self,
+    ) -> None:
+        with patch.object(WarningClaim, "for_hook", side_effect=TypeError("bug")):
+            out = SessionOutput.warned(BASE, {"source": "startup"})
+        assert "could not check whether channels are live" in _text(out)
+
+
 class TestStartupWarning:
     """The assembled warning."""
 
@@ -212,38 +232,82 @@ class TestGuardedAssembly:
         assert gate.calls == 1
 
 
+def _plugin_root(directory: Path, body: str) -> dict[str, str]:
+    """Write a plugin.json under *directory*; return the env that points at it."""
+    manifest = directory / ".claude-plugin"
+    manifest.mkdir(parents=True, exist_ok=True)
+    (manifest / "plugin.json").write_text(body)
+    return {"CLAUDE_PLUGIN_ROOT": str(directory)}
+
+
 class TestPollCommand:
-    """The poll command is the loaded plugin variant's."""
+    """The poll command is the loaded plugin's, read from its own manifest."""
 
     @pytest.mark.parametrize(
-        ("name", "command"),
+        ("body", "command"),
         [
-            (None, "/biff:read 2m"),
-            ("", "/biff:read 2m"),
-            ("biff", "/biff:read 2m"),
-            ("biff-dev", "/biff-dev:read-dev 2m"),
+            ('{"name": "biff"}', "/biff:read 2m"),
+            ('{"name": "biff-dev"}', "/biff-dev:read-dev 2m"),
+            (
+                '{"author":{"name":"Punt Labs"},"name":"biff-dev"}',
+                "/biff-dev:read-dev 2m",
+            ),
+            ('{"name":"biff","author":{"name":"x-dev"}}', "/biff:read 2m"),
         ],
     )
-    def test_command(self, name: str | None, command: str) -> None:
-        env = {} if name is None else {"BIFF_PLUGIN_NAME": name}
+    def test_command(self, tmp_path: Path, body: str, command: str) -> None:
+        env = _plugin_root(tmp_path, body)
         assert PollCommand.for_env(env).text == command
-
-    @pytest.mark.parametrize("name", [None, "", "garbage"])
-    def test_an_unrecognized_name_is_logged(
-        self, name: str | None, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        env = {} if name is None else {"BIFF_PLUGIN_NAME": name}
-        with caplog.at_level("INFO"):
-            PollCommand.for_env(env)
-        assert "BIFF_PLUGIN_NAME" in caplog.text
 
     @pytest.mark.parametrize("name", ["biff", "biff-dev"])
     def test_a_known_name_is_not_logged(
-        self, name: str, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, name: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _plugin_root(tmp_path, f'{{"name": "{name}"}}')
+        with caplog.at_level("INFO"):
+            PollCommand.for_env(env)
+        assert not caplog.records
+
+    @pytest.mark.parametrize(
+        "body",
+        ['{"name": "garbage"}', '{"name": 3}', "{}", "[1]", "{not json", ""],
+    )
+    def test_an_unusable_manifest_falls_back_and_is_logged(
+        self, tmp_path: Path, body: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _plugin_root(tmp_path, body)
+        with caplog.at_level("INFO"):
+            assert PollCommand.for_env(env).text == "/biff:read 2m"
+        assert caplog.records
+
+    def test_a_missing_manifest_falls_back_and_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level("INFO"):
-            PollCommand.for_env({"BIFF_PLUGIN_NAME": name})
-        assert "BIFF_PLUGIN_NAME" not in caplog.text
+            command = PollCommand.for_env({"CLAUDE_PLUGIN_ROOT": str(tmp_path)})
+        assert command.text == "/biff:read 2m"
+        assert "plugin.json" in caplog.text
+
+    def test_no_plugin_root_falls_back_and_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("INFO"):
+            assert PollCommand.for_env({}).text == "/biff:read 2m"
+        assert "CLAUDE_PLUGIN_ROOT" in caplog.text
+
+    def test_this_checkout_matches_its_own_manifest(self) -> None:
+        plugin = Path(__file__).resolve().parent.parent / "plugin"
+        name = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text())[
+            "name"
+        ]
+        expected = "/biff-dev:read-dev 2m" if name.endswith("-dev") else "/biff:read 2m"
+        assert PollCommand.for_env({"CLAUDE_PLUGIN_ROOT": str(plugin)}).text == expected
+
+    @pytest.mark.parametrize("script", ["session-init.sh", "session-resume.sh"])
+    def test_the_dispatchers_stay_thin(self, script: str) -> None:
+        hooks = Path(__file__).resolve().parent.parent / "plugin" / "hooks"
+        assert "BIFF_PLUGIN_NAME" not in (hooks / script).read_text()
+        assert not (hooks / "plugin-name.sh").exists()
 
 
 class TestSessionOutputFailure:
@@ -584,18 +648,20 @@ class TestEntryPoint:
         assert "systemMessage" in run(["claude"])
 
     def test_dev_plugin_gets_its_own_poll_command(
-        self, run: _Run, monkeypatch: pytest.MonkeyPatch
+        self, run: _Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("BIFF_PLUGIN_NAME", "biff-dev")
+        env = _plugin_root(tmp_path, '{"name": "biff-dev"}')
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", env["CLAUDE_PLUGIN_ROOT"])
         out = run(["claude"])
         banner = cast("str", out["systemMessage"])
         assert "run /biff-dev:read-dev 2m" in banner
         assert "/biff:read" not in banner
 
     def test_prod_plugin_gets_the_prod_poll_command(
-        self, run: _Run, monkeypatch: pytest.MonkeyPatch
+        self, run: _Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("BIFF_PLUGIN_NAME", "biff")
+        env = _plugin_root(tmp_path, '{"name": "biff"}')
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", env["CLAUDE_PLUGIN_ROOT"])
         assert "run /biff:read 2m" in cast("str", run(["claude"])["systemMessage"])
 
     def test_two_plugins_warn_once(self, run: _Run) -> None:

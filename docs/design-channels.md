@@ -281,10 +281,10 @@ Two biff plugins in one session (the installed plugin and a `--plugin-dir`
 one) warn once. Each hook run tries to create one marker file in biff's state
 directory, keyed on `CLAUDE_PID`, `session_id`, `source` and the current minute;
 only the creator emits. Two runs that straddle a minute boundary may both warn,
-and markers are pruned after 10 minutes, so a later compaction warns again. If
+and markers are pruned after 10 minutes. A later compaction warns again because the key includes the current minute, not because of pruning. If
 the state directory cannot be used, the hook warns without a claim. If the warning
 code itself fails, the hook logs it and tells the model that biff could not check
-whether channels are live; a gate that crashes is reported to the model as unknown.
+whether channels are live; a gate that crashes is reported to the model as unknown, and when a gate that knows also fires, the known warning wins and the unknown ones are left out of the text.
 
 Who sees what. Every SessionStart the plugin handles gives the model the
 warning in `additionalContext`, so it survives a resume, a clear and a
@@ -310,8 +310,9 @@ do not arrive on their own, run <command>.
 ```
 
 `<command>` is `/biff:read 2m`, or `/biff-dev:read-dev 2m` for the
-`--plugin-dir` plugin, named by the SessionStart dispatchers through
-`BIFF_PLUGIN_NAME`.
+`--plugin-dir` plugin. `biff-hook` reads the top-level `name` of
+`$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` in Python; a missing or
+malformed manifest is logged at INFO and means `/biff:read 2m`.
 
 If every visible gate is open, it says nothing. The warning costs no model
 turn and changes nothing about delivery.
