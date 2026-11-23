@@ -3,245 +3,35 @@
 from __future__ import annotations
 
 import json
-import os
-from collections.abc import Callable
+import logging
+import sys
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 from unittest.mock import patch
 
 import pytest
 
-from biff.plugins.claude_code._hook_entry import (
-    _cc_session_resume,
-    _cc_session_start,
-)
-from biff.plugins.claude_code.channel_gates import ClosedGate, FeatureFlagGate
-from biff.plugins.claude_code.managed_policy import ManagedPolicyGate
+from biff.plugins.claude_code import _hook_entry, hook
+from biff.plugins.claude_code.channel_gates import ClosedGate, EnvGate
+from biff.plugins.claude_code.launch_flag import LaunchFlagGate
+from biff.plugins.claude_code.managed_sources import ManagedSources
+from biff.plugins.claude_code.poll_setting import PollSetting
 from biff.plugins.claude_code.startup_warning import StartupWarning
 
-FLAGS = (
-    "DISABLE_TELEMETRY",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-    "DO_NOT_TRACK",
-    "DISABLE_GROWTHBOOK",
-)
+DEV = "--dangerously-load-development-channels"
+BIFF = "plugin:biff@punt-labs"
 POLL = "Run /biff:read 2m to poll."
-BIFF_ENTRY = {"marketplace": "punt-labs", "plugin": "biff"}
-
-
-def _write(directory: Path, name: str, body: object) -> Path:
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / name
-    path.write_text(body if isinstance(body, str) else json.dumps(body))
-    return path
-
-
-def _warning(env: dict[str, str], managed_dir: Path | None) -> str | None:
-    return StartupWarning(
-        (*FeatureFlagGate.all_in(env), ManagedPolicyGate(managed_dir))
-    ).text()
-
-
-class TestFeatureFlags:
-    """A feature-flag opt-out closes the gate Claude Code needs for channels."""
-
-    @pytest.mark.parametrize("flag", FLAGS)
-    def test_each_flag_warns_by_name(self, flag: str, tmp_path: Path) -> None:
-        text = _warning({flag: "1"}, tmp_path / "absent")
-        assert text is not None
-        assert text.startswith("biff: channels are not live in this session (")
-        assert f"{flag} is set" in text
-        assert "New messages will not arrive on their own." in text
-        assert POLL in text
-        assert f"Unset {flag} and restart Claude Code." in text
-
-    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
-    def test_truthy_values_close_the_gate(self, value: str, tmp_path: Path) -> None:
-        assert _warning({"DO_NOT_TRACK": value}, tmp_path) is not None
-
-    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off"])
-    def test_falsy_values_leave_the_gate_open(self, value: str, tmp_path: Path) -> None:
-        assert _warning({"DO_NOT_TRACK": value}, tmp_path) is None
-
-    def test_two_flags_name_both(self, tmp_path: Path) -> None:
-        text = _warning({"DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1"}, tmp_path)
-        assert text is not None
-        assert "DISABLE_TELEMETRY is set" in text
-        assert "DO_NOT_TRACK is set" in text
-        assert text.count(POLL) == 1
-
-
-class TestManagedPolicy:
-    """Managed settings must allow channels and list biff."""
-
-    def test_no_directory_is_no_restriction(self, tmp_path: Path) -> None:
-        assert _warning({}, tmp_path / "absent") is None
-
-    def test_no_known_directory_is_no_restriction(self) -> None:
-        assert _warning({}, None) is None
-
-    def test_empty_directory_is_no_restriction(self, tmp_path: Path) -> None:
-        assert _warning({}, tmp_path) is None
-
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
-    def test_unreadable_file_is_no_restriction(self, tmp_path: Path) -> None:
-        path = _write(tmp_path, "managed-settings.json", {"channelsEnabled": False})
-        path.chmod(0)
-        try:
-            assert _warning({}, tmp_path) is None
-        finally:
-            path.chmod(0o600)
-
-    def test_malformed_json_names_the_file(self, tmp_path: Path) -> None:
-        path = _write(tmp_path, "managed-settings.json", "{not json")
-        text = _warning({}, tmp_path)
-        assert text is not None
-        assert f"{path} is not valid JSON" in text
-        assert POLL in text
-
-    def test_non_object_json_is_malformed(self, tmp_path: Path) -> None:
-        path = _write(tmp_path, "managed-settings.json", "[1]")
-        text = _warning({}, tmp_path)
-        assert text is not None
-        assert f"{path} is not valid JSON" in text
-
-    @pytest.mark.parametrize("body", [{}, {"channelsEnabled": False}])
-    def test_channels_not_enabled(
-        self, body: dict[str, object], tmp_path: Path
-    ) -> None:
-        _write(tmp_path, "managed-settings.json", body)
-        text = _warning({}, tmp_path)
-        assert text is not None
-        assert f"managed settings in {tmp_path} do not set channelsEnabled" in text
-        assert "Ask your administrator to set channelsEnabled to true" in text
-
-    @pytest.mark.parametrize(
-        "allowed",
-        [
-            [BIFF_ENTRY],
-            ["biff@punt-labs"],
-            [{"marketplace": "claude-plugins-official", "plugin": "tg"}, BIFF_ENTRY],
-        ],
-    )
-    def test_enabled_and_listed_is_open(
-        self, allowed: list[object], tmp_path: Path
-    ) -> None:
-        body = {"channelsEnabled": True, "allowedChannelPlugins": allowed}
-        _write(tmp_path, "managed-settings.json", body)
-        assert _warning({}, tmp_path) is None
-
-    @pytest.mark.parametrize(
-        "body",
-        [
-            {"channelsEnabled": True},
-            {"channelsEnabled": True, "allowedChannelPlugins": []},
-            {
-                "channelsEnabled": True,
-                "allowedChannelPlugins": [
-                    {"marketplace": "claude-plugins-official", "plugin": "telegram"}
-                ],
-            },
-            {"channelsEnabled": True, "allowedChannelPlugins": ["biff@other"]},
-            {"channelsEnabled": True, "allowedChannelPlugins": "biff@punt-labs"},
-        ],
-    )
-    def test_biff_not_listed(self, body: dict[str, object], tmp_path: Path) -> None:
-        _write(tmp_path, "managed-settings.json", body)
-        text = _warning({}, tmp_path)
-        assert text is not None
-        assert f"managed settings in {tmp_path} do not list biff" in text
-        assert "allowedChannelPlugins" in text
-        assert "punt-labs" in text
-
-    def test_drop_in_merges_over_the_base(self, tmp_path: Path) -> None:
-        _write(tmp_path, "managed-settings.json", {"channelsEnabled": True})
-        drop_in = tmp_path / "managed-settings.d"
-        _write(drop_in, "20-channels.json", {"allowedChannelPlugins": [BIFF_ENTRY]})
-        assert _warning({}, tmp_path) is None
-
-    def test_later_drop_in_overrides_scalars(self, tmp_path: Path) -> None:
-        _write(tmp_path, "managed-settings.json", {"channelsEnabled": True})
-        drop_in = tmp_path / "managed-settings.d"
-        _write(drop_in, "10-a.json", {"allowedChannelPlugins": [BIFF_ENTRY]})
-        _write(drop_in, "20-b.json", {"channelsEnabled": False})
-        text = _warning({}, tmp_path)
-        assert text is not None
-        assert "channelsEnabled" in text
-
-    def test_drop_in_arrays_concatenate(self, tmp_path: Path) -> None:
-        _write(
-            tmp_path,
-            "managed-settings.json",
-            {"channelsEnabled": True, "allowedChannelPlugins": ["a@b"]},
-        )
-        drop_in = tmp_path / "managed-settings.d"
-        _write(drop_in, "10.json", {"allowedChannelPlugins": ["biff@punt-labs"]})
-        assert _warning({}, tmp_path) is None
-
-    def test_hidden_drop_ins_are_ignored(self, tmp_path: Path) -> None:
-        _write(tmp_path, "managed-settings.json", {"channelsEnabled": True})
-        drop_in = tmp_path / "managed-settings.d"
-        _write(drop_in, ".10-hidden.json", {"allowedChannelPlugins": [BIFF_ENTRY]})
-        assert _warning({}, tmp_path) is not None
-
-    def test_malformed_drop_in_names_it_and_keeps_the_rest(
-        self, tmp_path: Path
-    ) -> None:
-        body = {"channelsEnabled": True, "allowedChannelPlugins": [BIFF_ENTRY]}
-        _write(tmp_path, "managed-settings.json", body)
-        bad = _write(tmp_path / "managed-settings.d", "10-bad.json", "oops")
-        text = _warning({}, tmp_path)
-        assert text is not None
-        assert f"{bad} is not valid JSON" in text
-        assert "channelsEnabled" not in text
-
-    @pytest.mark.parametrize(
-        ("platform", "expected"),
-        [
-            ("darwin", Path("/Library/Application Support/ClaudeCode")),
-            ("linux", Path("/etc/claude-code")),
-            ("win32", None),
-        ],
-    )
-    def test_directory_per_platform(self, platform: str, expected: Path | None) -> None:
-        assert ManagedPolicyGate.directory_for(platform) == expected
-
-
-class _BrokenGate:
-    def closed(self) -> tuple[ClosedGate, ...]:
-        msg = "boom"
-        raise RuntimeError(msg)
-
-
-class TestStartupWarning:
-    """The assembled warning."""
-
-    def test_a_failing_gate_is_logged_and_skipped(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        gates = (_BrokenGate(), FeatureFlagGate("DO_NOT_TRACK", {"DO_NOT_TRACK": "1"}))
-        text = StartupWarning(gates).text()
-        assert text is not None
-        assert "DO_NOT_TRACK is set" in text
-        assert "_BrokenGate" in caplog.text
-
-    def test_all_gates_open_is_silent(self, tmp_path: Path) -> None:
-        assert _warning({}, tmp_path) is None
-
-    def test_for_machine_reads_the_environment(self) -> None:
-        with patch.dict(os.environ, {"DISABLE_GROWTHBOOK": "1"}):
-            text = StartupWarning.for_machine(platform="win32").text()
-        assert text is not None
-        assert "DISABLE_GROWTHBOOK is set" in text
-
-    def test_flag_and_policy_reasons_join(self, tmp_path: Path) -> None:
-        _write(tmp_path, "managed-settings.json", {})
-        text = _warning({"DO_NOT_TRACK": "1"}, tmp_path)
-        assert text is not None
-        assert "DO_NOT_TRACK is set" in text
-        assert "channelsEnabled" in text
-
-
+FLAGS = (
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "DISABLE_GROWTHBOOK",
+    "DISABLE_TELEMETRY",
+    "CLAUDE_CODE_DISABLE_FEATURE_FLAGS",
+)
+PROVIDERS = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+)
 BASE: dict[str, object] = {
     "hookSpecificOutput": {
         "hookEventName": "SessionStart",
@@ -250,45 +40,336 @@ BASE: dict[str, object] = {
 }
 
 
-class TestSessionStartOutput:
-    """The hook tells the user (systemMessage) and the model (context)."""
+def _env_warning(env: dict[str, str]) -> str | None:
+    return StartupWarning((*EnvGate.opt_outs(env), EnvGate.provider(env))).text()
 
-    def test_closed_gate_reaches_user_and_model(self) -> None:
-        warning = "biff: channels are not live in this session (x). " + POLL
-        with patch.object(StartupWarning, "text", return_value=warning):
-            out = StartupWarning.add_to(BASE)
-        assert out["systemMessage"] == warning
+
+class TestEnvGates:
+    """Feature-flag opt-outs and non-Anthropic providers close channels."""
+
+    @pytest.mark.parametrize("flag", FLAGS)
+    def test_each_flag_warns_by_name(self, flag: str) -> None:
+        text = _env_warning({flag: "1"})
+        assert text is not None
+        assert text.startswith("biff: channels are not live in this session (")
+        assert f"{flag} is set" in text
+        assert "New messages will not arrive on their own." in text
+        assert POLL in text
+        assert f"Unset {flag} and restart Claude Code." in text
+
+    def test_do_not_track_is_not_a_gate(self) -> None:
+        assert _env_warning({"DO_NOT_TRACK": "1"}) is None
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
+    def test_truthy_values_close_the_gate(self, value: str) -> None:
+        assert _env_warning({"DISABLE_TELEMETRY": value}) is not None
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off"])
+    def test_falsy_values_leave_the_gate_open(self, value: str) -> None:
+        assert _env_warning({"DISABLE_TELEMETRY": value}) is None
+
+    @pytest.mark.parametrize("name", PROVIDERS)
+    def test_provider_closes_channels(self, name: str) -> None:
+        text = _env_warning({name: "1"})
+        assert text is not None
+        assert "channels need Anthropic authentication" in text
+        assert name in text
+        assert POLL in text
+
+    def test_two_flags_name_both(self) -> None:
+        text = _env_warning({"DISABLE_TELEMETRY": "1", "DISABLE_GROWTHBOOK": "1"})
+        assert text is not None
+        assert "DISABLE_TELEMETRY is set" in text
+        assert "DISABLE_GROWTHBOOK is set" in text
+        assert text.count(POLL) == 1
+
+
+class _BrokenGate:
+    def closed(self) -> tuple[ClosedGate, ...]:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+
+class _SilentGate:
+    def closed(self) -> tuple[ClosedGate, ...]:
+        return (ClosedGate("quiet reason", "quiet fix", notify_user=False),)
+
+
+class TestStartupWarning:
+    """The assembled warning."""
+
+    def test_all_open_is_silent(self) -> None:
+        assert _env_warning({}) is None
+
+    def test_a_failing_gate_is_logged_and_skipped(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        gates = (
+            _BrokenGate(),
+            EnvGate(("DISABLE_TELEMETRY",), {"DISABLE_TELEMETRY": "1"}),
+        )
+        text = StartupWarning(gates).text()
+        assert text is not None
+        assert "DISABLE_TELEMETRY is set" in text
+        assert "_BrokenGate" in caplog.text
+
+    def test_user_text_leaves_out_model_only_gates(self) -> None:
+        warning = StartupWarning((_SilentGate(),))
+        assert warning.text() is not None
+        assert warning.text(user=True) is None
+
+    def test_polling_on_silences_everything(self) -> None:
+        env = {"DISABLE_TELEMETRY": "1"}
+        gates = EnvGate.opt_outs(env)
+        assert StartupWarning(gates, lambda: True).text() is None
+        assert StartupWarning(gates, lambda: False).text() is not None
+
+
+class TestApply:
+    """User message on startup only; model context always."""
+
+    def _apply(self, source: object) -> dict[str, object]:
+        warning = StartupWarning(EnvGate.opt_outs({"DISABLE_TELEMETRY": "1"}))
+        return warning.apply(BASE, source=source)
+
+    def test_startup_reaches_user_and_model(self) -> None:
+        out = self._apply("startup")
+        text = cast("str", out["systemMessage"])
         specific = cast("dict[str, str]", out["hookSpecificOutput"])
+        assert specific["additionalContext"] == f"Biff session starting. {text}"
         assert specific["hookEventName"] == "SessionStart"
-        assert specific["additionalContext"] == f"Biff session starting. {warning}"
+
+    @pytest.mark.parametrize("source", ["resume", "compact", "clear", None])
+    def test_other_sources_reach_only_the_model(self, source: object) -> None:
+        out = self._apply(source)
+        assert "systemMessage" not in out
+        specific = cast("dict[str, str]", out["hookSpecificOutput"])
+        assert "channels are not live" in specific["additionalContext"]
 
     def test_open_gates_leave_the_output_unchanged(self) -> None:
-        with patch.object(StartupWarning, "text", return_value=None):
-            assert StartupWarning.add_to(BASE) == BASE
+        assert StartupWarning(()).apply(BASE, source="startup") == BASE
 
     def test_input_is_not_mutated(self) -> None:
-        with patch.object(StartupWarning, "text", return_value="warn"):
-            StartupWarning.add_to(BASE)
+        self._apply("startup")
         assert "systemMessage" not in BASE
 
+    def test_model_only_gate_sends_no_system_message_on_startup(self) -> None:
+        out = StartupWarning((_SilentGate(),)).apply(BASE, source="startup")
+        assert "systemMessage" not in out
+        assert "quiet reason" in json.dumps(out)
 
-class TestHookEntryPoints:
-    """Both SessionStart entry points carry the warning."""
+
+class TestPollSetting:
+    """Polling already started means the user needs no warning."""
+
+    def _root(self, tmp_path: Path, body: str | None) -> Path:
+        config = tmp_path / ".punt-labs" / "biff"
+        config.mkdir(parents=True)
+        if body is not None:
+            (config / "config.local.yaml").write_text(body)
+        return tmp_path
 
     @pytest.mark.parametrize(
-        "entry", [_cc_session_start, _cc_session_resume], ids=["start", "resume"]
+        ("body", "expected"),
+        [
+            (None, False),
+            ("other: 1\n", False),
+            ("poll_interval: 0\n", False),
+            ("poll_interval: 120\n", True),
+            ("poll_interval: 2.5\n", True),
+            ("poll_interval: nope\n", False),
+        ],
     )
-    def test_warning_is_emitted(
+    def test_is_on(self, tmp_path: Path, body: str | None, expected: bool) -> None:
+        assert PollSetting(self._root(tmp_path, body)).is_on() is expected
+
+    def test_no_repository_is_not_polling(self) -> None:
+        assert PollSetting(None).is_on() is False
+
+
+class TestWarningFailure:
+    """Biff's own context survives every failure of the warning path."""
+
+    @pytest.fixture(autouse=True)
+    def _session(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(hook, "_open_session", _ignore)
+        monkeypatch.setattr(hook, "_read_hook_input", _startup_input)
+        monkeypatch.setattr(hook, "handle_session_start", _start_context)
+
+    @pytest.mark.parametrize("resume", [False, True])
+    def test_failure_is_logged_and_base_context_emitted(
         self,
-        entry: Callable[[], None],
+        resume: bool,
         capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         with (
-            patch("biff.plugins.claude_code.hook._read_hook_input", return_value={}),
-            patch("biff.plugins.claude_code.hook._open_session"),
-            patch.object(StartupWarning, "text", return_value="warn"),
+            caplog.at_level(logging.WARNING),
+            patch.object(StartupWarning, "for_machine", side_effect=OSError("boom")),
         ):
-            entry()
+            hook._run_session_start(resume=resume)
         out = json.loads(capsys.readouterr().out)
-        assert out["systemMessage"] == "warn"
-        assert out["hookSpecificOutput"]["additionalContext"].endswith(" warn")
+        assert "systemMessage" not in out
+        assert _text(out).startswith(
+            "Biff session " + ("resumed" if resume else "starting")
+        )
+        assert [r.levelname for r in caplog.records] == ["WARNING"]
+
+    def test_import_failure_is_survived(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with patch.dict(
+            sys.modules, {"biff.plugins.claude_code.startup_warning": None}
+        ):
+            hook._run_session_start(resume=False)
+        assert _text(json.loads(capsys.readouterr().out)) == "Biff session starting."
+
+
+def _startup_input() -> dict[str, object]:
+    return {"source": "startup"}
+
+
+def _start_context(_data: dict[str, object] | None = None) -> str:
+    return "Biff session starting."
+
+
+class _Run(Protocol):
+    """Drive ``biff-hook claude-code <event>`` and return the hook's JSON."""
+
+    def __call__(
+        self,
+        argv: list[str],
+        *,
+        managed: dict[str, object] | None = None,
+        event: str = "session-start",
+        source: str = "startup",
+    ) -> dict[str, object]: ...
+
+
+def _text(out: dict[str, object]) -> str:
+    return cast("dict[str, str]", out["hookSpecificOutput"])["additionalContext"]
+
+
+def _ignore(_data: dict[str, object]) -> None:
+    return None
+
+
+def _polling(_self: PollSetting) -> bool:
+    return True
+
+
+def _no_poll(_cls: type[PollSetting]) -> PollSetting:
+    return PollSetting(None)
+
+
+@pytest.fixture
+def run(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> _Run:
+    """Run the real entry point; only the process and file boundaries are faked."""
+    for name in (*FLAGS, *PROVIDERS, "DO_NOT_TRACK"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(hook, "_is_biff_enabled", lambda: True)
+    monkeypatch.setattr(hook, "_open_session", _ignore)
+    monkeypatch.setattr(PollSetting, "here", classmethod(_no_poll))
+    monkeypatch.setattr("biff.caller_stamp._live_ancestors", lambda: frozenset({4242}))
+
+    def go(
+        argv: list[str],
+        *,
+        managed: dict[str, object] | None = None,
+        event: str = "session-start",
+        source: str = "startup",
+    ) -> dict[str, object]:
+        def read_argv(_pid: int) -> list[str]:
+            return argv
+
+        def sources(_platform: str) -> tuple[dict[str, object], ...]:
+            return () if managed is None else (managed,)
+
+        def read_input() -> dict[str, object]:
+            return {"session_id": "s", "source": source}
+
+        monkeypatch.setattr(LaunchFlagGate, "_process_argv", staticmethod(read_argv))
+        monkeypatch.setattr(ManagedSources, "for_platform", staticmethod(sources))
+        monkeypatch.setattr(hook, "_read_hook_input", read_input)
+        monkeypatch.setattr(sys, "argv", ["biff-hook", "claude-code", event])
+        _hook_entry.main()
+        return cast("dict[str, object]", json.loads(capsys.readouterr().out))
+
+    return go
+
+
+class TestEntryPoint:
+    """The real biff-hook entry point, with real gates."""
+
+    def test_dev_flag_all_open_adds_nothing(self, run: _Run) -> None:
+        out = run(["claude", DEV, BIFF])
+        assert "systemMessage" not in out
+        assert "channels are not live" not in _text(out)
+        assert "Biff session starting." in _text(out)
+
+    def test_no_flag_warns_user_and_model(self, run: _Run) -> None:
+        out = run(["claude"])
+        banner = cast("str", out["systemMessage"])
+        assert "channels are not live" in banner
+        assert banner in _text(out)
+
+    def test_comma_form(self, run: _Run) -> None:
+        assert "systemMessage" not in run(["claude", DEV, f"plugin:x@y,{BIFF}"])
+
+    def test_dev_flag_naming_another_entry(self, run: _Run) -> None:
+        out = run(["claude", DEV, "server:fakechat"])
+        assert "channel flag for biff" in cast("str", out["systemMessage"])
+
+    def test_print_mode_reaches_only_the_model(self, run: _Run) -> None:
+        out = run(["claude", "-p", DEV, BIFF])
+        assert "systemMessage" not in out
+        assert "channels are not live" in _text(out)
+
+    def test_unrelated_managed_file_is_no_finding(self, run: _Run) -> None:
+        out = run(["claude", DEV, BIFF], managed={"permissions": {"allow": []}})
+        assert "systemMessage" not in out
+
+    def test_dev_flag_with_unlisted_policy_is_live(self, run: _Run) -> None:
+        out = run(["claude", DEV, BIFF], managed={"channelsEnabled": True})
+        assert "systemMessage" not in out
+
+    def test_channels_flag_needs_the_allowlist(self, run: _Run) -> None:
+        argv = ["claude", "--channels", BIFF]
+        assert "systemMessage" in run(argv, managed={"channelsEnabled": True})
+        listed: dict[str, object] = {
+            "channelsEnabled": True,
+            "allowedChannelPlugins": ["biff@punt-labs"],
+        }
+        assert "systemMessage" not in run(argv, managed=listed)
+
+    def test_bedrock_env(self, run: _Run, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        out = run(["claude", DEV, BIFF])
+        banner = cast("str", out["systemMessage"])
+        assert "channels need Anthropic authentication" in banner
+
+    def test_polling_on_sends_nothing(
+        self, run: _Run, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(PollSetting, "is_on", _polling)
+        out = run(["claude"])
+        assert "systemMessage" not in out
+        assert "channels are not live" not in _text(out)
+
+    def test_resume_sends_context_but_no_banner(self, run: _Run) -> None:
+        out = run(["claude"], event="session-resume", source="resume")
+        assert "systemMessage" not in out
+        assert "channels are not live" in _text(out)
+
+    def test_start_passes_the_hook_input_to_the_handler(self, run: _Run) -> None:
+        seen: list[object] = []
+        real = hook.handle_session_start
+
+        def spy(data: dict[str, object] | None = None) -> str:
+            seen.append(data)
+            return real(data)
+
+        with patch.object(hook, "handle_session_start", spy):
+            run(["claude", DEV, BIFF])
+        assert seen == [{"session_id": "s", "source": "startup"}]

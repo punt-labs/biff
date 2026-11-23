@@ -121,12 +121,6 @@ def _hook_context(event: str, context: str) -> dict[str, object]:
     }
 
 
-def _emit_session_context(context: str) -> None:
-    from biff.plugins.claude_code.startup_warning import StartupWarning  # noqa: PLC0415
-
-    _emit(StartupWarning.add_to(_hook_context("SessionStart", context)))
-
-
 def _post_tool_use_context(context: str) -> dict[str, object]:
     """Build PostToolUse hook output with ``additionalContext`` only."""
     return _hook_context("PostToolUse", context)
@@ -926,21 +920,29 @@ def cc_post_pr() -> None:
         _emit(_post_tool_use_context(result))
 
 
+def _run_session_start(*, resume: bool) -> None:
+    from biff.plugins.claude_code.session_output import SessionOutput  # noqa: PLC0415
+
+    data = _read_hook_input()
+    _open_session(data)
+    context = handle_session_resume() if resume else handle_session_start(data)
+    _emit(
+        SessionOutput.warned(_hook_context("SessionStart", context), data.get("source"))
+    )
+
+
 @_cc_app.command("session-start")
 def cc_session_start() -> None:
     """SessionStart(startup) — auto-tty, plan from branch, check unread."""
     if _is_biff_enabled():
-        data = _read_hook_input()
-        _open_session(data)
-        _emit_session_context(handle_session_start(data))
+        _run_session_start(resume=False)
 
 
 @_cc_app.command("session-resume")
 def cc_session_resume() -> None:
     """SessionStart(resume/compact) — re-orient after context loss."""
     if _is_biff_enabled():
-        _open_session(_read_hook_input())
-        _emit_session_context(handle_session_resume())
+        _run_session_start(resume=True)
 
 
 @_cc_app.command("session-end")

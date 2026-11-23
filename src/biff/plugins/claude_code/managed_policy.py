@@ -1,96 +1,80 @@
-"""Claude Code's file-based managed settings, read for the channel policy."""
+"""The effective managed policy for channels, and the gate it can close."""
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
-from typing import Self, cast, final
+import sys
+from collections.abc import Sequence
+from typing import Final, Self, cast, final
 
 from biff.plugins.claude_code.channel_gates import ClosedGate
+from biff.plugins.claude_code.managed_sources import ManagedSources, Source
 
-__all__ = ["ManagedPolicyGate", "ManagedSettings"]
+__all__ = ["ManagedPolicy", "ManagedPolicyGate"]
 
 logger = logging.getLogger(__name__)
 
 # The marketplace and plugin name Claude Code knows biff by.
-_BIFF = "biff@punt-labs"
-_BIFF_ENTRY = '{"marketplace": "punt-labs", "plugin": "biff"}'
+BIFF_ENTRY: Final = "biff@punt-labs"
 
-_BASE_FILE = "managed-settings.json"
-_DROP_IN_DIR = "managed-settings.d"
+_CONTROL_KEYS = frozenset({"managedSourcesBehavior", "wslInheritsWindowsSettings"})
 
 
 @final
-class ManagedSettings:
-    """The channel keys of the managed settings in one system directory.
+class ManagedPolicy:
+    """The managed settings that apply to channels.
 
-    Claude Code merges ``managed-settings.json`` first, then each
-    ``managed-settings.d/*.json`` in name order: a later scalar replaces an
-    earlier one and arrays concatenate.  A file that cannot be read is skipped,
-    as if it were absent; a file that is not a JSON object is recorded in
-    :attr:`malformed`.
+    The first source with a policy key wins whole.  With
+    ``managedSourcesBehavior`` set to ``"merge"`` every source with a policy
+    key is merged instead, higher ranks over lower.  A source holding only
+    control keys is no policy.  Server-managed settings are invisible to a
+    hook, so an organization that sets channels only there has no policy here.
     """
 
-    __slots__ = ("_allowed", "_channels_enabled", "_malformed", "_sources")
+    __slots__ = ("_effective",)
 
-    _allowed: frozenset[str]
-    _channels_enabled: bool
-    _malformed: tuple[Path, ...]
-    _sources: tuple[Path, ...]
+    _effective: Source
 
-    def __new__(cls, directory: Path) -> Self:
-        """Read and merge the settings files under *directory*."""
+    def __new__(cls, sources: Sequence[Source]) -> Self:
+        """Rank *sources*, best first, into one effective policy."""
         self = super().__new__(cls)
-        sources: list[Path] = []
-        malformed: list[Path] = []
-        enabled: object = None
-        allowed: list[object] = []
-        for path in cls._candidates(directory):
-            try:
-                text = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                malformed.append(path)
-                continue
-            except OSError:
-                logger.debug("managed settings unreadable: %s", path, exc_info=True)
-                continue
-            try:
-                body = json.loads(text)
-            except json.JSONDecodeError:
-                malformed.append(path)
-                continue
-            if not isinstance(body, dict):
-                malformed.append(path)
-                continue
-            keys = cast("dict[str, object]", body)
-            sources.append(path)
-            enabled = keys.get("channelsEnabled", enabled)
-            listed = keys.get("allowedChannelPlugins")
-            if isinstance(listed, list):
-                allowed.extend(cast("list[object]", listed))
-        self._sources = tuple(sources)
-        self._malformed = tuple(malformed)
-        self._channels_enabled = enabled is True
-        self._allowed = frozenset(cls._entry_name(entry) for entry in allowed)
+        with_policy = [s for s in sources if not _CONTROL_KEYS.issuperset(s)]
+        effective: Source = {}
+        if with_policy:
+            if with_policy[0].get("managedSourcesBehavior") == "merge":
+                for source in reversed(with_policy):
+                    effective = ManagedSources.merged(effective, source)
+            else:
+                effective = with_policy[0]
+        self._effective = effective
         return self
 
-    @staticmethod
-    def _candidates(directory: Path) -> tuple[Path, ...]:
-        """Return the files Claude Code would merge, in merge order."""
-        try:
-            drop_ins = sorted(
-                path
-                for path in (directory / _DROP_IN_DIR).glob("*.json")
-                if not path.name.startswith(".")
-            )
-        except OSError:
-            drop_ins = []
-        return (directory / _BASE_FILE, *drop_ins)
+    @classmethod
+    def for_machine(cls, platform: str | None = None) -> Self:
+        """Return the policy visible on this machine."""
+        return cls(
+            ManagedSources.for_platform(sys.platform if platform is None else platform)
+        )
+
+    @property
+    def channels_enabled(self) -> object:
+        """The effective ``channelsEnabled`` value, or ``None`` when unset."""
+        return self._effective.get("channelsEnabled")
+
+    @property
+    def lists_biff(self) -> bool:
+        """Whether the effective ``allowedChannelPlugins`` names biff."""
+        listed = self._effective.get("allowedChannelPlugins")
+        if not isinstance(listed, list):
+            return False
+        return any(
+            self._entry_name(entry) == BIFF_ENTRY
+            for entry in cast("list[object]", listed)
+        )
 
     @staticmethod
     def _entry_name(entry: object) -> str:
-        """Return an ``allowedChannelPlugins`` entry as ``plugin@marketplace``."""
+        """Return an allowlist entry as ``plugin@marketplace``."""
         if isinstance(entry, str):
             return entry
         if isinstance(entry, dict):
@@ -101,88 +85,38 @@ class ManagedSettings:
                 return f"{plugin}@{marketplace}"
         return ""
 
-    @property
-    def sources(self) -> tuple[Path, ...]:
-        """The files that parsed, in merge order."""
-        return self._sources
-
-    @property
-    def malformed(self) -> tuple[Path, ...]:
-        """The files that exist but are not a JSON object."""
-        return self._malformed
-
-    @property
-    def channels_enabled(self) -> bool:
-        """Whether the merged ``channelsEnabled`` is ``true``."""
-        return self._channels_enabled
-
-    @property
-    def lists_biff(self) -> bool:
-        """Whether the merged ``allowedChannelPlugins`` names biff."""
-        return _BIFF in self._allowed
-
 
 @final
 class ManagedPolicyGate:
-    """Open unless managed settings block channels or leave biff off the list.
+    """Closed when the effective policy sets ``channelsEnabled`` to a non-true value.
 
-    No managed settings, or none that can be read, is no restriction: the
-    user's own plan decides.  Server-managed settings and MDM policy are not
-    visible to a hook and are not checked.
+    An unset key is no finding: Pro and Max users have no managed policy, and
+    Claude Code's own default applies.
     """
 
-    __slots__ = ("_directory",)
+    __slots__ = ("_policy",)
 
-    _directory: Path | None
+    _policy: ManagedPolicy
 
-    def __new__(cls, directory: Path | None) -> Self:
-        """Check the managed settings under *directory*, if there is one."""
+    def __new__(cls, policy: ManagedPolicy) -> Self:
+        """Check *policy*."""
         self = super().__new__(cls)
-        self._directory = directory
+        self._policy = policy
         return self
 
-    @staticmethod
-    def directory_for(platform: str) -> Path | None:
-        """Return where *platform* keeps managed settings files, if anywhere.
-
-        *platform* is a ``sys.platform`` value.
-        """
-        if platform == "darwin":
-            return Path("/Library/Application Support/ClaudeCode")
-        if platform.startswith("linux"):
-            return Path("/etc/claude-code")
-        return None
-
     def closed(self) -> tuple[ClosedGate, ...]:
-        """Return a closed gate for each policy problem found."""
-        if self._directory is None:
+        """Return the closed gate when ``channelsEnabled`` is set and not true."""
+        value = self._policy.channels_enabled
+        if value is None or value is True:
             return ()
-        settings = ManagedSettings(self._directory)
-        problems = [
+        if isinstance(value, str) and value.strip().lower() == "true":
+            logger.info(
+                "managed channelsEnabled is the string %r; treating as true", value
+            )
+            return ()
+        return (
             ClosedGate(
-                reason=f"{path} is not valid JSON",
-                fix=f"Ask your administrator to fix or remove {path}.",
-            )
-            for path in settings.malformed
-        ]
-        if not settings.sources:
-            return tuple(problems)
-        where = f"managed settings in {self._directory}"
-        if not settings.channels_enabled:
-            problems.append(
-                ClosedGate(
-                    reason=f"{where} do not set channelsEnabled to true",
-                    fix="Ask your administrator to set channelsEnabled to true.",
-                )
-            )
-        if not settings.lists_biff:
-            problems.append(
-                ClosedGate(
-                    reason=f"{where} do not list biff in allowedChannelPlugins",
-                    fix=(
-                        "Ask your administrator to add "
-                        f"{_BIFF_ENTRY} to allowedChannelPlugins."
-                    ),
-                )
-            )
-        return tuple(problems)
+                reason=f"managed settings set channelsEnabled to {value!r}",
+                fix="Ask your administrator to set channelsEnabled to true.",
+            ),
+        )

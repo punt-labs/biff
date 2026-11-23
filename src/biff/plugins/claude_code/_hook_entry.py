@@ -50,15 +50,13 @@ def main() -> None:
 def _cc_session_start() -> None:
     from biff.plugins.claude_code import hook  # noqa: PLC0415
 
-    hook._open_session(hook._read_hook_input())
-    hook._emit_session_context(hook.handle_session_start())
+    hook._run_session_start(resume=False)
 
 
 def _cc_session_resume() -> None:
     from biff.plugins.claude_code import hook  # noqa: PLC0415
 
-    hook._open_session(hook._read_hook_input())
-    hook._emit_session_context(hook.handle_session_resume())
+    hook._run_session_start(resume=True)
 
 
 def _cc_session_end() -> None:

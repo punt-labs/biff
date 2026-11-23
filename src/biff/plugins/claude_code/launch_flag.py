@@ -1,4 +1,4 @@
-"""The launch-flag gate: Claude Code must be started with a channel flag."""
+"""The joint launch-flag and policy gate: when can biff be a live channel."""
 
 from __future__ import annotations
 
@@ -8,41 +8,65 @@ from typing import Self, final
 
 import psutil
 
+from biff.caller_stamp import main_agent_id
 from biff.plugins.claude_code.channel_gates import ClosedGate
+from biff.plugins.claude_code.claude_argv import (
+    BIFF_CHANNEL,
+    CHANNELS_FLAG,
+    DEV_FLAG,
+    ClaudeArgv,
+)
+from biff.plugins.claude_code.managed_policy import ManagedPolicy
 
 __all__ = ["LaunchFlagGate"]
 
 logger = logging.getLogger(__name__)
 
-_DEV_FLAG = "--dangerously-load-development-channels"
-_CHANNELS_FLAG = "--channels"
-_BIFF = "plugin:biff@punt-labs"
-
 type ArgvReader = Callable[[int], Sequence[str]]
+
+_RESTART = (
+    f"Restart Claude Code with {DEV_FLAG} {BIFF_CHANNEL}. "
+    f"Organizations that list biff in allowedChannelPlugins can use "
+    f"{CHANNELS_FLAG} {BIFF_CHANNEL} instead."
+)
 
 
 @final
 class LaunchFlagGate:
-    """Open while ``claude`` was started with a flag that can register biff.
+    """Open only when ``claude`` was started with a way to register biff.
 
-    Neither the environment nor a hook's stdin carries the launch flags, but
-    Claude Code sets ``CLAUDE_PID`` to its own process id, whose argv does.
-    When that argv cannot be read the gate is unknown, not closed: it stays
-    silent and logs, so a user is never warned falsely.
+    Biff is a live channel when either the development flag names biff, which
+    bypasses ``allowedChannelPlugins``, or ``--channels`` names biff and the
+    managed policy lists biff, because ``--channels`` alone only accepts
+    Anthropic's own list.  A ``-p`` run ignores channels.
+
+    Neither the environment nor a hook's stdin carries the flags, but
+    ``CLAUDE_PID`` is the ``claude`` process, whose argv does.  It is trusted
+    only when it is a live ancestor of this hook.  When it cannot be, or its
+    argv cannot be read, the gate is unknown, not closed: it stays silent and
+    logs, so a user is never warned falsely.
     """
 
-    __slots__ = ("_env", "_read_argv")
+    __slots__ = ("_ancestors", "_env", "_policy", "_read_argv")
 
+    _ancestors: Callable[[], frozenset[int]] | None
     _env: Mapping[str, str]
+    _policy: ManagedPolicy
     _read_argv: ArgvReader
 
     def __new__(
-        cls, env: Mapping[str, str], read_argv: ArgvReader | None = None
+        cls,
+        env: Mapping[str, str],
+        policy: ManagedPolicy,
+        read_argv: ArgvReader | None = None,
+        ancestors: Callable[[], frozenset[int]] | None = None,
     ) -> Self:
-        """Look up ``CLAUDE_PID`` in *env* and read its argv with *read_argv*."""
+        """Look up ``CLAUDE_PID`` in *env*, read its argv, and judge it by *policy*."""
         self = super().__new__(cls)
         self._env = env
+        self._policy = policy
         self._read_argv = cls._process_argv if read_argv is None else read_argv
+        self._ancestors = ancestors
         return self
 
     @staticmethod
@@ -50,54 +74,52 @@ class LaunchFlagGate:
         return psutil.Process(pid).cmdline()
 
     def closed(self) -> tuple[ClosedGate, ...]:
-        """Return the closed gate when the argv has no usable channel flag."""
+        """Return the closed gate when biff cannot be registered as a channel."""
         argv = self._argv()
-        if argv is None or self._has_channel_flag(argv):
+        if argv is None:
             return ()
+        if argv.is_print:
+            return (
+                ClosedGate(
+                    reason="Claude Code is running with -p, which ignores channels",
+                    fix="",
+                    notify_user=False,
+                ),
+            )
+        if argv.dev_names_biff:
+            return ()
+        if argv.channels_name_biff:
+            if self._policy.lists_biff:
+                return ()
+            return (
+                ClosedGate(
+                    reason=(
+                        f"{CHANNELS_FLAG} only accepts Anthropic's own plugin list "
+                        "unless managed settings list biff in allowedChannelPlugins"
+                    ),
+                    fix=f"Restart Claude Code with {DEV_FLAG} {BIFF_CHANNEL}.",
+                ),
+            )
         return (
             ClosedGate(
                 reason="Claude Code was not started with a channel flag for biff",
-                fix=(
-                    "Restart Claude Code with "
-                    f"{_DEV_FLAG} {_BIFF}, or with {_CHANNELS_FLAG} {_BIFF} "
-                    "where your organization allows it."
-                ),
+                fix=_RESTART,
             ),
         )
 
-    def _argv(self) -> Sequence[str] | None:
-        """Return Claude Code's argv, or ``None`` (logged) when it is unknown."""
-        raw = self._env.get("CLAUDE_PID", "")
-        try:
-            pid = int(raw)
-        except ValueError:
-            logger.info("launch_flag_unknown: CLAUDE_PID=%r is not a pid", raw)
+    def _argv(self) -> ClaudeArgv | None:
+        """Return Claude Code's parsed argv, or ``None`` (logged) when unknown."""
+        corroborate = None if self._ancestors is None else self._ancestors()
+        pid = main_agent_id(self._env, ancestors=corroborate)
+        if pid is None:
+            logger.info("launch_flag_unknown: CLAUDE_PID is not a live ancestor")
             return None
         try:
-            return self._read_argv(pid)
-        except psutil.Error as exc:
+            return ClaudeArgv(self._read_argv(int(pid)))
+        except (psutil.Error, OSError) as exc:
             logger.info(
-                "launch_flag_unknown: argv of pid %d unreadable: %s",
+                "launch_flag_unknown: argv of pid %s unreadable: %s",
                 pid,
                 type(exc).__name__,
             )
             return None
-
-    @staticmethod
-    def _has_channel_flag(argv: Sequence[str]) -> bool:
-        """Return whether *argv* carries the development flag or names biff."""
-        listed = False
-        for arg in argv:
-            if arg == _DEV_FLAG or arg.startswith(f"{_DEV_FLAG}="):
-                return True
-            if arg == _CHANNELS_FLAG:
-                listed = True
-            elif arg.startswith(f"{_CHANNELS_FLAG}="):
-                listed = False
-                if arg.partition("=")[2] == _BIFF:
-                    return True
-            elif arg.startswith("-"):
-                listed = False
-            elif listed and arg == _BIFF:
-                return True
-        return False

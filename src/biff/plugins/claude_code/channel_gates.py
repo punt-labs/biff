@@ -6,18 +6,41 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, Self, final
 
-__all__ = ["ChannelGate", "ClosedGate", "FeatureFlagGate"]
+__all__ = ["ChannelGate", "ClosedGate", "EnvGate"]
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 """Values Claude Code reads as "set" for a boolean environment variable."""
 
+_OPT_OUTS = (
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "DISABLE_GROWTHBOOK",
+    "DISABLE_TELEMETRY",
+    "CLAUDE_CODE_DISABLE_FEATURE_FLAGS",
+)
+"""Variables that stop the feature-flag evaluation channels depend on (DES-063).
+
+``DO_NOT_TRACK`` is not here: no real launch showed it closing channels.
+"""
+
+_PROVIDERS = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+)
+"""Variables that select a cloud provider; channels need Anthropic authentication."""
+
 
 @dataclass(frozen=True, slots=True)
 class ClosedGate:
-    """One reason channels cannot be live, and what the user does about it."""
+    """One reason channels cannot be live, and what the user does about it.
+
+    ``notify_user`` is false for a closure the user cannot act on, which only
+    the model is told about.
+    """
 
     reason: str
     fix: str
+    notify_user: bool = True
 
 
 class ChannelGate(Protocol):
@@ -29,45 +52,65 @@ class ChannelGate(Protocol):
 
 
 @final
-class FeatureFlagGate:
-    """Open while one opt-out environment variable is not set.
+class EnvGate:
+    """Open while none of a set of environment variables is set to a true value."""
 
-    Claude Code evaluates the feature flag that enables channels at start-up,
-    and each of these opt-outs stops that evaluation (DES-063).
-    """
-
-    NAMES = (
-        "DISABLE_TELEMETRY",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-        "DO_NOT_TRACK",
-        "DISABLE_GROWTHBOOK",
-    )
-    """The environment variables that close the gate."""
-
-    __slots__ = ("_env", "_name")
+    __slots__ = ("_env", "_fix", "_names", "_reason")
 
     _env: Mapping[str, str]
-    _name: str
+    _fix: str | None
+    _names: tuple[str, ...]
+    _reason: str | None
 
-    def __new__(cls, name: str, env: Mapping[str, str]) -> Self:
-        """Watch *name* in *env*."""
+    def __new__(
+        cls,
+        names: tuple[str, ...],
+        env: Mapping[str, str],
+        *,
+        reason: str | None = None,
+        fix: str | None = None,
+    ) -> Self:
+        """Watch *names* in *env*.
+
+        Without *reason* and *fix* the gate reports the name that is set and
+        tells the user to unset it.
+        """
         self = super().__new__(cls)
-        self._name = name
+        self._names = names
         self._env = env
+        self._reason = reason
+        self._fix = fix
         return self
 
     @classmethod
-    def all_in(cls, env: Mapping[str, str]) -> tuple[Self, ...]:
-        """Return one gate per opt-out variable, all reading *env*."""
-        return tuple(cls(name, env) for name in cls.NAMES)
+    def opt_outs(cls, env: Mapping[str, str]) -> tuple[Self, ...]:
+        """Return one gate per feature-flag opt-out variable, reading *env*."""
+        return tuple(cls((name,), env) for name in _OPT_OUTS)
+
+    @classmethod
+    def provider(cls, env: Mapping[str, str]) -> Self:
+        """Return the gate that closes when a cloud provider is selected."""
+        return cls(
+            _PROVIDERS,
+            env,
+            reason="channels need Anthropic authentication",
+            fix="Polling is how messages arrive with this provider.",
+        )
 
     def closed(self) -> tuple[ClosedGate, ...]:
-        """Return the closed gate when the variable is set to a true value."""
-        if self._env.get(self._name, "").strip().lower() not in _TRUTHY:
+        """Return the closed gate when a watched variable has a true value."""
+        names = [
+            name
+            for name in self._names
+            if self._env.get(name, "").strip().lower() in _TRUTHY
+        ]
+        if not names:
             return ()
-        return (
-            ClosedGate(
-                reason=f"{self._name} is set",
-                fix=f"Unset {self._name} and restart Claude Code.",
-            ),
+        listed = ", ".join(f"{name} is set" for name in names)
+        reason = listed if self._reason is None else f"{self._reason}, and {listed}"
+        fix = (
+            f"Unset {' and '.join(names)} and restart Claude Code."
+            if self._fix is None
+            else self._fix
         )
+        return (ClosedGate(reason=reason, fix=fix),)

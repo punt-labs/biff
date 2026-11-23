@@ -5,14 +5,15 @@
 ### Added
 
 - Start-up channel warning: at SessionStart the Claude Code plugin checks the
-  channel gates a hook can see (`DISABLE_TELEMETRY`,
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DO_NOT_TRACK`,
-  `DISABLE_GROWTHBOOK`; managed settings under
-  `/Library/Application Support/ClaudeCode` or `/etc/claude-code`, including
-  `managed-settings.d`; and the `claude` process's launch flag, read from
-  `CLAUDE_PID`). When one is closed it tells the user and the model that channels
-  are not live, why, the fix, and to poll with `/biff:read 2m`. It says nothing
-  when every visible gate is open or a gate cannot be read.
+  channel gates a hook can see: the feature-flag opt-outs
+  (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,
+  `DISABLE_TELEMETRY`, `CLAUDE_CODE_DISABLE_FEATURE_FLAGS`), a cloud provider
+  (`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, `_FOUNDRY`), managed
+  `channelsEnabled`, and the `claude` process's launch flag (from `CLAUDE_PID`)
+  judged together with the managed `allowedChannelPlugins`. When channels cannot
+  be live it tells the model, and the user at startup, why, the fix, and to poll
+  with `/biff:read 2m`. It says nothing when every visible gate is open, a gate
+  cannot be read, or polling is already on.
 - Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
   fails on any import that breaks the DES-088 package layers and is not in
   `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs
