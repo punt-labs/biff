@@ -121,6 +121,12 @@ def _hook_context(event: str, context: str) -> dict[str, object]:
     }
 
 
+def _emit_session_context(context: str) -> None:
+    from biff.plugins.claude_code.startup_warning import StartupWarning  # noqa: PLC0415
+
+    _emit(StartupWarning.add_to(_hook_context("SessionStart", context)))
+
+
 def _post_tool_use_context(context: str) -> dict[str, object]:
     """Build PostToolUse hook output with ``additionalContext`` only."""
     return _hook_context("PostToolUse", context)
@@ -235,9 +241,7 @@ def _log_skipped_shared_plan(root: str, identities: tuple[str | None, ...]) -> N
     the hook payload carries; without this line the resulting denial after
     ``biff plan`` would have no visible cause.
     """
-    from biff.markers import has_plan_marker  # noqa: PLC0415
-
-    if None not in identities and has_plan_marker(root, None):
+    if None not in identities and _has_any_plan_marker(root, (None,)):
         logger.info(
             "plan gate: a plan exists in the shared bucket but was skipped for "
             "an identified session; run /plan from this session to set its own"
@@ -925,22 +929,18 @@ def cc_post_pr() -> None:
 @_cc_app.command("session-start")
 def cc_session_start() -> None:
     """SessionStart(startup) — auto-tty, plan from branch, check unread."""
-    if not _is_biff_enabled():
-        return
-    data = _read_hook_input()
-    _open_session(data)
-    result = handle_session_start(data)
-    _emit(_hook_context("SessionStart", result))
+    if _is_biff_enabled():
+        data = _read_hook_input()
+        _open_session(data)
+        _emit_session_context(handle_session_start(data))
 
 
 @_cc_app.command("session-resume")
 def cc_session_resume() -> None:
     """SessionStart(resume/compact) — re-orient after context loss."""
-    if not _is_biff_enabled():
-        return
-    _open_session(_read_hook_input())
-    result = handle_session_resume()
-    _emit(_hook_context("SessionStart", result))
+    if _is_biff_enabled():
+        _open_session(_read_hook_input())
+        _emit_session_context(handle_session_resume())
 
 
 @_cc_app.command("session-end")

@@ -268,8 +268,8 @@ interface of the plugin contract (DES-088), which `src/biff/hook.py` calls. It c
 | Gate | Check |
 |------|-------|
 | Feature flags | `DISABLE_TELEMETRY`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DO_NOT_TRACK`, `DISABLE_GROWTHBOOK` unset |
-| Org policy | Claude Code's managed settings allow channels and list biff in `allowedChannelPlugins` (Team and Enterprise) |
-| Launch flag | Claude Code was started with `--channels plugin:biff@punt-labs` or the development flag. Whether a hook can see this is unverified; wave 0 finds out |
+| Org policy | Claude Code's file-based managed settings (`/Library/Application Support/ClaudeCode` on macOS, `/etc/claude-code` on Linux, plus `managed-settings.d/*.json`) set `channelsEnabled` to true and list biff in `allowedChannelPlugins`. No file, or an unreadable one, is no restriction; a file that is not a JSON object is a warning that names it. Server-managed settings and MDM policy are not visible to a hook |
+| Launch flag | Claude Code was started with `--channels plugin:biff@punt-labs` or the development flag. Neither the environment nor the hook's stdin carries the flags, but `CLAUDE_PID` is the `claude` process, and its argv (read with `psutil`) does. When `CLAUDE_PID` is absent or the argv cannot be read the gate is unknown: the hook logs and says nothing about it |
 
 If any gate is closed, the hook tells both the user (as a visible message)
 and the model (as context):

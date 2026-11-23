@@ -4,6 +4,15 @@
 
 ### Added
 
+- Start-up channel warning: at SessionStart the Claude Code plugin checks the
+  channel gates a hook can see (`DISABLE_TELEMETRY`,
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DO_NOT_TRACK`,
+  `DISABLE_GROWTHBOOK`; managed settings under
+  `/Library/Application Support/ClaudeCode` or `/etc/claude-code`, including
+  `managed-settings.d`; and the `claude` process's launch flag, read from
+  `CLAUDE_PID`). When one is closed it tells the user and the model that channels
+  are not live, why, the fix, and to poll with `/biff:read 2m`. It says nothing
+  when every visible gate is open or a gate cannot be read.
 - Layer gate: `make check-layers` (`oo-ratchet layers`, punt-oo-ratchet 0.5.0)
   fails on any import that breaks the DES-088 package layers and is not in
   `.oo-layers-baseline.json`; `make update-layers` shrinks the baseline. It runs

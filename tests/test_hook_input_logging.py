@@ -10,6 +10,7 @@ import pytest
 
 from biff.plugins.claude_code._hook_entry import _cc_session_start
 from biff.plugins.claude_code.hook import _read_hook_input
+from biff.plugins.claude_code.startup_warning import StartupWarning
 
 
 @pytest.mark.parametrize(
@@ -26,6 +27,7 @@ def test_malformed_session_start(
         os.fdopen(read_fd) as stdin,
         patch("sys.stdin", stdin),
         patch("biff.plugins.claude_code.hook._open_session") as open_session,
+        patch.object(StartupWarning, "text", return_value=None),
         patch(
             "biff.plugins.claude_code.hook.handle_session_start", return_value="context"
         ),

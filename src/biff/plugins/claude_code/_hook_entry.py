@@ -48,31 +48,17 @@ def main() -> None:
 
 
 def _cc_session_start() -> None:
-    from biff.plugins.claude_code.hook import (  # noqa: PLC0415
-        _emit,
-        _hook_context,
-        _open_session,
-        _read_hook_input,
-        handle_session_start,
-    )
+    from biff.plugins.claude_code import hook  # noqa: PLC0415
 
-    _open_session(_read_hook_input())
-    result = handle_session_start()
-    _emit(_hook_context("SessionStart", result))
+    hook._open_session(hook._read_hook_input())
+    hook._emit_session_context(hook.handle_session_start())
 
 
 def _cc_session_resume() -> None:
-    from biff.plugins.claude_code.hook import (  # noqa: PLC0415
-        _emit,
-        _hook_context,
-        _open_session,
-        _read_hook_input,
-        handle_session_resume,
-    )
+    from biff.plugins.claude_code import hook  # noqa: PLC0415
 
-    _open_session(_read_hook_input())
-    result = handle_session_resume()
-    _emit(_hook_context("SessionStart", result))
+    hook._open_session(hook._read_hook_input())
+    hook._emit_session_context(hook.handle_session_resume())
 
 
 def _cc_session_end() -> None:
