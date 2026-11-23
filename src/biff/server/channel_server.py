@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 from functools import cached_property
 from typing import TYPE_CHECKING, Self
 
@@ -22,6 +23,7 @@ from biff.server.tools import _descriptions
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from fastmcp import Context
     from mcp.shared.dispatcher import DispatchContext
     from mcp.shared.transport_context import TransportContext
 
@@ -43,6 +45,22 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
     def channel_link(self) -> ChannelLink:
         """The link to the live client, for whatever sends channel events."""
         return ChannelLink()
+
+    @staticmethod
+    async def capture_handshake_session(ctx: Context | None) -> None:
+        """Store the session the handshake opened (``CaptureSession`` in the model).
+
+        A session that cannot be read is logged, not hidden: in channel mode it
+        is the only session there will be, and every notification would stay
+        owed.
+        """
+        session = None
+        with suppress(RuntimeError):
+            session = ctx.session if ctx is not None else None
+        if session is None:
+            logger.warning("Handshake session not captured; changes stay owed")
+        else:
+            await _descriptions.handshake_delivery.capture_session(session)
 
     def run_stdio(self) -> None:
         """Serve stdio, as a channel when the plugin asked for it.
@@ -80,7 +98,7 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
                 stdio_server() as (read_stream, write_stream),
             ):
                 dispatcher: JSONRPCDispatcher[TransportContext] = JSONRPCDispatcher(
-                    read_stream,
+                    link.observe_reads(read_stream),
                     link.observe(write_stream),
                     inline_methods=frozenset({"initialize"}),
                     on_stream_exception=_log_malformed_input,
@@ -94,29 +112,33 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
                     await dispatcher.run(gate.on_request, runner.on_notify)
                 finally:
                     link.detach()
-                    await aclose_shielded(connection)
-                    # The client must see EOF, and this loop does not close it.
-                    await write_stream.aclose()
+                    try:
+                        await aclose_shielded(connection)
+                    finally:
+                        # The client must see EOF; this loop does not close it.
+                        await write_stream.aclose()
         finally:
             reset_transport(token)
 
 
 async def _log_malformed_input(exc: Exception) -> None:
     """Log a line the client sent that is not valid JSON-RPC."""
-    logger.warning("Ignored malformed client input: %s", type(exc).__name__)
+    logger.warning(
+        "Ignored malformed client input: %s: %.200s", type(exc).__name__, exc
+    )
 
 
 class _HandshakeOnly[LifespanT]:
     """Refuse requests that carry the 2026-07-28 envelope, and log the handshake."""
 
     _runner: ServerRunner[LifespanT]
-    _refusal_logged: bool
+    _refused: set[str]
 
     def __new__(cls, runner: ServerRunner[LifespanT]) -> Self:
         """Gate *runner*; the first refusal is logged, later ones are not."""
         self = super().__new__(cls)
         self._runner = runner
-        self._refusal_logged = False
+        self._refused = set()
         return self
 
     async def on_request(
@@ -129,8 +151,8 @@ class _HandshakeOnly[LifespanT]:
         meta = params.get("_meta") if params else None
         has_envelope = isinstance(meta, dict) and PROTOCOL_VERSION_META_KEY in meta
         if has_envelope and method not in _PASSED_TO_RUNNER:
-            if not self._refusal_logged:
-                self._refusal_logged = True
+            if method not in self._refused:
+                self._refused.add(method)
                 logger.warning("Refused 2026-07-28 request: method=%s", method)
             msg = "this connection serves the handshake era; 2026-07-28 is refused"
             raise MCPError(code=INVALID_REQUEST, message=msg)

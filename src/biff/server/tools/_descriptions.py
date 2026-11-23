@@ -27,7 +27,6 @@ from datetime import UTC, datetime
 from enum import Enum, auto
 from typing import TYPE_CHECKING, NamedTuple, Protocol
 
-from mcp.shared.subscriptions import ToolsListChanged
 from mcp.types import ToolListChangedNotification
 from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 
@@ -106,14 +105,6 @@ _WALL_NOTIFY_RESUBSCRIBE_MESSAGES = LatchMessages(
 _NOTIFY_SEND_TIMEOUT = 3.0
 
 
-async def _publish_tool_change(bus: SubscriptionBus) -> None:
-    try:
-        async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-            await bus.publish(ToolsListChanged())
-    except Exception:
-        logger.warning("Tool list subscription publish failed", exc_info=True)
-
-
 @dataclass
 class _HandshakeDelivery:
     """Track legacy notification debt under one lock (DES-061)."""
@@ -123,9 +114,6 @@ class _HandshakeDelivery:
     # Channel mode serves one connection for the process's life: a failed send
     # keeps its session, and a write the SDK dropped stays owed (DES-087).
     _link: ChannelLink | None = None
-    # Channel mode serves one connection for the process's life, so a failed
-    # send must not forget the only session there will ever be (DES-087).
-    keep_session: bool = False
     # Hold across send and debt update so a concurrent success cannot erase a drop.
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -145,7 +133,7 @@ class _HandshakeDelivery:
             bus: Server event bus, or None to send the handshake notification only.
         """
         if bus is not None:
-            await _publish_tool_change(bus)
+            await ListChanged(_NOTIFY_SEND_TIMEOUT, None).publish(bus)
 
         from fastmcp.server.dependencies import get_context  # noqa: PLC0415
 
@@ -159,15 +147,17 @@ class _HandshakeDelivery:
                 await self._notify_standalone()
         elif ctx.session.protocol_version not in MODERN_PROTOCOL_VERSIONS:
             async with self._lock:
-                try:
-                    async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-                        await ctx.send_notification(ToolListChangedNotification())
-                except Exception:
-                    logger.warning("Tool list push failed in request", exc_info=True)
-                    self._pending_notify = True
-                else:
-                    self._pending_notify = False
+                sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(
+                    lambda: ctx.send_notification(ToolListChangedNotification())
+                )
+                self._pending_notify = not sent.delivered
                 self._session = ctx.session
+
+    async def flush_owed(self) -> None:
+        """Retry a notification a single connection still owes (DES-087)."""
+        async with self._lock:
+            if self._link is not None and self._pending_notify:
+                await self._notify_standalone()
 
     def serve_single_connection(self, link: ChannelLink) -> None:
         """Serve one connection for the process's life, observed through *link*.
@@ -180,7 +170,9 @@ class _HandshakeDelivery:
         self._pending_notify = True
         if self._session is None:
             return
-        sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(self._session)
+        sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(
+            self._session.send_tool_list_changed
+        )
         self._pending_notify = not sent.delivered
         self._session = self._session if sent.keep_session else None
 
@@ -939,6 +931,7 @@ async def _active_tick(
 
     Returns updated ``(count, wall_key, talk_signal)`` tracking state.
     """
+    await handshake_delivery.flush_owed()
     if _relay_pushes_inbox_notify(state):
         if gate.claim():
             ok = await refresh_read_messages(mcp, state)

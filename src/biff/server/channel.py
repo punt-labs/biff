@@ -5,15 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Callable, Mapping, MutableMapping
 from types import TracebackType
 from typing import Protocol, Self
 
 import anyio
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCNotification
-
-from biff.talk_latch import LatchMessages, TalkNotifyLatch
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +24,6 @@ CHANNEL_SEND_TIMEOUT = 3.0
 
 class ChannelUnavailableError(Exception):
     """No live client stream can carry the event."""
-
-
-_SEND_FAILED = LatchMessages(
-    onset="Tool list change not delivered; session kept, will retry",
-    retry="Tool list change still not delivered; session kept",
-    recovery="Tool list change delivered again",
-)
 
 
 def take_channel_mode(
@@ -62,6 +53,83 @@ class _Sink(Protocol):
 
     async def aclose(self) -> None:
         """Close the stream."""
+
+
+class _Source(Protocol):
+    """The read operations the dispatcher uses on a session-message stream."""
+
+    async def __anext__(self) -> SessionMessage | Exception:
+        """Return the next message."""
+        ...
+
+    async def receive(self) -> SessionMessage | Exception:
+        """Return the next message, or raise at the end of the stream."""
+        ...
+
+    async def aclose(self) -> None:
+        """Close the stream."""
+
+
+class ObservedReadStream:
+    """A read stream that reports when the client's input ends.
+
+    After end of input the SDK's dispatcher stops writing but keeps running
+    until its handlers finish, so a link that waits for ``run`` to return would
+    report open while every write is dropped.
+    """
+
+    _inner: _Source
+    _on_end: Callable[[], None]
+
+    def __new__(cls, inner: _Source, on_end: Callable[[], None]) -> Self:
+        """Wrap *inner*, calling *on_end* once when it ends."""
+        self = super().__new__(cls)
+        self._inner = inner
+        self._on_end = on_end
+        return self
+
+    @property
+    def last_context(self) -> object:
+        """The sender's context for the last message, which the SDK restores."""
+        return getattr(self._inner, "last_context", None)
+
+    def __aiter__(self) -> Self:
+        """Iterate messages until the input ends."""
+        return self
+
+    async def __anext__(self) -> SessionMessage | Exception:
+        """Return the next message, reporting the end of input."""
+        try:
+            return await self._inner.__anext__()
+        except (StopAsyncIteration, anyio.ClosedResourceError):
+            self._on_end()
+            raise StopAsyncIteration from None
+
+    async def receive(self) -> SessionMessage | Exception:
+        """Return the next message, reporting the end of input."""
+        try:
+            return await self._inner.receive()
+        except (anyio.EndOfStream, anyio.ClosedResourceError):
+            self._on_end()
+            raise
+
+    async def aclose(self) -> None:
+        """Close the stream."""
+        self._on_end()
+        await self._inner.aclose()
+
+    async def __aenter__(self) -> Self:
+        """Enter the wrapped stream's context."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Close on exit, as the SDK's streams do."""
+        await self.aclose()
 
 
 class ObservedWriteStream:
@@ -119,19 +187,20 @@ class ChannelLink:
     """The server's live client stream, narrowed to sending channel events.
 
     ``serve_channel_stdio`` wraps the connection's write stream with
-    :meth:`observe`, so a write the SDK drops marks the link closed.  A closed
-    stream raises ``ChannelUnavailableError`` and a blocked write raises
+    :meth:`observe` and the read stream with :meth:`observe_reads`, so a write
+    the SDK drops, or the end of the client's input, marks the link closed.  A
+    closed stream raises ``ChannelUnavailableError`` and a blocked write raises
     ``TimeoutError``.
     """
 
     _stream: ObservedWriteStream | None
-    _failures: TalkNotifyLatch
+    _failing: set[str]
 
     def __new__(cls) -> Self:
         """Create a link with no stream attached."""
         self = super().__new__(cls)
         self._stream = None
-        self._failures = TalkNotifyLatch(logger, _SEND_FAILED)
+        self._failing = set()
         return self
 
     @property
@@ -144,12 +213,20 @@ class ChannelLink:
         self._stream = ObservedWriteStream(write_stream)
         return self._stream
 
+    def observe_reads(self, read_stream: _Source) -> ObservedReadStream:
+        """Return *read_stream* wrapped so that its end closes the link."""
+        return ObservedReadStream(read_stream, self.detach)
+
     def detach(self) -> None:
         """Forget the stream once its connection has ended."""
         self._stream = None
 
     async def send(self, content: str, meta: Mapping[str, str]) -> None:
         """Send one ``notifications/claude/channel`` event.
+
+        A normal return means the event was handed to the stdout writer task,
+        not that the client read it: the stdio write stream has no buffer, so a
+        later ``BrokenPipeError`` surfaces in that task, not here.
 
         Raises:
             ChannelUnavailableError: No stream is attached, or it is closed.
@@ -178,15 +255,18 @@ class ChannelLink:
             msg = "a write to the client was dropped"
             raise ChannelUnavailableError(msg)
 
-    def delivered(self) -> None:
-        """Record a successful send, logging recovery once after a failure."""
-        self._failures.record_success()
+    def delivered(self, what: str) -> None:
+        """Record that *what* was sent, logging recovery once after a failure."""
+        if what in self._failing:
+            self._failing.discard(what)
+            logger.info("%s delivered again", what)
 
-    def failed(self, exc: Exception) -> None:
-        """Log an expected send failure once per episode; re-raise any other.
-
-        A code bug must not be absorbed into a retry loop.
-        """
-        if not isinstance(exc, (TimeoutError, ChannelUnavailableError)):
-            raise exc
-        self._failures.record_failure()
+    def failed(self, what: str, exc: Exception) -> None:
+        """Log that *what* was not delivered: once per episode, naming the cause."""
+        if what in self._failing:
+            logger.debug("%s still not delivered: %r", what, exc)
+            return
+        self._failing.add(what)
+        logger.warning(
+            "%s not delivered: %s: %s; will retry", what, type(exc).__name__, exc
+        )

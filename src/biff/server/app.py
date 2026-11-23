@@ -142,9 +142,7 @@ class _SessionCaptureMiddleware(Middleware):
         call_next: CallNext[InitializeRequest, InitializeResult | None],
     ) -> InitializeResult | None:
         result = await call_next(context)
-        if (ctx := context.fastmcp_context) is not None:
-            with suppress(RuntimeError):
-                await _descriptions.handshake_delivery.capture_session(ctx.session)
+        await ChannelServer.capture_handshake_session(context.fastmcp_context)
         return result
 
 
