@@ -398,6 +398,11 @@ class LocalRelay:
         # once per heartbeat tick, which runs on a fixed interval forever.
         self._heartbeat_missing_warned: set[str] = set()
 
+    @property
+    def data_dir(self) -> Path:
+        """The directory this relay keeps its files in."""
+        return self._data_dir
+
     @staticmethod
     def _ensure_dir(data_dir: Path) -> None:
         """Create *data_dir* 0700, tightening it if it already exists.

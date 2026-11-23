@@ -16,10 +16,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from biff.config import find_git_root, is_enabled, resolve_relay_config
-from biff.models import RelayAuth
 from biff.plugins.contract import CheckResult
+from biff.relay_check import LocalRelayCheck
 
 if TYPE_CHECKING:
+    from biff.models import RelayAuth
     from biff.plugins.contract import PluginRegistry
 
 PLUGIN_ID = "biff@punt-labs"
@@ -231,7 +232,7 @@ def _check_relay() -> CheckResult:
 
     relay_url, relay_auth, tls = _resolve_relay_config()
     if relay_url is None:
-        return CheckResult("Relay", True, "local filesystem relay (no network)")
+        return LocalRelayCheck.of(find_git_root())
     # A NATS URL may embed user:pass@ -- doctor's success/failure messages
     # go straight to the operator's terminal, so they must never echo the
     # raw credential-bearing URL.
@@ -241,8 +242,9 @@ def _check_relay() -> CheckResult:
         reachable = asyncio.run(
             _test_nats_connection(relay_url, relay_auth, tls_handshake_first=tls)
         )
-    except Exception:  # noqa: BLE001
-        return CheckResult("NATS relay", False, f"connection error ({host})")
+    except Exception as exc:  # noqa: BLE001
+        detail = f"{type(exc).__name__}: {str(exc).replace(relay_url, host)}"
+        return CheckResult("NATS relay", False, f"connection error ({host}): {detail}")
 
     return CheckResult("NATS relay", reachable, f"{_REACHABILITY[reachable]} ({host})")
 
@@ -275,12 +277,7 @@ def _check_enabled() -> CheckResult:
     """
     repo_root = find_git_root()
     if repo_root is None:
-        return CheckResult(
-            "Enabled",
-            False,
-            "not in a git repo",
-            required=False,
-        )
+        return CheckResult("Enabled", False, "not in a git repo", required=False)
     if is_enabled(repo_root):
         return CheckResult(
             "Enabled", True, "yes (.punt-labs/biff/enabled)", required=False
@@ -297,12 +294,7 @@ def _check_git_hooks() -> CheckResult:
     """Check biff git hooks are deployed (informational)."""
     repo_root = find_git_root()
     if repo_root is None:
-        return CheckResult(
-            "Git hooks",
-            False,
-            "not in a git repo",
-            required=False,
-        )
+        return CheckResult("Git hooks", False, "not in a git repo", required=False)
     if not is_enabled(repo_root):
         return CheckResult(
             "Git hooks",

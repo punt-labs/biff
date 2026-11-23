@@ -262,6 +262,7 @@ prefixes = [
     "enablement",
     "git_hooks",
     "integration",
+    "relay_check",
     "repo_toggle",
 ]
 imports = ["kernel", "wire", "engine", "render", "plugins"]
