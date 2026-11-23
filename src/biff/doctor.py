@@ -38,6 +38,8 @@ BIFF_COMMANDS = (
 )
 
 
+_REACHABILITY = {True: "reachable", False: "unreachable"}
+
 # Individual checks ----------------------------------------------------------
 
 
@@ -148,7 +150,7 @@ def _check_user_commands(commands_dir: Path | None = None) -> CheckResult:
     )
 
 
-def _resolve_relay_config() -> tuple[str, RelayAuth | None, bool]:
+def _resolve_relay_config() -> tuple[str | None, RelayAuth | None, bool]:
     """Resolve relay settings without requiring user identity.
 
     Delegate to the CLI's file and environment resolution chain so doctor
@@ -222,12 +224,14 @@ async def _test_nats_connection(
 
 
 def _check_relay() -> CheckResult:
-    """Check NATS relay is reachable."""
+    """Check the relay: the local one needs no network, a NATS one must connect."""
     # Lazy import -- keep doctor's module-level imports free of nats_relay
     # (and its eager `import nats`) for checks that don't need it.
     from biff.nats_relay import sanitize_relay_url
 
-    relay_url, relay_auth, tls_handshake_first = _resolve_relay_config()
+    relay_url, relay_auth, tls = _resolve_relay_config()
+    if relay_url is None:
+        return CheckResult("Relay", True, "local filesystem relay (no network)")
     # A NATS URL may embed user:pass@ -- doctor's success/failure messages
     # go straight to the operator's terminal, so they must never echo the
     # raw credential-bearing URL.
@@ -235,16 +239,12 @@ def _check_relay() -> CheckResult:
 
     try:
         reachable = asyncio.run(
-            _test_nats_connection(
-                relay_url, relay_auth, tls_handshake_first=tls_handshake_first
-            )
+            _test_nats_connection(relay_url, relay_auth, tls_handshake_first=tls)
         )
     except Exception:  # noqa: BLE001
         return CheckResult("NATS relay", False, f"connection error ({host})")
 
-    if reachable:
-        return CheckResult("NATS relay", True, f"reachable ({host})")
-    return CheckResult("NATS relay", False, f"unreachable ({host})")
+    return CheckResult("NATS relay", reachable, f"{_REACHABILITY[reachable]} ({host})")
 
 
 def _check_biff_file() -> CheckResult:

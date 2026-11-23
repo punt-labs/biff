@@ -168,10 +168,10 @@ class TestCheckGitHooks:
 
 class TestResolveRelayConfig:
     @patch("biff.doctor.find_git_root", return_value=None)
-    def test_defaults_to_demo_relay(self, _mock: object) -> None:
+    def test_defaults_to_local_relay(self, _mock: object) -> None:
         url, auth, tls_handshake_first = _resolve_relay_config()
-        assert "ngs.global" in url
-        assert auth is not None
+        assert url is None
+        assert auth is None
         assert tls_handshake_first is False
 
     def test_uses_yaml_config(self, tmp_path: Path) -> None:
@@ -221,6 +221,12 @@ class TestResolveRelayConfig:
 
 
 class TestCheckRelay:
+    @patch("biff.doctor._resolve_relay_config", return_value=(None, None, False))
+    def test_local_relay_needs_no_network(self, _mock: object) -> None:
+        result = _check_relay()
+        assert result.passed
+        assert "local filesystem relay" in result.message
+
     @patch("biff.doctor._test_nats_connection", return_value=True)
     @patch("biff.doctor._resolve_relay_config")
     def test_reachable(self, mock_config: object, _mock_conn: object) -> None:

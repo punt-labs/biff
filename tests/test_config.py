@@ -9,14 +9,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from biff._stdlib import _parse_repo_slug
+from biff._stdlib import _parse_repo_slug, biff_data_dir
 from biff.config import (
-    DEMO_RELAY_URL,
     _apply_env_relay_overrides,
     _ConfigFields,
+    _local_relay_dir,
     _resolve_relay_fields,
     _tls_env_override,
-    compute_data_dir,
     extract_biff_fields,
     find_git_root,
     get_repo_slug,
@@ -196,19 +195,18 @@ class TestSanitizeRepoName:
         assert sanitize_repo_name("café") == "caf"
 
 
-# -- compute_data_dir --
-
-
-class TestComputeDataDir:
-    def test_basic(self) -> None:
+class TestLocalRelayDir:
+    def test_remote_repo_is_keyed_by_its_name(self) -> None:
         root = Path("/home/kai/projects/myapp")
-        result = compute_data_dir(root, Path("/tmp"))
-        assert result == Path("/tmp/biff/myapp")
+        path = _local_relay_dir("org__myapp", root, has_remote=True)
+        assert path == biff_data_dir() / "relay" / "org__myapp"
 
-    def test_var_spool_prefix(self) -> None:
+    def test_repo_without_remote_gets_a_path_digest(self) -> None:
         root = Path("/home/kai/projects/myapp")
-        result = compute_data_dir(root, Path("/var/spool"))
-        assert result == Path("/var/spool/biff/myapp")
+        path = _local_relay_dir("myapp", root, has_remote=False)
+        assert path.parent == biff_data_dir() / "relay"
+        assert path.name.startswith("myapp-")
+        assert len(path.name) == len("myapp-") + 8
 
 
 # -- extract_biff_fields (auth) --
@@ -402,14 +400,9 @@ class TestLoadCliConfig:
         assert resolved.config.display_name == "Kai Chen"
         assert resolved.config.team == ("kai", "eric")
         assert resolved.config.relay_url == "nats://localhost:4222"
-        assert resolved.data_dir == Path("/tmp/biff") / repo.name
+        assert resolved.data_dir.parent == biff_data_dir() / "relay"
+        assert resolved.data_dir.name.startswith(f"{repo.name}-")
         assert resolved.repo_root == repo
-
-    @patch("biff.identity.get_github_identity", return_value=_KAI)
-    def test_custom_prefix(self, _mock_gh: object, tmp_path: Path) -> None:
-        repo = _setup_repo_with_yaml(tmp_path)
-        resolved = load_cli_config(start=repo, prefix=Path("/var/spool"))
-        assert resolved.data_dir == Path("/var/spool/biff") / repo.name
 
     @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_data_dir_override(self, _mock_gh: object, tmp_path: Path) -> None:
@@ -488,14 +481,14 @@ class TestLoadCliConfig:
             load_cli_config(start=tmp_path)
 
     @patch("biff.identity.get_github_identity", return_value=_KAI)
-    def test_zero_config_uses_demo_relay(
+    def test_zero_config_uses_local_relay(
         self, _mock_gh: object, tmp_path: Path
     ) -> None:
         (tmp_path / ".git").mkdir()
         resolved = load_cli_config(start=tmp_path)
         assert resolved.config.team == ()
-        assert resolved.config.relay_url == DEMO_RELAY_URL
-        assert resolved.config.relay_auth is not None
+        assert resolved.config.relay_url is None
+        assert resolved.config.relay_auth is None
 
     @patch("biff.config.find_git_root", return_value=None)
     @patch("biff.identity.get_github_identity", return_value=_KAI)
@@ -819,13 +812,13 @@ class TestLoadMcpConfig:
             load_mcp_config(start=tmp_path)
 
     @patch("biff.identity.get_github_identity", return_value=_KAI)
-    def test_zero_config_uses_demo_relay(
+    def test_zero_config_uses_local_relay(
         self, _mock_gh: object, tmp_path: Path
     ) -> None:
         (tmp_path / ".git").mkdir()
         resolved = load_mcp_config(start=tmp_path)
-        assert resolved.config.relay_url == DEMO_RELAY_URL
-        assert resolved.config.relay_auth is not None
+        assert resolved.config.relay_url is None
+        assert resolved.config.relay_auth is None
 
 
 # -- _apply_env_relay_overrides --
@@ -992,7 +985,7 @@ class TestApplyEnvRelayOverrides:
         """Env-only auth override (no URL) leaves TLS and URL as file-resolved.
 
         The file must already resolve a relay URL (or the auth override
-        would fall through to the demo relay -- rejected by the fail-fast
+        would fall through to the local relay -- rejected by the fail-fast
         check this same override function performs).
         """
         monkeypatch.setenv("BIFF_RELAY_TOKEN", "rotated-token")
@@ -1119,24 +1112,24 @@ class TestApplyEnvRelayOverrides:
         result = _apply_env_relay_overrides(cf)
         assert result.relay_tls_handshake_first is True
 
-    def test_auth_only_no_url_fails_fast_instead_of_demo_relay(
+    def test_auth_only_no_url_fails_fast_instead_of_local_relay(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """an auth-only override with no
         resolved relay URL must raise, not silently resolve to the demo
-        relay via _apply_demo_relay_default -- this is the exact CI
+        relay -- this is the exact CI
         misconfiguration shape (missing/typo'd vars.BIFF_RELAY_URL) that
-        would otherwise leak a real CI token to the shared public relay.
+        would otherwise leave a real CI token unused with no error.
         """
         monkeypatch.setenv("BIFF_RELAY_TOKEN", "real-ci-secret")
         with pytest.raises(SystemExit, match="BIFF_RELAY_TOKEN"):
             _apply_env_relay_overrides(_ConfigFields())
 
-    def test_auth_only_no_url_error_does_not_name_demo_relay_as_fallback(
+    def test_auth_only_no_url_never_resolves_through_the_full_chain(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """End-to-end: the auth-only-no-URL misconfiguration must never
-        resolve to DEMO_RELAY_URL -- verified via the full resolution
+        """End-to-end: the auth-only-no-URL misconfiguration must raise,
+        not resolve to the local relay -- verified via the full resolution
         chain, not just the raw override function."""
         monkeypatch.setenv("BIFF_RELAY_TOKEN", "real-ci-secret")
         with pytest.raises(SystemExit):

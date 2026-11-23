@@ -41,9 +41,8 @@ async def test_unstamped_tools_use_startup_presence_only_when_opted_in(
     ):
         server = McpServerOptions(
             user="devin" if enabled else None,
-            data_dir=None,
+            data_dir=tmp_path,
             relay_url="",
-            prefix=tmp_path,
         ).create_server(CliInvocation.repo_toggle())
     state = cast("ServerState", factory.call_args.args[0])
     if enabled:

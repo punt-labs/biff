@@ -23,14 +23,18 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from biff.cli_context import CliContext
 from biff.cli_session_host import SessionHost
 from biff.cli_session_select import SessionSelector
 from biff.config import ResolvedConfig, load_cli_config
 from biff.nats_relay import NatsRelay
-from biff.relay import Relay
+from biff.relay_select import RelaySelector
 from biff.tty import get_hostname, get_pwd
+
+if TYPE_CHECKING:
+    from biff.relay import Relay
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +79,17 @@ class HostHandle:
 
     host: SessionHost
     resolved: ResolvedConfig
-    relay: NatsRelay
+    relay: Relay
+
+    async def org_repos(self) -> frozenset[str]:
+        """Return the repos of the configured orgs (DES-034); only NATS knows them."""
+        orgs = self.resolved.config.orgs
+        if not (orgs and isinstance(self.relay, NatsRelay)):
+            return frozenset[str]()
+        found = await asyncio.gather(
+            *(self.relay.discover_repos_for_org(org) for org in orgs)
+        )
+        return frozenset[str]().union(*found)
 
 
 @asynccontextmanager
@@ -90,21 +104,7 @@ async def cli_session_host(
     resolved = load_cli_config(user_override=user_override, start=start)
     config = resolved.config
 
-    if not config.relay_url:
-        msg = (
-            "CLI commands require a NATS relay. "
-            "Configure relay.url in .punt-labs/biff/config.yaml "
-            "or .punt-labs/biff/config.local.yaml"
-        )
-        raise ValueError(msg)
-
-    relay = NatsRelay(
-        url=config.relay_url,
-        auth=config.relay_auth,
-        tls_handshake_first=config.relay_tls_handshake_first,
-        name=f"biff-cli-{config.user}",
-        repo_name=config.repo_name,
-    )
+    relay = RelaySelector(config, resolved.data_dir).select(dormant=False)
     try:
         host = SessionHost(
             relay=relay,
@@ -144,18 +144,7 @@ async def cli_session(
             attached = await handle.host.resolve(session_ref)
             session_key = attached.routing.session_key(config.user)
 
-            # Org discovery (DES-034): discover repos for configured orgs.
-            org_repos = frozenset[str]()
-            if config.orgs:
-                org_results: list[frozenset[str]] = list(
-                    await asyncio.gather(
-                        *(
-                            handle.relay.discover_repos_for_org(org)
-                            for org in config.orgs
-                        )
-                    )
-                )
-                org_repos = frozenset[str]().union(*org_results)
+            org_repos = await handle.org_repos()
 
             if interactive:
                 record = attached.record
