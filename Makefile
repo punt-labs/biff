@@ -56,17 +56,20 @@ test-docker: ## Build the relay image and run tests against it
 
 test-e2e: test-wheel test-cli-multi-user test-nats-local ## Run installed-wheel and local NATS end-to-end tests
 
-test-nightly: test-subprocess test-cli-multi-user test-nats-local ## Run broader credential-free suites
+test-nightly: ## Run broader credential-free suites, reporting every suite
+	@status=0; for suite in test-subprocess test-cli-multi-user test-nats-local; do \
+		$(MAKE) --no-print-directory $$suite || status=1; \
+	done; exit $$status
 
 test-quarantine: ## List quarantines; an empty selection is expected
 	@uv run pytest --collect-only -m quarantine || [ "$$?" = 5 ]
 
 test-live: ## Run hosted NATS tests (requires BIFF_TEST_NATS_URL and auth)
-	@test -n "$${BIFF_TEST_NATS_URL:-}" || { echo "Set BIFF_TEST_NATS_URL and one BIFF_TEST_NATS_* auth variable" >&2; exit 1; }
+	@test -n "$${BIFF_TEST_NATS_URL:-}" -a -n "$${BIFF_TEST_NATS_TOKEN:-}$${BIFF_TEST_NATS_NKEYS_SEED:-}$${BIFF_TEST_NATS_CREDS:-}" || { echo "Set BIFF_TEST_NATS_URL and one BIFF_TEST_NATS_* auth variable" >&2; exit 1; }
 	uv run pytest -m 'nats_hosted and not stress and not quarantine'
 
 test-stress: ## Run hosted NATS scale tests (same prerequisites as test-live)
-	@test -n "$${BIFF_TEST_NATS_URL:-}" || { echo "Set BIFF_TEST_NATS_URL and one BIFF_TEST_NATS_* auth variable" >&2; exit 1; }
+	@test -n "$${BIFF_TEST_NATS_URL:-}" -a -n "$${BIFF_TEST_NATS_TOKEN:-}$${BIFF_TEST_NATS_NKEYS_SEED:-}$${BIFF_TEST_NATS_CREDS:-}" || { echo "Set BIFF_TEST_NATS_URL and one BIFF_TEST_NATS_* auth variable" >&2; exit 1; }
 	uv run pytest -m 'stress and not quarantine'
 
 test-agent: ## Drive real Claude sessions through biff (requires ANTHROPIC_API_KEY)
