@@ -167,6 +167,15 @@ class DisplayQueue:
         self._slot_start = self._clock()
         return True
 
+    def seconds_until_expiry(self) -> float | None:
+        """Seconds until the earliest item expires, or ``None`` if none will.
+
+        Negative once an item is past its expiry and not yet purged; does not
+        purge, so a caller can tell that an item is due.
+        """
+        due = [i.expires_at for i in self._items if i.expires_at is not None]
+        return min(due) - self._clock() if due else None
+
     def snapshot(self) -> list[DisplayItem]:
         """Return a shallow copy of the queue with expired items removed."""
         self._purge_expired()

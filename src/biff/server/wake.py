@@ -11,14 +11,15 @@ thread must go through ``loop.call_soon_threadsafe``.
 from __future__ import annotations
 
 import asyncio
-from contextlib import AbstractContextManager, nullcontext
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Self
 
-from biff.local_watch import LocalWatch
+from biff.local_watch import LocalWatch, WatchKeeper
 from biff.relay import LocalRelay
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from biff.relay import Relay
 
 
@@ -27,7 +28,7 @@ class WakeOutcome(Enum):
 
     SHUTDOWN = auto()  # shutdown fired — the poller must exit
     EVENT = auto()  # the signal fired before the timeout — an arrival
-    TIMEOUT = auto()  # neither fired — the liveness interval simply elapsed
+    TIMEOUT = auto()  # neither fired — a liveness or deadline interval elapsed
 
     @property
     def is_shutdown(self) -> bool:
@@ -68,17 +69,17 @@ class WakeSignal:
         """Ask the poller to run its next pass now."""
         self._event.set()
 
-    def watching(self, relay: Relay) -> AbstractContextManager[object]:
-        """Return what wakes this signal when *relay* has an arrival.
+    def watching(self, relay: Relay, *extra: Path) -> WatchKeeper:
+        """Return the keeper of the watches that wake this signal.
 
         The local relay has no push, so a watch on its data directory is how an
-        arrival reaches the poller without a timer (DES-087).  Enter it from
-        the event loop.  A NATS-backed relay is woken by its subscriptions
-        instead, so there is nothing to watch.
+        arrival reaches the poller without a timer (DES-087).  *extra* names
+        further directories to watch (the shutdown-sentinel directory).  A
+        NATS-backed relay is woken by its subscriptions instead.  Call it from
+        the event loop; the watches are not started.
         """
-        if isinstance(relay, LocalRelay):
-            return LocalWatch(relay.data_dir, self.wake)
-        return nullcontext()
+        dirs = (relay.data_dir, *extra) if isinstance(relay, LocalRelay) else extra
+        return WatchKeeper(tuple(LocalWatch(d, self.wake) for d in dirs))
 
     async def wait(
         self, *, timeout: float | None, shutdown: asyncio.Event | None

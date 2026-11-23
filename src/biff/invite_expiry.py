@@ -30,6 +30,11 @@ class InviteExpiry:
         self._ttl = ttl
         return self
 
+    @property
+    def ttl(self) -> float:
+        """Seconds an invite lives."""
+        return self._ttl
+
     def pending(
         self, invites: Mapping[str, PendingInvite], clock: float
     ) -> dict[str, PendingInvite]:

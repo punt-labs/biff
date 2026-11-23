@@ -22,7 +22,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum, auto
 from typing import TYPE_CHECKING, NamedTuple, Protocol
@@ -48,6 +48,8 @@ class _WallLookup(Enum):
 
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from fastmcp import FastMCP
     from mcp.server.session import ServerSession
     from mcp.server.subscriptions import SubscriptionBus
@@ -58,12 +60,20 @@ logger = logging.getLogger(__name__)
 
 _READ_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
 
-# The one timer the poller keeps: how often a NATS-backed poller checks that
-# its always-on subscriptions are bound to the live client.  It is part of
-# connection liveness (DES-041, DES-042, DES-087), not a cadence for finding
-# arrivals — see ``WakeSignal.wait``.  A client replacement leaves every SUB
-# orphaned until this check rebinds it, so it bounds that gap.
+# The poller's timers (DES-087).  Both are connection liveness, not a cadence
+# for finding arrivals — see ``WakeSignal.wait``:
+#
+# * a NATS-backed poller checks every ``SUB_RECONCILE_INTERVAL`` that its
+#   always-on subscriptions are bound to the live client (a client replacement
+#   leaves every SUB orphaned until this check rebinds it);
+# * a local-relay poller checks every ``WATCH_LIVENESS_INTERVAL`` that its
+#   filesystem watch is still running and still on the right directory.
+#
+# The third wait is a one-shot deadline wake, armed only while something with
+# an expiry is displayed (a wall, a talk invite); see ``_seconds_until_deadline``.
 SUB_RECONCILE_INTERVAL = 5.0
+WATCH_LIVENESS_INTERVAL = 60.0
+_MIN_WAIT = 0.05  # a deadline already due never spins the loop
 
 
 # Wording for the inbox-notify always-on SUB's re-subscribe latch (DES-062),
@@ -568,9 +578,10 @@ class _InboxPokeGate:
     ``_active_tick``, which calls :meth:`claim` once per tick.
 
     :meth:`claim` is true when a poke has arrived since the last
-    recompute.  There is no timer backstop (DES-087): a poke lost while the
-    connection was down is recovered by the reconnect catch-up, and an
-    explicit read recomputes the count.  It clears the poke in the same
+    recompute.  There is no timer backstop (DES-087), so a core-NATS poke
+    that was dropped is not recovered by this gate: the reconnect catch-up
+    covers the gap while the connection was down, and otherwise the next
+    explicit ``read_messages`` recomputes the count.  It clears the poke in the same
     synchronous step as the check, *before* the caller's own ``await`` on
     the actual refresh: a poke that arrives while that refresh is still in
     flight sets ``_poked`` again, which nothing after the clear can
@@ -879,6 +890,7 @@ class _Seen:
     unread: int = -1  # the local relay's count comparison only
     wall: tuple[str, str] = ("", "")
     talk: tuple[tuple[str, ...], int, str] = ((), -1, "")
+    failed: bool = False  # the last pass raised; the liveness pass retries it
 
 
 async def _active_tick(
@@ -887,10 +899,14 @@ async def _active_tick(
     seen: _Seen,
     *,
     gate: _InboxPokeGate,
+    due: bool = False,
 ) -> _Seen:
     """One poller pass: check inbox, wall, and talk changes.
 
-    Runs because something woke the poller, never on a schedule.
+    Runs because something woke the poller: an arrival, a deadline (*due*:
+    a displayed wall or invite has reached its expiry, so the wall and talk
+    descriptions are re-rendered whether or not the keys changed), or the
+    liveness pass.  Never a fixed cadence.
 
     Unread recompute is poke-gated (DES-062) for a NATS-backed relay, not
     unconditional: broadcast and targeted messages alike push a wake poke,
@@ -927,7 +943,7 @@ async def _active_tick(
         if current_wall
         else ("", "")
     )
-    if wall_key != last_wall:
+    if wall_key != last_wall or due:
         last_wall = wall_key
         await refresh_wall(mcp, state, wall=current_wall)
 
@@ -935,11 +951,28 @@ async def _active_tick(
     # (new invite, queued message, phase transition).  Reading the state
     # ages out a stale invite (``TalkState.expire_stale_invites``).
     talk_key = talk_signal(state.talk)
-    if talk_key != last_talk:
+    if talk_key != last_talk or due:
         last_talk = talk_key
         await refresh_talk(mcp, state)
 
+    if due:
+        state.display_queue.snapshot()  # purge what has expired
     return _Seen(unread=last_count, wall=last_wall, talk=last_talk)
+
+
+def _seconds_until_deadline(state: ServerState) -> float | None:
+    """Seconds until the earliest displayed expiry, or ``None`` if nothing expires.
+
+    A displayed wall and a held talk invite each end at a known time and
+    nothing else would clear them, so the poller arms one one-shot wake for the
+    earliest (DES-087).  With nothing displayed there is no deadline and no timer.
+    """
+    waits = (
+        state.display_queue.seconds_until_expiry(),
+        state.talk.seconds_until_invite_expiry(),
+    )
+    due = [w for w in waits if w is not None]
+    return min(due) if due else None
 
 
 async def _safe_tick(
@@ -948,25 +981,30 @@ async def _safe_tick(
     seen: _Seen,
     *,
     gate: _InboxPokeGate,
+    due: bool = False,
 ) -> _Seen:
     """Wrap ``_active_tick`` with error handling.
 
-    A transient NATS error must not kill the poller — log and retry
-    on the next wake.  ``CancelledError`` is re-raised so shutdown
-    propagates correctly.
-
-    Logged at DEBUG, not WARNING: a NATS wedge would otherwise spam a
-    warning per wake.  The relay's
-    ``_ConnectionHealth`` is the single source of onset/recovery
-    warnings — it logs the wedge once, not once per tick.
+    A relay error must not kill the poller.  The failure is logged at WARNING
+    once when it starts and once when the pass succeeds again; the pass is
+    retried on the liveness wake (``_Seen.failed``).  ``CancelledError`` is
+    re-raised so shutdown propagates correctly.
     """
     try:
-        return await _active_tick(mcp, state, seen, gate=gate)
+        result = await _active_tick(mcp, state, seen, gate=gate, due=due)
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.debug("Poller tick failed, will retry", exc_info=True)
-        return seen
+        if seen.failed:
+            logger.debug("Poller tick still failing", exc_info=True)
+        else:
+            logger.warning(
+                "Poller tick failed; retrying on the liveness pass", exc_info=True
+            )
+        return replace(seen, failed=True)
+    if seen.failed:
+        logger.warning("Poller tick recovered")
+    return result
 
 
 async def poll_inbox(
@@ -974,21 +1012,29 @@ async def poll_inbox(
     state: ServerState,
     *,
     shutdown: asyncio.Event | None = None,
+    reap: Callable[[], Awaitable[None]] | None = None,
+    watch_dirs: tuple[Path, ...] = (),
 ) -> None:
     """Background task: react to arrivals, refresh notifications on change.
 
     Runs for the lifetime of the MCP server and does work only when woken:
     by a NATS push (talk frame, inbox poke, wall poke), by a KV watcher,
-    or — for the local relay — by a file change in its data directory
-    (:meth:`~biff.relay.LocalRelay.watch`).  Nothing schedules a pass
-    (DES-087): the wall's remaining time, a talk invite's age and the unread
-    count are computed when read, and an explicit ``read_messages`` call
-    recomputes the count.
+    or by a file change in a watched directory (the local relay's data
+    directory and *watch_dirs*, via :class:`~biff.local_watch.WatchKeeper`).
+    *reap* runs on every pass (the shutdown-sentinel reaper).  Nothing runs
+    on a fixed cadence (DES-087).  The unread count is recomputed on a push,
+    and an explicit ``read_messages`` recomputes it too.
 
-    The one timer is connection liveness.  A NATS-backed poller wakes every
-    ``SUB_RECONCILE_INTERVAL`` to rebind its always-on subscriptions to the
-    live client, and to retry an unread refresh that failed; it runs no
-    other work then.  A filesystem relay has no subscriptions and no timer.
+    The timers are all one-shot waits on the same signal: the liveness check
+    (``SUB_RECONCILE_INTERVAL`` for NATS, which rebinds the always-on
+    subscriptions; ``WATCH_LIVENESS_INTERVAL`` for a watch, which rebuilds it
+    if it died) and a deadline wake while a wall or talk invite is displayed,
+    which re-renders both when the earliest expires.  A liveness wake also
+    retries a pass that failed and runs one after a watch was rebuilt, since
+    arrivals during the gap were unseen.
+
+    A watch that cannot start is logged at ERROR and retried on the liveness
+    pass; it never ends this task.
 
     Every wake interrupts the sleep immediately via ``state.wake``, so
     push-to-refresh latency is bounded by actual network/processing time.
@@ -1008,8 +1054,13 @@ async def poll_inbox(
     """
     seen = _Seen()
     gate = _InboxPokeGate()
-    liveness_timeout = (
-        SUB_RECONCILE_INTERVAL if _relay_pushes_inbox_notify(state) else None
+    keeper = state.wake.watching(state.relay, *watch_dirs)
+    liveness = (
+        SUB_RECONCILE_INTERVAL
+        if _relay_pushes_inbox_notify(state)
+        else WATCH_LIVENESS_INTERVAL
+        if keeper.watching
+        else None
     )
     talk_latch = TalkNotifyLatch.for_resubscribe(logger)
     inbox_notify_latch = TalkNotifyLatch(logger, _INBOX_NOTIFY_RESUBSCRIBE_MESSAGES)
@@ -1018,58 +1069,74 @@ async def poll_inbox(
     inbox_notify_sub: SubscriptionBinding | None = None
     wall_notify_sub: SubscriptionBinding | None = None
 
-    with state.wake.watching(state.relay):
-        try:
-            # Bind each subscription inside the cleanup scope so cancellation
-            # during the next await cannot leak an established subscription.
-            talk_sub = await subscribe_talk(state, talk_latch, gate)
-            inbox_notify_sub = await subscribe_inbox_notify(
-                state, inbox_notify_latch, gate
+    try:
+        await asyncio.to_thread(keeper.start)
+        # Bind each subscription inside the cleanup scope so cancellation
+        # during the next await cannot leak an established subscription.
+        talk_sub = await subscribe_talk(state, talk_latch, gate)
+        inbox_notify_sub = await subscribe_inbox_notify(state, inbox_notify_latch, gate)
+        wall_notify_sub = await subscribe_wall_notify(state, wall_notify_latch)
+        state.wake.wake()  # the first pass
+        while shutdown is None or not shutdown.is_set():
+            deadline = None if seen.failed else _seconds_until_deadline(state)
+            waits = [w for w in (liveness, deadline) if w is not None]
+            outcome = await state.wake.wait(
+                timeout=max(min(waits), _MIN_WAIT) if waits else None,
+                shutdown=shutdown,
             )
-            wall_notify_sub = await subscribe_wall_notify(state, wall_notify_latch)
-            state.wake.wake()  # the first pass
-            while shutdown is None or not shutdown.is_set():
-                outcome = await state.wake.wait(
-                    timeout=liveness_timeout, shutdown=shutdown
-                )
-                if outcome.is_shutdown:
-                    return
+            if outcome.is_shutdown:
+                return
 
-                # A TIMEOUT is purely the liveness check WakeSignal.wait
-                # documents: it exists to keep the SUB reconcile below
-                # alive, and to retry a failed unread refresh (the gate
-                # re-marks itself), not to find arrivals.
-                if outcome.is_arrival or gate.pending:
-                    seen = await _safe_tick(mcp, state, seen, gate=gate)
+            rebuilt = False
+            if not outcome.is_arrival and keeper.watching:
+                rebuilt = await asyncio.to_thread(keeper.check)
+            after = _seconds_until_deadline(state)
+            due = after is not None and after <= 0
+            if outcome.is_arrival or gate.pending or seen.failed or rebuilt or due:
+                seen = await _safe_tick(mcp, state, seen, gate=gate, due=due)
+            if reap is not None:
+                await _safe_reap(reap)
 
-                # Keep the always-on SUBs bound to the live client — AFTER the
-                # tick, not before. The tick's relay calls are what can trigger
-                # the wedge teardown (_force_reconnect / _on_closed) that
-                # advances connection_generation and orphans a SUB on the dead
-                # client. Reconciling here rebinds a same-tick client swap
-                # immediately. Also retries a failed initial subscribe (NATS
-                # down at startup) and re-subscribes after a client replacement
-                # whose new client carries no SUB. Cheap: a generation compare
-                # when nothing changed.
-                talk_sub = await _reconcile_talk_sub(state, talk_sub, talk_latch, gate)
-                inbox_notify_sub = await _reconcile_inbox_notify_sub(
-                    state, inbox_notify_sub, inbox_notify_latch, gate
-                )
-                wall_notify_sub = await _reconcile_wall_notify_sub(
-                    state, wall_notify_sub, wall_notify_latch, gate
-                )
-        finally:
-            # A hard cancel arriving while unsubscribing one SUB must not skip
-            # the rest — each attempt is shielded from that specific
-            # cancellation (the underlying unsubscribe keeps running server-side
-            # even if this task stops waiting for it) and both Exception and
-            # CancelledError are swallowed here so the loop always reaches every
-            # remaining SUB. This is a deliberate, narrow exception to "always
-            # re-raise CancelledError": we are already inside the finally block
-            # reacting to the original cancellation, and teardown must stay
-            # bounded and complete rather than abandoning it partway through.
-            all_subs = (talk_sub, inbox_notify_sub, wall_notify_sub)
-            for sub in all_subs:
-                if sub is not None:
-                    with suppress(Exception, asyncio.CancelledError):
-                        await asyncio.shield(sub.handle.unsubscribe())
+            # Keep the always-on SUBs bound to the live client — AFTER the
+            # tick, not before. The tick's relay calls are what can trigger
+            # the wedge teardown (_force_reconnect / _on_closed) that
+            # advances connection_generation and orphans a SUB on the dead
+            # client. Reconciling here rebinds a same-tick client swap
+            # immediately. Also retries a failed initial subscribe (NATS
+            # down at startup) and re-subscribes after a client replacement
+            # whose new client carries no SUB. Cheap: a generation compare
+            # when nothing changed.
+            talk_sub = await _reconcile_talk_sub(state, talk_sub, talk_latch, gate)
+            inbox_notify_sub = await _reconcile_inbox_notify_sub(
+                state, inbox_notify_sub, inbox_notify_latch, gate
+            )
+            wall_notify_sub = await _reconcile_wall_notify_sub(
+                state, wall_notify_sub, wall_notify_latch, gate
+            )
+    finally:
+        # A hard cancel arriving while unsubscribing one SUB must not skip
+        # the rest — each attempt is shielded from that specific
+        # cancellation (the underlying unsubscribe keeps running server-side
+        # even if this task stops waiting for it) and both Exception and
+        # CancelledError are swallowed here so the loop always reaches every
+        # remaining SUB. This is a deliberate, narrow exception to "always
+        # re-raise CancelledError": we are already inside the finally block
+        # reacting to the original cancellation, and teardown must stay
+        # bounded and complete rather than abandoning it partway through.
+        all_subs = (talk_sub, inbox_notify_sub, wall_notify_sub)
+        for sub in all_subs:
+            if sub is not None:
+                with suppress(Exception, asyncio.CancelledError):
+                    await asyncio.shield(sub.handle.unsubscribe())
+        with suppress(Exception, asyncio.CancelledError):
+            await asyncio.shield(asyncio.to_thread(keeper.stop))
+
+
+async def _safe_reap(reap: Callable[[], Awaitable[None]]) -> None:
+    """Run the sentinel reaper; a failure is logged and never ends the poller."""
+    try:
+        await reap()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("Sentinel reap failed", exc_info=True)

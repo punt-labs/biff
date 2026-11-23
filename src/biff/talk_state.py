@@ -539,6 +539,19 @@ class TalkState:
         self._queue = _EXPIRY.queued(self._queue, clock)
         return before - len(self._pending) - len(self._queue)
 
+    def seconds_until_invite_expiry(self) -> float | None:
+        """Seconds until the oldest held invite reaches its TTL, or ``None``.
+
+        Negative once an invite is past it and not yet reaped.  Does not reap:
+        the poller arms its one-shot wake from this so the ``[TALK]`` marker
+        clears with no other event.
+        """
+        arrivals = [i.arrived for i in self._pending.values()]
+        arrivals += [q.arrived for q in self._queue if q.notif.is_invite]
+        if not arrivals:
+            return None
+        return min(arrivals) + _EXPIRY.ttl - time.monotonic()
+
     # -- Local transitions (talk.tex Send*/Respond/End operations) --
 
     def begin_invite(self, *, partner: str, partner_tty: str, partner_key: str) -> None:

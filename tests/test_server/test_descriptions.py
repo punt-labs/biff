@@ -611,6 +611,9 @@ class TestPollInbox:
     ) -> None:
         """Run the poller for a few cycles then cancel it."""
         task = asyncio.create_task(poll_inbox(mcp, state))
+        if state.unread_path is not None:
+            path = state.unread_path
+            await _until(path.exists)  # the first pass has run
         await asyncio.sleep(self._FAST_INTERVAL * cycles)
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -630,8 +633,9 @@ class TestPollInbox:
         """Poller picks up a message added between poll cycles."""
         mcp = create_server(state_with_path)
         task = asyncio.create_task(poll_inbox(mcp, state_with_path))
-        # Let initial cycle run
-        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        # Let the first pass run
+        assert state_with_path.unread_path is not None
+        await _until(state_with_path.unread_path.exists)
         # Inject a message
         await state_with_path.relay.deliver(
             Message(
@@ -643,7 +647,9 @@ class TestPollInbox:
         # The file watch wakes the poller
         assert state_with_path.unread_path is not None
         path = state_with_path.unread_path
-        await _until(lambda: json.loads(path.read_text())["count"] == 1)
+        await _until(
+            lambda: path.exists() and json.loads(path.read_text())["count"] == 1
+        )
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
@@ -666,8 +672,8 @@ class TestPollInbox:
         mcp = create_server(state_with_path)
         task = asyncio.create_task(poll_inbox(mcp, state_with_path))
         # Let initial refresh write the file
-        await asyncio.sleep(self._FAST_INTERVAL * 3)
         assert state_with_path.unread_path is not None
+        await _until(state_with_path.unread_path.exists)
         mtime_after_initial = state_with_path.unread_path.stat().st_mtime_ns
         # Let several more cycles run — count stays at 0
         await asyncio.sleep(self._FAST_INTERVAL * 10)
@@ -790,8 +796,9 @@ class TestPollInbox:
             seen: _Seen,
             *,
             gate: _InboxPokeGate,
+            due: bool = False,
         ) -> _Seen:
-            del gate
+            del gate, due
             events.append(("tick", gen[0]))
             if gen[0] == 0:
                 gen[0] = 1  # the tick's relay calls trigger _force_reconnect

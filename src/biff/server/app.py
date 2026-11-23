@@ -241,7 +241,8 @@ async def _reap_sentinels(state: ServerState) -> None:
 
     When a biff server receives SIGTERM/SIGINT, the signal handler writes
     a sentinel file containing the session key.  This function processes
-    those sentinels on startup (and periodically via the reaper loop):
+    those sentinels on startup and whenever the poller wakes (a watch on the
+    sentinel directory wakes it when one appears):
 
     1. Fetch the session from KV (still present — 3-day TTL)
     2. Append a wtmp logout event with ``last_active`` as the timestamp
@@ -312,17 +313,10 @@ async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
     return True
 
 
-async def _reap_loop(
-    state: ServerState, shutdown: asyncio.Event, *, interval: float = 2.0
-) -> None:
-    """Background task: reap shutdown sentinels every *interval* seconds."""
-    while not shutdown.is_set():
-        try:
-            await asyncio.wait_for(shutdown.wait(), timeout=interval)
-            return  # Shutdown requested
-        except TimeoutError:
-            pass
-        await _reap_sentinels(state)
+def _log_poller_exit(task: asyncio.Task[None]) -> None:
+    """Log a poller that ended with an exception; its failure is never silent."""
+    if not task.cancelled() and (exc := task.exception()) is not None:
+        logger.error("Poller task died", exc_info=exc)
 
 
 async def _refresh_org_repos(state: ServerState) -> None:
@@ -762,7 +756,7 @@ async def _release_session(
     Removes the reap-fallback sentinel written by :func:`_lifespan_cleanup`
     before teardown started, only once ``delete_session`` actually
     succeeds.  A call that times out or raises leaves the sentinel in place,
-    so a reaper — this server's own periodic :func:`_reap_loop`, another
+    so a reaper — this server's own poller, another
     running server's, or the next startup's :func:`_reap_sentinels` —
     finishes the job later instead of the row silently outliving its
     process.
@@ -877,7 +871,7 @@ async def _lifespan_cleanup(
 
     The reaper is stopped first and separately from the other background
     tasks, and the fallback sentinel is written immediately after: writing
-    it any earlier races the still-ticking ``_reap_loop``, which treats any
+    it any earlier races the still-running poller, which treats any
     sentinel matching this session's own key as a prior incarnation and
     discards it unreaped -- consuming the fallback before a
     later timed-out ``_release_relay`` ever needs it.
@@ -898,7 +892,7 @@ async def _lifespan_cleanup(
     except asyncio.CancelledError:
         pass
     except Exception:
-        # _reap_loop can fail on its own (e.g. an unhandled error inside
+        # the poller can fail on its own (e.g. an unhandled error inside
         # _reap_sentinels) before this ever cancels it, in which case
         # ``await reaper`` re-raises that stored exception rather than
         # CancelledError -- letting it propagate would skip the sentinel
@@ -1274,10 +1268,18 @@ class _LiveSession:
         await _append_login_event(state, final_name)
         await _close_orphaned_logins(state, sessions)
 
-        poll = _descriptions.poll_inbox(mcp, state, shutdown=self.shutdown)
+        # The poller also reaps shutdown sentinels: it runs on every wake, and
+        # a watch on the sentinel directory wakes it, so there is no reaper timer.
+        poll = _descriptions.poll_inbox(
+            mcp,
+            state,
+            shutdown=self.shutdown,
+            reap=lambda: _reap_sentinels(state),
+            watch_dirs=(sentinel_dir(state.config.repo_name),),
+        )
         # The poller outlives the requests that may start it.
-        self.tasks.append(asyncio.create_task(poll, context=Context()))
-        self.reaper = asyncio.create_task(_reap_loop(state, self.shutdown))
+        self.reaper = asyncio.create_task(poll, context=Context())
+        self.reaper.add_done_callback(_log_poller_exit)
         self.tasks.append(self.reaper)
         self.tasks.append(asyncio.create_task(_heartbeat_loop(state, self.shutdown)))
         self.tasks.append(asyncio.create_task(_kv_watcher_loop(state, self.shutdown)))

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import inspect
 import json
 from collections.abc import Callable
 from contextlib import suppress
@@ -19,14 +20,17 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig, Message, UnreadSummary, WallPost
 from biff.nats_relay import NatsRelay
+from biff.server import app
 from biff.server.app import create_server
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import poll_inbox
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
+from biff.testing.caller import StampedClient, caller_for
 from tests._state import create_state
 
 if TYPE_CHECKING:
@@ -40,11 +44,11 @@ _DEADLINE = 15.0  # seconds; macOS FSEvents batches a change to an existing file
 def state(tmp_path: Path) -> ServerState:
     return create_state(
         BiffConfig(user="kai", repo_name=_REPO),
-        tmp_path,
+        tmp_path / "relay",
         tty="tty1",
         hostname="test-host",
         pwd="/test",
-        unread_path=tmp_path / "unread.json",
+        unread_path=tmp_path / "status" / "unread.json",
     )
 
 
@@ -91,12 +95,18 @@ class _TimerSpy:
         monkeypatch.setattr(loop, "call_at", call_at)
 
 
-async def _idle(task: asyncio.Task[None], *, spins: int = 500) -> None:
+async def _idle(
+    task: asyncio.Task[None], ready: Callable[[], bool], *, spins: int = 500
+) -> None:
     """Let *task* run with no arrival, yielding without scheduling a timer.
 
     ``sleep(0)`` yields to the loop but never calls ``call_at``, so every
     timer the spy records was scheduled by the poller (or what it awaits).
+    The poller starts its watches on a thread, so first spin until *ready*
+    says its first pass has run.
     """
+    while not ready():
+        await asyncio.sleep(0)
     for _ in range(spins):
         await asyncio.sleep(0)
     assert not task.done(), "poller exited while idling"
@@ -169,17 +179,20 @@ def _nats_state(tmp_path: Path) -> ServerState:
 class TestNoTimers:
     """With no arrivals the poller schedules nothing but the liveness check."""
 
-    async def test_local_relay_poller_schedules_no_timer(
+    async def test_local_relay_poller_schedules_only_the_watch_liveness_check(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         spy = _TimerSpy(monkeypatch)
         mcp: FastMCP[ServerState] = create_server(state)
         task = asyncio.create_task(poll_inbox(mcp, state))
         try:
-            await _idle(task)
+            await _idle(task, lambda: _unread_count(state) == 0)
         finally:
             await _stop(task)
-        assert spy.delays == []
+        assert spy.delays
+        assert {round(d) for d in spy.delays} == {
+            round(_descriptions.WATCH_LIVENESS_INTERVAL)
+        }
 
     async def test_nats_poller_schedules_only_the_liveness_reconcile(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -191,10 +204,92 @@ class TestNoTimers:
         mcp: FastMCP[ServerState] = create_server(state)
         task = asyncio.create_task(poll_inbox(mcp, state))
         try:
-            await _idle(task)
+            await _idle(task, lambda: relay.get_wall.await_count > 0)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
         finally:
             await _stop(task)
         assert spy.delays
         assert {round(d) for d in spy.delays} == {
             round(_descriptions.SUB_RECONCILE_INTERVAL)
         }
+
+    async def test_a_displayed_wall_arms_one_deadline_wake_and_clearing_it_ends_it(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mcp: FastMCP[ServerState] = create_server(state)
+        task = asyncio.create_task(poll_inbox(mcp, state))
+        wall = await mcp.get_tool("wall")
+        assert wall is not None
+        try:
+            await _idle(task, lambda: _unread_count(state) == 0, spins=10)
+            await state.relay.set_wall(_wall_for(30))
+            await _eventually(
+                lambda: "[WALL]" in (wall.description or ""), "wall shown"
+            )
+            spy = _TimerSpy(monkeypatch)
+            state.wake.wake()
+            await _idle(task, lambda: True, spins=200)
+            assert any(25 < d < 31 for d in spy.delays), spy.delays
+            await state.relay.set_wall(None)
+            await _eventually(
+                lambda: wall.description == WALL_BASE_DESCRIPTION, "wall cleared"
+            )
+            spy.delays.clear()
+            state.wake.wake()  # re-arm the wait; nothing is displayed now
+            await _idle(task, lambda: True, spins=200)
+            assert {round(d) for d in spy.delays} == {
+                round(_descriptions.WATCH_LIVENESS_INTERVAL)
+            }
+        finally:
+            await _stop(task)
+
+
+def _wall_for(seconds: float) -> WallPost:
+    now = datetime.now(UTC)
+    return WallPost(
+        text="deploy freeze",
+        from_user="eric",
+        posted_at=now,
+        expires_at=now + timedelta(seconds=seconds),
+    )
+
+
+class TestLiveSessionTimers:
+    """Driving the real session startup, the only recurring work is liveness."""
+
+    async def test_only_the_poller_and_the_heartbeat_run_in_the_background(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess")
+        monkeypatch.setattr(_descriptions, "WATCH_LIVENESS_INTERVAL", 0.3)
+        monkeypatch.setitem(app._heartbeat_loop.__kwdefaults__ or {}, "interval", 0.3)
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_REPO),
+            tmp_path / "relay",
+            hostname="h",
+            pwd="/p",
+            unread_dir=tmp_path / "unread",
+        )
+        spy = _TimerSpy(monkeypatch)
+        loop = asyncio.get_running_loop()
+        async with StampedClient(
+            FastMCPTransport(create_server(state)), caller=caller_for("sess")
+        ):
+            # Spin, never sleep: the test must add no timer of its own.
+            end = loop.time() + 2.5
+            while loop.time() < end:
+                await asyncio.sleep(0)
+            background = {
+                task.get_coro().__name__
+                for task in asyncio.all_tasks()
+                if inspect.iscoroutine(task.get_coro())
+                and "/biff/server/" in task.get_coro().cr_code.co_filename
+                and not task.done()
+            }
+        # No sentinel reaper (it ran every 2s) and no other loop.
+        assert background == {"poll_inbox", "_heartbeat_loop"}
+        # Whatever recurs is the 0.3s liveness check and heartbeat; the MCP
+        # transport's own one-shot request timeouts (10s, 5s, 3s) do not repeat.
+        repeats = [d for d in spy.delays if d < 1]
+        assert repeats
+        assert {round(d, 1) for d in repeats} == {0.3}

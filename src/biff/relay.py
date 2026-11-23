@@ -487,11 +487,13 @@ class LocalRelay:
             self._validate_user(message.to_user)
             path = self._user_inbox_path(message.to_user)
         with self._lock():
-            if any(m.id == message.id for m in self._read_inbox_file(path)):
+            existing = self._read_inbox_file(path)
+            if any(m.id == message.id for m in existing):
                 return  # same id twice is one message, as JetStream dedups it
-            with path.open("a") as f:
-                f.write(message.model_dump_json() + "\n")
-            path.chmod(0o600)
+            # Rewritten by rename, like every other change to a mailbox, so a
+            # watch on the directory sees an arrival at once (an append to an
+            # existing file would not change the directory).
+            self._write_inbox_file(path, [*existing, message])
 
     async def fetch(self, session_key: str) -> list[Message]:
         """Get unread messages for a session, oldest first."""

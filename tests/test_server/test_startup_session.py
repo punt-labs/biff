@@ -64,6 +64,7 @@ async def test_a_stamped_call_for_the_same_session_does_not_register_again(
     async with StampedClient(
         FastMCPTransport(create_server(state)), caller=caller_for("env-sess")
     ) as client:
+        await asyncio.sleep(1.0)  # the poller finishes starting its watches
         before = len(asyncio.all_tasks())
         await client.call_tool("who", {})
         assert len(asyncio.all_tasks()) == before

@@ -118,11 +118,27 @@ class TestWatching:
     async def test_a_local_relay_arrival_wakes_the_signal(self, tmp_path: Path) -> None:
         relay = LocalRelay(tmp_path)
         signal = WakeSignal()
-        with signal.watching(relay):
+        keeper = signal.watching(relay)
+        keeper.start()
+        try:
             await relay.deliver(Message(from_user="eric", to_user="kai", body="hi"))
             outcome = await signal.wait(timeout=15.0, shutdown=None)
+        finally:
+            keeper.stop()
+        assert outcome is WakeOutcome.EVENT
+
+    async def test_extra_directories_are_watched_too(self, tmp_path: Path) -> None:
+        signal = WakeSignal()
+        extra = tmp_path / "sentinels"
+        keeper = signal.watching(LocalRelay(tmp_path / "relay"), extra)
+        keeper.start()
+        try:
+            (extra / "remove-kai").write_text("kai:tty1")
+            outcome = await signal.wait(timeout=15.0, shutdown=None)
+        finally:
+            keeper.stop()
         assert outcome is WakeOutcome.EVENT
 
     async def test_a_push_relay_has_nothing_to_watch(self) -> None:
-        with WakeSignal().watching(NatsRelay(url="nats://localhost:4222")) as entered:
-            assert entered is None
+        keeper = WakeSignal().watching(NatsRelay(url="nats://localhost:4222"))
+        assert keeper.watching is False
