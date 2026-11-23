@@ -235,9 +235,7 @@ def _log_skipped_shared_plan(root: str, identities: tuple[str | None, ...]) -> N
     the hook payload carries; without this line the resulting denial after
     ``biff plan`` would have no visible cause.
     """
-    from biff.markers import has_plan_marker  # noqa: PLC0415
-
-    if None not in identities and has_plan_marker(root, None):
+    if None not in identities and _has_any_plan_marker(root, (None,)):
         logger.info(
             "plan gate: a plan exists in the shared bucket but was skipped for "
             "an identified session; run /plan from this session to set its own"
@@ -922,25 +920,27 @@ def cc_post_pr() -> None:
         _emit(_post_tool_use_context(result))
 
 
+def _run_session_start(*, resume: bool) -> None:
+    from biff.plugins.claude_code.session_output import SessionOutput  # noqa: PLC0415
+
+    data = _read_hook_input()
+    _open_session(data)
+    context = handle_session_resume() if resume else handle_session_start(data)
+    _emit(SessionOutput.warned(_hook_context("SessionStart", context), data))
+
+
 @_cc_app.command("session-start")
 def cc_session_start() -> None:
     """SessionStart(startup) — auto-tty, plan from branch, check unread."""
-    if not _is_biff_enabled():
-        return
-    data = _read_hook_input()
-    _open_session(data)
-    result = handle_session_start(data)
-    _emit(_hook_context("SessionStart", result))
+    if _is_biff_enabled():
+        _run_session_start(resume=False)
 
 
 @_cc_app.command("session-resume")
 def cc_session_resume() -> None:
     """SessionStart(resume/compact) — re-orient after context loss."""
-    if not _is_biff_enabled():
-        return
-    _open_session(_read_hook_input())
-    result = handle_session_resume()
-    _emit(_hook_context("SessionStart", result))
+    if _is_biff_enabled():
+        _run_session_start(resume=True)
 
 
 @_cc_app.command("session-end")

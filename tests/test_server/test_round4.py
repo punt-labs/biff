@@ -356,23 +356,14 @@ class TestAbandonedProbeDirectories:
 
 
 class TestReadingSharedMailPokesTheSiblings:
-    @staticmethod
-    async def _fetch(fetched: list[Message]) -> AsyncMock:
+    async def test_marking_a_broadcast_read_pokes_the_users_other_sessions(
+        self,
+    ) -> None:
         relay = NatsRelay(url="tls://fake:4222", repo_name="test")
         poke = AsyncMock()
-        relay._ensure_connected = AsyncMock(return_value=(MagicMock(), MagicMock()))  # type: ignore[method-assign]
-        relay._fetch_from_subject = AsyncMock(return_value=fetched)  # type: ignore[method-assign]
         relay._publish_inbox_notification = poke  # type: ignore[method-assign]
-        await relay.fetch_user_inbox("kai")
-        return poke
-
-    async def test_consuming_a_broadcast_pokes_the_users_other_sessions(self) -> None:
-        poke = await self._fetch([Message(from_user="eric", to_user="kai", body="hi")])
+        await relay.mark_read_user_inbox("kai", [uuid.uuid4()])
         poke.assert_awaited_once_with("test", "kai")
-
-    async def test_an_empty_fetch_pokes_nobody(self) -> None:
-        poke = await self._fetch([])
-        poke.assert_not_awaited()
 
 
 class _CountingIds(list["uuid.UUID"]):

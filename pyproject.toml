@@ -221,6 +221,7 @@ prefixes = [
     "caller_stamp",
     "config",
     "ethos_team",
+    "abandoned_canaries",
     "directory_kqueue",
     "identity",
     "invite_expiry",

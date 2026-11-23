@@ -1473,8 +1473,7 @@ class NatsRelay:
             self._validate_user(message.to_user)
             repo = self._validate_repo(target_repo) if target_repo else self._repo_name
             if target_repo:
-                prefix = f"{self._stream_prefix}.{repo}.inbox"
-                subject = f"{prefix}.{message.to_user}"
+                subject = f"{self._stream_prefix}.{repo}.inbox.{message.to_user}"
             else:
                 subject = self._user_subject(message.to_user)
             await self._tracked(
@@ -1618,8 +1617,7 @@ class NatsRelay:
         """
         try:
             nc = await self._live_nc_or_reconnect()
-            subject = self.inbox_notify_subject(repo, user)
-            await nc.publish(subject, b"1")
+            await nc.publish(self.inbox_notify_subject(repo, user), b"1")
         except Exception:  # noqa: BLE001 — notification is best-effort
             logger.debug("Inbox notification failed in %s", repo)
 
@@ -1726,19 +1724,20 @@ class NatsRelay:
         """Pull and ack all messages from the user's broadcast inbox."""
         self._validate_user(user)
         js, _ = await self._ensure_connected()
-        fetched = await self._fetch_from_subject(
+        return await self._fetch_from_subject(
             js,
             subject=self._user_subject(user),
             durable=self._user_durable_name(user),
         )
-        if fetched:
-            # Consuming shared mail lowers every sibling session's count;
-            # nothing else tells them, now that no timer recomputes it.
-            await self._publish_inbox_notification(self._repo_name, user)
-        return fetched
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[UUID]) -> None:
-        """No-op — messages are consumed (deleted) by :meth:`fetch_user_inbox`."""
+        """Poke the user's other sessions: shared mail was consumed (deleted).
+
+        Nothing else tells them their unread count fell, now that no timer
+        recomputes it.  :meth:`fetch_user_inbox` did the consuming.
+        """
+        del ids  # the interface's; consuming is all the NATS relay needs
+        await self._publish_inbox_notification(self._repo_name, user)
 
     async def get_user_unread_count(self, user: str) -> int:
         """Count unread messages in the user's broadcast inbox."""

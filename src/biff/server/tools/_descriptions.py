@@ -27,7 +27,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum, auto
-from typing import TYPE_CHECKING, NamedTuple, Protocol, Self
+from typing import TYPE_CHECKING, Protocol, Self
 
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.plugins.claude_code.unread_file import write_unread_file
@@ -481,7 +481,8 @@ class _Unsubscribable(Protocol):
     async def unsubscribe(self) -> None: ...
 
 
-class SubscriptionBinding(NamedTuple):
+@dataclass(frozen=True, slots=True)
+class SubscriptionBinding:
     """A live always-on core-NATS SUB paired with the connection generation it binds to.
 
     Generalizes across every always-on SUB kind biff holds (talk,

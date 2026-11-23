@@ -4,6 +4,16 @@
 
 ### Added
 
+- Start-up channel warning: at SessionStart the Claude Code plugin checks the
+  channel gates a hook can see: the feature-flag opt-outs
+  (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,
+  `DISABLE_TELEMETRY`, `CLAUDE_CODE_DISABLE_FEATURE_FLAGS`), a cloud provider
+  (`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, `_FOUNDRY`), and the `claude` process's
+  launch flag (from `CLAUDE_PID`). When it knows channels are off it tells the
+  user at startup and the model, why, the fix, and to poll with `/biff:read 2m`
+  (`/biff-dev:read-dev 2m` for the development plugin). Anything it cannot see,
+  such as server-managed policy, makes it tell only the model that channels may
+  be off. Two biff plugins in one session warn once.
 - `relay.type` in `config.yaml` / `config.local.yaml` chooses the relay:
   `local` (the default), `demo` (the shared public relay, bundled
   credentials) or `nats` (your own NATS server, with `relay.url`). A `relay`
