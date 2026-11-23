@@ -342,9 +342,11 @@ checkout:
 | Published package | `published-smoke` | `scripts/smoke-release.sh published` installs `punt-biff==<version>` from production PyPI on Linux and macOS and repeats the CLI and MCP round trip. |
 | Published relay image | `published-image-smoke` | Pulls `biff-relay:<version>`, checks it is the candidate digest, and runs tier 3b's presence and messaging tests against it (the full tier ran on that digest before promotion). |
 
-Run the candidate check locally with `make smoke-release`. A failed
-post-release check means the published version is broken: yank or ship a
-fix, never retag.
+Run the candidate check locally with `make smoke-release`. When a
+post-release check fails, read the failing step first. An install that
+still fails after its retries can be PyPI propagation or a dependency
+outage, not the package: rerun the job. A failed CLI, MCP or image step
+means the published version is broken: yank or ship a fix, never retag.
 
 ## Fixture model
 
