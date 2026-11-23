@@ -53,6 +53,10 @@ jobs:
     if: github.repository == 'punt-labs/biff' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Hosted runs share one relay namespace and purge it on teardown.
+    concurrency:
+      group: biff-hosted-relay
+      cancel-in-progress: false
     env:
       PUNT_TELEMETRY: "off"
       # The public demo relay; its credentials ship in the package.
