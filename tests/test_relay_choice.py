@@ -496,3 +496,66 @@ class TestPortsAndGlobalRemotes:
         two = _clone(tmp_path / "b")
         assert "no remote" in RelayLocation.of(one).reason
         assert RelayLocation.of(one).path != RelayLocation.of(two).path
+
+
+class TestPrivateAccountOnTheDemoEndpoint:
+    """The demo URL is shared; only the bundled demo selection refuses credentials."""
+
+    def test_an_explicit_url_takes_your_own_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        creds = tmp_path / "mine.creds"
+        creds.write_text("creds")
+        repo = _repo(
+            tmp_path,
+            f"relay:\n  url: {DEMO_RELAY_URL}\n  allow_env_override: true\n",
+        )
+        monkeypatch.setenv("BIFF_RELAY_USER_CREDENTIALS", str(creds))
+        url, auth, _ = resolve_relay_config(repo)
+        assert url == DEMO_RELAY_URL
+        assert auth == RelayAuth(user_credentials=str(creds))
+
+    def test_an_env_url_with_credentials_replaces_the_bundled_demo(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        creds = tmp_path / "mine.creds"
+        creds.write_text("creds")
+        repo = _repo(tmp_path, "relay:\n  type: demo\n  allow_env_override: true\n")
+        monkeypatch.setenv("BIFF_RELAY_URL", DEMO_RELAY_URL)
+        monkeypatch.setenv("BIFF_RELAY_USER_CREDENTIALS", str(creds))
+        assert resolve_relay_config(repo)[1] == RelayAuth(user_credentials=str(creds))
+
+
+class TestRemoteSpellings:
+    def test_zero_padded_ports_are_the_same_port(self) -> None:
+        assert (
+            RelayKey.of("ssh://git@h.example:02222/o/r").name
+            == RelayKey.of("ssh://git@h.example:2222/o/r").name
+        )
+        assert (
+            RelayKey.of("ssh://git@h.example:0022/o/r").name
+            == RelayKey.of("git@h.example:o/r").name
+        )
+
+    def test_bracketed_ipv6_hosts_are_hosts_not_paths(self) -> None:
+        key = RelayKey.of("https://[2001:db8::1]/o/r.git")
+        assert key.name.startswith("o__r-")
+        assert key.name == RelayKey.of("ssh://git@[2001:db8::1]/o/r").name
+
+    def test_file_urls_decode_and_ignore_a_local_authority(self) -> None:
+        plain = RelayKey.of("/srv/Team Repo.git")
+        assert RelayKey.of("file:///srv/Team%20Repo.git") == plain
+        assert RelayKey.of("file://localhost/srv/Team%20Repo.git") == plain
+
+    def test_a_checkout_and_its_git_directory_are_one_repository(self) -> None:
+        assert RelayKey.of("/srv/up/.git") == RelayKey.of("/srv/up")
+
+    def test_a_remote_from_an_included_config_is_the_repos_remote(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _clone(tmp_path / "a")
+        extra = repo / ".git" / "extra"
+        extra.write_text('[remote "origin"]\n\turl = git@github.com:o/r.git\n')
+        _git(repo, "config", "include.path", "extra")
+        other = _clone(tmp_path / "b", ("origin", "git@github.com:o/r.git"))
+        assert RelayLocation.of(repo).path == RelayLocation.of(other).path

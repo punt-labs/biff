@@ -268,6 +268,9 @@ class _ConfigFields:
     # allow_env_override: true and authorize ambient env vars without a
     # team commit.
     relay_committed: bool = False
+    # The relay is the bundled demo (``type: demo``), not an explicit URL that
+    # happens to be the demo endpoint: your own credentials never go to it.
+    relay_demo: bool = False
 
 
 def _has_orgs_key(raw: dict[str, object]) -> bool:
@@ -368,6 +371,7 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         poll_interval=_extract_poll_interval(merged),
         relay_allow_env_override=shared_relay.allows_env_override(),
         relay_committed=shared_relay.declares(),
+        relay_demo=relay.demo,
     )
 
 
@@ -496,7 +500,7 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
         # set together), reopening the #383 footgun.
         tls_handshake_first = False
 
-    if fired_auth and relay_url in (None, _relay_config().DEMO_RELAY_URL):
+    if fired_auth and (relay_url is None or (cf.relay_demo and url_env is None)):
         # An auth override with nothing to authenticate against would
         # otherwise fall through to the local relay, which ignores it (a
         # missing or misspelled BIFF_RELAY_URL would pass unnoticed), or to

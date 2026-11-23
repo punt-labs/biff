@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self, cast
+from urllib.parse import unquote, urlsplit
 
 from biff._stdlib import biff_data_dir, get_repo_common_root
 from biff.models import RelayAuth
@@ -40,6 +41,7 @@ class RelaySetting:
     url: str | None = None
     auth: RelayAuth | None = None
     tls_handshake_first: bool = False
+    demo: bool = False
 
 
 @dataclass(frozen=True)
@@ -209,7 +211,7 @@ class RelayLayers:
         url = DEMO_RELAY_URL if kind == "demo" else above[0].url_text()
         if url == DEMO_RELAY_URL and auth is None:
             auth = RelayAuth(user_credentials=str(DEMO_CREDS_PATH))
-        return RelaySetting(url, auth, tls)
+        return RelaySetting(url, auth, tls, demo=kind == "demo")
 
     def _reject_orphan_auth(self) -> None:
         if any(file.auth() for file in self.files):
@@ -247,11 +249,12 @@ class RelayKey:
         r"https://git-manager\.devin\.ai/proxy/(?P<host>github\.com)/(?P<path>.+)"
     )
     _URL = re.compile(
-        r"[a-z][a-z0-9+.-]*://(?:[^/@]*@)?(?P<host>[^/:@]+)"
-        r"(?::(?!(?:22|80|443|9418)/)(?P<port>\d+))?(?::\d+)?/(?P<path>.+)",
+        r"[a-z][a-z0-9+.-]*://(?:[^/@]*@)?(?P<host>\[[^\]]+\]|[^/:@]+)"
+        r"(?::(?P<port>\d+))?/(?P<path>.+)",
         re.IGNORECASE,
     )
     _SCP = re.compile(r"(?:[^@/]+@)?(?P<host>[^:/@]+):(?P<path>[^/].*)")
+    _DEFAULT_PORTS = (0, 22, 80, 443, 9418)
 
     @classmethod
     def of(cls, url: str, base: Path | None = None) -> Self:
@@ -272,19 +275,27 @@ class RelayKey:
             or cls._SCP.fullmatch(text)
         )
         if match is None or text.startswith("file:"):
-            path = (base or Path()) / url.strip().removeprefix("file://")
-            resolved = path.expanduser().resolve()
-            return cls(
-                f"remote-{cls._digest(str(resolved))}", f"remote path {resolved}"
-            )
-        port = match.groupdict().get("port")
-        host = f"{match['host']}:{port}" if port else match["host"]
+            return cls._for_filesystem(url, base or Path())
+        port = int(match.groupdict().get("port") or 0)
+        host = match["host"]
+        if port not in cls._DEFAULT_PORTS:
+            host = f"{host}:{port}"
         where = f"{host}/{match['path'].strip('/')}"
         parts = where.split("/")[1:]
         if len(parts) != 2 or not all(parts):
             return cls(f"remote-{cls._digest(where)}", f"remote URL hash of {where}")
         slug = cls._slug("__".join(parts))
         return cls(f"{slug}-{cls._digest(where)}", f"remote slug of {where}")
+
+    @classmethod
+    def _for_filesystem(cls, url: str, base: Path) -> Self:
+        """Key a path or ``file://`` remote by the absolute path it opens."""
+        is_url = url.strip().lower().startswith("file:")
+        raw = unquote(urlsplit(url.strip()).path) if is_url else url.strip()
+        resolved = (base / raw).expanduser().resolve()
+        if resolved.name == ".git":  # git opens a checkout through its .git
+            resolved = resolved.parent
+        return cls(f"remote-{cls._digest(str(resolved))}", f"remote path {resolved}")
 
     @classmethod
     def for_path(cls, common_root: Path) -> Self:
@@ -333,7 +344,7 @@ class RelayLocation:
         """
         try:
             result = subprocess.run(
-                ["git", "config", "--local", "--get-regexp", r"^remote\..*\.url$"],  # noqa: S607
+                ["git", "config", "--show-scope", "--get-regexp", r"^remote\..*\.url$"],  # noqa: S607
                 capture_output=True,
                 text=True,
                 check=False,
@@ -343,8 +354,12 @@ class RelayLocation:
             return None
         urls: dict[str, str] = {}
         for line in result.stdout.splitlines():
-            key, _, url = line.partition(" ")
-            urls[key.removeprefix("remote.").removesuffix(".url")] = url.strip()
+            # The repository's own config (and what it includes), never the
+            # user's global or system config.
+            scope, _, entry = line.partition("\t")
+            key, _, url = entry.partition(" ")
+            if scope in ("local", "worktree"):
+                urls[key.removeprefix("remote.").removesuffix(".url")] = url.strip()
         if "origin" in urls:
             return urls["origin"]
         return next(iter(urls.values())) if len(urls) == 1 else None

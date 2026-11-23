@@ -8719,6 +8719,12 @@ are never one:
   GitHub and GitLab, get different directories.
 - A remote that does not parse to `owner/repo` (a GitLab subgroup) is keyed
   `remote-` plus the hash of its normalized URL, so its clones still share.
+  A non-default port (not 22, 80, 443 or 9418) is part of the identity, and a
+  bracketed IPv6 host is a host. A filesystem remote (a path, a relative path,
+  or a `file://` URL) is keyed `remote-` plus the hash of the absolute path it
+  opens, resolved from the common root with case kept and `/.git` folded into
+  its checkout. Only the repository's own git config (including files it
+  includes) names the remote, never the user's global config.
 - A repo with no remote is keyed by the common root's name plus a hash of the
   common root's resolved path, so a linked worktree shares its main checkout.
 

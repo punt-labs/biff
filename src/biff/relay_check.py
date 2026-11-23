@@ -69,13 +69,14 @@ class LocalRelayCheck:
             return None
         return (
             "biff-notify.yml is installed but the committed config chooses no "
-            "network relay, so CI would use the local relay and reach no one: "
-            "commit a demo or nats relay in .punt-labs/biff/config.yaml, or set "
-            "the repository variable BIFF_RELAY_URL (vars.BIFF_RELAY_URL)"
+            "network relay, so CI would use the local relay and reach no one "
+            "unless a repository variable supplies one: commit a demo or nats "
+            "relay in .punt-labs/biff/config.yaml, or set BIFF_RELAY_URL "
+            "(vars.BIFF_RELAY_URL)"
             + (
                 " and relay.allow_env_override: true (a committed relay ignores "
                 "the variable otherwise)"
-                if committed.chooses()
+                if committed.declares()
                 else ""
             )
         )

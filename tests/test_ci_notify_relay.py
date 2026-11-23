@@ -147,3 +147,23 @@ class TestNotifyWarningReadsWhatCiReads:
         repo = _repo(tmp_path, "relay:\n  type: demo\n")
         _install_workflow(repo)
         assert LocalRelayCheck.notify_warning(repo) is None
+
+
+class TestNotifyWarningWording:
+    def test_a_null_url_is_a_declaration_that_blocks_the_variable(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(tmp_path, "relay:\n  url: null\n")
+        _install_workflow(repo)
+        warning = LocalRelayCheck.notify_warning(repo)
+        assert warning is not None
+        assert "allow_env_override" in warning
+
+    def test_the_warning_does_not_claim_to_know_the_repository_variables(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(tmp_path)
+        _install_workflow(repo)
+        warning = LocalRelayCheck.notify_warning(repo)
+        assert warning is not None
+        assert "unless" in warning
