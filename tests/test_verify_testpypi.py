@@ -59,14 +59,17 @@ def _metadata(
 class _Clock:
     """A fake monotonic clock; sleeping and slow fetches advance it."""
 
-    __slots__ = ("_now", "_waits")
+    __slots__ = ("_now", "_oversleep", "_waits")
 
     _now: float
+    _oversleep: float
     _waits: list[float]
 
-    def __new__(cls) -> Self:
+    def __new__(cls, oversleep: float = 0.0) -> Self:
+        """``oversleep`` models a runner that wakes later than asked."""
         self = super().__new__(cls)
         self._now = 0.0
+        self._oversleep = oversleep
         self._waits = []
         return self
 
@@ -79,7 +82,7 @@ class _Clock:
 
     def sleep(self, seconds: float) -> None:
         self._waits.append(seconds)
-        self.advance(seconds)
+        self.advance(seconds + self._oversleep)
 
     def time(self) -> float:
         return self._now
@@ -249,6 +252,17 @@ def test_budget_bounds_all_retries(dist: Path) -> None:
     clock = _Clock()
     with pytest.raises(VerificationError, match="budget spent"):
         _run(dist, net, clock, budget=45.0)
+    assert clock.waits == [30.0]
+
+
+def test_a_sleep_that_overshoots_the_deadline_stops_the_next_poll(
+    dist: Path,
+) -> None:
+    clock = _Clock(oversleep=20.0)
+    net = _Net({_META: [urllib.error.URLError("down"), _metadata()]})
+    with pytest.raises(VerificationError, match="budget spent"):
+        _run(dist, net, clock, budget=45.0)
+    assert net.calls == [_META]
     assert clock.waits == [30.0]
 
 
