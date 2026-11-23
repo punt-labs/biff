@@ -343,10 +343,11 @@ checkout:
 | Published relay image | `published-image-smoke` | Pulls `biff-relay:<version>`, checks it is the candidate digest, and runs tier 3b's presence and messaging tests against it (the full tier ran on that digest before promotion). |
 
 Run the candidate check locally with `make smoke-release`. When a
-post-release check fails, read the failing step first. An install that
-still fails after its retries can be PyPI propagation or a dependency
-outage, not the package: rerun the job. A failed CLI, MCP or image step
-means the published version is broken: yank or ship a fix, never retag.
+post-release check fails, read the failing step first. A `pip install` or
+`docker pull` that fails before the artifact runs can be registry
+propagation or an outage, not the release: rerun the job. A failed check
+against the installed package or the pulled image means the published
+version is broken: yank or ship a fix, never retag.
 
 ## Fixture model
 
