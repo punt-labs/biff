@@ -1190,12 +1190,12 @@ class TestPendingBound:
             st.receive(_invite(f"u{i}", f"u{i}:s{i}"))
             st.drain_idle()
         # Supersede u0 at a fresh, newest time: refreshes arrival, keeps position.
-        clock[0] = 2000.0
+        clock[0] = 1150.0
         st.receive(_invite("u0", "u0:refreshed"))
         st.drain_idle()
-        assert st.pending_invites["u0"].arrived == 2000.0
+        assert st.pending_invites["u0"].arrived == 1150.0
         # New inviter at the cap must evict u1 (the true oldest by arrival).
-        clock[0] = 2001.0
+        clock[0] = 1151.0
         st.receive(_invite("newcomer", "newcomer:sess"))
         st.drain_idle()
         assert "u1" not in st.pending_invites  # true oldest-by-arrival evicted
@@ -1231,3 +1231,75 @@ class TestRebind:
         st.begin_invite(partner="eric", partner_tty="t2", partner_key="eric:t2")
         with pytest.raises(ValueError, match="idle"):
             st.rebind(tty="newtty", session_key="kai:newtty")
+
+
+class TestStaleInviteReapedOnRead:
+    """An invite's age is checked when invites are read or answered (DES-087).
+
+    Nothing ticks ``expire_stale_invites``: every reader of invites reaps the
+    ones past ``PENDING_INVITE_TTL`` first, so a stale invite is never shown,
+    counted or accepted.
+    """
+
+    def _aged(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        drained: bool,
+        age: float = PENDING_INVITE_TTL,
+    ) -> TalkState:
+        """A state holding one invite from ``eric``, *age* seconds old."""
+        clock = [1000.0]
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: clock[0])
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        if drained:
+            st.drain_idle()
+        clock[0] += age
+        return st
+
+    def test_pending_invites_omits_a_stale_invite(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        st = self._aged(monkeypatch, drained=True)
+        assert st.pending_invites == {}
+
+    def test_a_stale_pending_invite_cannot_be_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        st = self._aged(monkeypatch, drained=True)
+        assert st.consume_pending_invite("eric") is None
+
+    def test_queued_counts_omit_a_stale_undrained_invite(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        st = self._aged(monkeypatch, drained=False)
+        assert (st.queued, st.queued_invite_users) == (0, ())
+
+    def test_has_pending_traffic_ignores_a_stale_invite(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        st = self._aged(monkeypatch, drained=False)
+        assert st.has_pending_traffic is False
+
+    def test_draining_does_not_record_a_stale_invite(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        st = self._aged(monkeypatch, drained=False)
+        assert st.drain_for_agent().pending == {}
+
+    def test_a_fresh_invite_is_still_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        st = self._aged(monkeypatch, drained=True, age=PENDING_INVITE_TTL - 1.0)
+        assert list(st.pending_invites) == ["eric"]
+
+    def test_a_queued_message_never_ages_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = [1000.0]
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: clock[0])
+        st = _make_state()
+        st.receive(_message("eric", OTHER_KEY, "still here"))
+        clock[0] += PENDING_INVITE_TTL * 10
+        assert st.queued == 1

@@ -21,7 +21,9 @@ from biff.models import BiffConfig, Message, UnreadSummary, WallPost
 from biff.nats_relay import NatsRelay
 from biff.plugins.claude_code.unread_file import MAX_UNREAD_COUNT, write_unread_file
 from biff.relay import LocalRelay
+from biff.server import handshake_delivery
 from biff.server.app import create_server
+from biff.server.display_queue import DisplayItem, DisplayQueue
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
@@ -32,9 +34,9 @@ from biff.server.tools._descriptions import (
     _reconcile_inbox_notify_sub,
     _reconcile_talk_sub,
     _reconcile_wall_notify_sub,
+    _Seen,
     _sync_unread_file,
     _talk_description,
-    nap_interval_for,
     poll_inbox,
     refresh_read_messages,
     subscribe_inbox_notify,
@@ -188,6 +190,26 @@ class TestUnreadFile:
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
         assert "preview" not in data
+
+    async def test_sync_drops_a_talk_item_whose_turn_is_over(
+        self, state_with_path: ServerState
+    ) -> None:
+        """Display rotation is computed when the file is written, not by a tick.
+
+        A talk item is shown for one turn and then discarded; nothing runs
+        between events, so the next write of the status file is what notices.
+        """
+        clock = [0.0]
+        queue = DisplayQueue(turn_duration=15.0, clock=lambda: clock[0])
+        object.__setattr__(state_with_path, "display_queue", queue)
+        queue.add(DisplayItem(kind="talk", text="eric: hi", source_key="talk:1"))
+        clock[0] = 16.0
+
+        await _sync_unread_file(state_with_path)
+
+        assert state_with_path.unread_path is not None
+        data = json.loads(state_with_path.unread_path.read_text())
+        assert data["display_items"] == []
 
     async def test_writes_zero_when_no_messages(
         self, state_with_path: ServerState
@@ -542,71 +564,16 @@ class TestRefreshWallSenderBounds:
         assert "u" * 10_000 not in spoken_calls[0]
 
 
-class TestSleepOrWakeLostWakeRace:
-    """A ``wake_event.set()`` landing in the narrow window between
-    ``asyncio.wait()``'s internal timeout decision and this function's own
-    ``wake_event.clear()`` must not be silently erased.
+# The local relay's file watch delivers within a second or two on macOS
+# (FSEvents batches a change to an existing file) and at once on Linux.
+_WATCH_DEADLINE = 15.0
 
-    ``asyncio.wait()``'s timeout resolution and a NATS callback's
-    ``wake_event.set()`` are two independent events that can interleave in
-    either order; if ``done`` came back empty (the wait-task lost that
-    narrow race) while the event was, in fact, set, trusting ``done`` alone
-    reports TIMEOUT instead of EVENT. At a disabled poll interval
-    (``interval<=0``), ``poll_inbox`` treats TIMEOUT as "skip tick work" —
-    so the poke is lost until the next fallback tick, not merely delayed.
-    """
 
-    async def test_event_set_despite_empty_done_still_reports_event(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        wake_event = asyncio.Event()
-
-        async def _fake_wait(
-            waiters: list[asyncio.Future[object]],
-            *,
-            timeout: float,
-            return_when: str,
-        ) -> tuple[set[asyncio.Future[object]], set[asyncio.Future[object]]]:
-            del waiters, timeout, return_when
-            # Simulate the race directly: asyncio.wait() decided "nothing
-            # completed" (empty done) in the same window a wake_event.set()
-            # landed — reproducible without depending on real scheduler
-            # timing.
-            wake_event.set()
-            return set(), set()
-
-        monkeypatch.setattr(asyncio, "wait", _fake_wait)
-
-        outcome = await _descriptions._sleep_or_wake(
-            interval=1000.0, shutdown=None, wake_event=wake_event
-        )
-
-        assert outcome is _descriptions._WakeOutcome.EVENT
-        assert not wake_event.is_set()  # still cleared before returning
-
-    async def test_truly_empty_done_and_unset_event_reports_timeout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The ordinary TIMEOUT path must still work — this fix must not
-        turn every wait into a false EVENT."""
-        wake_event = asyncio.Event()
-
-        async def _fake_wait(
-            waiters: list[asyncio.Future[object]],
-            *,
-            timeout: float,
-            return_when: str,
-        ) -> tuple[set[asyncio.Future[object]], set[asyncio.Future[object]]]:
-            del waiters, timeout, return_when
-            return set(), set()
-
-        monkeypatch.setattr(asyncio, "wait", _fake_wait)
-
-        outcome = await _descriptions._sleep_or_wake(
-            interval=1000.0, shutdown=None, wake_event=wake_event
-        )
-
-        assert outcome is _descriptions._WakeOutcome.TIMEOUT
+async def _until(check: Callable[[], bool]) -> None:
+    """Wait up to ``_WATCH_DEADLINE`` for *check* to hold."""
+    async with asyncio.timeout(_WATCH_DEADLINE):
+        while not check():
+            await asyncio.sleep(0.01)
 
 
 class TestPollInbox:
@@ -645,7 +612,10 @@ class TestPollInbox:
         cycles: int = 5,
     ) -> None:
         """Run the poller for a few cycles then cancel it."""
-        task = asyncio.create_task(poll_inbox(mcp, state, interval=self._FAST_INTERVAL))
+        task = asyncio.create_task(poll_inbox(mcp, state))
+        if state.unread_path is not None:
+            path = state.unread_path
+            await _until(path.exists)  # the first pass has run
         await asyncio.sleep(self._FAST_INTERVAL * cycles)
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -664,11 +634,10 @@ class TestPollInbox:
     async def test_detects_new_message(self, state_with_path: ServerState) -> None:
         """Poller picks up a message added between poll cycles."""
         mcp = create_server(state_with_path)
-        task = asyncio.create_task(
-            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
-        )
-        # Let initial cycle run
-        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        task = asyncio.create_task(poll_inbox(mcp, state_with_path))
+        # Let the first pass run
+        assert state_with_path.unread_path is not None
+        await _until(state_with_path.unread_path.exists)
         # Inject a message
         await state_with_path.relay.deliver(
             Message(
@@ -677,47 +646,15 @@ class TestPollInbox:
                 body="PR ready",
             )
         )
-        # Let poller detect the change
-        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        # The file watch wakes the poller
+        assert state_with_path.unread_path is not None
+        path = state_with_path.unread_path
+        await _until(
+            lambda: path.exists() and json.loads(path.read_text())["count"] == 1
+        )
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
-
-        assert state_with_path.unread_path is not None
-        data = json.loads(state_with_path.unread_path.read_text())
-        assert data["count"] == 1
-
-    async def test_local_relay_disabled_interval_still_detects_new_message(
-        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A ``LocalRelay`` session with polling disabled must still detect
-        new mail via the fallback tick, not go permanently silent.
-
-        LocalRelay has no push mechanism of any kind — the disabled-interval
-        skip that is safe for a NATS-backed relay (push covers detection
-        instead) would otherwise disable ``/write`` detection for the rest
-        of the session's life, not merely delay it, since nothing else
-        would ever set ``wake_event``.
-        """
-        assert not isinstance(state_with_path.relay, NatsRelay)
-        monkeypatch.setattr(
-            _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
-        )
-        mcp = create_server(state_with_path)
-        task = asyncio.create_task(poll_inbox(mcp, state_with_path, interval=0))
-        await asyncio.sleep(self._FAST_INTERVAL * 3)
-
-        await state_with_path.relay.deliver(
-            Message(from_user="eric", to_user=_KAI_SESSION, body="still here?")
-        )
-        await asyncio.sleep(self._FAST_INTERVAL * 5)
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-        assert state_with_path.unread_path is not None
-        data = json.loads(state_with_path.unread_path.read_text())
-        assert data["count"] == 1
 
     async def test_updates_tool_description(self, state_with_path: ServerState) -> None:
         """Poller updates the read_messages tool description."""
@@ -735,12 +672,10 @@ class TestPollInbox:
     ) -> None:
         """Poller does not rewrite the file when count is stable."""
         mcp = create_server(state_with_path)
-        task = asyncio.create_task(
-            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
-        )
+        task = asyncio.create_task(poll_inbox(mcp, state_with_path))
         # Let initial refresh write the file
-        await asyncio.sleep(self._FAST_INTERVAL * 3)
         assert state_with_path.unread_path is not None
+        await _until(state_with_path.unread_path.exists)
         mtime_after_initial = state_with_path.unread_path.stat().st_mtime_ns
         # Let several more cycles run — count stays at 0
         await asyncio.sleep(self._FAST_INTERVAL * 10)
@@ -766,9 +701,8 @@ class TestPollInbox:
             state: ServerState,
             latch: TalkNotifyLatch,
             gate: _InboxPokeGate,
-            wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
-            del state, latch, gate, wake_event
+            del state, latch, gate
             nonlocal calls
             calls += 1
             # LocalRelay has no generation, so _relay_generation is 0 — bind the
@@ -797,9 +731,8 @@ class TestPollInbox:
             state: ServerState,
             latch: TalkNotifyLatch,
             gate: _InboxPokeGate,
-            wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
-            del state, latch, gate, wake_event
+            del state, latch, gate
             return talk_binding
 
         inbox_subscribe_started = asyncio.Event()
@@ -808,9 +741,8 @@ class TestPollInbox:
             state: ServerState,
             latch: TalkNotifyLatch,
             gate: _InboxPokeGate,
-            wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
-            del state, latch, gate, wake_event
+            del state, latch, gate
             inbox_subscribe_started.set()
             await asyncio.sleep(5.0)  # never resolves before the cancellation
             msg = "unreachable — cancellation must fire first"
@@ -822,9 +754,7 @@ class TestPollInbox:
         )
 
         mcp = create_server(state_with_path)
-        task = asyncio.create_task(
-            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
-        )
+        task = asyncio.create_task(poll_inbox(mcp, state_with_path))
         await inbox_subscribe_started.wait()
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -858,7 +788,6 @@ class TestPollInbox:
             _state: ServerState,
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
         ) -> SubscriptionBinding:
             events.append(("subscribe", gen[0]))
             return SubscriptionBinding(AsyncMock(), gen[0])
@@ -866,125 +795,33 @@ class TestPollInbox:
         async def fake_tick(
             _mcp: FastMCP[ServerState],
             _state: ServerState,
-            last_count: int,
-            last_wall: tuple[str, str],
-            last_talk: tuple[tuple[str, ...], int, str],
+            seen: _Seen,
             *,
             gate: _InboxPokeGate,
-        ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
-            del gate
+            due: bool = False,
+        ) -> _Seen:
+            del gate, due
             events.append(("tick", gen[0]))
             if gen[0] == 0:
                 gen[0] = 1  # the tick's relay calls trigger _force_reconnect
                 shutdown.set()  # stop after this iteration completes
-            return last_count, last_wall, last_talk
+            return seen
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", fake_subscribe)
         monkeypatch.setattr(_descriptions, "_relay_generation", _gen)
         monkeypatch.setattr(_descriptions, "_safe_tick", fake_tick)
 
         mcp = create_server(state_with_path)
-        await poll_inbox(
-            mcp, state_with_path, shutdown=shutdown, interval=self._FAST_INTERVAL
-        )
+        await poll_inbox(mcp, state_with_path, shutdown=shutdown)
 
         assert ("subscribe", 1) in events  # rebound to the bumped generation
         # …and rebound before any further tick — same iteration as the bump.
         assert events == [("subscribe", 0), ("tick", 0), ("subscribe", 1)]
 
-    async def test_cheap_nap_tick_reconciles_background_generation_bump(
-        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A cheap nap tick still reconciles a background-triggered client swap.
-
-        The heartbeat loop can wedge-teardown and redial the NATS client
-        *during* a nap — advancing ``connection_generation`` with no ``_safe_tick``
-        involved.  If the reconcile were gated behind the nap-skip, the always-on
-        talk SUB would stay orphaned on the dead client until the nap ended, and
-        an unsolicited invite to the idle agent would be silently dropped.
-        The reconcile must run on the cheap nap tick even though the
-        expensive relay poll is skipped — proven by checking, at the exact
-        moment the rebind happens, that ``_safe_tick`` had not yet run (the
-        cheap-nap skip held for that same tick).
-
-        ``_reconcile_always_on_sub`` wakes the tracker on any
-        rebind — deliberately: a SUB re-established
-        after an orphaned window may have missed a poke with no replay, so
-        the very next tick must recompute for real rather than staying
-        napped indefinitely. That un-nap is expected to let subsequent
-        ticks run ``_safe_tick`` too; this test only pins the rebinding
-        tick itself, not what happens afterward.
-        """
-        events: list[tuple[str, int]] = []
-        tick_calls = [0]
-        subscribe_calls = [0]
-        tick_calls_at_rebind: list[int] = []
-        rebind_done = asyncio.Event()
-
-        def _gen(_state: ServerState) -> int:
-            return 1  # a background swap advanced the generation past the SUB
-
-        async def fake_subscribe(
-            _state: ServerState,
-            _latch: TalkNotifyLatch,
-            _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
-        ) -> SubscriptionBinding:
-            subscribe_calls[0] += 1
-            # First call is the startup bind at the pre-swap generation (0, now
-            # stale); the cheap-nap reconcile rebinds to the live generation (1).
-            bound = 0 if subscribe_calls[0] == 1 else 1
-            events.append(("subscribe", bound))
-            if bound == 1:
-                tick_calls_at_rebind.append(tick_calls[0])
-                rebind_done.set()
-            return SubscriptionBinding(AsyncMock(), bound)
-
-        async def fake_tick(
-            _mcp: FastMCP[ServerState],
-            _state: ServerState,
-            last_count: int,
-            last_wall: tuple[str, str],
-            last_talk: tuple[tuple[str, ...], int, str],
-            *,
-            gate: _InboxPokeGate,
-        ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
-            del gate
-            tick_calls[0] += 1
-            return last_count, last_wall, last_talk
-
-        monkeypatch.setattr(_descriptions, "subscribe_talk", fake_subscribe)
-        monkeypatch.setattr(_descriptions, "_relay_generation", _gen)
-        monkeypatch.setattr(_descriptions, "_safe_tick", fake_tick)
-
-        # Force a cheap nap tick: napping, with a recent nap poll so the
-        # seconds-since-nap-poll guard holds under a large nap_interval.
-        state_with_path.activity.enter_nap()
-        state_with_path.activity.record_nap_poll()
-
-        mcp = create_server(state_with_path)
-        task = asyncio.create_task(
-            poll_inbox(
-                mcp,
-                state_with_path,
-                interval=self._FAST_INTERVAL,
-                nap_interval=1000.0,
-            )
-        )
-        await asyncio.wait_for(rebind_done.wait(), timeout=2.0)
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-        assert ("subscribe", 1) in events  # rebound on the cheap nap tick
-        assert tick_calls_at_rebind == [0]  # _safe_tick had not yet run at rebind time
-
     async def test_cancellation_is_clean(self, state_with_path: ServerState) -> None:
         """Cancelling the poller task does not raise."""
         mcp = create_server(state_with_path)
-        task = asyncio.create_task(
-            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
-        )
+        task = asyncio.create_task(poll_inbox(mcp, state_with_path))
         await asyncio.sleep(self._FAST_INTERVAL * 2)
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -994,9 +831,7 @@ class TestPollInbox:
     async def test_poller_detects_wall_post(self, state_with_path: ServerState) -> None:
         """Poller detects a wall posted between cycles and updates tool description."""
         mcp = create_server(state_with_path)
-        task = asyncio.create_task(
-            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
-        )
+        task = asyncio.create_task(poll_inbox(mcp, state_with_path))
         # Let initial cycle run
         await asyncio.sleep(self._FAST_INTERVAL * 3)
         tool = await mcp.get_tool("wall")
@@ -1014,15 +849,13 @@ class TestPollInbox:
             expires_at=now + timedelta(hours=1),
         )
         await state_with_path.relay.set_wall(wall)
-        # Let poller detect the change
-        await asyncio.sleep(self._FAST_INTERVAL * 5)
+        await _until(lambda: "[WALL]" in (tool.description or ""))
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
 
         assert tool.description is not None
         assert "deploy freeze" in tool.description
-        assert "[WALL]" in tool.description
 
     async def test_poller_detects_wall_clear(
         self, state_with_path: ServerState
@@ -1040,18 +873,15 @@ class TestPollInbox:
         )
         await state_with_path.relay.set_wall(wall)
 
-        task = asyncio.create_task(
-            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
-        )
-        # Let poller pick up the wall
-        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        task = asyncio.create_task(poll_inbox(mcp, state_with_path))
+        # The first pass picks up the wall
         tool = await mcp.get_tool("wall")
         assert tool is not None
-        assert "[WALL]" in (tool.description or "")
+        await _until(lambda: "[WALL]" in (tool.description or ""))
 
         # Clear the wall
         await state_with_path.relay.set_wall(None)
-        await asyncio.sleep(self._FAST_INTERVAL * 5)
+        await _until(lambda: tool.description == WALL_BASE_DESCRIPTION)
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
@@ -1101,7 +931,7 @@ class TestPollInbox:
             relay=relay,
         )
         mcp = create_server(state)
-        task = asyncio.create_task(poll_inbox(mcp, state, interval=self._FAST_INTERVAL))
+        task = asyncio.create_task(poll_inbox(mcp, state))
         await asyncio.sleep(self._FAST_INTERVAL * 3)
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -1115,25 +945,23 @@ class TestPollInbox:
         inbox_handle.unsubscribe.assert_awaited_once()
         wall_handle.unsubscribe.assert_awaited_once()
 
-    async def test_disabled_interval_recovers_from_a_client_discard(
+    async def test_liveness_wait_recovers_from_a_client_discard(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """At ``interval<=0``, a client discard must not strand every
-        always-on SUB forever.
+        """A client discard must not strand every always-on SUB forever.
 
-        Waiting on ``wake_event`` alone with no timeout has a real
+        Waiting on the wake event alone with no timeout has a real
         liveness hole: a wedge teardown (``_force_reconnect``) or give-up
         close (``_on_closed``) orphans every SUB on the dead client, and
         only the reconcile step — which runs after ``_sleep_or_wake``
         returns — can rebind them. With no live SUB, no poke can ever
         arrive to end that wait, so reconcile never runs and the SUBs
-        stay stranded permanently. ``_DISABLED_POLLER_FALLBACK_INTERVAL``
-        (shrunk here for test speed) is the liveness backstop that
-        breaks this: it bounds the wait even at ``interval<=0``, so
-        reconcile still gets scheduled with zero poke traffic.
+        stay stranded permanently. ``_SUB_RECONCILE_INTERVAL`` (shrunk here
+        for test speed) is the liveness check that breaks this: it bounds
+        the wait, so reconcile still gets scheduled with zero poke traffic.
         """
         monkeypatch.setattr(
-            _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
+            _descriptions, "_SUB_RECONCILE_INTERVAL", self._FAST_INTERVAL
         )
         nc = AsyncMock()
         subscribe_calls = 0
@@ -1168,7 +996,7 @@ class TestPollInbox:
             relay=relay,
         )
         mcp = create_server(state)
-        task = asyncio.create_task(poll_inbox(mcp, state, interval=0))
+        task = asyncio.create_task(poll_inbox(mcp, state))
         await asyncio.sleep(self._FAST_INTERVAL * 3)
         assert subscribe_calls == 3  # talk + inbox-notify + wall-notify, startup bind
 
@@ -1183,17 +1011,17 @@ class TestPollInbox:
 
         assert subscribe_calls > 3  # reconcile ran and rebound all SUBs
 
-    async def test_disabled_interval_fallback_skips_tick_work_with_no_real_event(
+    async def test_liveness_timeout_skips_tick_work_with_no_real_event(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A bare fallback-timeout wake at ``interval<=0`` — no real event,
-        no reconcile-triggered rebind, nothing new — must not run the
-        periodic tick work (``get_wall``, ``get_unread_summary``). See
-        ``test_disabled_interval_reconcile_rebind_forces_a_recompute`` for
-        the complementary case where a rebind DOES force one.
+        """A bare liveness timeout — no real event, no reconcile-triggered
+        rebind, nothing new — must not run the tick work (``get_wall``,
+        ``get_unread_summary``). The first pass runs once at start. See
+        ``test_liveness_rebind_forces_a_recompute`` for the complementary
+        case where a rebind DOES force one.
         """
         monkeypatch.setattr(
-            _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
+            _descriptions, "_SUB_RECONCILE_INTERVAL", self._FAST_INTERVAL
         )
         nc = AsyncMock()
 
@@ -1225,31 +1053,34 @@ class TestPollInbox:
             relay=relay,
         )
         mcp = create_server(state)
-        task = asyncio.create_task(poll_inbox(mcp, state, interval=0))
-        await asyncio.sleep(self._FAST_INTERVAL * 5)
+        task = asyncio.create_task(poll_inbox(mcp, state))
+        await asyncio.sleep(self._FAST_INTERVAL * 2)
+        passes_at_start = relay.get_wall.await_count
+        assert passes_at_start == 1  # the first pass, run once at start
+        await asyncio.sleep(self._FAST_INTERVAL * 5)  # several liveness timeouts
 
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
 
-        relay.get_wall.assert_not_awaited()
-        relay.get_unread_summary.assert_not_awaited()
+        assert relay.get_wall.await_count == passes_at_start
+        assert relay.get_unread_summary.await_count == 1
 
-    async def test_disabled_interval_reconcile_rebind_forces_a_recompute(
+    async def test_liveness_rebind_forces_a_recompute(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A stranded-SUB rebind at ``interval<=0`` must force a real
-        recompute, not just rebind silently.
+        """A stranded-SUB rebind must force a real recompute, not just
+        rebind silently.
 
         A SUB orphaned by a wedge teardown and later rebound may have
         missed a poke published while nothing was listening — core NATS
-        has no replay. At a disabled interval, nothing else would ever
+        has no replay. With no timer backstop, nothing else would ever
         trigger ``get_unread_summary`` again after such a rebind, so a
         message that arrived during the gap would stay undetected
         forever, not just delayed.
         """
         monkeypatch.setattr(
-            _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
+            _descriptions, "_SUB_RECONCILE_INTERVAL", self._FAST_INTERVAL
         )
         nc = AsyncMock()
         subscribe_calls = 0
@@ -1284,10 +1115,10 @@ class TestPollInbox:
             relay=relay,
         )
         mcp = create_server(state)
-        task = asyncio.create_task(poll_inbox(mcp, state, interval=0))
+        task = asyncio.create_task(poll_inbox(mcp, state))
         await asyncio.sleep(self._FAST_INTERVAL * 3)
         assert subscribe_calls == 3  # talk + inbox-notify + wall-notify, startup bind
-        relay.get_wall.assert_not_awaited()  # steady state: nothing to recompute yet
+        passes_at_start = relay.get_wall.await_count  # the first pass only
 
         # A wedge teardown/give-up close, independent of this poller.
         relay.connection_generation = 1
@@ -1298,73 +1129,7 @@ class TestPollInbox:
             await task
 
         assert subscribe_calls > 3  # reconcile ran and rebound all SUBs
-        relay.get_wall.assert_awaited()  # the rebind forced a real recompute
-
-    async def test_cheap_nap_tick_reconciles_inbox_notify_generation_bump(
-        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A cheap nap tick still reconciles the inbox-notify SUB too.
-
-        Mirrors ``test_cheap_nap_tick_reconciles_background_generation_bump``
-        for the second always-on SUB the ``SubKind``-indexed family adds: a
-        background wedge teardown/redial can orphan the inbox-notify SUB
-        during a nap exactly as it can the talk SUB, and both reconciles sit
-        in the same unconditional region of the tick loop (after the
-        cheap-nap skip), so both must run on a cheap tick alike.
-        """
-        events: list[tuple[str, int]] = []
-        subscribe_calls = [0]
-
-        def _gen(_state: ServerState) -> int:
-            return 1  # a background swap advanced the generation past the SUB
-
-        async def fake_subscribe(
-            _state: ServerState,
-            _latch: TalkNotifyLatch,
-            _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
-        ) -> SubscriptionBinding:
-            subscribe_calls[0] += 1
-            # First call is the startup bind at the pre-swap generation (0, now
-            # stale); the cheap-nap reconcile rebinds to the live generation (1).
-            bound = 0 if subscribe_calls[0] == 1 else 1
-            events.append(("subscribe", bound))
-            return SubscriptionBinding(AsyncMock(), bound)
-
-        async def fake_tick(
-            _mcp: FastMCP[ServerState],
-            _state: ServerState,
-            last_count: int,
-            last_wall: tuple[str, str],
-            last_talk: tuple[tuple[str, ...], int, str],
-            *,
-            gate: _InboxPokeGate,
-        ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
-            del gate
-            return last_count, last_wall, last_talk
-
-        monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", fake_subscribe)
-        monkeypatch.setattr(_descriptions, "_relay_generation", _gen)
-        monkeypatch.setattr(_descriptions, "_safe_tick", fake_tick)
-
-        state_with_path.activity.enter_nap()
-        state_with_path.activity.record_nap_poll()
-
-        mcp = create_server(state_with_path)
-        task = asyncio.create_task(
-            poll_inbox(
-                mcp,
-                state_with_path,
-                interval=self._FAST_INTERVAL,
-                nap_interval=1000.0,
-            )
-        )
-        await asyncio.sleep(self._FAST_INTERVAL * 5)
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-        assert ("subscribe", 1) in events  # rebound on the cheap nap tick
+        assert relay.get_wall.await_count > passes_at_start  # the rebind recomputed
 
 
 def _fixed_generation(value: int) -> Callable[[ServerState], int]:
@@ -1398,7 +1163,7 @@ class TestReconcileTalkSub:
 
     @staticmethod
     def _gate() -> _InboxPokeGate:
-        return _InboxPokeGate(backstop_interval=1000.0)
+        return _InboxPokeGate()
 
     async def test_no_resubscribe_when_generation_unchanged(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
@@ -1417,7 +1182,6 @@ class TestReconcileTalkSub:
             _state: ServerState,
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
             nonlocal calls
             calls += 1
@@ -1426,9 +1190,7 @@ class TestReconcileTalkSub:
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(3))
 
-        result = await _reconcile_talk_sub(
-            state, current, _test_latch(), self._gate(), asyncio.Event()
-        )
+        result = await _reconcile_talk_sub(state, current, _test_latch(), self._gate())
 
         assert result is current
         assert calls == 0
@@ -1449,7 +1211,6 @@ class TestReconcileTalkSub:
             _state: ServerState,
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
             return fresh
 
@@ -1461,7 +1222,6 @@ class TestReconcileTalkSub:
             SubscriptionBinding(stale, 3),
             _test_latch(),
             self._gate(),
-            asyncio.Event(),
         )
 
         assert result is fresh
@@ -1477,16 +1237,13 @@ class TestReconcileTalkSub:
             _state: ServerState,
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
             return fresh
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(1))
 
-        result = await _reconcile_talk_sub(
-            state, None, _test_latch(), self._gate(), asyncio.Event()
-        )
+        result = await _reconcile_talk_sub(state, None, _test_latch(), self._gate())
 
         assert result is fresh
 
@@ -1504,7 +1261,6 @@ class TestReconcileTalkSub:
             _state: ServerState,
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
             return None
 
@@ -1516,60 +1272,43 @@ class TestReconcileTalkSub:
             SubscriptionBinding(stale, 2),
             _test_latch(),
             self._gate(),
-            asyncio.Event(),
         )
 
         assert result is None
         stale.unsubscribe.assert_awaited_once()
 
 
-class TestNapIntervalFor:
-    """The backstop cadence scales with the configured poll interval."""
-
-    def test_default_matches_historical_nap_interval(self) -> None:
-        """The module defaults (2.0s / 30.0s) round-trip exactly."""
-        assert nap_interval_for(2.0) == 30.0
-
-    def test_scales_proportionally(self) -> None:
-        assert nap_interval_for(1.0) == 15.0
-        assert nap_interval_for(10.0) == 150.0
-
-
 class TestInboxPokeGate:
-    """Poke-gated recompute with a periodic backstop (DES-062)."""
+    """Poke-gated recompute with no timer backstop (DES-062, DES-087)."""
 
     def test_starts_poked_forces_initial_recompute(self) -> None:
         """Recompute on the first check without requiring an incoming poke."""
-        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate = _InboxPokeGate()
         assert gate.claim() is True
 
-    def test_no_recompute_before_backstop_with_no_poke(self) -> None:
-        """An unpoked tick within the backstop window does not recompute."""
-        gate = _InboxPokeGate(backstop_interval=1000.0)
+    def test_no_recompute_with_no_poke(self) -> None:
+        """An unpoked tick does not recompute, however long it has been."""
+        gate = _InboxPokeGate()
         gate.claim()  # consume the initial forced recompute
         assert gate.claim() is False
 
-    def test_poke_forces_recompute_regardless_of_backstop(self) -> None:
-        """A marked poke recomputes immediately, even mid-backstop-window."""
-        gate = _InboxPokeGate(backstop_interval=1000.0)
+    def test_poke_forces_recompute(self) -> None:
+        """A marked poke recomputes."""
+        gate = _InboxPokeGate()
         gate.claim()
         gate.mark()
         assert gate.claim() is True
 
-    def test_backstop_recomputes_with_no_poke(self) -> None:
-        """The backstop cadence fires a recompute even with no poke at all.
-
-        This is the dropped-poke insurance: an at-most-once core-NATS poke
-        that never arrives still gets picked up within one backstop
-        interval instead of stalling forever.
-        """
-        gate = _InboxPokeGate(backstop_interval=0.0)
+    def test_pending_reports_an_unclaimed_poke(self) -> None:
+        gate = _InboxPokeGate()
         gate.claim()
-        assert gate.claim() is True
+        assert gate.pending is False
+        gate.mark()
+        assert gate.pending is True
 
-    def test_claim_clears_poke_and_resets_clock(self) -> None:
-        """A successful ``claim()`` clears the poke flag and restarts the clock."""
-        gate = _InboxPokeGate(backstop_interval=1000.0)
+    def test_claim_clears_the_poke(self) -> None:
+        """A successful ``claim()`` clears the poke flag."""
+        gate = _InboxPokeGate()
         gate.mark()
         assert gate.claim() is True  # consumes both the poke and the initial force
         assert gate.claim() is False
@@ -1583,17 +1322,17 @@ class TestInboxPokeGate:
         nothing the caller does with the returned ``True`` (including
         awaiting a slow refresh) can race a concurrent ``mark()``.
         """
-        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate = _InboxPokeGate()
         gate.claim()  # consume the initial force; simulates "refresh in flight"
         gate.mark()  # a poke arrives while that refresh is still running
         assert gate.claim() is True  # not clobbered — the next tick sees it
 
     def test_mark_after_failed_refresh_re_arms_retry(self) -> None:
         """Ordering property (b): re-marking after a failed refresh makes
-        the very next ``claim()`` due again, instead of waiting out a
-        full backstop interval for a transient failure.
+        the very next ``claim()`` due again, instead of waiting for the
+        next arrival after a transient failure.
         """
-        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate = _InboxPokeGate()
         gate.claim()  # consume the initial force
         # Simulate _active_tick's re-mark-on-failure branch.
         gate.mark()
@@ -1633,7 +1372,7 @@ class TestActiveTickGateOrderingProperties:
         """
         state, relay = self._nats_state(tmp_path)
         mcp = create_server(state)
-        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate = _InboxPokeGate()
 
         calls = 0
 
@@ -1649,13 +1388,13 @@ class TestActiveTickGateOrderingProperties:
 
         # Tick 1: the initial forced claim() fires and the fetch fails —
         # _active_tick's own re-mark-on-failure branch must run.
-        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+        await _active_tick(mcp, state, _Seen(), gate=gate)
         assert calls == 1
 
         # Tick 2: with a 1000s backstop, only a re-mark from tick 1 can
         # make claim() due again — a broken or inverted re-mark branch
         # leaves get_unread_summary uncalled here.
-        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+        await _active_tick(mcp, state, _Seen(), gate=gate)
         assert calls == 2
 
     async def test_poke_arriving_mid_refresh_survives_to_next_tick(
@@ -1670,7 +1409,7 @@ class TestActiveTickGateOrderingProperties:
         """
         state, relay = self._nats_state(tmp_path)
         mcp = create_server(state)
-        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate = _InboxPokeGate()
 
         calls = 0
 
@@ -1685,12 +1424,12 @@ class TestActiveTickGateOrderingProperties:
 
         relay.get_unread_summary = AsyncMock(side_effect=_poke_mid_refresh)
 
-        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+        await _active_tick(mcp, state, _Seen(), gate=gate)
         assert calls == 1
 
         # Tick 2: only the mid-refresh mark from tick 1 can make claim()
         # due again with a 1000s backstop.
-        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+        await _active_tick(mcp, state, _Seen(), gate=gate)
         assert calls == 2
 
 
@@ -1728,8 +1467,7 @@ class TestTargetedMessageMarksInboxGate:
         state = self._nats_state(tmp_path, nc)
         mcp = create_server(state)
 
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        wake_event = asyncio.Event()
+        gate = _InboxPokeGate()
         gate.claim()  # steady state: consume the initial forced recompute
 
         # Establish the talk SUB and drive the exact frame deliver() publishes
@@ -1739,7 +1477,6 @@ class TestTargetedMessageMarksInboxGate:
             state,
             TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER)),
             gate,
-            wake_event,
         )
         on_talk = nc.subscribe.call_args.kwargs["cb"]
         frame = json.dumps(
@@ -1755,10 +1492,9 @@ class TestTargetedMessageMarksInboxGate:
         await on_talk(msg)
 
         # The callback both wakes the poller and marks the gate.
-        assert state.activity.napping is False
-        assert wake_event.is_set()
+        assert state.wake.is_set
 
-        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+        await _active_tick(mcp, state, _Seen(), gate=gate)
 
         tool = await mcp.get_tool("read_messages")
         assert tool is not None
@@ -1788,14 +1524,12 @@ class TestTalkCallbackPreservesWireTypes:
             pwd="/test",
             relay=relay,
         )
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        wake_event = asyncio.Event()
+        gate = _InboxPokeGate()
 
         await subscribe_talk(
             state,
             TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER)),
             gate,
-            wake_event,
         )
         on_talk = nc.subscribe.call_args.kwargs["cb"]
 
@@ -1851,20 +1585,19 @@ class TestSubscribeTalkLatch:
     ) -> None:
         state, relay = self._nats_state(tmp_path)
         latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        wake_event = asyncio.Event()
+        gate = _InboxPokeGate()
 
         with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
             # onset — WARNING
-            assert await subscribe_talk(state, latch, gate, wake_event) is None
+            assert await subscribe_talk(state, latch, gate) is None
             # retry — DEBUG
-            assert await subscribe_talk(state, latch, gate, wake_event) is None
+            assert await subscribe_talk(state, latch, gate) is None
 
             warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
             assert len(warnings) == 1  # not one per tick
 
             relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
-            sub = await subscribe_talk(state, latch, gate, wake_event)
+            sub = await subscribe_talk(state, latch, gate)
 
         assert sub is not None
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
@@ -1898,17 +1631,15 @@ class TestSubscribeInboxNotify:
 
     async def test_returns_none_for_non_nats_relay(self, state: ServerState) -> None:
         """LocalRelay (the default test relay) has no push mechanism."""
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        result = await subscribe_inbox_notify(
-            state, _test_latch(), gate, asyncio.Event()
-        )
+        gate = _InboxPokeGate()
+        result = await subscribe_inbox_notify(state, _test_latch(), gate)
         assert result is None
 
     async def test_subscribes_on_the_repo_scoped_subject(self, tmp_path: Path) -> None:
         state, relay = self._nats_state(tmp_path)
         relay.get_nc = AsyncMock(return_value=AsyncMock())
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        sub = await subscribe_inbox_notify(state, _test_latch(), gate, asyncio.Event())
+        gate = _InboxPokeGate()
+        sub = await subscribe_inbox_notify(state, _test_latch(), gate)
         assert sub is not None
         assert sub.generation == 1
         relay.inbox_notify_subject.assert_called_once_with("_test-server", "kai")
@@ -1918,36 +1649,32 @@ class TestSubscribeInboxNotify:
         state, relay = self._nats_state(tmp_path)
         nc = AsyncMock()
         relay.get_nc = AsyncMock(return_value=nc)
-        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate = _InboxPokeGate()
         gate.claim()  # consume the initial forced recompute
-        wake_event = asyncio.Event()
-        state.activity.enter_nap()
 
-        await subscribe_inbox_notify(state, _test_latch(), gate, wake_event)
+        await subscribe_inbox_notify(state, _test_latch(), gate)
         callback = nc.subscribe.call_args.kwargs["cb"]
         await callback(object())
 
         assert gate.claim() is True
-        assert state.activity.napping is False  # wake() exited napping
-        assert wake_event.is_set()
+        assert state.wake.is_set
 
     async def test_failure_then_recovery_logs_once_each(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         state, relay = self._nats_state(tmp_path)
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        wake_event = asyncio.Event()
+        gate = _InboxPokeGate()
         latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
 
         with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
-            assert await subscribe_inbox_notify(state, latch, gate, wake_event) is None
-            assert await subscribe_inbox_notify(state, latch, gate, wake_event) is None
+            assert await subscribe_inbox_notify(state, latch, gate) is None
+            assert await subscribe_inbox_notify(state, latch, gate) is None
 
             warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
             assert len(warnings) == 1  # not one per tick
 
             relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
-            sub = await subscribe_inbox_notify(state, latch, gate, wake_event)
+            sub = await subscribe_inbox_notify(state, latch, gate)
 
         assert sub is not None
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
@@ -1981,57 +1708,52 @@ class TestSubscribeWallNotify:
 
     async def test_returns_none_for_non_nats_relay(self, state: ServerState) -> None:
         """LocalRelay (the default test relay) has no push mechanism."""
-        result = await subscribe_wall_notify(state, _test_latch(), asyncio.Event())
+        result = await subscribe_wall_notify(state, _test_latch())
         assert result is None
 
     async def test_subscribes_on_the_repo_scoped_subject(self, tmp_path: Path) -> None:
         """The SUB binds the repo-scoped, user-independent wall subject."""
         state, relay = self._nats_state(tmp_path)
         relay.get_nc = AsyncMock(return_value=AsyncMock())
-        sub = await subscribe_wall_notify(state, _test_latch(), asyncio.Event())
+        sub = await subscribe_wall_notify(state, _test_latch())
         assert sub is not None
         assert sub.generation == 1
         # Repo only — no user argument (a wall is a team broadcast).
         relay.wall_notify_subject.assert_called_once_with("_test-server")
 
     async def test_callback_wakes_without_marking_gate(self, tmp_path: Path) -> None:
-        """The callback wakes the poller out of nap and nothing else.
+        """The callback wakes the poller and nothing else.
 
         Unlike the inbox-notify callback it does NOT mark a poke gate: the
         wall read in ``_active_tick`` is unconditional per tick, so waking the
-        tick is sufficient. Waking exits napping and resets the nap-poll clock
-        so the woken tick is not skipped as a cheap nap.
+        tick is sufficient.
         """
         state, relay = self._nats_state(tmp_path)
         nc = AsyncMock()
         relay.get_nc = AsyncMock(return_value=nc)
-        wake_event = asyncio.Event()
-        state.activity.enter_nap()
 
-        await subscribe_wall_notify(state, _test_latch(), wake_event)
+        await subscribe_wall_notify(state, _test_latch())
         callback = nc.subscribe.call_args.kwargs["cb"]
         await callback(object())
 
-        assert state.activity.napping is False  # wake() exited napping
-        assert wake_event.is_set()
+        assert state.wake.is_set
 
     async def test_failure_then_recovery_logs_once_each(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A NATS outage latches: one WARNING onset, one INFO recovery."""
         state, relay = self._nats_state(tmp_path)
-        wake_event = asyncio.Event()
         latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
 
         with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
-            assert await subscribe_wall_notify(state, latch, wake_event) is None
-            assert await subscribe_wall_notify(state, latch, wake_event) is None
+            assert await subscribe_wall_notify(state, latch) is None
+            assert await subscribe_wall_notify(state, latch) is None
 
             warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
             assert len(warnings) == 1  # not one per tick
 
             relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
-            sub = await subscribe_wall_notify(state, latch, wake_event)
+            sub = await subscribe_wall_notify(state, latch)
 
         assert sub is not None
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
@@ -2053,7 +1775,6 @@ class TestSubscribeWallNotify:
         async def _sub(
             _state: ServerState,
             _latch: TalkNotifyLatch,
-            _wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
             nonlocal calls
             calls += 1
@@ -2066,8 +1787,7 @@ class TestSubscribeWallNotify:
             state,
             current,
             _test_latch(),
-            _InboxPokeGate(backstop_interval=1000.0),
-            asyncio.Event(),
+            _InboxPokeGate(),
         )
 
         assert result is not current
@@ -2096,7 +1816,7 @@ class TestReconcileInboxNotifySub:
 
     @staticmethod
     def _gate() -> _InboxPokeGate:
-        return _InboxPokeGate(backstop_interval=1000.0)
+        return _InboxPokeGate()
 
     async def test_no_resubscribe_when_generation_unchanged(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
@@ -2109,7 +1829,6 @@ class TestReconcileInboxNotifySub:
             _state: ServerState,
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
             nonlocal calls
             calls += 1
@@ -2123,7 +1842,6 @@ class TestReconcileInboxNotifySub:
             current,
             _test_latch(),
             self._gate(),
-            asyncio.Event(),
         )
 
         assert result is current
@@ -2140,7 +1858,6 @@ class TestReconcileInboxNotifySub:
             _state: ServerState,
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
             return fresh
 
@@ -2152,7 +1869,6 @@ class TestReconcileInboxNotifySub:
             SubscriptionBinding(stale, 3),
             _test_latch(),
             self._gate(),
-            asyncio.Event(),
         )
 
         assert result is fresh
@@ -2167,7 +1883,6 @@ class TestReconcileInboxNotifySub:
             _state: ServerState,
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
         ) -> SubscriptionBinding | None:
             return fresh
 
@@ -2175,7 +1890,7 @@ class TestReconcileInboxNotifySub:
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(1))
 
         result = await _reconcile_inbox_notify_sub(
-            state, None, _test_latch(), self._gate(), asyncio.Event()
+            state, None, _test_latch(), self._gate()
         )
 
         assert result is fresh
@@ -2258,7 +1973,7 @@ class TestStartupNotificationRace:
                 await asyncio.Event().wait()
             raise RuntimeError("bus unavailable")
 
-        monkeypatch.setattr(_descriptions, "_NOTIFY_SEND_TIMEOUT", 0.05)
+        monkeypatch.setattr(handshake_delivery, "_NOTIFY_SEND_TIMEOUT", 0.05)
         monkeypatch.setattr(state.tool_events, "publish", fail_publish)
         session = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
         await _descriptions.handshake_delivery.capture_session(session)
@@ -2705,7 +2420,7 @@ class TestNotifySendTimeout:
         # A short patched timeout, not a real wall-clock delay, keeps this
         # test fast — the hang below never resolves on its own, so only
         # the timeout ends the wait.
-        monkeypatch.setattr(_descriptions, "_NOTIFY_SEND_TIMEOUT", 0.05)
+        monkeypatch.setattr(handshake_delivery, "_NOTIFY_SEND_TIMEOUT", 0.05)
 
         never_set = asyncio.Event()
         wedged_session = MagicMock(spec=ServerSession)

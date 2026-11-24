@@ -1,7 +1,7 @@
 {
-  "total": 203,
+  "total": 202,
   "by_category": {
-    "noqa": 126,
+    "noqa": 125,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 31,
@@ -43,8 +43,11 @@
       "type_ignore": 1
     },
     "src/biff/nats_relay.py": {
-      "noqa": 5,
+      "noqa": 4,
       "pyright_ignore": 12
+    },
+    "src/biff/nats_support.py": {
+      "noqa": 1
     },
     "src/biff/plugins/claude_code/_hook_entry.py": {
       "noqa": 14,
@@ -67,23 +70,29 @@
     "src/biff/relay.py": {
       "noqa": 22
     },
+    "src/biff/relay_config.py": {
+      "noqa": 1
+    },
     "src/biff/repl_readline.py": {
       "noqa": 1
     },
     "src/biff/server/app.py": {
-      "noqa": 7,
+      "noqa": 6,
       "type_ignore": 5,
       "pyright_ignore": 8
     },
-    "src/biff/server/entrypoints.py": {
+    "src/biff/server/handshake_delivery.py": {
+      "noqa": 1
+    },
+    "src/biff/server/poller_supervisor.py": {
       "noqa": 1
     },
     "src/biff/server/tools/_descriptions.py": {
-      "noqa": 12,
+      "noqa": 11,
       "pyright_ignore": 5
     },
     "src/biff/server/tools/biff_relay.py": {
-      "noqa": 2
+      "noqa": 1
     },
     "src/biff/server/tools/mesg.py": {
       "noqa": 1
@@ -135,5 +144,5 @@
       "per_file_ignores": 4
     }
   },
-  "updated_at": "2026-11-23T00:15:50Z"
+  "updated_at": "2026-11-24T00:42:43Z"
 }

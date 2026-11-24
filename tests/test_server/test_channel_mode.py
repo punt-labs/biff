@@ -38,7 +38,7 @@ from typer.testing import CliRunner
 
 from biff.__main__ import app
 from biff.models import Message
-from biff.server import channel, channel_server
+from biff.server import channel, channel_server, handshake_delivery
 from biff.server.app import _SessionCaptureMiddleware, create_server
 from biff.server.channel import (
     CHANNEL_METHOD,
@@ -227,7 +227,7 @@ def stalled_session() -> MagicMock:
 @pytest.fixture(autouse=True)
 def _fresh_delivery(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     _descriptions._reset_session()
-    monkeypatch.setattr(_descriptions, "_NOTIFY_SEND_TIMEOUT", 0.05)
+    monkeypatch.setattr(handshake_delivery, "_NOTIFY_SEND_TIMEOUT", 0.05)
     yield
     _descriptions._reset_session()
 
@@ -313,7 +313,11 @@ class TestSingleConnectionDelivery:
                 await delivery.notify()
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        infos = [r for r in caplog.records if r.levelno == logging.INFO]
+        infos = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO and r.name == channel.logger.name
+        ]
         assert len(warnings) == 2
         assert "Tool list change (session kept)" in warnings[0].getMessage()
         assert "TimeoutError" in warnings[0].getMessage()
@@ -859,10 +863,10 @@ class TestAFailingFlushDoesNotSkipTheTick:
         unread, wall = _state_with_counting_relay(state)
 
         with caplog.at_level(logging.WARNING):
-            task = asyncio.create_task(
-                poll_inbox(create_server(state), state, interval=0.05)
-            )
-            await asyncio.sleep(0.4)
+            task = asyncio.create_task(poll_inbox(create_server(state), state))
+            for _ in range(8):  # arrivals wake the poller; no timer does
+                state.wake.wake()
+                await asyncio.sleep(0.05)
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
@@ -882,11 +886,11 @@ class TestAFailingFlushDoesNotSkipTheTick:
             raise RuntimeError(msg)
 
         monkeypatch.setattr(_descriptions, "_active_tick", broken)
-        gate = _InboxPokeGate(backstop_interval=30.0)
+        gate = _InboxPokeGate()
         with caplog.at_level(logging.WARNING):
             for _ in range(3):
                 await _descriptions._safe_tick(
-                    create_server(state), state, -1, ("x", "y"), ((), -1, ""), gate=gate
+                    create_server(state), state, _descriptions._Seen(), gate=gate
                 )
 
         assert [r.levelno for r in caplog.records] == [logging.ERROR]
@@ -1003,8 +1007,8 @@ class TestACancelledInRequestSendKeepsTheDebt:
         assert delivery._pending_notify
 
 
-class TestOwedDebtIsRetriedEveryPollerIteration:
-    async def test_a_cheap_nap_iteration_still_flushes(
+class TestOwedDebtIsRetriedOnEveryWake:
+    async def test_a_timeout_wake_with_no_tick_still_flushes(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         delivery = _descriptions.handshake_delivery
@@ -1014,19 +1018,36 @@ class TestOwedDebtIsRetriedEveryPollerIteration:
         session = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
         session.send_tool_list_changed = AsyncMock()
         await delivery.capture_session(session)
+        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.6)
+
+        async def settle(
+            _mcp: object,
+            _state: object,
+            seen: _descriptions._Seen,
+            *,
+            gate: _InboxPokeGate,
+            due: bool = False,
+        ) -> _descriptions._Seen:
+            gate.claim()  # a pass that succeeded
+            return seen
+
+        ticks = AsyncMock(side_effect=settle)
+        monkeypatch.setattr(_descriptions, "_safe_tick", ticks)
+        task = asyncio.create_task(poll_inbox(create_server(state), state))
+        await asyncio.sleep(0.3)  # the first pass is over; nothing else will wake it
+        link.failed("send", TimeoutError())  # back-off starts
         delivery._pending_notify = True
-        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.0)
-        state.activity.enter_nap()
-        state.activity.record_nap_poll()
-        task = asyncio.create_task(
-            poll_inbox(create_server(state), state, interval=0.05, nap_interval=3600.0)
-        )
-        await asyncio.sleep(0.3)
+        state.wake.wake()  # as a tool call that leaves a debt does
+        await asyncio.sleep(0.2)  # that wake's own pass runs
+        assert delivery.seconds_until_retry() is not None  # inside the back-off
+        before = ticks.await_count
+        await asyncio.sleep(0.8)
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
 
-        assert not delivery._pending_notify
+        assert delivery.seconds_until_retry() is None  # the debt is paid
+        assert ticks.await_count == before  # the back-off's wake ran no tick
 
 
 class TestNoSessionCapturedIsAFailureEpisode:

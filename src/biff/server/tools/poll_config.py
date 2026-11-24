@@ -1,7 +1,8 @@
 """Poll interval configuration tools — ``set_poll_interval`` / ``get_poll_status``.
 
-Allows users to adjust the background polling frequency at runtime
-and persist the setting to ``config.local.yaml``.
+Lets users record the polling cadence that ``/biff:read`` schedules and
+persist it to ``config.local.yaml``.  The server runs no timer for it
+(DES-087).
 """
 
 from __future__ import annotations
@@ -41,73 +42,34 @@ def _parse_interval(value: str) -> float | None:
     return amount
 
 
-_SET_POLL_INTERVAL_DESCRIPTION_NATS = (
-    "Set the background poller's cadence. Messages and talk "
-    "arrive in real time via NATS push regardless of this "
-    "value — the poller keeps its always-on subscriptions and "
-    "poke-driven recompute running even when disabled (see n, "
-    "below). This value instead governs the wall-countdown "
-    "render rate, stale talk-invite expiry, the unread-count "
-    "backstop (recomputed roughly every 15x this interval even "
-    "if a push notification is missed), and the connection "
-    "wedge-detection window. Accepts {N}s or {N}m format (e.g. "
-    "2s, 30s, 5m), or n (disable — push detection keeps "
-    "working, but the wall countdown stops re-rendering, stale "
-    "invites stop expiring, the backstop is gone, and wedge "
-    "detection widens to the ~60-80s keepalive floor). "
-    "Persisted to config. Restart required to take effect."
+_SET_POLL_INTERVAL_DESCRIPTION = (
+    "Record the polling cadence the user asked for. Biff's server runs no "
+    "timer for it: messages, walls and talk arrive by NATS push or, on the "
+    "local relay, by a file watch, whatever this value is, and an explicit "
+    "read recomputes the unread count. The cadence is how often /biff:read "
+    "schedules its own check. Accepts {N}s or {N}m format (e.g. 2s, 30s, "
+    "5m), or n (polling off). Persisted to config. Restart required to "
+    "take effect."
 )
 
-_SET_POLL_INTERVAL_DESCRIPTION_LOCAL = (
-    "Set the background poller's cadence. This relay is "
-    "filesystem-backed (no NATS server configured), which has "
-    "no push mechanism at all — this interval is the only "
-    "thing driving new-message and talk detection. Accepts "
-    "{N}s or {N}m format (e.g. 2s, 30s, 5m), or n (disable — "
-    "detection keeps working on a fixed ~30s fallback poll "
-    "instead of this interval; it is never fully disabled, "
-    "since nothing else would ever notice new activity). "
-    "Persisted to config. Restart required to take effect."
-)
-
-_DISABLE_RESPONSE_NATS = (
-    "Polling's periodic work is disabled — the wall countdown "
-    "stops re-rendering, stale talk invites stop expiring, "
-    "the unread backstop is gone, and wedge detection widens "
-    "to the ~60-80s keepalive floor. Messages and talk still "
-    "arrive via NATS push: the always-on subscriptions and "
-    "their poke-driven recompute keep running: only the "
-    "periodic safety net around them is gone. Restart Claude "
-    "Code for the change to take effect."
-)
-
-_DISABLE_RESPONSE_LOCAL = (
-    "Polling's configured interval is disabled. This relay is "
-    "filesystem-backed (no NATS server configured) and has no "
-    "push mechanism at all, so detection falls back to a fixed "
-    "~30s poll instead of stopping — nothing else would ever "
-    "notice new activity otherwise. Restart Claude Code for the "
-    "change to take effect."
+_DISABLE_RESPONSE = (
+    "Polling is off. Biff's server runs no timer either way: messages, "
+    "walls and talk still arrive by NATS push or, on the local relay, by "
+    "a file watch. Restart Claude Code for the change to take effect."
 )
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register poll configuration tools."""
-    nats_backed = isinstance(state.relay, NatsRelay)
-    description = (
-        _SET_POLL_INTERVAL_DESCRIPTION_NATS
-        if nats_backed
-        else _SET_POLL_INTERVAL_DESCRIPTION_LOCAL
-    )
 
-    @mcp.tool(name="set_poll_interval", description=description)
+    @mcp.tool(name="set_poll_interval", description=_SET_POLL_INTERVAL_DESCRIPTION)
     async def set_poll_interval(interval: str) -> str:
-        """Save the background polling cadence for the next server start.
+        """Save the polling cadence for the next server start.
 
         Args:
-            interval: A positive duration such as '2s' or '5m', or 'n' to disable
-                periodic work. NATS push subscriptions remain active; filesystem
-                relays use a fallback poll because they have no push mechanism.
+            interval: A positive duration such as '2s' or '5m', or 'n' to turn
+                polling off. Arrivals do not depend on it: the server is woken
+                by NATS push or by the local relay's file watch.
 
         Returns:
             A confirmation and restart reminder, or an invalid-interval notice.
@@ -136,7 +98,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             ensure_gitignore_yaml(repo_root)
 
         if parsed is None:
-            return _DISABLE_RESPONSE_NATS if nats_backed else _DISABLE_RESPONSE_LOCAL
+            return _DISABLE_RESPONSE
 
         return (
             f"Poll interval set to {interval} ({parsed}s). "

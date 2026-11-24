@@ -48,6 +48,20 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/abandoned_canaries.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/arrival_handler.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.667,
+    "avg_lcom": 0.667
+  },
   "src/biff/caller_identity.py": {
     "efferent_coupling": 1.0,
     "public_names": 3.0,
@@ -58,6 +72,13 @@
   "src/biff/caller_stamp.py": {
     "efferent_coupling": 1.0,
     "public_names": 5.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/changed_file.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -272,6 +293,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/directory_kqueue.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/dispatch.py": {
     "efferent_coupling": 2.0,
     "public_names": 2.0,
@@ -295,6 +323,13 @@
   },
   "src/biff/ethos_team.py": {
     "efferent_coupling": 1.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/failure_log.py": {
+    "efferent_coupling": 0.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -335,6 +370,20 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/invite_expiry.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/local_watch.py": {
+    "efferent_coupling": 5.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.717,
+    "avg_lcom": 0.454
+  },
   "src/biff/logging_config.py": {
     "efferent_coupling": 0.0,
     "public_names": 1.0,
@@ -360,8 +409,15 @@
     "efferent_coupling": 4.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.898,
-    "avg_lcom": 0.706
+    "max_lcom": 0.892,
+    "avg_lcom": 0.703
+  },
+  "src/biff/nats_support.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/biff/plugins/__init__.py": {
     "efferent_coupling": 0.0,
@@ -412,6 +468,20 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/plugins/claude_code/channel_gates.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/plugins/claude_code/claude_argv.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.5,
+    "avg_lcom": 0.5
+  },
   "src/biff/plugins/claude_code/claude_md.py": {
     "efferent_coupling": 0.0,
     "public_names": 2.0,
@@ -440,6 +510,48 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/plugins/claude_code/launch_flag.py": {
+    "efferent_coupling": 4.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
+  },
+  "src/biff/plugins/claude_code/managed_policy.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/plugins/claude_code/managed_sources.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/plugins/claude_code/poll_command.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/plugins/claude_code/session_output.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/plugins/claude_code/startup_warning.py": {
+    "efferent_coupling": 5.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.81,
+    "avg_lcom": 0.81
+  },
   "src/biff/plugins/claude_code/statusline.py": {
     "efferent_coupling": 4.0,
     "public_names": 13.0,
@@ -450,6 +562,13 @@
   "src/biff/plugins/claude_code/unread_file.py": {
     "efferent_coupling": 2.0,
     "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/plugins/claude_code/warning_claim.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -485,6 +604,13 @@
   "src/biff/relay_config.py": {
     "efferent_coupling": 2.0,
     "public_names": 8.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/relay_errors.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -531,13 +657,6 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
-  "src/biff/server/activity.py": {
-    "efferent_coupling": 0.0,
-    "public_names": 1.0,
-    "circular_imports": 0.0,
-    "max_lcom": 0.393,
-    "avg_lcom": 0.393
-  },
   "src/biff/server/app.py": {
     "efferent_coupling": 13.0,
     "public_names": 2.0,
@@ -559,15 +678,36 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/server/channel.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 12.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.773,
+    "avg_lcom": 0.672
+  },
+  "src/biff/server/channel_server.py": {
+    "efferent_coupling": 5.0,
+    "public_names": 2.0,
+    "circular_imports": 1.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 0.5
+  },
   "src/biff/server/display_queue.py": {
     "efferent_coupling": 0.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.222,
-    "avg_lcom": 0.222
+    "max_lcom": 0.2,
+    "avg_lcom": 0.2
   },
   "src/biff/server/entrypoints.py": {
     "efferent_coupling": 4.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/server/handshake_delivery.py": {
+    "efferent_coupling": 1.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -587,6 +727,20 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/server/poller_health.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
+  },
+  "src/biff/server/poller_supervisor.py": {
+    "efferent_coupling": 5.0,
+    "public_names": 4.0,
+    "circular_imports": 1.0,
+    "max_lcom": 0.2,
+    "avg_lcom": 0.2
+  },
   "src/biff/server/relay_lifecycle.py": {
     "efferent_coupling": 2.0,
     "public_names": 2.0,
@@ -600,6 +754,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.3,
     "avg_lcom": 0.3
+  },
+  "src/biff/server/tool_list_send.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/biff/server/tools/__init__.py": {
     "efferent_coupling": 1.0,
@@ -617,7 +778,7 @@
   },
   "src/biff/server/tools/_descriptions.py": {
     "efferent_coupling": 8.0,
-    "public_names": 16.0,
+    "public_names": 15.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -741,6 +902,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/server/wake.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 0.785
+  },
   "src/biff/session_handle.py": {
     "efferent_coupling": 1.0,
     "public_names": 1.0,
@@ -794,8 +962,8 @@
     "efferent_coupling": 2.0,
     "public_names": 5.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.737,
-    "avg_lcom": 0.737
+    "max_lcom": 0.725,
+    "avg_lcom": 0.725
   },
   "src/biff/talk_types.py": {
     "efferent_coupling": 2.0,

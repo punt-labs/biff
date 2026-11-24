@@ -313,7 +313,7 @@ class TestSignalSurvivesCleanupFailure:
     def test_survives_sentinel_write_failure(self, bound_server: ActiveServer) -> None:
         """The handler must still exit when its first cleanup step raises.
 
-        Makes the sentinels directory read-only so ``_write_sentinel``
+        Makes the repo's sentinel directory read-only so ``_write_sentinel``
         raises ``PermissionError`` (an ``OSError``) instead of succeeding.
         The process must still terminate within the grace period -- the
         handler's async-signal-safe ``os.write(2, ...)`` failure report
@@ -325,22 +325,24 @@ class TestSignalSurvivesCleanupFailure:
         code alone would also pass if that write were silently dropped.
         """
         proc, home, stderr_lines = bound_server
-        sentinels_root = _sentinel_dir(home).parent
-        sentinels_root.mkdir(parents=True, exist_ok=True)
-        sentinels_root.chmod(0o500)
+        sentinel_dir = _sentinel_dir(home)
+        # The server creates it at startup, to watch it; read-only, a file
+        # cannot be created in it.
+        sentinel_dir.mkdir(parents=True, exist_ok=True)
+        sentinel_dir.chmod(0o500)
         try:
             os.kill(proc.pid, signal.SIGTERM)
             exit_code = _wait_for_exit(proc)
         finally:
-            sentinels_root.chmod(0o700)
+            sentinel_dir.chmod(0o700)
 
         assert exit_code == -signal.SIGTERM.value, (
             f"expected termination by SIGTERM despite a failing cleanup "
             f"step, got exit code {exit_code}"
         )
-        assert not _sentinel_dir(home).exists(), (
-            "sentinel directory should not exist -- its creation must "
-            "have failed for this test to prove anything"
+        assert not [p for p in sentinel_dir.iterdir() if p.is_file()], (
+            "no sentinel should exist -- its creation must have failed for "
+            "this test to prove anything"
         )
 
         stderr = _drain_stderr(stderr_lines)

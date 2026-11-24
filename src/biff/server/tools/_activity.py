@@ -1,8 +1,4 @@
-"""Activity tracking and the dormant-repo guard for tool calls.
-
-Every user-facing tool records a tool call on the shared
-:class:`~biff.server.activity.ActivityTracker` so the background poller
-stays out of napping while the agent is actively using biff.
+"""The dormant-repo guard for tool calls.
 
 This replaces the retired lazy-activation decorator: enablement is now
 explicit repo policy (the committed ``.punt-labs/biff/enabled`` marker),
@@ -49,12 +45,11 @@ def track_activity(
     [Callable[_P, Awaitable[str]]],
     Callable[_P, Awaitable[str]],
 ]:
-    """Guard on enablement, then record the call and run.
+    """Guard on enablement, then run.
 
     When *state* is dormant (biff disabled for this repo), the wrapped
     tool returns :data:`_DISABLED_NOTICE` without running its body or
-    writing anything.  Otherwise it records the call on the activity
-    tracker and runs the body.
+    writing anything.  Otherwise it runs the body.
 
     Usage inside a ``register()`` function::
 
@@ -71,7 +66,6 @@ def track_activity(
         async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> str:
             if state.dormant:
                 return _DISABLED_NOTICE
-            state.activity.touch()
             return await fn(*args, **kwargs)
 
         return wrapper

@@ -1,7 +1,8 @@
 """Exercise broadcast-message push notifications against real NATS.
 
 Verify the always-on subscription chain wakes a separate MCP server and
-refreshes its unread description without waiting for the periodic poll.
+refreshes its unread description.  The server runs no periodic poll
+(DES-087), so a push is the only thing that wakes it.
 """
 
 from __future__ import annotations
@@ -18,13 +19,11 @@ from biff.models import BiffConfig, Message
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.state import ServerState
-from biff.server.tools._descriptions import nap_interval_for
 from biff.testing import NotificationTracker
 from biff.testing.caller import StampedClient
 from tests._state import create_state
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
     from pathlib import Path
 
     from fastmcp import Client
@@ -33,11 +32,6 @@ pytestmark = pytest.mark.nats_local
 
 _TEST_REPO = "_test-nats-e2e-inbox-push"
 _KAI_TTY = "aaaa0011"
-
-# A short poll_interval keeps the backstop (nap_interval_for(poll_interval),
-# DES-062) fast enough to wait out in a test — 0.3s active cadence yields a
-# 4.5s backstop, versus the 30s a production default would require.
-_FAST_POLL_INTERVAL = 0.3
 
 
 async def _wait_for_read_messages_description(
@@ -60,7 +54,7 @@ async def _publish_broadcast_without_poke(
 ) -> None:
     """Publish directly to the durable inbox without a notification poke.
 
-    Use this to isolate the periodic backstop from push-driven detection.
+    Use this to isolate push-driven detection from an explicit read.
     """
     nc = await nats_lib.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     try:
@@ -106,9 +100,7 @@ class TestBroadcastPushNotification:
             )
         )
 
-        # The poke wakes the poller well inside a couple of active-tick
-        # intervals — far under the 30s nap_interval backstop this proves
-        # is not what detected it.
+        # The poke wakes the poller at once; no timer exists to detect it.
         desc = await _wait_for_read_messages_description(
             kai_client, "1 unread", timeout=6.0
         )
@@ -148,8 +140,8 @@ class TestBroadcastPushNotification:
         await relay.get_nc()  # dial the fresh client
         assert relay.connection_generation > bound_generation
 
-        # The poller re-subscribes on its next tick after the generation
-        # bump; retry the broadcast until the fresh SUB catches the poke.
+        # The poller re-subscribes on its next liveness check after the
+        # generation bump; retry the broadcast until the fresh SUB catches the poke.
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 12.0
         desc = ""
@@ -218,56 +210,36 @@ class TestPokeSubjectDoesNotCollideWithInboxStream:
         assert after_count == before_count
 
 
-@pytest.fixture
-async def kai_fast_backstop(
-    nats_server: str, tmp_path: Path
-) -> AsyncIterator[tuple[Client[Any], ServerState]]:
-    """A kai MCP server whose ``poll_interval`` yields a short, waitable backstop.
+class TestUnpushedBroadcast:
+    """A JetStream-only broadcast (no poke) is found by an explicit read.
 
-    The shared ``kai_tracked`` fixture defaults to the production 2s/30s
-    active/backstop cadence — too slow to wait out in a test.
-    ``nap_interval_for`` ties the backstop cadence to ``poll_interval``
-    (DES-062), so a fast ``poll_interval`` here yields a fast backstop too.
+    There is no timer backstop (DES-087): nothing but a push wakes the
+    poller, so the description stays unchanged until the user reads.
     """
-    config = BiffConfig(
-        user="kai",
-        repo_name=_TEST_REPO,
-        relay_url=nats_server,
-        poll_interval=_FAST_POLL_INTERVAL,
-    )
-    state = create_state(
-        config, tmp_path / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
-    )
-    mcp = create_server(state)
-    async with StampedClient(FastMCPTransport(mcp)) as client:
-        await client.call_tool("who", {})
-        yield client, state
 
-
-class TestUnpushedBroadcastBackstop:
-    """A JetStream-only broadcast (no poke) is still caught by the backstop."""
-
-    async def test_unpushed_broadcast_detected_via_backstop(
+    async def test_unpushed_broadcast_waits_for_an_explicit_read(
         self,
         nats_server: str,
-        kai_fast_backstop: tuple[Client[Any], ServerState],
+        kai_tracked: tuple[Client[Any], NotificationTracker, ServerState],
     ) -> None:
-        kai_client, kai_state = kai_fast_backstop
-        await asyncio.sleep(1.0)  # let the poller establish its initial ticks
+        kai_client, _kt, kai_state = kai_tracked
+        await asyncio.sleep(1.0)  # let the poller establish its initial pass
 
-        backstop = nap_interval_for(_FAST_POLL_INTERVAL)
         await _publish_broadcast_without_poke(
             nats_server,
-            repo=_TEST_REPO,
+            repo=kai_state.config.repo_name,
             to_user=kai_state.config.user,
             from_user="eric",
             body="no poke here",
         )
 
-        desc = await _wait_for_read_messages_description(
-            kai_client, "1 unread", timeout=backstop + 6.0
-        )
-        assert "1 unread" in desc
+        await asyncio.sleep(3.0)  # past the retired 2s tick
+        tools = await kai_client.list_tools()
+        desc = next(t.description or "" for t in tools if t.name == "read_messages")
+        assert "unread" not in desc
+
+        result = await kai_client.call_tool("read_messages", {})
+        assert "no poke here" in str(result)
 
 
 class TestTargetedPushNotification:
@@ -277,7 +249,7 @@ class TestTargetedPushNotification:
     not a second inbox-notify publish — proving the talk-SUB callback's
     wake-poke classification (``TalkNotification.is_wake_poke``) actually
     marks the same gate a broadcast's inbox-notify poke marks, so the
-    gated tick does not defer this detection to the backstop.
+    gated tick does not wait for another arrival.
     """
 
     async def test_targeted_write_wakes_and_refreshes_description(
@@ -298,9 +270,8 @@ class TestTargetedPushNotification:
             sender_key=eric_state.session_key,
         )
 
-        # Well under the 30s nap_interval backstop the gate would otherwise
-        # fall back to — this proves the talk-SUB wake-poke path detected
-        # it, not the periodic safety net.
+        # This proves the talk-SUB wake-poke path detected it; no timer
+        # exists to do so.
         desc = await _wait_for_read_messages_description(
             kai_client, "1 unread", timeout=6.0
         )
@@ -308,9 +279,9 @@ class TestTargetedPushNotification:
 
 
 class TestPollerAtDisabledInterval:
-    """Keep push detection running when the periodic cadence is disabled.
+    """Keep push detection running when the user's polling is off.
 
-    The always-on subscriptions must be hosted even when poll_interval is zero.
+    The always-on subscriptions are hosted whatever ``poll_interval`` is.
     """
 
     async def test_disabled_interval_still_detects_a_broadcast_poke(
@@ -351,8 +322,8 @@ class TestPollerAtDisabledInterval:
             )
 
             # No periodic tick exists to eventually catch this on its own —
-            # if the wake_event/gate path is not doing the work, this
-            # would hang until the timeout with no other path to succeed.
+            # if the wake/gate path is not doing the work, this would hang
+            # until the timeout with no other path to succeed.
             desc = await _wait_for_read_messages_description(
                 kai_client, "1 unread", timeout=6.0
             )

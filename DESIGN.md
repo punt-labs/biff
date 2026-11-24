@@ -8414,11 +8414,16 @@ one INFO changed/unchanged outcome with fixed artifact labels after each
 completed enablement operation. Marker accounting examines the directory entry
 without following symlinks: replacing a symlink on enable or removing a
 dangling symlink on disable is a change. `_nats_connection.py` owns shared
-session/name bucket lifetime settings and connection-attempt diagnostics.
-It logs an outage's first error at INFO, demotes repeats to DEBUG, and records
-an INFO recovery or terminal summary with a failure count and exception class.
-Recovery and termination reset the episode counter. Relay generation guards
-continue to exclude callbacks from superseded clients.
+session/name bucket lifetime settings and connection-attempt diagnostics. It logs
+an outage's first error at INFO, demotes repeats to DEBUG, and records an INFO
+recovery or terminal summary with a failure count and exception class. Recovery
+and termination reset the episode counter. Relay generation guards continue to
+exclude callbacks from superseded clients.
+
+`nats_support.py` is separate: `NatsSupport` extends that setup with the inbox
+wake poke, which logs through `RelayLog` (the episode log of `failure_log.py`).
+A relay outage logs a WARNING when it starts, a WARNING reminder every 10 minutes
+of further failed pokes, and a WARNING on recovery; a code bug logs at ERROR.
 
 **Alternatives.** Relying on stderr loses durable CLI outcomes and uvicorn
 shutdown events because uvicorn does not propagate to biff's root sinks.
@@ -8520,8 +8525,28 @@ record unchanged because mesg is off or the client is not initialised, or
 times out (re-armed once; a second timeout drops that kind alone). A send that
 empties the held set cancels the timer (`docs/notification.tex`, Channel
 Delivery). The poller's wall-countdown, invite-expiry and unread-backstop jobs
-are removed: each value is computed when read, push is the detection path, and
-a relay reconnect (`NatsRelay._on_reconnect`) re-runs the summarizer to catch
+and the 2-second sentinel reaper are removed. Operator ruling (2026-11-23): the
+server may keep exactly (a) connection liveness, being the NATS 5-second
+subscription check, the local relay's 60-second watch check (tracked on elapsed
+time, so steady wakes cannot starve it; it verifies the watch's threads, the
+directory's device and inode, and a canary entry that an event must report (the
+canary lives in a per-process directory under biff's private per-user state
+(`watch-canaries`, mode 0700, owned by the user), never inside a watched directory
+and never in a shared one, so starting, checking or closing a watch wakes no
+other session; a root that is a link, foreign or open to others is refused with a
+warning and a random exclusive temp directory is used; a signal exit leaves the
+probe behind and the next start reclaims dead processes' probes without following
+links), and
+rebuilds the watch, logging onset and recovery) and the session heartbeat (60 seconds, which also carries the
+throttled org-repo refresh and keeps the session alive in the relay), and (b)
+one-shot deadline wakes armed only while something with an expiry is displayed:
+the earliest displayed wall `expires_at` and the earliest held talk invite
+arrival plus its TTL, so an expired wall or invite clears with no other event, and one armed only while
+a tool-list notification is owed, at the end of the link's back-off.
+No other cadence is allowed. Shutdown sentinels are reaped at start and on every
+poller wake, and a watch on the sentinel directory wakes it. A poller
+that dies is restarted with a backoff and an ERROR log each time. Push is the
+detection path for arrivals, and a relay reconnect (`NatsRelay._on_reconnect`) re-runs the summarizer to catch
 mail that core NATS did not replay. Mail is ordered by `inbox_high_water`
 (never used as a count), talk arrivals by monotonic `TalkState` counters, and
 the doctor acknowledgement travels over the relay, not a local file.
@@ -8583,11 +8608,25 @@ path. A send that timed out, failed, or was dropped by the SDK keeps the stored
 session and stays owed. The poller retries owed notifications (`flush_owed`) on
 every iteration of its loop, outside the tick-work gate, backing off
 `CHANNEL_BACKOFF` (30 s) after a failure so a client that stopped reading does
-not stall every pass for the 3 s send timeout. The poller sleeps `poll_interval`
-seconds between iterations whether it is active or napping (napping skips only
-the relay poll, not the loop), so the retry runs every `poll_interval` seconds,
-on every wake, and, with `poll_interval <= 0`, on each 30 s fallback timeout:
-late, not lost.
+not stall every pass for the 3 s send timeout. The poller has no fixed cadence, so the
+retry runs on every wake: an arrival, the 5 s NATS subscription check, the 60 s
+local watch-liveness check, a deadline wake, and a one-shot wake the poller arms
+only while a notification is owed, at the moment the link's `CHANNEL_BACKOFF`
+ends or, while no session is captured, when the handshake window ends,
+whichever is later, and re-armed only when that moment changes. A tool call
+that leaves a debt wakes the poller so it can arm that wake. Nothing is armed
+when nothing is owed. A retry is therefore late by at most the back-off, not
+lost, and not by up to 60 s on a quiet local relay.
+
+If the poller dies, the supervisor in `server/app.py` restarts it after a capped
+backoff counted over the deaths in a row (`PollerHealth` in
+`server/poller_health.py`). A poller that completes a pass including a liveness
+check ends the count; a death before that counts, however long the run. From the
+`_POLLER_DEGRADED_AFTER`-th death on, and whenever a restart itself raises, the
+`read_messages` description carries a "notifications stopped" prefix that every
+refresh renders, and it is removed only when a restarted poller completes such a
+pass. A health check that raises is logged by the watch's episode log and
+rebuilds the watch; it does not end the poller.
 
 `EpisodeLog` (`src/biff/failure_log.py`, kernel layer, shared by the server and
 any relay or watcher code) keeps repeated failures readable without hiding a
