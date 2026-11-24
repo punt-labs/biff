@@ -1,4 +1,4 @@
-"""What the NATS relay delegates: connection diagnostics and wake pokes."""
+"""Extend the NATS connection setup with the relay's wake pokes."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class _Publisher(Protocol):
 
 
 class NatsSupport(NatsConnectionSetup):
-    """Connection diagnostics, plus wake pokes whose failures are logged.
+    """Diagnose connection attempts and publish wake pokes, logging their failures.
 
     A poke only wakes another session's poller, so a failure never reaches the
     caller; but with no timer recomputing the unread count, the inbox poke is
