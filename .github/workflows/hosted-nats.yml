@@ -1,12 +1,14 @@
 name: Hosted NATS E2E
 
-# Disabled from automatic CI — session-scoped NATS connections hang
-# on GitHub Actions (event loop / asyncio interaction).  Run locally:
-#   BIFF_TEST_NATS_URL=tls://connect.ngs.global \
-#   BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
-#   uv run pytest -m nats_hosted -v
+# Manual run of the hosted tier against the demo relay; Nightly QA runs
+# the same `make test-live` on main. Tick `stress` for the scale subset.
 on:
   workflow_dispatch:
+    inputs:
+      stress:
+        description: Also run the hosted stress subset
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,6 +17,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Hosted runs share one relay namespace and purge it on teardown.
+    concurrency:
+      group: biff-hosted-relay
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -26,7 +32,13 @@ jobs:
       - run: uv sync --frozen --extra dev
 
       - name: Run hosted NATS tests (demo relay)
-        run: uv run pytest -m nats_hosted -v
+        run: make test-live
+        env:
+          BIFF_TEST_NATS_URL: "tls://connect.ngs.global"
+          BIFF_TEST_NATS_CREDS: "src/biff/data/demo.creds"
+      - name: Run hosted stress tests (demo relay)
+        if: ${{ inputs.stress }}
+        run: make test-stress
         env:
           BIFF_TEST_NATS_URL: "tls://connect.ngs.global"
           BIFF_TEST_NATS_CREDS: "src/biff/data/demo.creds"

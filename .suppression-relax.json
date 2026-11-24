@@ -10,5 +10,11 @@
     "ceiling": 3,
     "justify": "Documentation gate intentionally invokes pydoclint from the active environment and prints diagnostics; ported CLI requires narrowly scoped T20, S603, and S607 allowances.",
     "added_at": "2026-11-19T04:29:13Z"
+  },
+  {
+    "file": "tools/test_changed.py",
+    "ceiling": 2,
+    "justify": "pre-commit selector runs fixed git and pytest argv without a shell, like tools/check_python_docs.py",
+    "added_at": "2026-11-23T23:19:57.678977Z"
   }
 ]

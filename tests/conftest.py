@@ -13,6 +13,9 @@ from unittest.mock import patch
 import pytest
 
 from biff.server.tools._descriptions import _reset_session
+from tools.test_quarantine import (
+    pytest_collection_modifyitems as pytest_collection_modifyitems,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -23,6 +26,17 @@ if TYPE_CHECKING:
 def disable_usage_capture(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never write usage to the operator's store from ordinary tests."""
     monkeypatch.setenv("PUNT_TELEMETRY", "off")
+
+
+_AMBIENT_GIT_REPOSITORY = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_PREFIX",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +57,11 @@ def _confine_git_walk(  # pyright: ignore[reportUnusedFunction]
     # (and enable/disable tests rewrite) the real hooks directory.
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    # Git hooks export the caller's repository (a linked worktree's absolute
+    # GIT_INDEX_FILE under pre-commit); a test repo's ``git add`` would
+    # otherwise rewrite the developer's index.
+    for name in _AMBIENT_GIT_REPOSITORY:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

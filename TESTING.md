@@ -1,5 +1,8 @@
 # Testing
 
+This guide applies Punt Kit's [Testing standard][standard] and
+[Python rules][python-rules]. Run `make check` before opening a PR.
+
 Biff has an eight-tier testing pyramid. Each tier tests a different
 boundary, at a different transport, with different infrastructure
 requirements. Run `uv run pytest --collect-only` for current test
@@ -9,6 +12,87 @@ with every PR and a stale number in a doc is worse than no number.
 Every tier above unit/integration has its own pytest marker, and no
 marker is shared between two different tiers — `pytest -m <marker>`
 always selects exactly one tier, never a superset.
+
+## Trigger map (TST-1, TST-3)
+
+| Trigger | Entry point and runner | Budget target | Result |
+| --- | --- | --- | --- |
+| Pre-commit | `make test-changed` on the developer machine | <30 s for a typical change | Blocks commit when the hook is installed |
+| Pre-push | `make test-push` (default suite) on the developer machine | <3 min | Blocks push when the hook is installed |
+| PR | [Test workflow][test-ci]: default suite with coverage, `make test-wheel` on Linux and macOS; [Subprocess workflow][subprocess-ci]: tiers 3a and 3b | <10 min wall time | Required `test` gate; `subprocess` and `relay-image` checks |
+| Merge to main | The same workflows on the main SHA | <10 min wall time | Repeat the PR gate; keep SHA-keyed coverage |
+| Nightly | [Nightly QA][nightly-ci] on upstream main, Ubuntu | 30 min local job; 15 min hosted and agent jobs; 5 min alert | Advisory for PRs; red run and a biff `wall` on failure |
+| Release candidate | [Release workflow][release-ci]: `bash scripts/smoke-release.sh candidate VERSION WHEEL`, tier 3b on the candidate image digest | 10 min smoke job; 20 min image tests | Blocks PyPI upload and the image retag |
+| Post-release | [Release workflow][release-ci]: `bash scripts/smoke-release.sh published VERSION`, tier 3b on the pulled image | <2 min target; 10 min job timeout | Red release run; yank or ship a fix |
+
+Install the versioned hooks with `make hooks`. This refuses to change an
+existing custom hook path; chain the biff test hooks from those hooks
+instead. The hooks run any hook already in `.git/hooks`, and preserve the
+default `commit-msg` hook, including Ethos trailers, unless Ethos already
+handles trailers in the active hook.
+
+Pre-commit selects tests from staged path names and runs them against the
+working tree, so stage and test the same changes. A changed test runs
+itself; a changed module runs the tests that import it. Shared fixtures,
+configuration, tooling, scripts and unmapped source fall back to the whole
+default suite. A warm one-file change (`src/biff/tty.py`) took 5 s in the
+rollout Linux VM. The default suite took about 75 s warm there, so pre-push
+fits its budget; the shared-file fallback can exceed the pre-commit target.
+
+## Select a suite (TST-2)
+
+| Suite | Selector | Prerequisites and scope |
+| --- | --- | --- |
+| Default | `make test` | Dev extra; tiers 1 and 2 |
+| Unit | `make test-unit` | Tier 1: everything outside `tests/test_integration` |
+| Integration | `make test-integration` | Tier 2: in-process FastMCP client and `LocalRelay` |
+| Subprocess | `make test-subprocess` | Tier 3a: real `biff mcp` children over stdio |
+| CLI multi-user | `make test-cli-multi-user` | Tier 2b: `nats-server` on `PATH` |
+| Relay image | `make test-docker` | Tier 3b: Docker; builds the image unless `BIFF_RELAY_IMAGE` is set |
+| Local NATS | `make test-nats-local` | Tier 3c: `nats-server` on `PATH` |
+| E2E | `make test-e2e` | Installed wheel plus tiers 2b and 3c |
+| Live | `make test-live`; `make test-stress` | Tier 3d: `BIFF_TEST_NATS_URL` plus `BIFF_TEST_NATS_CREDS`, `_TOKEN` or `_NKEYS_SEED`; never a PR test |
+| Agent | `make test-agent` | Tier 4: scoped `ANTHROPIC_API_KEY` and the Claude Agent SDK |
+| Nightly | `make test-nightly` | Tiers 3a, 2b and 3c; `nats-server` on `PATH` |
+| Quarantine | `make test-quarantine`; `uv run pytest -m quarantine` | List marks, or run them with their own prerequisites |
+
+The suites that need `nats-server` or Docker skip themselves when it is
+missing. Nightly installs a pinned, checksum-verified `nats-server`. Add
+`and not quarantine` to any hand-written marker expression.
+
+## Trusted tests and quarantines (TST-6, TST-9)
+
+Nightly runs the hosted tier against the public demo relay, whose
+credentials ship in the package, and caps each SDK query at two turns and
+$0.05 (`tests/test_sdk/_client.py`). The provider key reaches only the
+agent step; the biff MCP child gets none. The relay token reaches only the
+failure alert. Do not run trusted tests on a PR or pass personal
+credentials to them. The [Hosted NATS workflow][hosted-ci] reruns the
+hosted tier, and optionally the stress subset, on demand.
+
+Quarantine a confirmed flaky test, not an entire optional tier. Register
+`@pytest.mark.quarantine(issue="PL-1234", owner="Name", expires="YYYY-MM-DD")`.
+The expiry must be within 14 days; review the list on Nightly and fix or
+remove the case by expiry. An expired or malformed mark fails collection.
+
+## Open deviations (TST-1, TST-5 to TST-8, TST-10)
+
+- **Local NATS tiers fail on main.** Tier 2b has 14 failures and tier 3c
+  one; both ran on no trigger before Nightly. Nightly stays red until
+  [PL-1427][local-nats] is fixed. Owner: biff maintainers. Review by
+  2026-12-07.
+- **Unproven Nightly jobs.** The hosted, agent and alert jobs have not yet
+  run in GitHub Actions; the hosted tier passed in the rollout VM.
+- **Candidate scope.** The candidate and published checks exercise the CLI,
+  the MCP server over stdio and the relay image, but not the hosted relay
+  or a real Claude session against the exact candidate, nor the published
+  plugin through a supported harness.
+- **Coverage scope.** Coverage does not count child `biff mcp` processes or
+  installed wheels (see [Coverage](#coverage)).
+- **Not applicable.** Biff has no browser UI; CLI, MCP and the relay apply.
+
+The [tracking issue][deviations] records those deviations. Owner: biff
+maintainers. Review by 2026-12-07.
 
 ## Pyramid
 
@@ -244,8 +328,8 @@ separately demonstrates the companion load claim (steady-state
 
 Same as 3c but against a real remote relay — the shared demo relay on
 Synadia Cloud by default, or any hosted/self-hosted NATS server you
-point it at. Manual-only, both locally and in CI (see
-[Dev box vs CI](#dev-box-vs-ci) below).
+point it at. Nightly QA runs it against the demo relay; run it locally
+before merging relay changes (see [Trigger map](#trigger-map-tst-1-tst-3)).
 
 ```bash
 BIFF_TEST_NATS_URL=tls://connect.ngs.global \
@@ -284,49 +368,6 @@ enough for the model to use correctly.
 
 **Cost**: Real money per test, tens of seconds each. Requires
 `ANTHROPIC_API_KEY`.
-
-## Dev box vs CI
-
-The tiers above split cleanly into "what runs automatically" and "what
-you run deliberately." Neither list is arbitrary — every gap below has
-a concrete blocking reason, tracked as a Linear issue, not a permanent design
-choice unless stated otherwise.
-
-### On your dev box
-
-| Tier | Command | When to run it |
-|------|---------|-----------------|
-| 1, 2 | `uv run pytest` (default) | Constantly. No external dependency; this is your inner loop. |
-| 3a | `uv run pytest -m subprocess` | Before pushing anything touching CLI wiring or process lifecycle. No extra infra — forces `LocalRelay`. |
-| 2b | `uv run pytest -m cli_multi_user` | When touching the CLI multi-user code path (`biff.commands` over a real relay). Needs `nats-server` on `PATH`; the fixture skips itself (not an error) if it's missing. |
-| 3b | `uv run pytest -m nats_docker` | When touching `docker/`. Needs Docker running locally. |
-| 3c | `uv run pytest -m nats_local` | When touching `NatsRelay`, relay selection, or anything JetStream/KV-shaped at the MCP-server level. Same `nats-server`-on-`PATH` requirement as 2b, distinct marker. |
-| 3d | `uv run pytest -m nats_hosted -v` (with `BIFF_TEST_NATS_URL`/`BIFF_TEST_NATS_CREDS` set) | Before merging any relay code change — this is the only tier that proves the code works against a real, non-local NATS deployment. Deliberate and occasional, never in a loop (see connection budget above). |
-| 4 | `uv run pytest -m sdk` | Rare, deliberate — before a change to MCP tool descriptions or anything the model's tool-selection depends on. Costs real money per run. |
-
-### In CI
-
-What's actually enforced on every push/PR (`subprocess-tests.yml` and
-friends): **tiers 1, 2, 3a, and 3b.** Nothing merges without these green.
-That's the whole gate today.
-
-Everything else is deliberately outside that gate, for reasons that
-are either a known, tracked gap or a genuine permanent constraint —
-these are not the same thing, and the doc should never blur them:
-
-- **Tier 2b / 3c (local NATS)** — no CI job. Blocked by biff-7xd:
-  `nats-server` hangs outright in the CI environment. This is a *gap*,
-  not a design choice — fix the hang, then wire it in.
-- **Tier 3d (hosted)** — `hosted-nats.yml` exists but is
-  `workflow_dispatch` only. Session-scoped NATS connections hang in
-  GitHub Actions' asyncio environment. Run it locally before merging
-  relay changes instead; don't wait for a CI green that will never
-  come from this tier.
-- **Tier 4 (SDK)** — local-only *by design*, not a gap. It costs real
-  money per test; it will never be a default CI job.
-- **Tier 3b (Docker image)** — the one gap that's now closed (biff-kmv).
-  It runs in CI on every push/PR, the same trigger as the existing
-  subprocess job (`relay-image` job in `subprocess-tests.yml`).
 
 ## Release checks
 
@@ -388,33 +429,6 @@ Remaining uncovered partitions are integration-level — they require a
 full REPL loop and NATS subscription running together, which is what
 tier 2b exists to cover; run the audit to see what's actually left.
 
-## Running tests
-
-```bash
-# Default: tiers 1-2 (fast, no external dependencies)
-uv run pytest
-
-# Subprocess (tier 3a)
-uv run pytest -m subprocess
-
-# CLI multi-user (tier 2b, requires nats-server)
-uv run pytest -m cli_multi_user
-
-# Docker relay image (tier 3b, requires Docker)
-uv run pytest -m nats_docker
-
-# Local NATS (tier 3c, requires nats-server)
-uv run pytest -m nats_local
-
-# Hosted NATS (tier 3d, local only)
-BIFF_TEST_NATS_URL=tls://connect.ngs.global \
-BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
-uv run pytest -m nats_hosted -v
-
-# SDK (tier 4, requires ANTHROPIC_API_KEY)
-uv run pytest -m sdk
-```
-
 ## Coverage
 
 Coverage has two structural floors, not incidental gaps: `nats_relay.py`
@@ -445,3 +459,13 @@ candidate` against it: a clean virtual environment and HOME, the installed
 CLI writing and reading a message, and the installed `biff mcp` server
 returning it over stdio. The Tests workflow runs it on Ubuntu and macOS for
 every PR; the required `test` check fails if it or the coverage job fails.
+
+[standard]: https://github.com/punt-labs/punt-kit/blob/main/standards/testing.md
+[python-rules]: https://github.com/punt-labs/punt-kit/blob/main/lang-rules/python/python-testing.md
+[test-ci]: .github/workflows/test.yml
+[subprocess-ci]: .github/workflows/subprocess-tests.yml
+[nightly-ci]: .github/workflows/nightly.yml
+[release-ci]: .github/workflows/release.yml
+[hosted-ci]: .github/workflows/hosted-nats.yml
+[local-nats]: https://linear.app/punt-labs/issue/PL-1427/fix-biffs-local-nats-tiers-failing-on-main-cli-multi-user-nats-local
+[deviations]: https://linear.app/punt-labs/issue/PL-1428/close-biff-testing-standard-deviations

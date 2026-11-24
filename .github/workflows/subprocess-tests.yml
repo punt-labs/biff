@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest -m subprocess
+      - run: uv run pytest -m 'subprocess and not quarantine'
 
   relay-image:
     # Tier 3b (tests/test_relay_image/): builds ghcr.io/punt-labs/biff-relay
@@ -52,4 +52,4 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest -m nats_docker
+      - run: uv run pytest -m 'nats_docker and not quarantine'

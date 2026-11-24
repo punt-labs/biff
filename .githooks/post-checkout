@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# core.hooksPath hides .git/hooks; keep hooks installed there (biff enable) running.
+existing="$(git rev-parse --git-common-dir)/hooks/${BASH_SOURCE[0]##*/}"
+if [[ -x "$existing" && ! "$existing" -ef "${BASH_SOURCE[0]}" ]]; then
+  exec "$existing" "$@"
+fi

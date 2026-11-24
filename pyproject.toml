@@ -118,6 +118,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tools/check_python_docs.py" = ["T20", "S603", "S607"]
+"tools/test_changed.py" = ["S603", "S607"]
 "tests/test_python_docs.py" = ["S603"]
 "tests/*" = ["S101", "S105", "S106", "S108", "T20", "SLF001", "ARG", "FBT", "PLC0415", "A002"]
 "src/biff/__main__.py" = ["T20", "FBT", "PLC0415"]
@@ -312,7 +313,7 @@ imports = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not cli_multi_user and not nats_local and not nats_docker and not nats_hosted and not stress'"
+addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not cli_multi_user and not nats_local and not nats_docker and not nats_hosted and not stress and not quarantine'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Per-test ceiling so a regression REPORTS (with every thread's stack
@@ -336,6 +337,7 @@ markers = [
     "stress: marks scale stress tests against hosted NATS (run with -m stress)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
     "vox: marks tests that manage vox mocking themselves (opts out of _silence_vox)",
+    "quarantine(issue, owner, expires): temporarily exclude a tracked flaky test",
 ]
 
 [tool.coverage.run]
