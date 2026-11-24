@@ -79,8 +79,12 @@ def _make_options(
         mcp_servers={
             "biff": {
                 "type": "stdio",
-                "command": "uv",
+                # The provider key is for Claude only, never biff.
+                "command": "env",
                 "args": [
+                    "-u",
+                    "ANTHROPIC_API_KEY",
+                    "uv",
                     "run",
                     "biff",
                     "mcp",
@@ -91,6 +95,12 @@ def _make_options(
                 ],
             },
         },
+        # Haiku, no built-in tools and no repo settings or CLAUDE.md keep
+        # each query well inside the budget.
+        model="haiku",
+        tools=[],
+        setting_sources=[],
+        strict_mcp_config=True,
         allowed_tools=["mcp__biff__*"],
         permission_mode="bypassPermissions",
         max_turns=max_turns,

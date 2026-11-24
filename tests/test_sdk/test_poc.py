@@ -46,13 +46,11 @@ class TestSDKCanCallBiffTools:
             args=[
                 "run",
                 "biff",
-                "serve",
+                "mcp",
                 "--user",
                 "kai",
                 "--data-dir",
                 str(kai.data_dir),
-                "--transport",
-                "stdio",
             ],
         )
         async with Client(transport) as client:
