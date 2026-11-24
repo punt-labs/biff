@@ -278,7 +278,11 @@ class TestWatchOrder:
         order: list[str] = []
         emitter = MagicMock()
         emitter.initialized.side_effect = lambda: order.append("gate")
-        on_notify = AsyncMock(side_effect=lambda *_: order.append("runner"))
+
+        async def runner(*_args: object) -> None:
+            order.append("runner")
+
+        on_notify = AsyncMock(side_effect=runner)
         _, notify = ChannelHandshake.watch(emitter, AsyncMock(), on_notify)
 
         await notify(MagicMock(), "notifications/initialized", None)
