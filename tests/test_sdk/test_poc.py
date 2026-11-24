@@ -56,8 +56,8 @@ class TestSDKCanCallBiffTools:
         async with Client(transport) as client:
             await client.call_tool("plan", {"message": "working on SDK spike"})
 
-        # SDK session: eric fingers kai
-        result = await eric.prompt('Call the "finger" tool with user "@kai".')
+            # SDK session: eric fingers kai while kai's server is live
+            result = await eric.prompt('Call the "finger" tool with user "@kai".')
 
         fingers = [tc for tc in result.tool_calls if tc.name == "finger"]
         names = [tc.name for tc in result.tool_calls]
