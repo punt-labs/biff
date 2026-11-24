@@ -459,6 +459,41 @@ class TestLoadCliConfig:
         assert resolved.config.user == "devin"
         assert resolved.config.kind == "agent"
 
+    @pytest.mark.parametrize("env", ["devin", "  devin  "])
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
+    def test_biff_user_env_names_the_agent_without_an_override(
+        self,
+        _mock_gh: object,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: str,
+    ) -> None:
+        # The CLI, the MCP server and the SessionStart hook all read BIFF_USER
+        # through the loaders, so a hosted agent needs no per-call flag.
+        monkeypatch.setenv("BIFF_USER", env)
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo, handle="devin")
+        for resolved in (load_cli_config(start=repo), load_mcp_config(start=repo)):
+            assert resolved.config.user == "devin"
+            assert resolved.config.kind == "agent"
+
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
+    def test_explicit_override_wins_over_biff_user(
+        self, _mock_gh: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("BIFF_USER", "devin")
+        repo = _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=repo, user_override="flag")
+        assert resolved.config.user == "flag"
+
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
+    def test_blank_biff_user_falls_back_to_discovery(
+        self, _mock_gh: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("BIFF_USER", "   ")
+        repo = _setup_repo_with_yaml(tmp_path)
+        assert load_cli_config(start=repo).config.user == _KAI.login
+
     @patch("biff.identity.get_os_user", return_value=None)
     @patch("biff.identity.get_github_identity", return_value=None)
     def test_exits_when_all_user_sources_fail(

@@ -8976,10 +8976,10 @@ agent.
    leaves the override plain, so DES-053 is unchanged. The handle grammar of
    DES-040 applies too, so a case-insensitive checkout cannot match `Devin` to
    `devin.yaml`.
-2. `BIFF_USER` is the host's default for `--user`: the root CLI reads it for
-   every command, and the agent-first identity chain reads it when no override
-   is passed, so the SessionStart hook and the MCP server register the same
-   `/who` row. It names the identity only; unstamped MCP tool calls still need
+2. `BIFF_USER` is the host's default for `--user`: both identity chains read
+   it (stripped) when no override is passed, so the CLI, the library loaders,
+   the SessionStart hook and the MCP server resolve the same identity and
+   register one `/who` row. It names the identity only; unstamped MCP tool calls still need
    an explicit `biff mcp --user`, as with the root `--user` flag.
 3. `BIFF_OWNER`, when nonempty, is captured as `owner_git` ahead of
    `git config user.name`. It declares who launched the agent from the
