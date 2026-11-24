@@ -16,19 +16,17 @@ import pytest
 from biff import commands
 from biff.cli_context import CliContext
 
-pytestmark = pytest.mark.cli_multi_user
+pytestmark = [pytest.mark.cli_multi_user, pytest.mark.asyncio]
 
 
 class TestPresence:
     """Scenario 1: both users appear in /who, each sees the other."""
 
-    @pytest.mark.anyio()
     async def test_both_visible_in_who(self, kai: CliContext, eric: CliContext) -> None:
         result = await commands.who(kai)
         assert "kai" in result.text
         assert "eric" in result.text
 
-    @pytest.mark.anyio()
     async def test_who_from_either_side(
         self, kai: CliContext, eric: CliContext
     ) -> None:
@@ -36,7 +34,6 @@ class TestPresence:
         assert "kai" in result.text
         assert "eric" in result.text
 
-    @pytest.mark.anyio()
     async def test_who_json_has_both(self, kai: CliContext, eric: CliContext) -> None:
         result = await commands.who(kai)
         assert result.json_data is not None
@@ -45,7 +42,6 @@ class TestPresence:
         assert "kai" in users
         assert "eric" in users
 
-    @pytest.mark.anyio()
     async def test_tty_names_assigned(self, kai: CliContext, eric: CliContext) -> None:
         """Both sessions get auto-assigned ttyN names."""
         assert kai.tty_name.startswith("tty")
@@ -59,13 +55,11 @@ class TestPresence:
 class TestMessaging:
     """Scenario 2: write → read (POP semantics)."""
 
-    @pytest.mark.anyio()
     async def test_write_and_read(self, kai: CliContext, eric: CliContext) -> None:
         await commands.write(kai, "@eric", "review the PR")
         result = await commands.read(eric)
         assert "review the PR" in result.text
 
-    @pytest.mark.anyio()
     async def test_pop_semantics(self, kai: CliContext, eric: CliContext) -> None:
         """Messages consumed on read — second read returns empty."""
         await commands.write(kai, "@eric", "hello")
@@ -73,7 +67,6 @@ class TestMessaging:
         result = await commands.read(eric)
         assert "No new messages" in result.text
 
-    @pytest.mark.anyio()
     async def test_bidirectional(self, kai: CliContext, eric: CliContext) -> None:
         await commands.write(kai, "@eric", "from kai")
         await commands.write(eric, "@kai", "from eric")
@@ -86,7 +79,6 @@ class TestMessaging:
 class TestWall:
     """Scenario 3: wall broadcast visibility."""
 
-    @pytest.mark.anyio()
     async def test_wall_visible_to_both(
         self, kai: CliContext, eric: CliContext
     ) -> None:
@@ -94,7 +86,6 @@ class TestWall:
         result = await commands.wall(eric, "", "", clear=False)
         assert "release freeze" in result.text
 
-    @pytest.mark.anyio()
     async def test_wall_clear(self, kai: CliContext, eric: CliContext) -> None:
         await commands.wall(kai, "freeze", "1h", clear=False)
         await commands.wall(kai, "", "", clear=True)
@@ -105,7 +96,6 @@ class TestWall:
 class TestPlanVisibility:
     """Scenario 4: plan → finger."""
 
-    @pytest.mark.anyio()
     async def test_plan_visible_via_finger(
         self, kai: CliContext, eric: CliContext
     ) -> None:
@@ -113,7 +103,6 @@ class TestPlanVisibility:
         result = await commands.finger(eric, "@kai")
         assert "debugging websocket" in result.text
 
-    @pytest.mark.anyio()
     async def test_plan_visible_in_who(self, kai: CliContext, eric: CliContext) -> None:
         await commands.plan(kai, "fixing tests")
         result = await commands.who(eric)
@@ -125,16 +114,16 @@ class TestPlanVisibility:
 
 
 class TestSessionCleanup:
-    """Scenario 5: session cleanup on exit."""
+    """Scenario 5: session cleanup after explicit end."""
 
-    @pytest.mark.anyio()
-    async def test_session_disappears_after_exit(
+    async def test_session_persists_until_ended(
         self, kai: CliContext, nats_server: str, tmp_path: Path
     ) -> None:
-        """After eric's session exits, kai's /who no longer shows eric."""
+        """An invocation leaves Eric visible; ending his session removes him."""
         from unittest.mock import patch
 
-        from biff.cli_session import cli_session
+        from biff.cli_session import cli_session, cli_session_host
+        from biff.commands.session import SessionVerbs
         from biff.config import ResolvedConfig
         from biff.models import BiffConfig
 
@@ -151,11 +140,17 @@ class TestSessionCleanup:
 
         # Eric connects and is visible.
         with patch("biff.cli_session.load_cli_config", return_value=resolved):
-            async with cli_session() as _eric:
+            async with cli_session() as eric:
                 result = await commands.who(kai)
                 assert "eric" in result.text
 
-        # Eric disconnected — no longer visible.
+            result = await commands.who(kai)
+            assert "eric" in result.text
+
+            async with cli_session_host() as handle:
+                ended = await SessionVerbs(handle.host).end(eric.tty_name)
+                assert not ended.error
+
         result = await commands.who(kai)
         assert result.json_data is not None
         data: list[dict[str, object]] = result.json_data  # type: ignore[assignment]
@@ -166,7 +161,6 @@ class TestSessionCleanup:
 class TestWtmp:
     """Scenario 6: wtmp login/logout events."""
 
-    @pytest.mark.anyio()
     async def test_login_events_in_last(
         self, kai: CliContext, eric: CliContext
     ) -> None:
@@ -174,7 +168,6 @@ class TestWtmp:
         assert "kai" in result.text
         assert "eric" in result.text
 
-    @pytest.mark.anyio()
     async def test_last_shows_still_logged_in(
         self, kai: CliContext, eric: CliContext
     ) -> None:
@@ -185,7 +178,6 @@ class TestWtmp:
 class TestMesg:
     """Scenario 7: mesg off — write still delivers to inbox."""
 
-    @pytest.mark.anyio()
     async def test_mesg_off_still_receives(
         self, kai: CliContext, eric: CliContext
     ) -> None:
@@ -194,7 +186,6 @@ class TestMesg:
         result = await commands.read(eric)
         assert "urgent message" in result.text
 
-    @pytest.mark.anyio()
     async def test_mesg_status_visible(self, kai: CliContext, eric: CliContext) -> None:
         await commands.mesg(eric, "off")
         result = await commands.finger(kai, "@eric")
@@ -204,7 +195,6 @@ class TestMesg:
 class TestCrossRepoMail:
     """Scenario: a bare write reaches a recipient working in a peer repo."""
 
-    @pytest.mark.anyio()
     async def test_bare_write_lands_where_recipient_reads(
         self, nats_server: str, tmp_path: Path
     ) -> None:

@@ -39,6 +39,8 @@ from biff.testing import RecordingClient, Transcript
 from biff.testing.caller import StampedClient
 from tests._state import create_state
 
+from .conftest import _TEST_CALLER
+
 pytestmark = pytest.mark.nats_local
 
 # Same organization, two repositories (sanitized ``owner__repo``): repo-keyed
@@ -59,12 +61,11 @@ async def _serve(
     *,
     user: str,
     repo: str,
-    tty: str,
     peers: tuple[str, ...],
 ) -> AsyncIterator[RecordingClient]:
     """Yield a RecordingClient for *user* in *repo* peered with *peers*."""
     config = BiffConfig(user=user, repo_name=repo, relay_url=nats_server, peers=peers)
-    state = create_state(config, data_dir, tty=tty, hostname="h", pwd="/w")
+    state = create_state(config, data_dir, hostname="h", pwd="/w")
     mcp = create_server(state)
     async with StampedClient(FastMCPTransport(mcp)) as client:
         yield RecordingClient(client=client, transcript=transcript, user=user)
@@ -81,7 +82,6 @@ async def kai_biff(
         transcript,
         user="kai",
         repo=_KAI_REPO,
-        tty="aaaa0011",
         peers=(_ERIC_REPO,),
     ):
         yield client
@@ -98,7 +98,6 @@ async def eric_vox(
         transcript,
         user="eric",
         repo=_ERIC_REPO,
-        tty="eeee0022",
         peers=(_KAI_REPO,),
     ):
         yield client
@@ -115,7 +114,6 @@ async def kai_alpha(
         transcript,
         user="kai",
         repo=_ALPHA_REPO,
-        tty="aaaa0a1f",
         peers=(_BETA_REPO,),
     ):
         yield client
@@ -132,7 +130,6 @@ async def eric_beta(
         transcript,
         user="eric",
         repo=_BETA_REPO,
-        tty="eeee0b7a",
         peers=(_ALPHA_REPO,),
     ):
         yield client
@@ -141,9 +138,6 @@ async def eric_beta(
 async def _drive_full_talk(
     inviter: RecordingClient,
     invitee: RecordingClient,
-    *,
-    invitee_addr: str,
-    inviter_addr: str,
 ) -> None:
     """Drive invite -> accept -> message both ways -> end and assert delivery.
 
@@ -151,6 +145,8 @@ async def _drive_full_talk(
     the accept's opening line (reply direction), the inviter's reply, and the
     hangup all cross whatever repo/org boundary separates the two sessions.
     """
+    invitee_addr = f"@{_TEST_CALLER.routing.session_key(invitee.user)}"
+    inviter_addr = f"@{_TEST_CALLER.routing.session_key(inviter.user)}"
     await inviter.call("plan", message="ready")
     await invitee.call("plan", message="ready")
 
@@ -196,12 +192,7 @@ class TestSameOrgDifferentRepoTalk:
             "One org's biff and vox repos complete a full talk — every frame "
             "routed on identity alone."
         )
-        await _drive_full_talk(
-            kai_biff,
-            eric_vox,
-            invitee_addr="@eric:eeee0022",
-            inviter_addr="@kai:aaaa0011",
-        )
+        await _drive_full_talk(kai_biff, eric_vox)
 
     async def test_invite_withdraw_clears_pending(
         self, kai_biff: RecordingClient, eric_vox: RecordingClient
@@ -210,7 +201,9 @@ class TestSameOrgDifferentRepoTalk:
         await kai_biff.call("plan", message="on biff")
         await eric_vox.call("plan", message="on vox")
 
-        result = await eric_vox.call("talk", to="@kai:aaaa0011", message="ping?")
+        result = await eric_vox.call(
+            "talk", to=f"@{_TEST_CALLER.routing.session_key('kai')}", message="ping?"
+        )
         assert "Invite sent" in result
 
         await asyncio.sleep(0.3)
@@ -245,12 +238,7 @@ class TestCrossOrgVisibleTalk:
             "Two mutually-peered orgs complete a full talk — identity is the "
             "route, visibility is the only gate."
         )
-        await _drive_full_talk(
-            kai_alpha,
-            eric_beta,
-            invitee_addr="@eric:eeee0b7a",
-            inviter_addr="@kai:aaaa0a1f",
-        )
+        await _drive_full_talk(kai_alpha, eric_beta)
 
 
 class TestVisibilityGate:
@@ -271,11 +259,11 @@ class TestVisibilityGate:
         """
         kai_cfg = BiffConfig(user="kai", repo_name=_KAI_REPO, relay_url=nats_server)
         kai_state = create_state(
-            kai_cfg, shared_data_dir / "kai", tty="aaaa0011", hostname="h", pwd="/w"
+            kai_cfg, shared_data_dir / "kai", hostname="h", pwd="/w"
         )
         eric_cfg = BiffConfig(user="eric", repo_name=_ERIC_REPO, relay_url=nats_server)
         eric_state = create_state(
-            eric_cfg, shared_data_dir / "eric", tty="eeee0022", hostname="h", pwd="/w"
+            eric_cfg, shared_data_dir / "eric", hostname="h", pwd="/w"
         )
         kai_mcp = create_server(kai_state)
         eric_mcp = create_server(eric_state)
@@ -287,7 +275,8 @@ class TestVisibilityGate:
             received.append(msg.data)  # type: ignore[attr-defined]
 
         assert isinstance(eric_state.relay, NatsRelay)
-        subject = eric_state.relay.talk_notify_subject(eric_state.session_key)
+        eric_key = _TEST_CALLER.routing.session_key("eric")
+        subject = eric_state.relay.talk_notify_subject(eric_key)
         sub = await nc.subscribe(subject, cb=_capture)  # pyright: ignore[reportUnknownMemberType]
 
         try:
@@ -302,7 +291,7 @@ class TestVisibilityGate:
                     client=eric_raw, transcript=transcript, user="eric"
                 )
                 await eric_r.call("plan", message="on vox")
-                result = await kai_r.call("talk", to="@eric:eeee0022", message="hi")
+                result = await kai_r.call("talk", to=f"@{eric_key}", message="hi")
                 assert "not online" in result
 
                 await asyncio.sleep(0.3)

@@ -157,13 +157,18 @@ class TestCrossRepoMessaging:
         await kai_biff.call("plan", message="working")
         await eric_vox.call("plan", message="working")
 
-        # Get eric's tty_name for targeted delivery
+        # Use the address advertised in who, not the pre-binding routing ID.
         who_result = await kai_biff.call("who")
         assert "eric" in who_result
+        address = next(
+            line.split()[0]
+            for line in who_result.splitlines()
+            if line.lstrip().startswith("eric:")
+        )
 
         # Write to eric's session (targeted by tty)
         result = await kai_biff.call(
-            "write", to="@eric:bbb222", message="cross-repo hello"
+            "write", to=f"@{address}", message="cross-repo hello"
         )
         assert "Message sent" in result
 
@@ -172,19 +177,18 @@ class TestCrossRepoMessaging:
         assert "kai" in read_result
         assert "cross-repo hello" in read_result
 
-    async def test_bare_write_stays_repo_local(
+    async def test_bare_write_reaches_present_peer(
         self, kai_biff: RecordingClient, eric_vox: RecordingClient
     ) -> None:
-        """Bare @user write stays repo-local (no cross-repo broadcast)."""
+        """A bare write reaches the peer repo where the recipient is present."""
         await kai_biff.call("plan", message="working")
         await eric_vox.call("plan", message="working")
 
-        # Bare write to eric (no tty) — goes to biff's subject, not vox's
-        await kai_biff.call("write", to="@eric", message="local message")
+        result = await kai_biff.call("write", to="@eric", message="peer message")
+        assert "Message sent to eric" in result
 
-        # eric in vox should NOT see it (message went to biff's subject)
         read_result = await eric_vox.call("read_messages")
-        assert "No new messages" in read_result
+        assert "peer message" in read_result
 
 
 class TestCrossRepoTtyNames:

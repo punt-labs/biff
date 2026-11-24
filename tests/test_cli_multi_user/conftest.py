@@ -42,6 +42,12 @@ def _make_resolved(user: str, nats_url: str, tmp_path: Path) -> ResolvedConfig:
     )
 
 
+@pytest.fixture(autouse=True, name="_isolate_cli_home")
+def isolate_cli_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CLI session records and repo pointers out of the operator's home."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
 @pytest.fixture(autouse=True)
 async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ignore[reportUnusedFunction]
     """Delete shared NATS streams after each test for full isolation."""

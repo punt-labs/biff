@@ -16,12 +16,13 @@ import nats
 import pytest
 from fastmcp.client.transports import FastMCPTransport
 
+from biff.caller_identity import CallerIdentity
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import ServerState
 from biff.server.tools._descriptions import _reset_session
 from biff.testing import NotificationTracker, RecordingClient, Transcript
-from biff.testing.caller import StampedClient
+from biff.testing.caller import DEFAULT_CALLER, StampedClient
 from tests._state import create_state
 
 if TYPE_CHECKING:
@@ -30,14 +31,7 @@ if TYPE_CHECKING:
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 _TEST_REPO = "_test-nats-e2e"
 
-# Routing ids (the session-key value half) must be hex: registration feeds the
-# session_id through validate_routing_id ([0-9a-fA-F-]).  These are 8-char hex,
-# the shape generate_tty() produces, but fixed rather than random because the
-# talk tests address the peer by this exact token (user:<tty>) and assert on
-# the resulting session key and frame keys — the value must be known at author
-# time.  Distinct per user so a shared-KV test never confuses the two.
-_KAI_TTY = "aaaa0001"
-_ERIC_TTY = "eeee0002"
+_TEST_CALLER = CallerIdentity.from_wire(DEFAULT_CALLER)
 
 
 @pytest.fixture(autouse=True)
@@ -92,9 +86,9 @@ async def kai_client(
     """MCP client for kai backed by NatsRelay."""
     config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
     state = create_state(
-        config, shared_data_dir / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
+        config, shared_data_dir / "kai", hostname="test-host", pwd="/test"
     )
-    mcp = create_server(state)
+    mcp = create_server(state, default_caller=_TEST_CALLER)
     async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
@@ -108,11 +102,10 @@ async def eric_client(
     state = create_state(
         config,
         shared_data_dir / "eric",
-        tty=_ERIC_TTY,
         hostname="test-host",
         pwd="/test",
     )
-    mcp = create_server(state)
+    mcp = create_server(state, default_caller=_TEST_CALLER)
     async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
@@ -144,11 +137,13 @@ async def kai_tracked(
     tracker = NotificationTracker()
     config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
     state = create_state(
-        config, shared_data_dir / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
+        config, shared_data_dir / "kai", hostname="test-host", pwd="/test"
     )
     mcp = create_server(state)
     async with StampedClient(
-        FastMCPTransport(mcp), message_handler=tracker, mode="legacy"
+        FastMCPTransport(mcp),
+        message_handler=tracker,
+        mode="legacy",
     ) as client:
         await client.call_tool("who", {})
         yield client, tracker, state
@@ -165,13 +160,14 @@ async def eric_tracked(
     state = create_state(
         config,
         shared_data_dir / "eric",
-        tty=_ERIC_TTY,
         hostname="test-host",
         pwd="/test",
     )
     mcp = create_server(state)
     async with StampedClient(
-        FastMCPTransport(mcp), message_handler=tracker, mode="legacy"
+        FastMCPTransport(mcp),
+        message_handler=tracker,
+        mode="legacy",
     ) as client:
         await client.call_tool("who", {})
         yield client, tracker, state
