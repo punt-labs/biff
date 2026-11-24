@@ -232,7 +232,7 @@ class ChannelEmitter:
                 await self._consider(reading)
 
     async def _retry_owed(self) -> None:
-        """The gate could not be read: retry what is owed or held, nothing else."""
+        """Retry what is owed or held, nothing else; the gate could not be read."""
         for kind in EventKind:
             reading = await self._read(kind)
             if reading is None or reading.is_owed or kind in self._due:
