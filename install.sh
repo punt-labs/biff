@@ -153,7 +153,7 @@ ok "$BINARY $(command -v "$BINARY")"
 
 for dir in "" active current logs sessions unread; do
   mkdir -p "$HOME/.punt-labs/biff/$dir"
-  chmod 700 "$HOME/.punt-labs/biff/$dir"
+  [ -L "$HOME/.punt-labs/biff/$dir" ] || chmod 700 "$HOME/.punt-labs/biff/$dir"
 done
 
 # --- Steps 4-6: Claude Code plugin (skipped in CLI-only mode) ---

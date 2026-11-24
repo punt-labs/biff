@@ -367,12 +367,14 @@ def provision_home() -> Path:
 
     Idempotent: existing directories and their contents are left untouched,
     so repeating ``biff install`` never discards data.  Every directory is
-    private (``0700``), tightened if it already exists.
+    private (``0700``), tightened if it already exists; a symlinked entry is
+    left alone, so its target's permissions are never changed.
     """
     root = biff_data_dir()
     for path in (root, *(root / name for name in _HOME_SUBDIRS)):
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path.chmod(0o700)
+        if not path.is_symlink():
+            path.chmod(0o700)
     return root
 
 
