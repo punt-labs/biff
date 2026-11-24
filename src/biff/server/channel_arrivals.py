@@ -29,7 +29,7 @@ class Arrivals:
     """
 
     _source: ArrivalSource
-    _mail_sent: int
+    _mail_sent: dict[str, int]
     _invites_sent: int
     _messages_sent: int
     _walls_sent: set[WallKey]
@@ -41,7 +41,7 @@ class Arrivals:
         """Create records in which nothing has been sent or seen."""
         self = super().__new__(cls)
         self._source = source
-        self._mail_sent = 0
+        self._mail_sent = {}
         self._invites_sent = 0
         self._messages_sent = 0
         self._walls_sent = set()
@@ -53,21 +53,29 @@ class Arrivals:
     def count(self, notif: TalkNotification) -> None:
         """Count an accepted talk frame: an invite, or a message from the partner.
 
-        A message counts only from the connected partner (the DES-046 key
-        check); a peer session that invites again counts again.
+        A message counts only from the accepted partner (the DES-046 key check):
+        the connected one, or the invited one once its accept is queued, since
+        the reply that opens a talk arrives before the inviter has drained the
+        accept.  A peer session that invites again counts again.
         """
-        talk = self._source.talk
         if notif.is_invite:
             self._invites_seen += 1
             self._invites.append(
                 (self._invites_seen, notif.nfrom_key, notif.nfrom, notif.nfrom_tty)
             )
-        elif (
-            notif.ntype == "message"
-            and talk.phase is TalkPhase.CONNECTED
-            and notif.nfrom_key == talk.partner_key
-        ):
+        elif notif.ntype == "message" and self._is_partner(notif.nfrom_key):
             self._messages_seen += 1
+
+    def _is_partner(self, key: str) -> bool:
+        """Whether *key* is the accepted partner: connected, or accepted, undrained."""
+        talk = self._source.talk
+        if key != talk.partner_key:
+            return False
+        if talk.phase is TalkPhase.CONNECTED:
+            return True
+        return talk.phase is TalkPhase.INVITING and any(
+            n.is_accept and n.nfrom_key == key for n in talk.peek()[0]
+        )
 
     async def reading(self, kind: EventKind) -> Reading:
         """Read *kind* now: its fingerprint, whether it is newer, and its event."""
@@ -85,17 +93,18 @@ class Arrivals:
         """Mail is newer when the high-water mark passes the last-sent one."""
         source = self._source
         mark = await source.relay.inbox_high_water(source.session_key)
-        is_newer = mark > self._mail_sent
+        is_newer = mark > self._mail_sent.get(source.session_key, 0)
         event = None
         if is_newer:  # the count is only the N of the text, read after the mark
             count = (await source.relay.get_unread_summary(source.session_key)).count
             event = ChannelEvent.mail(count) if count > 0 else None
+        key = source.session_key  # a mark orders mail within one inbox only
         return Reading(
-            EventKind.MAIL, mark, is_newer, event, lambda: self._sent_mail(mark)
+            EventKind.MAIL, mark, is_newer, event, lambda: self._sent_mail(key, mark)
         )
 
-    def _sent_mail(self, mark: int) -> None:
-        self._mail_sent = max(self._mail_sent, mark)
+    def _sent_mail(self, key: str, mark: int) -> None:
+        self._mail_sent[key] = max(self._mail_sent.get(key, 0), mark)
 
     async def _wall(self) -> Reading:
         """Read the wall: newer when its key was never announced, and not our own."""
@@ -166,9 +175,9 @@ class Arrivals:
         """Read talk messages: newer when a partner arrival was never announced."""
         talk = self._source.talk
         count = self._messages_seen
-        frames = talk.peek()[0] if talk.phase is TalkPhase.CONNECTED else ()
         is_queued = any(
-            n.ntype == "message" and n.nfrom_key == talk.partner_key for n in frames
+            n.ntype == "message" and self._is_partner(n.nfrom_key)
+            for n in talk.peek()[0]
         )
         event = ChannelEvent.talk_message() if is_queued else None
         return Reading(

@@ -14,6 +14,7 @@ import pytest
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.server.app import create_server
+from biff.server.channel_handshake import ChannelHandshake
 from biff.server.tools._descriptions import TALK_BASE_DESCRIPTION, _talk_description
 from biff.talk_state import TalkState
 from tests._state import create_state
@@ -122,3 +123,41 @@ class TestReadCommand:
         assert "mcp__plugin_biff-dev_tty__talk_read" in text
         assert "mcp__plugin_biff-dev_tty__read_messages" in text
         assert "mcp__plugin_biff-dev_tty__set_poll_interval" in text
+
+
+class TestChannelModeInstructions:
+    """Channel mode says events arrive on their own; polling is a fallback."""
+
+    def _server(self, tmp_path: Path):
+        config = BiffConfig(user="kai", repo_name="test")
+        state = create_state(config, tmp_path, relay=LocalRelay(tmp_path))
+        return create_server(state), state
+
+    def test_the_default_instructions_teach_passive_polling(
+        self, tmp_path: Path
+    ) -> None:
+        server, _ = self._server(tmp_path)
+        text = server.instructions or ""
+        assert "NOTHING wakes you between turns" in text
+        assert "/biff:read 5m" in text
+
+    def test_channel_mode_drops_the_passive_text_and_keeps_the_rest(
+        self, tmp_path: Path
+    ) -> None:
+        server, state = self._server(tmp_path)
+        ChannelHandshake.open(server, server.channel_link, state.emitter)
+        text = server.instructions or ""
+        assert "NOTHING wakes you between turns" not in text
+        assert "/biff:read 5m" not in text
+        assert text.startswith("Biff is a communication tool for software engineers.")
+        assert "never reformat" in text  # the output-format paragraph stays
+
+    def test_channel_mode_names_polling_only_as_a_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        server, state = self._server(tmp_path)
+        ChannelHandshake.open(server, server.channel_link, state.emitter)
+        text = server.instructions or ""
+        assert "arrive on their own" in text
+        assert "Only if the startup warning says channels are not live" in text
+        assert "/biff:read 2m" in text

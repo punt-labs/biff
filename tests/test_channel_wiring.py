@@ -288,3 +288,11 @@ class TestWatchOrder:
         await notify(MagicMock(), "notifications/initialized", None)
 
         assert order == ["runner", "gate"]
+
+
+class TestWatchTypes:
+    def test_the_wrapped_callbacks_use_exact_types(self) -> None:
+        request, notify = ChannelHandshake.watch(MagicMock(), AsyncMock(), AsyncMock())
+
+        for fn in (request, notify):
+            assert "Any" not in repr(fn.__annotations__)

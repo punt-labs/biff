@@ -12,13 +12,17 @@ from biff.server.tools import _descriptions
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from typing import Any
 
     from fastmcp import Context
     from mcp.shared.dispatcher import DispatchContext, OnNotify, OnRequest
     from mcp.shared.transport_context import TransportContext
 
 logger = logging.getLogger(__name__)
+
+
+# Where the default instructions start teaching passive polling; channel mode
+# replaces everything from here on with its own paragraph (events arrive).
+PASSIVE_MARKER = "HOW YOU RECEIVE"
 
 
 class Instructed(Protocol):
@@ -67,7 +71,7 @@ class ChannelHandshake:
         _descriptions.handshake_delivery.serve_single_connection(link)
         if emitter is not None:
             emitter.serve(link)
-            base = server.instructions or ""
+            base = (server.instructions or "").partition(PASSIVE_MARKER)[0].rstrip()
             if emitter.instructions not in base:  # once, however often this runs
                 server.instructions = f"{base}\n\n{emitter.instructions}"
 
@@ -87,8 +91,8 @@ class ChannelHandshake:
         async def request(
             dctx: DispatchContext[TransportContext],
             method: str,
-            params: Mapping[str, Any] | None,
-        ) -> dict[str, Any]:
+            params: Mapping[str, object] | None,
+        ) -> dict[str, object]:
             if method == "initialize":
                 emitter.initializing()
             return await on_request(dctx, method, params)
@@ -96,7 +100,7 @@ class ChannelHandshake:
         async def notify(
             dctx: DispatchContext[TransportContext],
             method: str,
-            params: Mapping[str, Any] | None,
+            params: Mapping[str, object] | None,
         ) -> None:
             await on_notify(dctx, method, params)
             if method == "notifications/initialized":

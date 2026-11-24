@@ -1711,3 +1711,104 @@ class TestFreshEpisode:
         await rig.emitter.check()
         await rig.emitter.close()
         assert rig.emitter.held == frozenset()
+
+
+class _SequenceRelay(_CountingRelay):
+    """A relay whose inbox marks are one global sequence, as the NATS stream's are."""
+
+    def __init__(self, data_dir: Path, marks: dict[str, int]) -> None:
+        super().__init__(data_dir=data_dir)
+        self.marks = marks
+
+    async def inbox_high_water(self, session_key: str) -> int:
+        return self.marks.get(session_key, 0)
+
+
+class TestOpeningReply:
+    async def test_a_reply_that_completes_the_handshake_is_announced(
+        self, rig: _Rig
+    ) -> None:
+        """An accept with an opening line reaches an inviter still INVITING."""
+        rig.open()
+        rig.source.talk.begin_invite(
+            partner="eric", partner_tty="tty9", partner_key=_PEER
+        )
+        rig.emitter.receive_frame(
+            {"type": "accept", "from": "eric", "from_key": _PEER, "to_key": _ME}
+        )
+        rig.emitter.receive_frame(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_key": _PEER,
+                "to_key": _ME,
+                "body": "hello",
+            }
+        )
+
+        await rig.emitter.check()
+
+        assert [m["kind"] for m in rig.sink.metas] == ["talk_message"]
+
+    async def test_a_message_from_the_invited_session_before_it_accepts_is_not(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        rig.source.talk.begin_invite(
+            partner="eric", partner_tty="tty9", partner_key=_PEER
+        )
+        rig.emitter.receive_frame(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_key": _PEER,
+                "to_key": _ME,
+                "body": "hello",
+            }
+        )
+
+        await rig.emitter.check()
+
+        assert rig.sink.frames == []
+
+
+class TestMailAcrossARebind:
+    async def test_mail_for_the_new_inbox_is_announced_after_a_rebind(
+        self, rig: _Rig
+    ) -> None:
+        """/clear re-points the session; the old inbox's mark must not hide new mail."""
+        rig.open()
+        await rig.mail(3)
+        await rig.emitter.check()
+        assert len(rig.sink.frames) == 1
+        rig.source.session_key = "kai:tty2"
+        rig.clock.advance(31)
+        await rig.mail(1, to="kai:tty2")
+
+        await rig.emitter.check()
+
+        assert [m["count"] for m in rig.sink.metas] == ["3", "1"]
+
+    async def test_a_lower_stream_sequence_for_the_new_inbox_is_still_new(
+        self, tmp_path: Path
+    ) -> None:
+        relay = _SequenceRelay(tmp_path, {"kai:old": 100, "kai:new": 50})
+        talk = TalkState(
+            relay=relay, user="kai", tty="old", session_key="kai:old", tty_name="t"
+        )
+        source = _Source(relay, talk, session_key="kai:old")
+        sink = _Sink()
+        link = ChannelLink()
+        link.observe(sink)
+        clock = _Clock()
+        emitter = ChannelEmitter(source, lambda: None, clock=clock)
+        emitter.serve(link)
+        emitter.initialized()
+        relay.scripted = [2, 1]
+        await emitter.check()
+        source.session_key = "kai:new"
+        clock.advance(31)
+
+        await emitter.check()
+
+        assert [m["count"] for m in sink.metas] == ["2", "1"]

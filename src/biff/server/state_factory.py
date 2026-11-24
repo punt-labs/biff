@@ -64,9 +64,9 @@ class StateBlueprint:
 
     def _selected_relay(self) -> Relay:
         """Return the explicit relay, or the one the configuration selects."""
-        return self.relay or RelaySelector(self.config, self.data_dir).select(
-            dormant=self.dormant
-        )
+        if self.relay is not None:
+            return self.relay
+        return RelaySelector(self.config, self.data_dir).select(dormant=self.dormant)
 
     def _common_root(self) -> Path:
         """Return the repo's common root, falling back as the loader does.
