@@ -1812,3 +1812,57 @@ class TestMailAcrossARebind:
         await emitter.check()
 
         assert [m["count"] for m in sink.metas] == ["2", "1"]
+
+
+class TestHeldMailAcrossARebind:
+    async def test_the_deferred_send_reads_the_new_inbox_with_its_own_mark(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        await rig.mail(2)
+        await rig.emitter.check()  # old inbox: sent, mark recorded for it
+        await rig.mail(1)
+        await rig.emitter.check()  # held by the window
+        assert rig.emitter.held == {EventKind.MAIL}
+        rig.source.session_key = "kai:tty2"  # /clear re-points the session
+        await rig.mail(1, to="kai:tty2")
+        rig.clock.advance(31)
+
+        await rig.emitter.deferred_send()
+
+        assert [m["count"] for m in rig.sink.metas] == ["2", "1"]
+        assert rig.emitter.held == frozenset()
+        rig.clock.advance(31)
+        await rig.emitter.check()
+        assert len(rig.sink.frames) == 2  # nothing double-announced
+
+    async def test_an_empty_new_inbox_sends_nothing_at_firing(self, rig: _Rig) -> None:
+        rig.open()
+        await rig.mail(1)
+        await rig.emitter.check()
+        await rig.mail(1)
+        await rig.emitter.check()
+        rig.source.session_key = "kai:tty2"
+        rig.clock.advance(31)
+
+        await rig.emitter.deferred_send()
+
+        assert len(rig.sink.frames) == 1
+        assert rig.emitter.held == frozenset()
+        assert not rig.emitter.is_timer_armed()
+
+    async def test_returning_to_the_old_inbox_does_not_repeat_its_announcement(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        await rig.mail(2)
+        await rig.emitter.check()
+        rig.source.session_key = "kai:tty2"
+        rig.clock.advance(31)
+        await rig.emitter.check()
+        rig.source.session_key = _ME
+        rig.clock.advance(31)
+
+        await rig.emitter.check()
+
+        assert len(rig.sink.frames) == 1

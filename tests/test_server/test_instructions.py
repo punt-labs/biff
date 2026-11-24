@@ -159,5 +159,6 @@ class TestChannelModeInstructions:
         ChannelHandshake.open(server, server.channel_link, state.emitter)
         text = server.instructions or ""
         assert "arrive on their own" in text
-        assert "Only if the startup warning says channels are not live" in text
+        assert "startup note says channels are not live or may not be live" in text
         assert "/biff:read 2m" in text
+        assert "/biff-dev:read-dev 2m" in text
