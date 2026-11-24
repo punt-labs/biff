@@ -8985,3 +8985,18 @@ agent.
 **Delivery.** The org blueprint exports `BIFF_USER=devin` and
 `BIFF_OWNER=jmf-pobox` and provisions the gitignored `devin.yaml`
 (`kind: agent`) per repo, as `devin-plugin/hooks.json` already does.
+
+**Alternatives:** where the owner and kind come from.
+
+- *A `manager:` key in `config.local.yaml`.* Rejected: MGR is captured per
+  session from the launching environment, and a repo file would name one owner
+  for every agent and human in that checkout.
+- *Set the box's `git config user.name` to `jmf-pobox`.* Rejected: it would
+  author every Devin commit as Jim and break attribution.
+- *Leave `--user` as a plain handle and require `.punt-labs/ethos.yaml`.*
+  Rejected: Devin works in repos that do not configure ethos, so `[A]` would
+  depend on each repo's setup.
+
+**Outcome:** with `BIFF_USER=devin` and `BIFF_OWNER=jmf-pobox` set, a Devin
+session in `punt-labs/vox` shows `devin:tty53 [A] jmf-pobox` in `/who`, the
+same shape as the `claude` agent on Jim's machine.
