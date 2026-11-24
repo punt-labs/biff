@@ -8951,3 +8951,60 @@ repository-independent state.
 relay; they reach each other through a NATS relay. The `<repo-key>`
 derivation (remote normalization, filesystem-remote hashing) is removed with
 the location it served.
+
+---
+
+## DES-092: A Named Agent Override Keeps Its Kind; Hosted Agents Name Their Owner
+
+**Date:** 2026-11-24
+**Status:** SETTLED
+**Topic:** How a hosted agent launched with `--user` shows `[A]` and a manager
+in `/who` (amends DES-040, DES-081 and the `/who` MGR decision)
+
+**Context.** Devin runs `biff --user devin` and `biff mcp --user devin` from
+repos with no `.punt-labs/ethos.yaml`, so the override short-circuited the
+agent identity file and every row had an empty kind. MGR reads `owner_git`
+then `launched_by`; on a Devin box those are the bot's git user `Devin AI`
+(not addressable) and the OS user `ubuntu`, never the human who runs the
+agent.
+
+**Decision.**
+
+1. An explicit override that names a `kind: agent` identity in the repo's
+   `.punt-labs/ethos/identities/` takes that identity's kind and display name.
+   The path-traversal guard of DES-040 applies; a human or missing identity
+   leaves the override plain, so DES-053 is unchanged. The handle grammar of
+   DES-040 applies too, so a case-insensitive checkout cannot match `Devin` to
+   `devin.yaml`.
+2. `BIFF_USER` is the host's default for `--user`: both identity chains read
+   it (stripped) when no override is passed, so the CLI, the library loaders,
+   the SessionStart hook and the MCP server resolve the same identity and
+   register one `/who` row. It names the identity only; unstamped MCP tool calls still need
+   an explicit `biff mcp --user`, as with the root `--user` flag.
+3. `BIFF_OWNER`, when nonempty, is captured as `owner_git` ahead of
+   `git config user.name`. It declares who launched the agent from the
+   environment that launched it, the same source as the git config it
+   precedes; it is not a reporting model and is not authentication. MGR's
+   addressability and self-exclusion rules still apply.
+
+**Delivery.** The org blueprint exports `BIFF_USER=devin` and
+`BIFF_OWNER=jmf-pobox` and provisions the gitignored `devin.yaml`
+(`kind: agent`) per repo, as `devin-plugin/hooks.json` already does.
+
+**Alternatives:** where the owner and kind come from.
+
+- *A `manager:` key in `config.local.yaml`.* Rejected: MGR is captured per
+  session from the launching environment, and a repo file would name one owner
+  for every agent and human in that checkout.
+- *Set the box's `git config user.name` to `jmf-pobox`.* Rejected: it would
+  author every Devin commit as Jim and break attribution.
+- *Leave `--user` as a plain handle and require `.punt-labs/ethos.yaml`.*
+  Rejected: Devin works in repos that do not configure ethos, so `[A]` would
+  depend on each repo's setup.
+- *`BIFF_USER` bound only to the root `--user` flag.* Rejected: the
+  SessionStart hook resolves identity without the CLI, so it would register a
+  second `/who` row under the default identity.
+
+**Outcome:** with `BIFF_USER=devin` and `BIFF_OWNER=jmf-pobox` set, a Devin
+session in `punt-labs/vox` shows `devin:tty53 [A] jmf-pobox` in `/who`, the
+same shape as the `claude` agent on Jim's machine.

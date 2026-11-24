@@ -122,6 +122,8 @@ def _clear_claude_session_env(  # pyright: ignore[reportUnusedFunction]
 # and BIFF_RELAY_IMAGE (release image under test) are test inputs, kept.
 _AMBIENT_BIFF_SETTINGS = (
     "BIFF_CHANNEL_MODE",
+    "BIFF_OWNER",
+    "BIFF_USER",
     "BIFF_RELAY_NKEYS_SEED",
     "BIFF_RELAY_TLS_HANDSHAKE_FIRST",
     "BIFF_RELAY_TOKEN",

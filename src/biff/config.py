@@ -664,7 +664,7 @@ def _assemble_config(
         display_name=display_name,
         kind=kind,
         launched_by=identity.get_os_user() or "",
-        owner_git=identity.git_user_name(base.repo_root),
+        owner_git=identity.owner_name(base.repo_root),
         repo_name=base.repo_name,
         relay_url=base.relay_url,
         relay_auth=base.relay_auth,
@@ -692,8 +692,9 @@ def load_mcp_config(
     """Discover and resolve configuration for the MCP server.
 
     Identity chain:
-    ``user_override`` -> :func:`resolve_agent_identity_from_disk` ->
-    :func:`get_github_identity` -> :func:`get_os_user`.
+    ``user_override`` (or ``BIFF_USER``) ->
+    :func:`resolve_agent_identity_from_disk` -> :func:`get_github_identity` ->
+    :func:`get_os_user`.
 
     The MCP server runs inside the agent's process; its primary
     identity is the agent. Disk-based resolution avoids the
@@ -726,12 +727,15 @@ def load_cli_config(
     """Discover and resolve configuration for the ``biff`` CLI.
 
     Identity chain:
-    ``user_override`` -> :func:`get_github_identity` -> :func:`get_os_user`.
+    ``user_override`` (or ``BIFF_USER``) -> :func:`get_github_identity` ->
+    :func:`get_os_user`.
 
     The CLI runs in the user's shell -- a human at the terminal. CLI
-    sessions identify as the human, never the agent. A GitHub login matching a known
-    ``kind: agent`` identity is rejected even when ``get_github_identity``
-    resolves one -- see :func:`biff.identity.resolve_human_identity` (DES-053).
+    sessions identify as the human unless the override or ``BIFF_USER``
+    names a ``kind: agent`` identity, as a hosted agent's host does. A GitHub
+    login matching a known ``kind: agent`` identity is rejected even when
+    ``get_github_identity`` resolves one -- see
+    :func:`biff.identity.resolve_human_identity` (DES-053).
 
     Raises:
         SystemExit: No repository or human identity can be resolved, shared

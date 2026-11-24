@@ -25,7 +25,7 @@ from biff.formatting import (
     format_who,
     who_mgr,
 )
-from biff.identity import git_user_name
+from biff.identity import owner_name
 from biff.models import Message, UserSession
 
 
@@ -572,7 +572,7 @@ class TestGitUserName:
     def test_reads_the_config_value(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        assert git_user_name(self._repo(tmp_path, "jmf-pobox")) == "jmf-pobox"
+        assert owner_name(self._repo(tmp_path, "jmf-pobox")) == "jmf-pobox"
 
     def test_provisioned_host_config_wins_over_author_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -585,7 +585,7 @@ class TestGitUserName:
             tty="a",
             kind="agent",
             launched_by="osjim",
-            owner_git=git_user_name(repo),
+            owner_git=owner_name(repo),
         )
         assert who_mgr(row) == "jmf-pobox"
 
@@ -609,7 +609,7 @@ class TestGitUserName:
         # literal quotes that the reader must remove.
         repo = self._repo(tmp_path, None)
         (repo / ".git" / "config").write_text(f"[user]\n\tname = {written}\n")
-        assert git_user_name(repo) == want
+        assert owner_name(repo) == want
 
     def test_quoted_value_renders_unquoted_in_who(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -617,7 +617,7 @@ class TestGitUserName:
         repo = self._repo(tmp_path, None)
         (repo / ".git" / "config").write_text('[user]\n\tname = \\"jmf-pobox\\"\n')
         row = UserSession(
-            user="claude", tty="a", kind="agent", owner_git=git_user_name(repo)
+            user="claude", tty="a", kind="agent", owner_git=owner_name(repo)
         )
         out = format_who([row])
         assert "jmf-pobox" in out
@@ -626,7 +626,7 @@ class TestGitUserName:
     def test_unset_is_empty(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        assert git_user_name(self._repo(tmp_path, None)) == ""
+        assert owner_name(self._repo(tmp_path, None)) == ""
 
     def test_unset_is_logged(
         self,
@@ -635,14 +635,14 @@ class TestGitUserName:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         with caplog.at_level("DEBUG", logger="biff.identity"):
-            git_user_name(self._repo(tmp_path, None))
+            owner_name(self._repo(tmp_path, None))
         assert "user.name" in caplog.text
 
     def test_missing_git_is_empty_not_an_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("PATH", str(tmp_path))
-        assert git_user_name(tmp_path) == ""
+        assert owner_name(tmp_path) == ""
 
 
 class TestFingerLaunchedBy:
