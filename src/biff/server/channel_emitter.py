@@ -61,6 +61,10 @@ INSTRUCTIONS = (
 type WallKey = tuple[datetime, str, str]
 
 
+class RetriesExhaustedError(TimeoutError):
+    """The relay did not answer within the deferred retries."""
+
+
 class ChannelEmitter:
     """Turn arrivals into rate-limited ``notifications/claude/channel`` events.
 
@@ -212,17 +216,27 @@ class ChannelEmitter:
         async with self._lock:
             gate = await self._gate.state()
             if gate is Gate.OPEN:
-                frees, self._frees_dormant = self._frees_dormant, False
-                for kind in EventKind:
-                    reading = await self._read(kind)
-                    if reading is None:
-                        self._retry(kind)
-                    elif not self._is_asleep(reading, frees=frees):
-                        await self._consider(reading)
+                await self._announce()
             elif gate is Gate.UNREADABLE:
-                for kind in EventKind:
-                    self._retry(kind)
+                await self._retry_owed()
             self._rearm()
+
+    async def _announce(self) -> None:
+        """Read every kind and send, hold or drop it; the gate is open."""
+        frees, self._frees_dormant = self._frees_dormant, False
+        for kind in EventKind:
+            reading = await self._read(kind)
+            if reading is None:
+                self._retry(kind)
+            elif not self._is_asleep(reading, frees=frees):
+                await self._consider(reading)
+
+    async def _retry_owed(self) -> None:
+        """The gate could not be read: retry what is owed or held, nothing else."""
+        for kind in EventKind:
+            reading = await self._read(kind)
+            if reading is None or reading.is_owed or kind in self._due:
+                self._retry(kind)
 
     async def close(self) -> None:
         """Stop for good: cancel the timer, end a firing in progress, drop the link.
@@ -239,6 +253,7 @@ class ChannelEmitter:
         self._link = None
         self._due.clear()
         self._retried.clear()
+        self._misses.clear()
 
     async def deferred_send(self) -> None:
         """Handle the one-shot timer: send, drop or release each kind that is due.
@@ -274,12 +289,10 @@ class ChannelEmitter:
         """
         misses = self._misses.get(kind, 0) + 1
         if misses > MAX_READ_RETRIES:
-            self._misses.pop(kind, None)
-            self._release(kind)
-            logger.warning(
-                "channel %s: giving up the retry after %d failed reads",
-                kind.value,
-                MAX_READ_RETRIES,
+            self._release(kind)  # forgets the misses: the next episode starts afresh
+            self._log.failed(
+                f"channel retry ({kind.value})",
+                RetriesExhaustedError(f"gave up after {MAX_READ_RETRIES} failed reads"),
             )
             return
         self._misses[kind] = misses
@@ -318,6 +331,7 @@ class ChannelEmitter:
         """Stop holding *kind*; its record is unchanged."""
         self._due.pop(kind, None)
         self._retried.discard(kind)
+        self._misses.pop(kind, None)
 
     async def _send(self, reading: Reading) -> None:
         """Send *reading*'s event; the record advances once it is handed to the writer.
@@ -404,5 +418,6 @@ class ChannelEmitter:
             self._log.failed(label, exc)
             return None
         self._log.recovered(label)
+        self._log.recovered(f"channel retry ({kind.value})")
         self._misses.pop(kind, None)
         return reading

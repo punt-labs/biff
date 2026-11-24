@@ -1315,10 +1315,10 @@
   "src/biff/server/channel_emitter.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.56,
+    "avg_params": 0.52,
     "max_complexity": 9.0,
-    "avg_complexity": 2.8,
-    "module_size": 272.0,
+    "avg_complexity": 2.78,
+    "module_size": 280.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

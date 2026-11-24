@@ -23,7 +23,11 @@ from biff.relay import LocalRelay
 from biff.server import channel
 from biff.server.channel import ChannelLink
 from biff.server.channel_content import EventKind
-from biff.server.channel_emitter import RETRY_SECONDS, ChannelEmitter
+from biff.server.channel_emitter import (
+    MAX_READ_RETRIES,
+    RETRY_SECONDS,
+    ChannelEmitter,
+)
 from biff.server.channel_rate import RateLimit
 from biff.talk_state import PENDING_INVITE_TTL, TalkState
 
@@ -348,9 +352,7 @@ class TestWall:
         rig.open()
         await rig.wall(text="SECRET-WALL")
         await rig.emitter.check()
-        assert rig.sink.contents == [
-            "Call wall to read: new biff wall from eric:tty9 (claimed, unverified)."
-        ]
+        assert rig.sink.contents == ["Call wall: unverified wall from eric:tty9."]
 
     async def test_this_sessions_own_wall_emits_nothing(self, rig: _Rig) -> None:
         """O3."""
@@ -389,7 +391,7 @@ class TestWall:
         rig.open()
         await rig.wall(user="kai", tty="tty7")
         await rig.emitter.check()
-        assert "unverified (claims to be you)" in rig.sink.contents[0]
+        assert "someone claiming to be you" in rig.sink.contents[0]
 
     async def test_a_128_character_sender_is_a_teammate(self, rig: _Rig) -> None:
         """O3."""
@@ -397,7 +399,7 @@ class TestWall:
         await rig.wall(user="e" * 128)
         await rig.emitter.check()
         assert rig.sink.contents[0].startswith(
-            "Call wall to read: new biff wall from a teammate (claimed"
+            "Call wall: unverified wall from a teammate"
         )
 
 
@@ -1124,7 +1126,7 @@ class TestFailedReads:
                 await rig.emitter.deferred_send()
         assert rig.emitter.held == frozenset()
         assert not rig.emitter.is_timer_armed()
-        assert any("giving up" in r.getMessage() for r in caplog.records)
+        assert any("gave up" in r.getMessage() for r in caplog.records)
 
     async def test_a_gate_read_that_fails_is_retried(self, rig: _Rig) -> None:
         rig.open()
@@ -1621,3 +1623,91 @@ class TestFiredHandle:
         assert armed_during_send == [False]
         assert not rig.emitter.is_timer_armed()
         assert len(rig.sink.frames) == 2
+
+
+class TestSustainedOutage:
+    async def test_an_unreadable_gate_with_nothing_owed_holds_and_logs_nothing_more(
+        self, rig: _Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rig.open()
+        await rig.emitter.check()  # healthy, nothing owed
+        rig.source.relay.session_fails_with = TimeoutError()
+        with caplog.at_level("WARNING", logger="biff"):
+            for _ in range(5):
+                rig.emitter.tool_called()
+                await rig.emitter.check()
+                for _ in range(4):
+                    rig.clock.advance(2)
+                    await rig.emitter.deferred_send()
+
+        assert rig.emitter.held == frozenset()
+        assert not rig.emitter.is_timer_armed()
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "channel mesg read failed" in warnings[0]
+
+    async def test_giving_up_is_logged_once_per_episode_and_recovery_is_logged(
+        self, rig: _Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rig.open()
+        await rig.mail()
+        rig.source.relay.fails_with = TimeoutError()
+        with caplog.at_level("WARNING", logger="biff"):
+            await rig.emitter.check()
+            for _ in range(12):
+                rig.clock.advance(2)
+                await rig.emitter.deferred_send()
+            for _ in range(3):  # later arrivals fail the same way
+                await rig.emitter.check()
+                for _ in range(MAX_READ_RETRIES + 2):
+                    rig.clock.advance(2)
+                    await rig.emitter.deferred_send()
+            gave_up = [r for r in caplog.records if "retry (mail)" in r.getMessage()]
+            assert len(gave_up) == 1
+            rig.source.relay.fails_with = None
+            rig.emitter.tool_called()
+            await rig.emitter.check()
+
+        assert any("retry (mail) recovered" in r.getMessage() for r in caplog.records)
+
+    async def test_an_unreadable_gate_still_retries_a_kind_that_is_owed(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        await rig.mail()
+        rig.source.relay.session_fails_with = TimeoutError()
+        await rig.emitter.check()
+        assert rig.emitter.held == {EventKind.MAIL}
+
+
+class TestFreshEpisode:
+    async def test_a_new_episode_gets_every_retry(self, rig: _Rig) -> None:
+        """Misses of an earlier episode do not survive a mesg-off release."""
+        rig.open()
+        await rig.mail()
+        rig.source.relay.fails_with = TimeoutError()
+        await rig.emitter.check()  # miss 1
+        rig.clock.advance(2)
+        await rig.emitter.deferred_send()  # miss 2
+        await rig.mesg(enabled=False)
+        rig.clock.advance(2)
+        await rig.emitter.deferred_send()  # released
+        await rig.mesg(enabled=True)
+
+        await rig.emitter.check()  # a new episode: miss 1
+        for _ in range(MAX_READ_RETRIES - 1):
+            rig.clock.advance(2)
+            await rig.emitter.deferred_send()
+        assert rig.emitter.held == {EventKind.MAIL}  # still retrying
+
+        rig.clock.advance(2)
+        await rig.emitter.deferred_send()
+        assert rig.emitter.held == frozenset()  # now it gives up
+
+    async def test_close_forgets_the_misses(self, rig: _Rig) -> None:
+        rig.open()
+        await rig.mail()
+        rig.source.relay.fails_with = TimeoutError()
+        await rig.emitter.check()
+        await rig.emitter.close()
+        assert rig.emitter.held == frozenset()

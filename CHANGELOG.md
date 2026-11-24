@@ -17,7 +17,8 @@
   flat or flapping count cannot hide an arrival. A relay reconnect re-runs the
   sender. The server instructions gain a paragraph that treats bodies as
   untrusted, and `initialize` now returns it. Each event puts its action first
-  and fits one 80-column line ("Call read_messages: 3 unread biff messages.");
+  and is at most 60 characters ("Call read_messages: 3 unread biff messages.", "Call wall: unverified wall from eric:tty9."), so the client
+  does not cut the action or the trust label;
   the mail count is the unread total, not the new arrivals. A read or mesg-read
   failure is retried by the deferred send (three tries, then logged and given
   up); the emitter is closed with the connection; biff.log gets one INFO line per

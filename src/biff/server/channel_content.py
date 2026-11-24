@@ -17,11 +17,12 @@ from biff.session_routing import ID_RE
 MAX_EVENT_LENGTH = 200
 MAX_SENDER_USER_LENGTH = 39
 
-# The actionable part first: the client shows one line and cuts the rest.
-_WALL = "Call wall to read: new biff wall from {}."
-_INVITE = "Ask the user: talk invite from {}."
-_ANONYMOUS = "a teammate (claimed, unverified)"
-_OWN_IDENTITY = "unverified (claims to be you)"
+# The action, then the trust label, then the sender: the client shows about 70
+# characters of one line, so only a long sender may be cut.
+_WALL = "Call wall: unverified wall from {}."
+_INVITE = "Ask the user: unverified talk invite from {}."
+_ANONYMOUS = "a teammate"
+_OWN_IDENTITY = "someone claiming to be you"
 
 
 class EventKind(StrEnum):
@@ -56,7 +57,7 @@ class Sender:
             return cls(_ANONYMOUS)
         if user == own_user:
             return cls(_OWN_IDENTITY)
-        return cls(f"{user}:{tty} (claimed, unverified)")
+        return cls(f"{user}:{tty}")
 
     @classmethod
     def anonymous(cls) -> Self:

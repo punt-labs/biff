@@ -333,7 +333,7 @@ async def refresh_wall(
         wall_text = terminal_safe(current.text)
         sender = sanitized_sender(current.from_user, current.from_tty)
         tool.description = (
-            f"[WALL] {wall_text} — {sender}, "
+            f"[WALL] [untrusted] {wall_text} — {sender}, "
             f"expires in {remaining}. "
             "Use wall(clear=True) to remove."
         )
