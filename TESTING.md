@@ -63,7 +63,7 @@ missing. Nightly installs a pinned, checksum-verified `nats-server`. Add
 ## Trusted tests and quarantines (TST-6, TST-9)
 
 Nightly runs the hosted tier against the public demo relay, whose
-credentials ship in the package, and caps each SDK query at two turns and
+credentials ship in the package, and caps each SDK query at three turns and
 $0.05 (`tests/test_sdk/_client.py`). The provider key reaches only the
 agent step; the biff MCP child gets none. The relay token reaches only the
 failure alert. Do not run trusted tests on a PR or pass personal

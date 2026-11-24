@@ -72,7 +72,7 @@ def _make_options(
     user: str,
     data_dir: Path,
     *,
-    max_turns: int = 2,
+    max_turns: int = 3,
 ) -> ClaudeAgentOptions:
     """Build ClaudeAgentOptions with biff as an MCP server."""
     from claude_agent_sdk import ClaudeAgentOptions
@@ -200,7 +200,7 @@ class SDKClient:
     user: str
     data_dir: Path
     transcript: Transcript
-    max_turns: int = 2
+    max_turns: int = 3
 
     async def prompt(self, text: str) -> SDKResult:
         """Send a prompt to Claude; return structured results.
