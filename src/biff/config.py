@@ -732,9 +732,10 @@ def load_cli_config(
 
     The CLI runs in the user's shell -- a human at the terminal. CLI
     sessions identify as the human unless the override or ``BIFF_USER``
-    names a ``kind: agent`` identity, as a hosted agent's host does. A GitHub login matching a known
-    ``kind: agent`` identity is rejected even when ``get_github_identity``
-    resolves one -- see :func:`biff.identity.resolve_human_identity` (DES-053).
+    names a ``kind: agent`` identity, as a hosted agent's host does. A GitHub
+    login matching a known ``kind: agent`` identity is rejected even when
+    ``get_github_identity`` resolves one -- see
+    :func:`biff.identity.resolve_human_identity` (DES-053).
 
     Raises:
         SystemExit: No repository or human identity can be resolved, shared
