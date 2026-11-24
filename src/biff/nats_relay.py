@@ -50,7 +50,6 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
-from biff._nats_connection import NatsConnectionSetup
 from biff.models import (
     Message,
     RelayAuth,
@@ -60,6 +59,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
+from biff.nats_support import NatsSupport
 from biff.tty import (
     SID_HINT_NAMESPACE,
     build_session_key,
@@ -519,7 +519,7 @@ class NatsRelay:
         self._connect_lock = asyncio.Lock()
         self._wtmp_available: bool = False
         self._health = _ConnectionHealth(url)
-        self._setup = NatsConnectionSetup()
+        self._setup = NatsSupport()
         # Monotonic per-dial token.  Each new client dialed in
         # ``_open_connection`` bumps it; the connection callbacks capture the
         # value in force at their registration and no-op when it no longer
@@ -1260,8 +1260,7 @@ class NatsRelay:
         self._validate_user(user)
         self._validate_tty(tty)
         repo = self._validate_repo(target_repo) if target_repo else self._repo_name
-        prefix = f"{self._stream_prefix}.{repo}.inbox"
-        return f"{prefix}.{user}.{tty}"
+        return f"{self._stream_prefix}.{repo}.inbox.{user}.{tty}"
 
     def _user_subject(self, user: str) -> str:
         """NATS subject for a user's broadcast inbox: ``biff.{repo}.inbox.{user}``.
@@ -1396,8 +1395,7 @@ class NatsRelay:
         """
         try:
             nc = await self._live_nc_or_reconnect()
-            subject = self.wall_notify_subject(repo)
-            await nc.publish(subject, b"1")
+            await nc.publish(self.wall_notify_subject(repo), b"1")
         except Exception:  # noqa: BLE001 — notification is best-effort
             logger.debug("Wall notification failed for %s", repo)
 
@@ -1473,8 +1471,7 @@ class NatsRelay:
             self._validate_user(message.to_user)
             repo = self._validate_repo(target_repo) if target_repo else self._repo_name
             if target_repo:
-                prefix = f"{self._stream_prefix}.{repo}.inbox"
-                subject = f"{prefix}.{message.to_user}"
+                subject = f"{self._stream_prefix}.{repo}.inbox.{message.to_user}"
             else:
                 subject = self._user_subject(message.to_user)
             await self._tracked(
@@ -1587,7 +1584,6 @@ class NatsRelay:
             return
         try:
             nc = await self._live_nc_or_reconnect()
-            subject = self.talk_notify_subject(to_user)
             if message is not None:
                 data: dict[str, str] = {
                     "from": message.from_user,
@@ -1601,7 +1597,7 @@ class NatsRelay:
                 payload = json.dumps(data).encode()
             else:
                 payload = b"1"
-            await nc.publish(subject, payload)
+            await nc.publish(self.talk_notify_subject(to_user), payload)
         except Exception:  # noqa: BLE001 — notification is best-effort
             logger.debug("Talk notification failed")
 
@@ -1616,12 +1612,11 @@ class NatsRelay:
         payload; the subscriber (``subscribe_inbox_notify``) only wakes the
         poller, which recomputes the unread count on its own next tick.
         """
-        try:
-            nc = await self._live_nc_or_reconnect()
-            subject = self.inbox_notify_subject(repo, user)
-            await nc.publish(subject, b"1")
-        except Exception:  # noqa: BLE001 — notification is best-effort
-            logger.debug("Inbox notification failed in %s", repo)
+        await self._setup.poke(
+            self._live_nc_or_reconnect,
+            lambda: self.inbox_notify_subject(repo, user),
+            f"Inbox wake poke in {repo}",
+        )
 
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.
@@ -1733,7 +1728,13 @@ class NatsRelay:
         )
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[UUID]) -> None:
-        """No-op — messages are consumed (deleted) by :meth:`fetch_user_inbox`."""
+        """Poke the user's other sessions: shared mail was consumed (deleted).
+
+        Nothing else tells them their unread count fell, now that no timer
+        recomputes it.  :meth:`fetch_user_inbox` did the consuming.
+        """
+        del ids  # the interface's; consuming is all the NATS relay needs
+        await self._publish_inbox_notification(self._repo_name, user)
 
     async def get_user_unread_count(self, user: str) -> int:
         """Count unread messages in the user's broadcast inbox."""
@@ -1796,8 +1797,7 @@ class NatsRelay:
 
     async def update_session(self, session: UserSession) -> None:
         """Store session in KV using ``{user}.{tty}`` key."""
-        key = build_session_key(session.user, session.tty)
-        kv_key = self._kv_key(key)
+        kv_key = self._kv_key(build_session_key(session.user, session.tty))
         _, kv = await self._ensure_connected()
         await self._tracked(
             "kv.put", kv.put(kv_key, session.model_dump_json().encode())
@@ -1818,8 +1818,7 @@ class NatsRelay:
     async def get_sessions_for_user(self, user: str) -> list[UserSession]:
         """Return all sessions for a given user."""
         self._validate_user(user)
-        all_sessions = await self.get_sessions()
-        return [s for s in all_sessions if s.user == user]
+        return [s for s in await self.get_sessions() if s.user == user]
 
     def _warn_heartbeat_missing_once(self, session_key: str) -> None:
         """Warn once per session key that heartbeat found no session.
@@ -2119,11 +2118,10 @@ class NatsRelay:
         """
         self._validate_user(user)
         js, _ = await self._ensure_connected()
-        names_stream = f"KV_{self._names_bucket}"
         kv_prefix = f"$KV.{self._names_bucket}."
         user_filter = f"{kv_prefix}{user}.>"
         try:
-            info = await js.stream_info(names_stream, subjects_filter=user_filter)
+            info = await js.stream_info(f"KV_{self._names_bucket}", user_filter)
         except NotFoundError:
             return []
         if not info.state.subjects:
@@ -2178,8 +2176,8 @@ class NatsRelay:
         error = validate_reclaimable_name(name)
         if error is not None:
             raise ValueError(error)
-        names_kv = await self._ensure_names_kv()
-        await names_kv.put(self._sid_hint_key(user, session_id), name.encode())
+        kv = await self._ensure_names_kv()
+        await kv.put(self._sid_hint_key(user, session_id), name.encode())
 
     # -- Session history (wtmp) --
 

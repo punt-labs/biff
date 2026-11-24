@@ -1043,21 +1043,33 @@ keeps feeding \texttt{\_tracked} while the connection is otherwise idle:
 the three consecutive timeouts the gate counts must actually occur inside
 one keepalive window, which requires \emph{some} periodic
 \texttt{\_tracked}-wrapped request to fire at a cadence no coarser than
-the keepalive floor.  Today that source is the poller's tick loop, which
-issues a \texttt{get\_wall()} round-trip every \texttt{poll\_interval}
-(active) or \texttt{nap\_interval} (napping) regardless of whether wall's
-content changed, because the countdown text must keep re-rendering.  This
-is a normative dependency, not an incidental one: \textbf{some periodic
+the keepalive floor.  The poller's tick loop was that source: it issued a
+\texttt{get\_wall()} round-trip every \texttt{poll\_interval} (active) or
+\texttt{nap\_interval} (napping) regardless of whether wall's content
+changed, because the countdown text had to keep re-rendering.  PL-1367
+(DES-087) removes that tick loop: the poller has no periodic wall, unread or
+invite work, and wakes only on an arrival, on its connection-liveness check,
+and on a one-shot deadline armed while a wall or invite is displayed.  The
+\texttt{\_tracked} request that still runs on a cadence with nothing else
+happening is the session heartbeat (\texttt{heartbeat()}, a \texttt{kv.get}
+every 60\,s), which DES-087 keeps as connection liveness.  This is a
+normative dependency, not an incidental one: \textbf{some periodic
 \texttt{\_tracked} request source must run at a cadence no coarser than
-the relay's poll interval for $ForceReconnect$ to retain its speed
-advantage over $WedgeDetected$}; remove the last such source without
-replacing it and the proactive detector degrades to the keepalive floor or
-worse, inverting the ordering \S\ref{sec:modelcheck}'s wedge-liveness
-property was written to describe.  biff-5ex's push design
-(\texttt{docs/design-nats-push.md}, \S3) identifies exactly this risk when
-it proposes removing the unread-count poll from the tick loop, and
-resolves it by retaining the wall-countdown tick as the surviving cadence
-source rather than removing the tick loop outright.  The dependency is
+the keepalive floor for $ForceReconnect$ to retain its speed advantage over
+$WedgeDetected$}; remove the last such source without replacing it and the
+proactive detector degrades to the keepalive floor or worse, inverting the
+ordering \S\ref{sec:modelcheck}'s wedge-liveness property was written to
+describe.  The heartbeat meets the floor but not the faster bound the
+earlier tick loop gave: three consecutive timeouts at one request per minute
+take about three minutes, so on an otherwise idle connection the keepalive
+detector, not the \texttt{\_tracked} gate, is the likelier to fire first.
+Requests made for arrivals, tool calls and the deadline wakes feed the gate
+as well, but none of them is periodic.  The ruling of DES-087 trades the
+speed of the proactive path for the removal of every other cadence; the
+property of \S\ref{sec:modelcheck} is unaffected, since it is an
+eventuality.  biff-5ex's push design
+(\texttt{docs/design-nats-push.md}, \S3) identified this risk when it
+proposed removing the unread-count poll from the tick loop.  The dependency is
 recorded here as prose because it is a real-time property of an untimed
 model: $\S\ref{sec:modelcheck}$'s $AG(connState = halfOpen \Rightarrow
 EF\,connState = disconnected)$ proves $ForceReconnect$ and $WedgeDetected$
@@ -1345,8 +1357,9 @@ dropped-client window.)
 \end{schema}
 
 The poller's re-subscribe transition
-(\texttt{poll\_inbox} / \texttt{\_active\_tick}): on each tick, once the
-connection is $connected$, the poller compares the generation each kind's
+(\texttt{poll\_inbox} / \texttt{\_AlwaysOnSubs.reconcile}): on each
+connection-liveness wake (every 5\,s, the NATS subscription check, and after
+any pass), once the connection is $connected$, the poller compares the generation each kind's
 SUB is bound to against the current connection generation and, for
 whichever kind $kind?$ differs, opens a fresh SUB of that kind on the live
 client and records the new binding.  One schema, indexed by $kind?$,
@@ -1355,8 +1368,8 @@ the biff-5ex $inboxNotify$ reconciliation, the $kvWatch$
 watcher's re-subscribe, and the $wallNotify$ reconciliation, because $subGen(kind?) < generation$ is their common signature
 regardless of kind.  This one operation covers three cases the code
 treats uniformly for each kind.  The \emph{initial} subscribe: after
-the first dial, $subGen(kind?) = 0 < generation = 1$, and the first tick
-binds that kind's SUB to generation $1$.  The \emph{re-subscribe} after a
+the first dial, $subGen(kind?) = 0 < generation = 1$, and the first
+liveness wake binds that kind's SUB to generation $1$.  The \emph{re-subscribe} after a
 force-reconnect: a fresh dial has advanced $generation$ past the stranded
 $subGen(kind?)$, and the tick rebinds to the new generation.  The
 idempotent \emph{no-op}: when $subGen(kind?) = generation$ already, the
@@ -1371,7 +1384,7 @@ sessions-KV watcher ($kind? = kvWatch$) and the wall wake poke
 ($kind? = wallNotify$) alike.  Every other component of $Connection$ is preserved, $subGen$'s
 other kinds included; a re-subscribe of one kind touches that kind's SUB
 and nothing else --- the four kinds reconcile independently, one
-$Subscribe$ per stranded kind per tick, exactly as \texttt{poll\_inbox}
+$Subscribe$ per stranded kind per liveness wake, exactly as \texttt{poll\_inbox}
 calls \texttt{\_reconcile\_talk\_sub} and its $inboxNotify$ counterpart
 as separate calls, and the watcher supervisor re-subscribes $kvWatch$.
 
@@ -1388,7 +1401,7 @@ as separate calls, and the watcher supervisor re-subscribes $kvWatch$.
 A subscribe attempt can fail: \texttt{subscribe} returns without
 establishing a SUB (the JetStream/core request times out, or the client
 is momentarily unhealthy), so the binding is not advanced and the next
-tick tries again.  $SubscribeRetry$ is the $\Xi Connection$ no-op that
+next liveness wake tries again.  $SubscribeRetry$ is the $\Xi Connection$ no-op that
 models this outcome, for whichever kind the attempt was for --- it is
 enabled in exactly the stranded state $Subscribe$ is enabled in for that
 kind, and leaves every component, $subGen$ included, unchanged.  It
@@ -1845,19 +1858,19 @@ verified by model checking with probcli (\texttt{z-spec test}):
     advances $generation$ past $subGen(k)$.  The property is a genuine
     liveness claim, not a one-step safety claim, for any of the three
     kinds: $SubscribeRetry$ models a subscribe of kind $kind?$ that fails
-    and is retried next tick, so that kind's SUB is \emph{eventually},
-    not \emph{immediately}, re-bound.  ``Next tick'' names the model's
+    and is retried at the next liveness wake, so that kind's SUB is \emph{eventually},
+    not \emph{immediately}, re-bound.  ``Next liveness wake'' names the model's
     retry point without timing it --- $EF$ makes no claim about how soon
     the eventually is --- but the property is only as true in practice as
     the real scheduler that keeps calling $Subscribe$/$SubscribeRetry$ at
     all: a poller that stops ticking makes ``eventually'' vacuous no
-    matter what the model proves.  The relay's poller ticks at a
-    configurable cadence and, when that cadence is disabled outright
-    (interval $\leq 0$, biff-5ex), still retries on a bounded fallback
-    interval rather than waiting on wake signals alone --- the wake path
-    depends on a live SUB of the very kind that may be stranded, so with
-    every SUB down, nothing but a time-bounded retry can ever restart the
-    cycle.  This is an implementation-level fairness obligation the
+    matter what the model proves.  The poller has no periodic tick
+    (PL-1367, DES-087); its connection-liveness check wakes it every 5\,s
+    whatever else happens, and that wake runs the reconcile --- the wake path
+    from an arrival depends on a live SUB of the very kind that may be
+    stranded, so with every SUB down, nothing but a time-bounded retry can
+    ever restart the cycle.  The 5\,s check is that retry, and it is tracked
+    on elapsed time, so steady wakes from other causes cannot starve it.  This is an implementation-level fairness obligation the
     untimed model does not and cannot state; it is recorded here as the
     condition under which the proven liveness property actually holds in
     the running system, not as a gap in the property itself.  The pre-fix

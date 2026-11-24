@@ -1,8 +1,9 @@
-"""Compare push-driven broadcast detection with the periodic backstop.
+"""Compare push-driven broadcast detection with an explicit read.
 
-Push trials use relay delivery, including its notification poke. Poll
-trials publish directly to JetStream without a poke, so the receiver can
-only discover them on a backstop tick.
+Push trials use relay delivery, including its notification poke. Poke-less
+trials publish directly to JetStream, so the receiver has nothing to wake
+it: the server runs no timer (DES-087), and only an explicit read finds
+the message.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from fastmcp.client.transports import FastMCPTransport
 from biff.models import BiffConfig, Message, UnreadSummary
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
-from biff.server.tools._descriptions import _reset_session, nap_interval_for
+from biff.server.tools._descriptions import _reset_session
 from biff.testing import NotificationTracker
 from biff.testing.caller import StampedClient
 from tests._state import create_state
@@ -37,36 +38,14 @@ _TEST_REPO = "_test-push-vs-poll-latency"
 _KAI_TTY = "aaaa00f1"
 _TRIALS = 3
 
-# Fast enough to wait out in a test (0.3s active tick, matching
-# test_inbox_push.py's kai_fast_backstop) — nap_interval_for's 15x ratio
-# scales this to a 4.5s backstop, versus a 30s production default.
-_POLL_INTERVAL = 0.3
-_BACKSTOP = nap_interval_for(_POLL_INTERVAL)
+# Longer than the retired 2s poll tick: a poke-less message that no timer
+# finds in this window is not going to be found by one.
+_NO_TIMER_WAIT = 3.0
 
-# Bounds a single trial's wait for the description to reflect the new
-# unread count.  Generous relative to _BACKSTOP so a slow CI runner
-# doesn't turn a real detection into a false miss (the -1.0 sentinel
-# below, not this bound, is what a genuine miss reports as).
-_TRIAL_TIMEOUT = _BACKSTOP * 2.0
-
-# Synchronization pause before each poll trial: deliberately longer
-# than one full _BACKSTOP, so a message-less recompute is guaranteed
-# to happen at least once during the sleep, resetting the gate's
-# clock — without this, a trial's phase relative to the backstop's
-# periodic schedule is wherever the previous trial's wall-clock
-# overhead happened to leave it, and the observed latency swings
-# unpredictably across [0, _BACKSTOP) run to run.
-#
-# The pause *oversleeps* past that reset by roughly 2 * _POLL_INTERVAL
-# plus jitter, so the trial's message is actually published partway
-# into the *next* backstop window, not right at its start — the next
-# recompute is then less than a full _BACKSTOP away. Observed latency
-# is consistently around two-thirds of _BACKSTOP (~2.9-3.0s of 4.5s
-# across three separate runs), not the full interval. That's still
-# what the demonstration needs: deterministic and reproducible run to
-# run, clearly separated from push's sub-second latency, and
-# comfortably above the assertion's half-backstop floor.
-_SYNC_PAUSE = _BACKSTOP + 2 * _POLL_INTERVAL
+# Bounds a single push trial's wait for the description to reflect the new
+# unread count.  Generous so a slow CI runner doesn't turn a real detection
+# into a false miss (the -1.0 sentinel below is what a genuine miss reports).
+_TRIAL_TIMEOUT = 6.0
 
 
 async def _publish_broadcast_without_poke(
@@ -157,38 +136,37 @@ class _LatencyTrials:
             await _drain_inbox(self._client)
         return latencies
 
-    async def run_poll(self, sender: NatsRelay) -> list[float]:
-        """Measure poll-path (backstop-only) latency, ``_TRIALS`` times."""
-        latencies: list[float] = []
+    async def run_unpoked(self, sender: NatsRelay) -> list[bool]:
+        """For each trial, whether the poke-less message stayed undetected.
+
+        A trial passes (``True``) when the description still shows no unread
+        mail after ``_NO_TIMER_WAIT`` and an explicit ``read_messages`` then
+        returns the message.
+        """
+        outcomes: list[bool] = []
         for i in range(_TRIALS):
-            # Force a message-less backstop recompute before this trial's
-            # publish, so the measurement is deterministic run to run —
-            # see _SYNC_PAUSE's comment above for the traced timing.
-            await asyncio.sleep(_SYNC_PAUSE)
-            t_send = time.monotonic()
             await _publish_broadcast_without_poke(
                 sender,
                 to_user=self._session_user(),
                 from_user="eric",
-                body=f"poll trial {i}",
+                body=f"unpoked trial {i}",
             )
-            t_recv = await _wait_for_unread_description(
-                self._client, timeout=_TRIAL_TIMEOUT
+            await asyncio.sleep(_NO_TIMER_WAIT)
+            undetected = (
+                await _wait_for_unread_description(self._client, timeout=0.2) is None
             )
-            latencies.append(t_recv - t_send if t_recv is not None else -1.0)
-            await _drain_inbox(self._client)
-        return latencies
+            result = await self._client.call_tool("read_messages", {})
+            outcomes.append(undetected and f"unpoked trial {i}" in str(result))
+        return outcomes
 
     def _session_user(self) -> str:
         return self._kai_state.config.user
 
 
-def _print_comparison(push: list[float], poll: list[float]) -> None:
-    """Print the side-by-side table, mirroring test_notification_latency.py."""
+def _print_comparison(push: list[float], unpoked: list[bool]) -> None:
+    """Print the push latencies and the poke-less outcomes."""
     push_valid = [t for t in push if t >= 0]
-    poll_valid = [t for t in poll if t >= 0]
     push_missed = sum(1 for t in push if t < 0)
-    poll_missed = sum(1 for t in poll if t < 0)
 
     print(f"\n{'Path':<8} {'Avg (ms)':>10} {'Max (ms)':>10} {'Missed':>8}")
     print("-" * 40)
@@ -199,28 +177,21 @@ def _print_comparison(push: list[float], poll: list[float]) -> None:
             f"{max(push_valid) * 1000:>10.1f} "
             f"{push_missed:>8}"
         )
-    if poll_valid:
-        print(
-            f"{'poll':<8} "
-            f"{sum(poll_valid) * 1000 / len(poll_valid):>10.1f} "
-            f"{max(poll_valid) * 1000:>10.1f} "
-            f"{poll_missed:>8}"
-        )
-    print(f"\nbackstop (nap_interval): {_BACKSTOP * 1000:.1f}ms")
+    held = sum(unpoked)
+    print(f"\nno poke: {held}/{len(unpoked)} waited for an explicit read")
 
 
 @pytest.fixture
 async def kai_latency(
     nats_server: str, tmp_path: Path
 ) -> AsyncIterator[tuple[Client[Any], NotificationTracker, ServerState]]:
-    """A ``kai`` MCP server with a fast poll_interval, so both arms are waitable."""
+    """A ``kai`` MCP server for both arms."""
     _reset_session()
     tracker = NotificationTracker()
     config = BiffConfig(
         user="kai",
         repo_name=_TEST_REPO,
         relay_url=nats_server,
-        poll_interval=_POLL_INTERVAL,
     )
     state = create_state(
         config, tmp_path / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
@@ -243,7 +214,7 @@ async def sender_relay(nats_server: str) -> AsyncIterator[NatsRelay]:
 
 
 class TestPushVsPollLatency:
-    """The comparative demonstration: push beats poll for broadcast detection."""
+    """Push detects a broadcast; with no poke, no timer does."""
 
     async def test_push_beats_poll(
         self,
@@ -255,49 +226,32 @@ class TestPushVsPollLatency:
 
         trials = _LatencyTrials(kai_client, _tracker, kai_state)
         push_latencies = await trials.run_push(sender_relay)
-        poll_latencies = await trials.run_poll(sender_relay)
+        unpoked = await trials.run_unpoked(sender_relay)
 
-        _print_comparison(push_latencies, poll_latencies)
+        _print_comparison(push_latencies, unpoked)
 
         push_missed = sum(1 for t in push_latencies if t < 0)
         assert not push_missed, f"push missed {push_missed}/{_TRIALS} detections"
-        poll_missed = sum(1 for t in poll_latencies if t < 0)
-        assert not poll_missed, f"poll missed {poll_missed}/{_TRIALS} detections"
-
         push_avg = sum(push_latencies) / len(push_latencies)
-        poll_avg = sum(poll_latencies) / len(poll_latencies)
 
-        # Generous, CI-stable margins (docs/design-nats-push.md): push
-        # resolves in under 2s regardless of runner slowness; poll is
-        # bound to at least half the backstop cadence because nothing
-        # wakes it early.
+        # Generous, CI-stable margin: push resolves in under 2s regardless
+        # of runner slowness.
         assert push_avg < 2.0, f"push averaged {push_avg * 1000:.1f}ms, expected < 2s"
-        assert poll_avg >= _BACKSTOP * 0.5, (
-            f"poll averaged {poll_avg * 1000:.1f}ms, "
-            f"expected >= {_BACKSTOP * 500:.1f}ms (half the backstop)"
-        )
+        assert all(unpoked), f"a timer found a poke-less message: {unpoked}"
 
 
 class TestLoadReduction:
-    """Steady-state unread ``stream_info`` load drops to backstop-only cadence."""
+    """With no arrivals, the server asks the relay for unread counts only at start."""
 
-    async def test_idle_unread_summary_calls_bounded_by_backstop(
+    async def test_idle_unread_summary_calls_stop_after_startup(
         self,
         nats_server: str,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Query unread counts only on the backstop when no messages arrive.
-
-        Idle poll ticks must not issue a stream_info round trip on every interval.
-        """
+        """Idle time issues no ``stream_info`` round trip at all (DES-087)."""
         _reset_session()
-        config = BiffConfig(
-            user="kai",
-            repo_name=_TEST_REPO,
-            relay_url=nats_server,
-            poll_interval=_POLL_INTERVAL,
-        )
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
         state = create_state(
             config, tmp_path / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
         )
@@ -314,32 +268,14 @@ class TestLoadReduction:
         )
 
         mcp = create_server(state)
-        idle_seconds = _BACKSTOP * 2.2
         async with StampedClient(FastMCPTransport(mcp)) as client:
             await client.call_tool("who", {})
-            await asyncio.sleep(idle_seconds)
+            await asyncio.sleep(2.0)  # startup settles
+            settled = len(call_times)
+            await asyncio.sleep(_NO_TIMER_WAIT * 2)
+            idle = len(call_times) - settled
         _reset_session()
 
-        old_style_calls = idle_seconds / _POLL_INTERVAL
-        # Backstop-only: one per elapsed backstop interval, plus +3 —
-        # 1 for app.py's lifespan, which calls refresh_read_messages
-        # once before the poller's own first tick even runs, and 2 for
-        # scheduling slop. Observed was exactly 4 across three separate
-        # runs (int(9.9/4.5)=2 backstop recomputes + 1 lifespan + 1 of
-        # the slop already used), so a bare +2 left zero margin above
-        # the observed count — a latent flake waiting for a slow
-        # runner. +3 leaves one full unit of headroom. Nowhere near the
-        # old per-tick rate either way.
-        expected_ceiling = int(idle_seconds / _BACKSTOP) + 3
-
-        print(
-            f"\nunread summary calls over {idle_seconds:.1f}s idle: "
-            f"{len(call_times)} (backstop-only) "
-            f"vs {old_style_calls:.0f} (old per-tick rate)"
-        )
-        assert call_times, "the attached poller never checked unread counts"
-        assert len(call_times) <= expected_ceiling, (
-            f"{len(call_times)} calls exceeds backstop-only ceiling "
-            f"{expected_ceiling} — recompute is running on every tick again"
-        )
-        assert len(call_times) < old_style_calls / 2
+        print(f"\nunread summary calls: {settled} at startup, {idle} while idle")
+        assert settled, "the server never checked unread counts at startup"
+        assert idle == 0, f"{idle} unread summary calls while idle: a timer is running"

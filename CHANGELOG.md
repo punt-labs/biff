@@ -54,6 +54,30 @@
 
 ### Changed
 
+- The biff server runs no cadence except connection liveness (DES-087). The
+  poller no longer ticks every 2 seconds, and the 2-second sentinel reaper is
+  gone: sentinels are reaped at start and whenever the poller wakes, and a
+  watch on the sentinel directory wakes it. The wall countdown re-render,
+  stale talk-invite expiry and unread-count backstop are removed. What remains
+  are three wakes on one signal: a 5-second NATS subscription check, a
+  60-second local-relay watch check that rebuilds a watch that died (and logs
+  it), and a one-shot wake at the earliest expiry of a displayed wall or talk
+  invite, so both clear on their own. The local relay replaces its fixed poll
+  with a filesystem watch (`watchdog`, a new dependency; on macOS also a
+  kqueue on the directory, which uses a fixed number of descriptors however
+  many mailboxes exist). Mailboxes are now written by rename. A failing poller
+  pass logs a warning and is retried on the liveness wake. A poller that dies is
+  restarted with a backoff; from the fifth death in a row, or when a restart
+  itself fails, the `read_messages` description says notifications stopped on
+  every refresh until a restarted poller completes a pass with a liveness check,
+  and a death before that check counts however long the run. An owed
+  notification on a quiet relay is retried when its back-off ends (one one-shot
+  wake, armed only while owed). The watch check also proves delivery end to end with a
+  canary entry and names the failed check in its warning. Removing sentinel
+  files and registering sessions can no longer lose a session: the reap takes the
+  relay directory lock. `set_poll_interval`
+  now only records the cadence `/biff:read` schedules; the server runs no timer
+  for it.
 - **Behavior change: the local relay is the default.** A repo with no relay
   configured now uses the local filesystem relay (no network, no shared
   credentials) instead of connecting to the public demo relay

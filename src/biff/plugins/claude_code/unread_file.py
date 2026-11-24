@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from biff.changed_file import ChangedFile
 from biff.models import UnreadSummary
-from biff.relay import atomic_write
 
 if TYPE_CHECKING:
     from biff.server.display_queue import DisplayItem
@@ -57,21 +57,19 @@ def write_unread_file(
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
     """
-    items_list: list[dict[str, str]] = [
-        {"kind": item.kind, "text": item.text} for item in (display_items or [])
-    ]
-    clamped_count = min(summary.count, MAX_UNREAD_COUNT)
-    data: dict[str, object] = {
+    data = {
         "user": user,
         "repo": repo_name,
-        "count": clamped_count,
+        "count": min(summary.count, MAX_UNREAD_COUNT),
         "tty_name": tty_name,
         "biff_enabled": biff_enabled,
-        "display_items": items_list,
+        "display_items": [
+            {"kind": d.kind, "text": d.text} for d in display_items or []
+        ],
         "plan": plan,
         "server_pid": os.getpid(),
     }
     try:
-        atomic_write(path, json.dumps(data, indent=2) + "\n")
+        ChangedFile.write(path, json.dumps(data, indent=2) + "\n")
     except OSError:
         logger.warning("Failed to write unread status file %s", path, exc_info=True)

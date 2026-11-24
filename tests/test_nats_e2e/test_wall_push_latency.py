@@ -36,14 +36,12 @@ _TEST_REPO = "_test-wall-push-latency"
 _KAI_TTY = "aaaa00f2"
 _TRIALS = 3
 
-# The receiver's periodic poll interval is set deliberately HIGH — well above
-# the latency bound asserted below — so a scheduled tick cannot satisfy the
-# assertion. The only thing that can reconcile the wall in under a second is
-# the wall-notify wake poke, which interrupts the poll sleep immediately
-# (``wake_event`` cuts the tick regardless of the interval). If the poke path
-# were broken, detection would wait out this whole interval and the test would
-# fail — that isolation is the point (latency isolation). A broken poke
-# must not be able to hide behind a fast poll cadence.
+# The receiver's configured poll interval is set deliberately HIGH — well above
+# the latency bound asserted below. The server runs no timer for it (DES-087),
+# so the only thing that can reconcile the wall in under a second is the
+# wall-notify wake poke, which wakes the poller immediately. If the poke path
+# were broken, nothing would wake the poller and the test would fail — that
+# isolation is the point (latency isolation).
 _POLL_INTERVAL = 10.0
 
 # Detection must land well inside one poll interval to prove the poke, not the

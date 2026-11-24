@@ -15,8 +15,8 @@ from mcp.server.subscriptions import InMemorySubscriptionBus as NotificationBus
 from biff.models import BiffConfig
 from biff.relay import Relay
 from biff.relay_select import RelaySelector
-from biff.server.activity import ActivityTracker
 from biff.server.display_queue import DisplayQueue
+from biff.server.wake import WakeSignal
 from biff.session_routing import SessionRouting
 from biff.talk_state import TalkState
 from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
@@ -56,7 +56,7 @@ class ServerState:
     # What the ``biff`` enable/disable tool runs.  Required: ``cli`` builds it
     # with every tool's installer, so a state cannot skip their permissions.
     toggle: RepoToggle
-    activity: ActivityTracker = field(default_factory=ActivityTracker)
+    wake: WakeSignal = field(default_factory=WakeSignal)
     display_queue: DisplayQueue = field(default_factory=DisplayQueue)
     tool_events: NotificationBus = field(default_factory=NotificationBus, compare=False)
     tty: str = ""
@@ -84,7 +84,7 @@ class ServerState:
         """Compose the shared ephemeral talk state from this server's identity.
 
         ``TalkState`` is mutable and held by reference inside the frozen
-        state — the same seating ``ActivityTracker`` and ``DisplayQueue``
+        state — the same seating ``WakeSignal`` and ``DisplayQueue``
         get.  The always-on talk subscription feeds it every frame and the
         state-returning tool drains it (talk_state.py, DES-020/021).  The
         display ``tty_name`` is populated after registration via

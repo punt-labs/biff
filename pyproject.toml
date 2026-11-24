@@ -27,6 +27,7 @@ dependencies = [
     "psutil>=6.0,<8",
     "punt-observe==0.1.1",
     "wcwidth>=0.8.2,<1",
+    "watchdog>=7,<8",
 ]
 
 [project.optional-dependencies]
@@ -220,11 +221,18 @@ prefixes = [
     "caller_stamp",
     "config",
     "ethos_team",
+    "abandoned_canaries",
+    "arrival_handler",
+    "directory_kqueue",
     "identity",
+    "invite_expiry",
+    "local_watch",
     "nats_relay",
+    "nats_support",
+    "relay_errors",
+    "changed_file",
     "relay",
     "relay_config",
-    "relay_errors",
     "relay_select",
     "session_handle",
     "session_open",
