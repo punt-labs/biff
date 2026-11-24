@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
+from biff._stdlib import biff_data_dir
+
 _KEY_HEX_CHARS = 16
 
 
@@ -25,7 +27,7 @@ class CurrentPointer:
     @classmethod
     def default(cls) -> Self:
         """Return the pointer directory at ``~/.punt-labs/biff/current``."""
-        return cls(Path.home() / ".punt-labs" / "biff" / "current")
+        return cls(biff_data_dir() / "current")
 
     @staticmethod
     def repo_key(repo_root: Path) -> str:

@@ -359,6 +359,23 @@ def biff_data_dir() -> Path:
 
 BIFF_DATA_DIR = biff_data_dir()
 
+_HOME_SUBDIRS = ("active", "current", "logs", "sessions", "unread")
+
+
+def provision_home() -> Path:
+    """Create ``~/.punt-labs/biff/`` and its required subdirectories.
+
+    Idempotent: existing directories and their contents are left untouched,
+    so repeating ``biff install`` never discards data.  New directories are
+    private (``0700``).
+    """
+    root = biff_data_dir()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for name in _HOME_SUBDIRS:
+        (root / name).mkdir(mode=0o700, exist_ok=True)
+    return root
+
+
 # ── Session lifecycle helpers ────────────────────────────────────────
 
 

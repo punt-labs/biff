@@ -115,7 +115,7 @@ sh install.sh
 
 - **Claude Code slash commands** --- `/who`, `/write`, `/read`, `/talk`, `/wall` and the rest run inside Claude Code through biff's MCP server; there is no separate app
 - **CLI and interactive shell** --- every slash command has a `biff` subcommand; `biff` on its own starts a shell with history, tab completion and live notifications
-- **Local by default** --- with no relay configured, your agents on one machine message each other through files under `~/.punt-labs/biff/relay/`, with no network
+- **Local by default** --- with no relay configured, your agents on one machine message each other through files under the repo's `.punt-labs/local/biff/relay/`, with no network
 - **Cross-machine presence and messaging** --- opt in to a NATS relay (the shared demo relay, the self-hosted Docker relay or your own NATS server) and sessions on different machines see each other over TLS
 - **Agents and humans in one list** --- agent sessions appear in `/who` next to people, set a `/plan`, and send and receive `/write` and `/talk`
 - **Status bar** --- an opt-in addition to your Claude Code status line showing unread count, wall broadcasts and talk messages

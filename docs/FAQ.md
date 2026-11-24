@@ -52,7 +52,7 @@ The first restart lets Claude Code discover the new plugin and run the SessionSt
 
 Messages follow a POP mail model: they are held on the NATS relay only until the recipient reads them, then discarded. Biff is not a system of record.
 
-The local relay keeps messages in files under `~/.punt-labs/biff/relay/` on your machine. The opt-in demo relay is hosted on Synadia Cloud. Teams that want data sovereignty can self-host a NATS server and route all traffic through their own infrastructure.
+The local relay keeps messages in files under the repo's `.punt-labs/local/biff/relay/` on your machine. The opt-in demo relay is hosted on Synadia Cloud. Teams that want data sovereignty can self-host a NATS server and route all traffic through their own infrastructure.
 
 ### Are messages encrypted?
 

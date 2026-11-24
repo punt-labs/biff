@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from biff._stdlib import biff_data_dir
 from biff.models import Message, UserSession, WallPost
 from biff.relay import LocalRelay
 
@@ -18,14 +17,8 @@ def _mode(path: Path) -> int:
 
 
 @pytest.fixture
-def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    return tmp_path
-
-
-@pytest.fixture
-def relay_dir(home: Path) -> Path:
-    return biff_data_dir() / "relay" / "repo-key"
+def relay_dir(tmp_path: Path) -> Path:
+    return tmp_path / "repo" / ".punt-labs" / "local" / "biff" / "relay"
 
 
 def _message(to_user: str) -> Message:

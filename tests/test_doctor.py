@@ -25,9 +25,9 @@ from biff.models import RelayAuth
 from biff.plugins.contract import CheckResult, PluginRegistry
 
 
-def tmp_home(repo: Path) -> Path:
-    """Return the isolated HOME the ``local_repo`` fixture set."""
-    return repo.parent / "home"
+def _relay_dir(repo: Path) -> Path:
+    """Return the local relay directory inside *repo*'s private zone."""
+    return repo.resolve() / ".punt-labs" / "local" / "biff" / "relay"
 
 
 # -- Individual checks -------------------------------------------------------
@@ -240,34 +240,30 @@ class TestCheckRelay:
             result = _check_relay()
         assert result.passed
         assert "local filesystem relay" in result.message
-        assert str(tmp_home(local_repo) / ".punt-labs" / "biff" / "relay") in (
-            result.message
-        )
-        assert "no remote" in result.message
+        assert str(_relay_dir(local_repo)) in result.message
+        assert "main checkout" in result.message
 
     def test_local_relay_directory_is_probed_and_left_clean(
         self, local_repo: Path
     ) -> None:
         with patch("biff.doctor.find_git_root", return_value=local_repo):
             _check_relay()
-        relay_root = tmp_home(local_repo) / ".punt-labs" / "biff" / "relay"
-        (directory,) = relay_root.iterdir()
-        assert list(directory.iterdir()) == []
+        assert list(_relay_dir(local_repo).iterdir()) == []
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
     def test_unwritable_local_relay_directory_fails_naming_path_and_error(
         self, local_repo: Path
     ) -> None:
-        relay_root = tmp_home(local_repo) / ".punt-labs" / "biff" / "relay"
-        relay_root.mkdir(parents=True)
-        relay_root.chmod(0o500)
+        punt_labs = local_repo / ".punt-labs"
+        punt_labs.mkdir()
+        punt_labs.chmod(0o500)
         try:
             with patch("biff.doctor.find_git_root", return_value=local_repo):
                 result = _check_relay()
         finally:
-            relay_root.chmod(0o700)
+            punt_labs.chmod(0o700)
         assert not result.passed
-        assert str(relay_root) in result.message
+        assert str(_relay_dir(local_repo)) in result.message
         assert "Permission denied" in result.message
 
     def test_outside_a_repo_the_local_relay_has_no_directory(self) -> None:

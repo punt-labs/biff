@@ -44,6 +44,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
+from biff.relay_config import RelayLocation
 from biff.session_lock import routing_lock
 from biff.tty import build_session_key, validate_reclaimable_name, validate_routing_id
 
@@ -419,15 +420,7 @@ class LocalRelay:
 
     @staticmethod
     def _ensure_dir(data_dir: Path) -> None:
-        """Create *data_dir* 0700, tightening it if it already exists.
-
-        The per-user relay root (``.../biff/relay``) is tightened too; any
-        other parent of a custom data directory is left as it is.
-        """
-        in_relay_root = data_dir.parts[-3:-1] == ("biff", "relay")
-        for path in (data_dir.parent, data_dir) if in_relay_root else (data_dir,):
-            path.mkdir(mode=0o700, parents=True, exist_ok=True)
-            path.chmod(0o700)
+        RelayLocation.ensure(data_dir)
 
     @staticmethod
     def _validate_user(user: str) -> str:

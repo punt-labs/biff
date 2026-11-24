@@ -13,17 +13,13 @@ it is, and only a file at or above it can supply its credentials.
 
 from __future__ import annotations
 
-import hashlib
 import importlib.resources
-import re
-import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self, cast
-from urllib.parse import unquote
 
-from biff._stdlib import biff_data_dir, get_repo_common_root
+from biff._stdlib import get_repo_common_root
 from biff.models import RelayAuth
 
 DEMO_RELAY_URL = "tls://connect.ngs.global"
@@ -239,86 +235,6 @@ class RelayLayers:
 
 
 @dataclass(frozen=True)
-class RelayKey:
-    """The directory name that keys a git remote's local relay, and why."""
-
-    name: str
-    reason: str
-
-    _PROXY = re.compile(
-        r"https://git-manager\.devin\.ai/proxy/(?P<host>github\.com)/(?P<path>.+)"
-    )
-    _URL = re.compile(
-        r"[a-z][a-z0-9+.-]*://(?:[^/@]*@)?(?P<host>\[[^\]]+\]|[^/:@]+)"
-        r"(?::(?P<port>\d+))?/(?P<path>.+)",
-        re.IGNORECASE,
-    )
-    _SCP = re.compile(r"(?:[^@/]+@)?(?P<host>\[[^\]]+\]|[^:/@]+):(?P<path>[^/].*)")
-    _DEFAULT_PORTS = (0, 22, 80, 443, 9418)
-
-    @classmethod
-    def of(cls, url: str, base: Path | None = None) -> Self:
-        """Return the key for the git remote *url*, as seen from *base*.
-
-        The key is built from the normalized identity (lowercase host and
-        ``owner/repo``, no trailing ``/`` or ``.git``), so ssh and https forms
-        of one remote agree and different identities never do.  A remote that
-        is not ``host/owner/repo`` (a GitLab subgroup) is keyed by its
-        normalized URL.  A filesystem remote (a path or ``file://`` URL, absolute
-        or relative to *base*) is identified by the absolute path it resolves
-        to, with its case preserved.
-        """
-        text = url.strip().rstrip("/").removesuffix(".git").rstrip("/").lower()
-        match = (
-            cls._PROXY.fullmatch(text)
-            or cls._URL.fullmatch(text)
-            or cls._SCP.fullmatch(text)
-        )
-        if match is None or text.startswith("file://"):
-            return cls._for_filesystem(url, base or Path())
-        port = int(match.groupdict().get("port") or 0)
-        host = match["host"]
-        if port not in cls._DEFAULT_PORTS:
-            host = f"{host}:{port}"
-        where = f"{host}/{match['path'].strip('/')}"
-        parts = where.split("/")[1:]
-        if len(parts) != 2 or not all(parts):
-            return cls(f"remote-{cls._digest(where)}", f"remote URL hash of {where}")
-        slug = cls._slug("__".join(parts))
-        return cls(f"{slug}-{cls._digest(where)}", f"remote slug of {where}")
-
-    @classmethod
-    def _for_filesystem(cls, url: str, base: Path) -> Self:
-        """Key a path or ``file://`` remote by the absolute path it opens."""
-        is_url = url.strip().lower().startswith("file://")
-        # After file:// and an optional host, everything is the path: git reads
-        # a ? or # there literally.
-        rest = url.strip()[len("file://") :]
-        raw = unquote(rest[rest.find("/") :]) if is_url else url.strip()
-        resolved = (base / raw).expanduser().resolve()
-        if resolved.name == ".git":  # git opens a checkout through its .git
-            resolved = resolved.parent
-        return cls(f"remote-{cls._digest(str(resolved))}", f"remote path {resolved}")
-
-    @classmethod
-    def for_path(cls, common_root: Path) -> Self:
-        """Return the key for a repo with no remote: its resolved common root."""
-        root = common_root.resolve()
-        name = f"{cls._slug(root.name)}-{cls._digest(str(root))}"
-        return cls(name, f"no remote: keyed by the repo's path ({root})")
-
-    @staticmethod
-    def _digest(text: str) -> str:
-        return hashlib.sha256(text.encode()).hexdigest()[:8]
-
-    @staticmethod
-    def _slug(text: str) -> str:
-        """Return *text* lowercased with anything outside ``[a-z0-9_-]`` as ``-``."""
-        slug = re.sub(r"[^a-z0-9_-]+", "-", text.lower()).strip("-")
-        return slug[:60] or "repo"
-
-
-@dataclass(frozen=True)
 class RelayLocation:
     """A repo's local relay directory and why it is that directory."""
 
@@ -329,40 +245,31 @@ class RelayLocation:
     def of(cls, repo_root: Path) -> Self:
         """Return the local relay directory for the repo at *repo_root*.
 
-        Every clone and worktree of one repo lands on the same directory, and
-        two different repos never do.
+        The relay is private runtime state of the repo's owning store, its main
+        checkout: ``<store>/.punt-labs/local/biff/relay/``.  A linked worktree
+        shares its main checkout's relay; two separate checkouts never share.
         """
-        url = cls._remote_url(repo_root)
-        common = Path(get_repo_common_root(str(repo_root)) or repo_root)
-        key = RelayKey.of(url, common) if url else RelayKey.for_path(common)
-        return cls(biff_data_dir() / "relay" / key.name, key.reason)
+        store = Path(get_repo_common_root(str(repo_root)) or repo_root).resolve()
+        path = store / ".punt-labs" / "local" / "biff" / "relay"
+        return cls(path, f"private to the repo's main checkout ({store})")
 
     @staticmethod
-    def _remote_url(repo_root: Path) -> str | None:
-        """Return the URL of ``origin``, or of the only remote when there is one.
+    def ensure(data_dir: Path) -> None:
+        """Create *data_dir* 0700, tightening it if it already exists.
 
-        ``None`` when git is unavailable, there is no remote, or several remotes
-        exist and none is ``origin``.  The URL is read as configured, before any
-        ``insteadOf`` rewriting, so every clone of a remote agrees on it.
+        In a repo's private zone (``.punt-labs/local/biff/relay``) the ``local``
+        and ``biff`` directories are tightened too, and ``local/`` gets a
+        ``.gitignore`` of ``*`` so relay state never enters shared history.  Any
+        other parent of a custom data directory is left as it is.
         """
-        try:
-            result = subprocess.run(
-                ["git", "config", "--show-scope", "--get-regexp", r"^remote\..*\.url$"],  # noqa: S607
-                capture_output=True,
-                text=True,
-                check=False,
-                cwd=repo_root,
-            )
-        except OSError:
-            return None
-        urls: dict[str, str] = {}
-        for line in result.stdout.splitlines():
-            # The repository's own config (and what it includes), never the
-            # user's global or system config.
-            scope, _, entry = line.partition("\t")
-            key, _, url = entry.partition(" ")
-            if scope in ("local", "worktree"):
-                urls[key.removeprefix("remote.").removesuffix(".url")] = url.strip()
-        if "origin" in urls:
-            return urls["origin"]
-        return next(iter(urls.values())) if len(urls) == 1 else None
+        in_zone = data_dir.parts[-4:] == (".punt-labs", "local", "biff", "relay")
+        zone = data_dir.parent.parent
+        for path in (zone, data_dir.parent, data_dir) if in_zone else (data_dir,):
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.chmod(0o700)
+        if in_zone:
+            try:
+                with (zone / ".gitignore").open("x") as ignore:
+                    ignore.write("*\n")
+            except FileExistsError:
+                pass

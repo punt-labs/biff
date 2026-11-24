@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 import pytest
 
-from biff._stdlib import biff_data_dir
 from biff.config import (
     ResolvedConfig,
     load_cli_config,
@@ -20,7 +19,6 @@ from biff.models import RelayAuth
 from biff.relay_config import (
     DEMO_CREDS_PATH,
     DEMO_RELAY_URL,
-    RelayKey,
     RelayLocation,
 )
 
@@ -282,133 +280,80 @@ def _clone(path: Path, *remotes: tuple[str, str]) -> Path:
     return path
 
 
-class TestRemoteRelayKey:
-    """One remote identity, one key; different identities, different keys."""
-
-    @pytest.mark.parametrize(
-        ("one", "two"),
-        [
-            ("git@github.com:punt-labs/biff.git", "https://github.com/punt-labs/biff"),
-            ("https://github.com/punt-labs/biff/", "https://github.com/punt-labs/biff"),
-            ("https://github.com/Punt-Labs/Biff", "https://github.com/punt-labs/biff"),
-            (
-                "ssh://git@github.com/punt-labs/biff.git",
-                "git@github.com:punt-labs/biff",
-            ),
-            (
-                "ssh://git@github.com:22/punt-labs/biff",
-                "https://github.com/punt-labs/biff.git",
-            ),
-            (
-                "https://GitHub.com/punt-labs/biff.git/",
-                "git@github.com:punt-labs/biff.git",
-            ),
-            (
-                "https://git-manager.devin.ai/proxy/github.com/punt-labs/biff",
-                "git@github.com:punt-labs/biff.git",
-            ),
-            ("https://gitlab.com/g/sub/repo", "git@gitlab.com:g/sub/repo.git"),
-            ("https://gitlab.com/g/sub/repo/", "https://GitLab.com/G/Sub/Repo.git"),
-        ],
-    )
-    def test_same_identity_shares_a_key(self, one: str, two: str) -> None:
-        assert RelayKey.of(one).name == RelayKey.of(two).name
-
-    @pytest.mark.parametrize(
-        ("one", "two"),
-        [
-            ("https://github.com/o/my.repo", "https://github.com/o/my-repo"),
-            ("https://github.com/o/r", "https://gitlab.com/o/r"),
-            ("https://github.com/a/r", "https://github.com/b/r"),
-            ("https://gitlab.com/g/one/repo", "https://gitlab.com/g/two/repo"),
-            ("https://github.com/o/r", "https://gitlab.com/g/o/r"),
-        ],
-    )
-    def test_different_identities_never_share_a_key(self, one: str, two: str) -> None:
-        assert RelayKey.of(one).name != RelayKey.of(two).name
-
-    def test_owner_repo_key_is_a_readable_slug_plus_hash(self) -> None:
-        key = RelayKey.of("git@github.com:Punt-Labs/Biff.git")
-        assert key.name.startswith("punt-labs__biff-")
-        assert len(key.name) == len("punt-labs__biff-") + 8
-        assert "slug" in key.reason
-
-    def test_subgroup_remote_is_keyed_by_its_url_hash(self) -> None:
-        key = RelayKey.of("https://gitlab.com/g/sub/repo")
-        assert key.name.startswith("remote-")
-        assert "URL hash" in key.reason
-
-
 class TestLocalRelayLocation:
-    def test_remote_repo_lives_in_the_per_user_relay_root(
+    _ZONE = Path(".punt-labs", "local", "biff", "relay")
+
+    def test_relay_lives_in_the_checkouts_private_zone(
         self, tmp_path: Path, _isolated_home: Path
     ) -> None:
         repo = _clone(tmp_path / "work", ("origin", "git@github.com:o/r.git"))
         location = RelayLocation.of(repo)
-        assert location.path.parent == biff_data_dir() / "relay"
-        assert location.path.is_relative_to(_isolated_home)
-        assert "slug" in location.reason
+        assert location.path == repo.resolve() / self._ZONE
+        assert not location.path.is_relative_to(_isolated_home)
+        assert "main checkout" in location.reason
 
-    def test_ssh_clone_and_https_clone_with_trailing_slash_share_a_relay(
-        self, tmp_path: Path
-    ) -> None:
-        one = _clone(tmp_path / "a", ("origin", "git@github.com:Punt-Labs/biff.git"))
-        two = _clone(tmp_path / "b", ("origin", "https://github.com/punt-labs/biff/"))
-        assert RelayLocation.of(one).path == RelayLocation.of(two).path
-
-    def test_only_remote_is_used_when_it_is_not_called_origin(
-        self, tmp_path: Path
-    ) -> None:
-        one = _clone(tmp_path / "a", ("upstream", "git@github.com:o/r.git"))
-        two = _clone(tmp_path / "b", ("origin", "git@github.com:o/r.git"))
-        assert RelayLocation.of(one).path == RelayLocation.of(two).path
-
-    def test_origin_wins_among_several_remotes(self, tmp_path: Path) -> None:
-        one = _clone(
-            tmp_path / "a",
-            ("fork", "git@github.com:me/r.git"),
-            ("origin", "git@github.com:o/r.git"),
-        )
-        two = _clone(tmp_path / "b", ("origin", "git@github.com:o/r.git"))
-        assert RelayLocation.of(one).path == RelayLocation.of(two).path
-
-    def test_several_remotes_without_origin_count_as_no_remote(
-        self, tmp_path: Path
-    ) -> None:
-        repo = _clone(
-            tmp_path / "a",
-            ("one", "git@github.com:o/r.git"),
-            ("two", "git@github.com:o/s.git"),
-        )
-        assert "no remote" in RelayLocation.of(repo).reason
-
-    def test_repos_with_the_same_name_and_no_remote_stay_apart(
-        self, tmp_path: Path
-    ) -> None:
-        one = _clone(tmp_path / "a" / "app")
-        two = _clone(tmp_path / "b" / "app")
+    def test_checkouts_with_the_same_name_stay_apart(self, tmp_path: Path) -> None:
+        one = _clone(tmp_path / "a" / "app", ("origin", "git@github.com:o/r.git"))
+        two = _clone(tmp_path / "b" / "app", ("origin", "git@github.com:o/r.git"))
         assert RelayLocation.of(one).path != RelayLocation.of(two).path
 
-    def test_no_remote_key_is_stable(self, tmp_path: Path) -> None:
+    def test_location_is_stable(self, tmp_path: Path) -> None:
         repo = _clone(tmp_path / "app")
         assert RelayLocation.of(repo) == RelayLocation.of(repo)
 
-    def test_linked_worktree_of_a_no_remote_repo_shares_its_main_checkout(
+    def test_linked_worktree_uses_its_main_checkouts_relay(
         self, tmp_path: Path
     ) -> None:
         main = _clone(tmp_path / "app")
         worktree = tmp_path / "app-wt"
         _git(main, "worktree", "add", "-q", str(worktree), "-b", "wt")
-        assert RelayLocation.of(worktree).path == RelayLocation.of(main).path
+        assert RelayLocation.of(worktree).path == main.resolve() / self._ZONE
         assert (worktree / ".git").is_file()
 
-    def test_linked_worktree_of_a_remote_repo_shares_its_main_checkout(
+    def test_subdirectory_resolves_to_the_checkout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _clone(tmp_path / "app")
+        sub = repo / "src"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+        assert RelayLocation.of(sub).path == repo.resolve() / self._ZONE
+
+    def test_without_git_the_given_root_owns_the_relay(self, tmp_path: Path) -> None:
+        with patch("biff.relay_config.get_repo_common_root", return_value=""):
+            location = RelayLocation.of(tmp_path)
+        assert location.path == tmp_path.resolve() / self._ZONE
+
+    def test_relay_directory_is_private_and_ignored_by_git(
         self, tmp_path: Path
     ) -> None:
-        main = _clone(tmp_path / "app", ("origin", "git@github.com:o/r.git"))
-        worktree = tmp_path / "app-wt"
-        _git(main, "worktree", "add", "-q", str(worktree), "-b", "wt")
-        assert RelayLocation.of(worktree).path == RelayLocation.of(main).path
+        repo = _clone(tmp_path / "app")
+        RelayLocation.ensure(RelayLocation.of(repo).path)
+        zone = repo / ".punt-labs" / "local"
+        for path in (zone, zone / "biff", zone / "biff" / "relay"):
+            assert path.stat().st_mode & 0o777 == 0o700, path
+        status = subprocess.run(  # noqa: S603
+            ["git", "-C", str(repo), "status", "--porcelain"],  # noqa: S607
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert status.stdout == ""
+
+    def test_existing_gitignore_in_the_zone_is_kept(self, tmp_path: Path) -> None:
+        repo = _clone(tmp_path / "app")
+        zone = repo / ".punt-labs" / "local"
+        zone.mkdir(parents=True)
+        (zone / ".gitignore").write_text("custom\n")
+        RelayLocation.ensure(RelayLocation.of(repo).path)
+        assert (zone / ".gitignore").read_text() == "custom\n"
+
+    def test_data_dir_override_is_honored(self, tmp_path: Path) -> None:
+        repo = _clone(tmp_path / "app", ("origin", "git@github.com:o/r.git"))
+        override = tmp_path / "operator-relay"
+        with patch("biff.identity.get_github_identity", return_value=_KAI):
+            resolved = load_cli_config(start=repo, data_dir_override=override)
+        assert resolved.data_dir == override
 
     def test_loaded_config_uses_the_same_directory(self, tmp_path: Path) -> None:
         repo = _clone(tmp_path / "app", ("origin", "git@github.com:o/r.git"))
@@ -440,64 +385,6 @@ class TestDemoRelayNeverGetsEnvCredentials:
         )
 
 
-class TestFilesystemRemotes:
-    """A path remote is identified by where it points, not by its text."""
-
-    def test_the_same_relative_remote_in_different_places_stays_apart(
-        self, tmp_path: Path
-    ) -> None:
-        one = _clone(tmp_path / "a" / "work", ("origin", "../upstream.git"))
-        two = _clone(tmp_path / "b" / "work", ("origin", "../upstream.git"))
-        assert RelayLocation.of(one).path != RelayLocation.of(two).path
-
-    def test_different_spellings_of_one_path_share(self, tmp_path: Path) -> None:
-        one = _clone(tmp_path / "a" / "work", ("origin", "../up.git"))
-        two = _clone(
-            tmp_path / "a" / "other", ("origin", str(tmp_path / "a" / "up.git"))
-        )
-        assert RelayLocation.of(one).path == RelayLocation.of(two).path
-
-    def test_file_urls_are_paths(self, tmp_path: Path) -> None:
-        one = _clone(tmp_path / "a", ("origin", f"file://{tmp_path}/up.git"))
-        two = _clone(tmp_path / "b", ("origin", f"{tmp_path}/up.git"))
-        assert RelayLocation.of(one).path == RelayLocation.of(two).path
-
-    def test_path_case_is_preserved(self, tmp_path: Path) -> None:
-        one = _clone(tmp_path / "a", ("origin", f"{tmp_path}/Up.git"))
-        two = _clone(tmp_path / "b", ("origin", f"{tmp_path}/up.git"))
-        assert RelayLocation.of(one).path != RelayLocation.of(two).path
-
-
-class TestPortsAndGlobalRemotes:
-    def test_different_non_default_ports_are_different_servers(self) -> None:
-        one = RelayKey.of("ssh://git@git.example.com:2222/o/r.git")
-        two = RelayKey.of("ssh://git@git.example.com:2223/o/r.git")
-        assert one.name != two.name
-
-    @pytest.mark.parametrize(
-        "same",
-        [
-            "ssh://git@git.example.com:22/o/r.git",
-            "https://git.example.com:443/o/r",
-            "https://git.example.com/o/r.git",
-            "git@git.example.com:o/r.git",
-        ],
-    )
-    def test_default_ports_do_not_split_one_server(self, same: str) -> None:
-        assert RelayKey.of(same).name == RelayKey.of("git@git.example.com:o/r").name
-
-    def test_a_global_remote_is_not_a_repos_remote(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        global_config = tmp_path / "gitconfig"
-        global_config.write_text('[remote "origin"]\n\turl = git@github.com:o/r.git\n')
-        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
-        one = _clone(tmp_path / "a")
-        two = _clone(tmp_path / "b")
-        assert "no remote" in RelayLocation.of(one).reason
-        assert RelayLocation.of(one).path != RelayLocation.of(two).path
-
-
 class TestPrivateAccountOnTheDemoEndpoint:
     """The demo URL is shared; only the bundled demo selection refuses credentials."""
 
@@ -524,57 +411,3 @@ class TestPrivateAccountOnTheDemoEndpoint:
         monkeypatch.setenv("BIFF_RELAY_URL", DEMO_RELAY_URL)
         monkeypatch.setenv("BIFF_RELAY_USER_CREDENTIALS", str(creds))
         assert resolve_relay_config(repo)[1] == RelayAuth(user_credentials=str(creds))
-
-
-class TestRemoteSpellings:
-    def test_zero_padded_ports_are_the_same_port(self) -> None:
-        assert (
-            RelayKey.of("ssh://git@h.example:02222/o/r").name
-            == RelayKey.of("ssh://git@h.example:2222/o/r").name
-        )
-        assert (
-            RelayKey.of("ssh://git@h.example:0022/o/r").name
-            == RelayKey.of("git@h.example:o/r").name
-        )
-
-    def test_bracketed_ipv6_hosts_are_hosts_not_paths(self) -> None:
-        key = RelayKey.of("https://[2001:db8::1]/o/r.git")
-        assert key.name.startswith("o__r-")
-        assert key.name == RelayKey.of("ssh://git@[2001:db8::1]/o/r").name
-
-    def test_file_urls_decode_and_ignore_a_local_authority(self) -> None:
-        plain = RelayKey.of("/srv/Team Repo.git")
-        assert RelayKey.of("file:///srv/Team%20Repo.git") == plain
-        assert RelayKey.of("file://localhost/srv/Team%20Repo.git") == plain
-
-    def test_a_checkout_and_its_git_directory_are_one_repository(self) -> None:
-        assert RelayKey.of("/srv/up/.git") == RelayKey.of("/srv/up")
-
-    def test_a_remote_from_an_included_config_is_the_repos_remote(
-        self, tmp_path: Path
-    ) -> None:
-        repo = _clone(tmp_path / "a")
-        extra = repo / ".git" / "extra"
-        extra.write_text('[remote "origin"]\n\turl = git@github.com:o/r.git\n')
-        _git(repo, "config", "include.path", "extra")
-        other = _clone(tmp_path / "b", ("origin", "git@github.com:o/r.git"))
-        assert RelayLocation.of(repo).path == RelayLocation.of(other).path
-
-
-class TestLiteralFileRemotesAndScpIpv6:
-    def test_file_url_paths_keep_question_marks_and_hashes(self) -> None:
-        plain = RelayKey.of("/srv/we?ird#repo.git")
-        assert RelayKey.of("file:///srv/we?ird#repo.git") == plain
-        assert RelayKey.of("file://localhost/srv/we?ird#repo.git") == plain
-
-    def test_scp_style_ipv6_hosts_split_after_the_brackets(self) -> None:
-        scp = RelayKey.of("git@[2001:db8::1]:o/r.git")
-        assert scp.name.startswith("o__r-")
-        assert scp.name == RelayKey.of("ssh://git@[2001:db8::1]/o/r").name
-        assert scp.name == RelayKey.of("https://[2001:db8::1]/o/r").name
-
-
-def test_scp_style_remotes_on_a_host_named_file_stay_apart(tmp_path: Path) -> None:
-    one = RelayKey.of("file:/srv/team/repo.git", tmp_path)
-    two = RelayKey.of("file:/var/team/repo.git", tmp_path)
-    assert one.name != two.name

@@ -86,7 +86,7 @@ class LocalRelayCheck:
         """Create *path*, then create, write and remove a file in it."""
         probe = path / f".probe-{os.getpid()}"
         try:
-            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            RelayLocation.ensure(path)
             probe.write_text("ok")
             probe.unlink()
         except OSError as exc:
