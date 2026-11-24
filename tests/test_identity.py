@@ -19,7 +19,7 @@ from biff.identity import (
     _SubmoduleDeclaration,
     get_github_identity,
     get_os_user,
-    git_user_name,
+    owner_name,
     resolve_agent_identity_from_disk,
 )
 
@@ -114,7 +114,7 @@ class TestGetOsUser:
             assert get_os_user() is None
 
 
-# -- git_user_name --
+# -- owner_name --
 
 
 def _init_repo(path: Path, name: str | None) -> Path:
@@ -132,25 +132,40 @@ def _init_repo(path: Path, name: str | None) -> Path:
     return path
 
 
-class TestGitUserName:
+class TestOwnerName:
     def test_returns_configured_name(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path / "repo", "J Freeman")
-        assert git_user_name(repo) == "J Freeman"
+        assert owner_name(repo) == "J Freeman"
+
+    def test_biff_owner_wins_over_git_user_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A hosted agent's git user.name is the bot; BIFF_OWNER names its human.
+        repo = _init_repo(tmp_path / "repo", "Devin AI")
+        monkeypatch.setenv("BIFF_OWNER", " jmf-pobox ")
+        assert owner_name(repo) == "jmf-pobox"
+
+    def test_blank_biff_owner_falls_back_to_git_user_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _init_repo(tmp_path / "repo", "J Freeman")
+        monkeypatch.setenv("BIFF_OWNER", "  ")
+        assert owner_name(repo) == "J Freeman"
 
     def test_strips_one_surrounding_quote_pair(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path / "repo", '"jmf-pobox"')
-        assert git_user_name(repo) == "jmf-pobox"
+        assert owner_name(repo) == "jmf-pobox"
 
     def test_strips_only_one_quote_pair(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path / "repo", "\"'x'\"")
-        assert git_user_name(repo) == "'x'"
+        assert owner_name(repo) == "'x'"
 
     def test_unset_returns_empty_and_logs_debug(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         repo = _init_repo(tmp_path / "repo", None)
         with caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER):
-            assert git_user_name(repo) == ""
+            assert owner_name(repo) == ""
         assert any(
             r.levelno == logging.DEBUG and "user.name is unset" in r.getMessage()
             for r in caplog.records
@@ -163,7 +178,7 @@ class TestGitUserName:
             patch("biff.identity.subprocess.run", side_effect=FileNotFoundError("git")),
             caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
         ):
-            assert git_user_name(tmp_path) == ""
+            assert owner_name(tmp_path) == ""
         assert any(
             r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
             for r in caplog.records
@@ -177,7 +192,7 @@ class TestGitUserName:
             patch("biff.identity.subprocess.run", side_effect=timeout),
             caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
         ):
-            assert git_user_name(tmp_path) == ""
+            assert owner_name(tmp_path) == ""
         assert any(
             r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
             for r in caplog.records
@@ -191,7 +206,7 @@ class TestGitUserName:
             patch("biff.identity.subprocess.run", side_effect=err),
             caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
         ):
-            assert git_user_name(tmp_path) == ""
+            assert owner_name(tmp_path) == ""
         assert any(
             r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
             for r in caplog.records
@@ -205,7 +220,7 @@ class TestGitUserName:
             patch("biff.identity.subprocess.run", side_effect=err),
             caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
         ):
-            assert git_user_name(tmp_path) == ""
+            assert owner_name(tmp_path) == ""
         assert any(
             r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
             for r in caplog.records
@@ -216,20 +231,20 @@ class TestGitUserName:
     ) -> None:
         repo = _init_repo(tmp_path / "repo", "cwd-user")
         monkeypatch.chdir(repo)
-        assert git_user_name(None) == "cwd-user"
+        assert owner_name(None) == "cwd-user"
 
     def test_none_repo_root_omits_dash_c(self) -> None:
         with patch("biff.identity.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "x\n"
-            git_user_name(None)
+            owner_name(None)
         assert mock_run.call_args.args[0] == ["git", "config", "user.name"]
 
     def test_repo_root_passes_dash_c(self, tmp_path: Path) -> None:
         with patch("biff.identity.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "x\n"
-            git_user_name(tmp_path)
+            owner_name(tmp_path)
         assert mock_run.call_args.args[0] == [
             "git",
             "-C",

@@ -152,10 +152,7 @@ class UserSession(BaseModel):
     )
     owner_git: str = Field(
         default="",
-        description=(
-            "The session owner at registration: BIFF_OWNER, else git user.name, "
-            "or empty"
-        ),
+        description="BIFF_OWNER, else git user.name, at registration, or empty",
     )
     plan: str = ""
     plan_source: Literal["manual", "auto"] = "manual"
@@ -283,9 +280,7 @@ class BiffConfig(BaseModel):
     )
     owner_git: str = Field(
         default="",
-        description=(
-            "The owner at startup: BIFF_OWNER, else git user.name, or empty when unset"
-        ),
+        description="BIFF_OWNER, else git user.name, at startup, or empty if unset",
     )
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None

@@ -664,7 +664,7 @@ def _assemble_config(
         display_name=display_name,
         kind=kind,
         launched_by=identity.get_os_user() or "",
-        owner_git=_env_or_none("BIFF_OWNER") or identity.git_user_name(base.repo_root),
+        owner_git=identity.owner_name(base.repo_root),
         repo_name=base.repo_name,
         relay_url=base.relay_url,
         relay_auth=base.relay_auth,

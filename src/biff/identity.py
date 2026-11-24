@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import getpass
 import logging
+import os
 import re
 import stat
 import subprocess
@@ -456,49 +457,21 @@ def _build_agent_identity(identity_path: Path, agent: str) -> EthosIdentity | No
     identity = _read_identity_yaml(identity_path)
     if not identity:
         return None
-    yaml_handle = identity.get("handle", "")
-    if isinstance(yaml_handle, str) and yaml_handle and yaml_handle != agent:
+    if (yaml_handle := identity.get("handle")) not in (None, "", agent):
         logger.warning(
             "Identity %s declares handle %r; using validated agent handle %r",
             identity_path,
             yaml_handle,
             agent,
         )
-    kind_raw = identity.get("kind", "")
-    kind = kind_raw if isinstance(kind_raw, str) else ""
-    if kind != "agent":
-        logger.warning(
-            "Rejecting identity %s: kind=%r (expected 'agent')",
-            identity_path,
-            kind,
-        )
+    name_raw = identity.get("name", agent)
+    display_name = name_raw if isinstance(name_raw, str) and name_raw else agent
+    if identity.get("kind") != "agent":
+        msg = "Rejecting identity %s: kind=%r (expected 'agent')"
+        logger.warning(msg, identity_path, identity.get("kind", ""))
         return None
-    return _agent_identity(identity, agent)
-
-
-def _agent_identity(identity: dict[str, object], handle: str) -> EthosIdentity:
-    """Build the agent identity for *handle*, the validated filename handle."""
-    name_raw = identity.get("name", handle)
-    display_name = name_raw if isinstance(name_raw, str) and name_raw else handle
-    return EthosIdentity(handle=handle, display_name=display_name, kind="agent")
-
-
-def _resolve_user_override(user_override: str, repo_root: Path) -> tuple[str, str, str]:
-    """Return (user, display_name, kind) for an explicit ``--user`` handle.
-
-    When the repo registers *user_override* as a ``kind: agent`` identity in
-    ``.punt-labs/ethos/identities/``, the session is that agent: it takes the
-    identity's display name and kind, so ``/who`` flags it ``[A]``.  Any other
-    identity, or none, leaves the override as a plain handle.
-    """
-    if _AGENT_HANDLE_RE.fullmatch(user_override):
-        identity_path = _resolve_identity_path(repo_root, user_override)
-        if identity_path is not None:
-            identity = _read_identity_yaml(identity_path)
-            if identity and identity.get("kind") == "agent":
-                agent = _agent_identity(identity, user_override)
-                return agent.handle, agent.display_name, agent.kind
-    return user_override, "", ""
+    # Always the validated filename-derived handle, never the YAML's own.
+    return EthosIdentity(handle=agent, display_name=display_name, kind="agent")
 
 
 def resolve_agent_identity_from_disk(repo_root: Path) -> EthosIdentity | None:
@@ -557,8 +530,7 @@ def resolve_human_identity(
     """Return (user, display_name, kind) from the human-identity chain.
 
     Chain: ``user_override`` -> ``get_github_identity()`` -> ``get_os_user()``.
-    An override naming a ``kind: agent`` identity takes that identity's kind
-    (:func:`_resolve_user_override`).
+    An override resolves as in :func:`resolve_mcp_identity`.
     A resolved GitHub login that matches a ``kind: agent`` identity in
     ``.punt-labs/ethos/identities/`` is rejected and treated the same as
     ``get_github_identity()`` returning ``None`` -- a bot's ``GH_TOKEN``
@@ -575,7 +547,7 @@ def resolve_human_identity(
     Raises :class:`SystemExit` when no identity source succeeds.
     """
     if user_override is not None:
-        return _resolve_user_override(user_override, repo_root)
+        return resolve_mcp_identity(repo_root, user_override)
     identity = get_github_identity()
     # None means "not applicable" (no login rejected for incompleteness),
     # not "failed to compute" -- only set when the scan-incomplete branch
@@ -618,6 +590,8 @@ def resolve_mcp_identity(
 
     Chain: ``user_override`` -> :func:`resolve_agent_identity_from_disk` ->
     :func:`get_github_identity` -> :func:`get_os_user`.
+    An override naming a ``kind: agent`` identity in
+    ``.punt-labs/ethos/identities/`` is that agent, with its kind and name.
 
     The MCP server runs inside the agent's process; its primary identity is
     the agent. Disk-based resolution avoids the ``ethos whoami`` subprocess
@@ -626,7 +600,10 @@ def resolve_mcp_identity(
     Raises :class:`SystemExit` when no identity source succeeds.
     """
     if user_override is not None:
-        return _resolve_user_override(user_override, base_repo_root)
+        path = _resolve_identity_path(base_repo_root, user_override)
+        if agent := path and _build_agent_identity(path, user_override):
+            return agent.handle, agent.display_name, agent.kind
+        return user_override, "", ""
 
     agent = resolve_agent_identity_from_disk(base_repo_root)
     if agent is not None:
@@ -642,13 +619,18 @@ def resolve_mcp_identity(
     return os_user, "", ""
 
 
-def git_user_name(repo_root: Path | None) -> str:
-    """Return ``git config user.name`` for *repo_root*, or ``""``.
+def owner_name(repo_root: Path | None) -> str:
+    """Return ``BIFF_OWNER``, else ``git config user.name`` for *repo_root*, or ``""``.
+
+    ``BIFF_OWNER`` names the human behind a hosted agent whose git identity is
+    the bot's own.
 
     The configured value, not the effective author: provisioned hosts export
     ``GIT_AUTHOR_NAME`` as the bot, and the config still names the human.
     Never raises; any failure reads as unset.
     """
+    if owner := os.environ.get("BIFF_OWNER", "").strip():
+        return owner
     cmd = ["git", "config", "user.name"]
     if repo_root is not None:
         cmd[1:1] = ["-C", str(repo_root)]
@@ -664,6 +646,6 @@ def git_user_name(repo_root: Path | None) -> str:
         return ""
     name = result.stdout.strip()
     # A value with spaces or special characters is stored quoted in the file.
-    if len(name) >= 2 and name[0] == name[-1] and name[0] in "\"'":
+    if len(name) >= 2 and name[0] + name[-1] in ('""', "''"):
         name = name[1:-1].strip()
     return name

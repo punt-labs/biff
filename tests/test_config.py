@@ -435,7 +435,7 @@ class TestLoadCliConfig:
         assert resolved.config.user == "claude"
         assert resolved.config.launched_by == "jim"
 
-    @patch("biff.identity.git_user_name", return_value="jmf-pobox")
+    @patch("biff.identity.owner_name", return_value="jmf-pobox")
     @patch("biff.identity.get_os_user", return_value="jim")
     @patch("biff.identity.get_github_identity", return_value=None)
     def test_owner_git_is_captured_into_the_config(
@@ -445,39 +445,6 @@ class TestLoadCliConfig:
         _mock_name: object,
         tmp_path: Path,
     ) -> None:
-        _setup_repo_with_yaml(tmp_path)
-        resolved = load_cli_config(start=tmp_path, user_override="claude")
-        assert resolved.config.owner_git == "jmf-pobox"
-
-    @patch("biff.identity.git_user_name", return_value="Devin AI")
-    @patch("biff.identity.get_os_user", return_value="ubuntu")
-    @patch("biff.identity.get_github_identity", return_value=None)
-    def test_biff_owner_names_the_owner_over_git_user_name(
-        self,
-        _mock_git: object,
-        _mock_os: object,
-        _mock_name: object,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # A hosted agent's git user.name is the bot; BIFF_OWNER names its human.
-        monkeypatch.setenv("BIFF_OWNER", "jmf-pobox")
-        _setup_repo_with_yaml(tmp_path)
-        resolved = load_cli_config(start=tmp_path, user_override="devin")
-        assert resolved.config.owner_git == "jmf-pobox"
-
-    @patch("biff.identity.git_user_name", return_value="jmf-pobox")
-    @patch("biff.identity.get_os_user", return_value="jim")
-    @patch("biff.identity.get_github_identity", return_value=None)
-    def test_empty_biff_owner_falls_back_to_git_user_name(
-        self,
-        _mock_git: object,
-        _mock_os: object,
-        _mock_name: object,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setenv("BIFF_OWNER", "")
         _setup_repo_with_yaml(tmp_path)
         resolved = load_cli_config(start=tmp_path, user_override="claude")
         assert resolved.config.owner_git == "jmf-pobox"
