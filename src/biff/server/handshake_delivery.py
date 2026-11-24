@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -17,7 +18,10 @@ if TYPE_CHECKING:
 
     from biff.server.channel import ChannelLink
 
+logger = logging.getLogger(__name__)
+
 _NOTIFY_SEND_TIMEOUT = 3.0
+_GIVE_UP_AFTER = 3
 
 
 @dataclass
@@ -29,6 +33,8 @@ class HandshakeDelivery:
     # Channel mode serves one connection for the process's life: a failed send
     # keeps its session, and a write the SDK dropped stays owed (DES-087).
     _link: ChannelLink | None = None
+    # Sends that failed in a row: a retry that keeps timing out is given up.
+    _misses: int = 0
     # Hold across send and debt update so a concurrent success cannot erase a drop.
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -70,7 +76,7 @@ class HandshakeDelivery:
                 sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(
                     lambda: ctx.send_notification(ToolListChangedNotification())
                 )
-                self._pending_notify = not sent.delivered
+                self._count(delivered=sent.delivered)
                 self._session = ctx.session
 
     async def flush_owed(self) -> None:
@@ -92,12 +98,28 @@ class HandshakeDelivery:
         wait for, and nothing is armed when nothing is owed.
         """
         link = self._link
-        if not (link and self._pending_notify):
-            return None
+        if not (link and self._pending_notify and link.is_open):
+            return None  # nothing owed, or the connection is gone
+        if self._misses >= _GIVE_UP_AFTER:
+            return None  # left for the next arrival, tool call or initialize
         wait = link.seconds_until_ready()
-        if self._session is None:
-            wait = max(wait, link.window_remaining())
-        return wait or None
+        if self._session is not None:
+            return wait
+        # Nothing can be sent before ``initialize``; after the window it only
+        # arrives with ``initialize``, which flushes.
+        return max(wait, link.window_remaining()) if link.window_remaining() else None
+
+    def _count(self, *, delivered: bool) -> None:
+        """Record a send's outcome; say once that the retry gave up."""
+        self._pending_notify = not delivered
+        if delivered or self._session is not None:  # no session: nothing was tried
+            self._misses = 0 if delivered else self._misses + 1
+        if self._misses == _GIVE_UP_AFTER and not delivered:
+            logger.info(
+                "Tool list notification: gave up retrying after %d failed sends;"
+                " it is sent with the next event",
+                self._misses,
+            )
 
     def serve_single_connection(self, link: ChannelLink) -> None:
         """Serve one connection for the process's life, observed through *link*.
@@ -110,5 +132,5 @@ class HandshakeDelivery:
         self._pending_notify = True
         push = self._session.send_tool_list_changed if self._session else None
         sent = await ListChanged(_NOTIFY_SEND_TIMEOUT, self._link).send(push)
-        self._pending_notify = not sent.delivered
+        self._count(delivered=sent.delivered)
         self._session = self._session if sent.keep_session else None

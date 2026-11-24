@@ -21,7 +21,7 @@ from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay
 from biff.server import app, channel, poller_supervisor
 from biff.server.app import create_server
-from biff.server.channel import ChannelLink
+from biff.server.channel import ChannelLink, ChannelUnavailableError
 from biff.server.poller_supervisor import PollerSupervisor
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions
@@ -215,6 +215,10 @@ class TestARestartThatRaisesIsRetried:
 class _BrokenWatch(LocalWatch):
     """A watch whose health check has a bug."""
 
+    @property
+    def is_started(self) -> bool:
+        return True
+
     def unhealthy_reason(self, canary_timeout: float | None = None) -> str | None:
         msg = "bug in the check"
         raise TypeError(msg)
@@ -340,15 +344,16 @@ class TestADebtInsideTheHandshakeWindowWakesOnce:
 
 class TestAbandonedProbeDirectories:
     async def test_a_dead_sessions_probe_is_reclaimed_and_a_live_ones_is_not(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import os
 
-        prefix = LocalWatch.CANARY_PREFIX
-        dead = tmp_path / f"{prefix}4194303-abc"  # no such process
-        live = tmp_path / f"{prefix}{os.getpid()}-other"
+        root = tmp_path / "canaries"
+        monkeypatch.setattr(LocalWatch, "CANARY_ROOT", root)
+        dead = root / "4194303-abc"  # no such process
+        live = root / f"{os.getpid()}-other"
         for d in (dead, live):
-            d.mkdir()
+            d.mkdir(parents=True)
         with LocalWatch(tmp_path, lambda: None):
             pass
         assert not dead.exists()
@@ -437,3 +442,153 @@ class TestACancelledSendStillWakesThePoller:
             await task
         outcome = await state.wake.wait(timeout=0.2, shutdown=None)
         assert outcome.is_arrival
+
+
+def _owing_link(
+    monkeypatch: pytest.MonkeyPatch, *, window: float = 0.0, backoff: float = 0.0
+) -> ChannelLink:
+    monkeypatch.setattr(channel, "HANDSHAKE_WINDOW", window)
+    monkeypatch.setattr(channel, "CHANNEL_BACKOFF", backoff)
+    link = ChannelLink()
+    link.observe(anyio.create_memory_object_stream[SessionMessage](1)[0])
+    _descriptions.handshake_delivery.serve_single_connection(link)
+    return link
+
+
+class TestOnlyAPlausibleRetryIsArmed:
+    def test_no_session_after_the_window_arms_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        link = _owing_link(monkeypatch, window=0.0, backoff=5.0)
+        link.failed("send", ChannelUnavailableError("no session"))  # a back-off runs
+        delivery = _descriptions.handshake_delivery
+        delivery._pending_notify = True
+        assert delivery.seconds_until_retry() is None
+
+    def test_a_closed_link_arms_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        link = _owing_link(monkeypatch, backoff=5.0)
+        delivery = _descriptions.handshake_delivery
+        delivery._pending_notify = True
+        delivery._session = MagicMock(spec=ServerSession)
+        link.failed("send", TimeoutError())
+        assert delivery.seconds_until_retry() is not None  # open: retried
+        link.detach()
+        assert delivery.seconds_until_retry() is None  # the connection is gone
+
+    async def test_three_timeouts_in_a_row_stop_the_arming(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _owing_link(monkeypatch, backoff=0.0)
+        delivery = _descriptions.handshake_delivery
+        session = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
+        session.send_tool_list_changed = AsyncMock(side_effect=TimeoutError)
+        await delivery.capture_session(session)
+        delivery._pending_notify = True
+        monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 5.0)
+        armed: list[bool] = []
+        for _ in range(4):
+            monkeypatch.setattr(channel, "CHANNEL_BACKOFF", 0.0)
+            with caplog.at_level(logging.INFO):
+                await delivery.flush_owed()
+            armed.append(delivery.seconds_until_retry() is not None)
+        assert armed == [True, True, False, False]
+        assert any("gave up" in r.getMessage() for r in caplog.records)
+
+    def test_a_debt_sendable_now_is_zero_not_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _owing_link(monkeypatch, backoff=5.0)
+        delivery = _descriptions.handshake_delivery
+        delivery._pending_notify = True
+        delivery._session = MagicMock(spec=ServerSession)
+        assert delivery.seconds_until_retry() == 0.0
+
+
+class TestACancelledSendWithAReadyLinkStillWakes:
+    async def test_a_debt_sendable_now_wakes_the_poller(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _owing_link(monkeypatch, backoff=30.0)
+        delivery = _descriptions.handshake_delivery
+        delivery._session = MagicMock(spec=ServerSession)
+        state = _state(tmp_path)
+
+        async def owes_then_hangs(_bus: object = None) -> None:
+            delivery._pending_notify = True
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(delivery, "notify", owes_then_hangs)
+        await state.wake.wait(timeout=0.0, shutdown=None)  # drain
+        task = asyncio.create_task(_descriptions._announce(state))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        outcome = await state.wake.wait(timeout=0.2, shutdown=None)
+        assert outcome.is_arrival
+
+
+class TestTheStatusFileIsNotRewrittenWhenUnchanged:
+    def test_an_identical_write_leaves_the_file_alone(self, tmp_path: Path) -> None:
+        from biff.models import UnreadSummary
+        from biff.plugins.claude_code.unread_file import write_unread_file
+
+        path = tmp_path / "unread.json"
+        summary = UnreadSummary(count=0)
+        write_unread_file(
+            path, summary, repo_name="r", user="kai", tty_name="t", biff_enabled=True
+        )
+        first = path.stat().st_mtime_ns
+        write_unread_file(
+            path, summary, repo_name="r", user="kai", tty_name="t", biff_enabled=True
+        )
+        assert path.stat().st_mtime_ns == first
+
+
+class TestAnotherSessionsWatchWakesNobody:
+    async def test_start_checks_and_close_of_one_watch_wake_the_other_zero_times(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            LocalWatch, "CANARY_ROOT", tmp_path / "canaries", raising=False
+        )
+        shared = tmp_path / "relay"
+        shared.mkdir()
+        wakes: list[int] = []
+        with LocalWatch(shared, lambda: wakes.append(1)) as watch_b:
+            assert watch_b.unhealthy_reason(canary_timeout=15.0) is None
+            await asyncio.sleep(1.0)  # B's own start and check settle
+            wakes.clear()
+            with LocalWatch(shared, lambda: None) as watch_a:
+                for _ in range(3):
+                    assert watch_a.unhealthy_reason(canary_timeout=15.0) is None
+            await asyncio.sleep(1.5)
+        assert wakes == []
+
+
+class TestAFailedInboxPokeIsLoggedPerEpisode:
+    async def test_onset_then_quiet_then_recovery(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        down = [True]
+
+        async def live_client() -> MagicMock:
+            if down[0]:
+                msg = "nats unreachable"
+                raise ConnectionError(msg)
+            return MagicMock(publish=AsyncMock())
+
+        relay._live_nc_or_reconnect = live_client  # type: ignore[method-assign]
+        with caplog.at_level(logging.INFO, logger="biff.nats_relay"):
+            for _ in range(3):
+                await relay.mark_read_user_inbox("kai", [uuid.uuid4()])
+            down[0] = False
+            await relay.mark_read_user_inbox("kai", [uuid.uuid4()])
+        loud = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert [
+            ("failed" in r.getMessage(), "recovered" in r.getMessage()) for r in loud
+        ] == [
+            (True, False),
+            (False, True),
+        ]

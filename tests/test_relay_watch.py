@@ -18,7 +18,8 @@ from watchdog.events import (
     FileSystemEvent,
 )
 
-from biff.local_watch import ArrivalHandler, LocalWatch
+from biff.arrival_handler import ArrivalHandler
+from biff.local_watch import LocalWatch
 from biff.models import Message, WallPost
 from biff.relay import LocalRelay, atomic_write
 

@@ -8524,7 +8524,10 @@ and the 2-second sentinel reaper are removed. Operator ruling (2026-11-23): the
 server may keep exactly (a) connection liveness, being the NATS 5-second
 subscription check, the local relay's 60-second watch check (tracked on elapsed
 time, so steady wakes cannot starve it; it verifies the watch's threads, the
-directory's device and inode, and a canary entry that an event must report, and
+directory's device and inode, and a canary entry that an event must report (the
+canary lives in a per-process directory under the system temp directory, never
+inside a watched directory, so starting, checking or closing a watch wakes no
+other session; a signal exit leaves it behind and the next start reclaims it), and
 rebuilds the watch, logging onset and recovery) and the session heartbeat (60 seconds, which also carries the
 throttled org-repo refresh and keeps the session alive in the relay), and (b)
 one-shot deadline wakes armed only while something with an expiry is displayed:

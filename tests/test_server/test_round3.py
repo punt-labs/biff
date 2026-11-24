@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import biff.arrival_handler as arrival_handler
 import biff.local_watch as local_watch
 from biff.local_watch import LocalWatch, WatchKeeper
 from biff.models import BiffConfig, Message
@@ -83,7 +84,11 @@ class TestTheCanaryStaysPrivate:
             assert watch.unhealthy_reason(canary_timeout=15.0) is None
             assert _snapshot(shared) == before
 
-    async def test_two_watches_get_their_own_canary(self, tmp_path: Path) -> None:
+    async def test_two_watches_get_their_own_canary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "canaries"
+        monkeypatch.setattr(LocalWatch, "CANARY_ROOT", root)
         shared = tmp_path / "relay"
         shared.mkdir()
         with (
@@ -92,8 +97,8 @@ class TestTheCanaryStaysPrivate:
         ):
             assert first.unhealthy_reason(canary_timeout=15.0) is None
             assert second.unhealthy_reason(canary_timeout=15.0) is None
-            names = [p.name for p in shared.iterdir() if p.name.startswith(".")]
-            assert len(names) == len(set(names)) == 2
+            assert len({p.name for p in root.iterdir()}) == 2
+            assert not [p for p in shared.iterdir() if p.name.startswith(".")]
 
 
 class TestReaperAcceptsOnlySentinels:
@@ -219,7 +224,7 @@ class TestRecoveryIsProven:
     ) -> None:
         shared = tmp_path / "relay"
         shared.mkdir()
-        monkeypatch.setattr(local_watch.ArrivalHandler, "on_any_event", _deaf)
+        monkeypatch.setattr(arrival_handler.ArrivalHandler, "on_any_event", _deaf)
         monkeypatch.setattr(local_watch, "DirectoryKqueue", _DeafKqueue)
         monkeypatch.setattr(LocalWatch, "CANARY_SECONDS", 0.5)
         keeper = WatchKeeper((LocalWatch(shared, lambda: None),))

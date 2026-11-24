@@ -23,6 +23,7 @@ only — zero consumers created (DES-015).
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import ssl
@@ -76,6 +77,8 @@ from biff.wtmp_reader import (
 if TYPE_CHECKING:
     from nats.js.client import JetStreamContext
     from nats.js.kv import KeyValue
+
+    from biff.relay_errors import RelayLog
 
 logger = logging.getLogger(__name__)
 
@@ -490,6 +493,10 @@ class NatsRelay:
         self._tls_handshake_first = tls_handshake_first
         self._name = name
         self._repo_name = repo_name
+        # Resolved at runtime: the type is only needed to annotate it.
+        self._poke_log: RelayLog = importlib.import_module(
+            "biff.relay_errors"
+        ).RelayLog(logger)
         # Validate stream_prefix — must be a simple alphanumeric-dash token.
         # Dots, wildcards, or spaces would break NATS subject routing.
         if not stream_prefix or not all(c.isalnum() or c == "-" for c in stream_prefix):
@@ -1260,8 +1267,7 @@ class NatsRelay:
         self._validate_user(user)
         self._validate_tty(tty)
         repo = self._validate_repo(target_repo) if target_repo else self._repo_name
-        prefix = f"{self._stream_prefix}.{repo}.inbox"
-        return f"{prefix}.{user}.{tty}"
+        return f"{self._stream_prefix}.{repo}.inbox.{user}.{tty}"
 
     def _user_subject(self, user: str) -> str:
         """NATS subject for a user's broadcast inbox: ``biff.{repo}.inbox.{user}``.
@@ -1396,8 +1402,7 @@ class NatsRelay:
         """
         try:
             nc = await self._live_nc_or_reconnect()
-            subject = self.wall_notify_subject(repo)
-            await nc.publish(subject, b"1")
+            await nc.publish(self.wall_notify_subject(repo), b"1")
         except Exception:  # noqa: BLE001 — notification is best-effort
             logger.debug("Wall notification failed for %s", repo)
 
@@ -1586,7 +1591,6 @@ class NatsRelay:
             return
         try:
             nc = await self._live_nc_or_reconnect()
-            subject = self.talk_notify_subject(to_user)
             if message is not None:
                 data: dict[str, str] = {
                     "from": message.from_user,
@@ -1600,7 +1604,7 @@ class NatsRelay:
                 payload = json.dumps(data).encode()
             else:
                 payload = b"1"
-            await nc.publish(subject, payload)
+            await nc.publish(self.talk_notify_subject(to_user), payload)
         except Exception:  # noqa: BLE001 — notification is best-effort
             logger.debug("Talk notification failed")
 
@@ -1618,8 +1622,9 @@ class NatsRelay:
         try:
             nc = await self._live_nc_or_reconnect()
             await nc.publish(self.inbox_notify_subject(repo, user), b"1")
-        except Exception:  # noqa: BLE001 — notification is best-effort
-            logger.debug("Inbox notification failed in %s", repo)
+            self._poke_log.recovered(f"Inbox wake poke in {repo}")
+        except Exception as exc:  # noqa: BLE001 — notification is best-effort
+            self._poke_log.failed(f"Inbox wake poke in {repo}", exc)
 
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.
@@ -1800,8 +1805,7 @@ class NatsRelay:
 
     async def update_session(self, session: UserSession) -> None:
         """Store session in KV using ``{user}.{tty}`` key."""
-        key = build_session_key(session.user, session.tty)
-        kv_key = self._kv_key(key)
+        kv_key = self._kv_key(build_session_key(session.user, session.tty))
         _, kv = await self._ensure_connected()
         await self._tracked(
             "kv.put", kv.put(kv_key, session.model_dump_json().encode())
@@ -1822,8 +1826,7 @@ class NatsRelay:
     async def get_sessions_for_user(self, user: str) -> list[UserSession]:
         """Return all sessions for a given user."""
         self._validate_user(user)
-        all_sessions = await self.get_sessions()
-        return [s for s in all_sessions if s.user == user]
+        return [s for s in await self.get_sessions() if s.user == user]
 
     def _warn_heartbeat_missing_once(self, session_key: str) -> None:
         """Warn once per session key that heartbeat found no session.
@@ -2123,11 +2126,10 @@ class NatsRelay:
         """
         self._validate_user(user)
         js, _ = await self._ensure_connected()
-        names_stream = f"KV_{self._names_bucket}"
         kv_prefix = f"$KV.{self._names_bucket}."
         user_filter = f"{kv_prefix}{user}.>"
         try:
-            info = await js.stream_info(names_stream, subjects_filter=user_filter)
+            info = await js.stream_info(f"KV_{self._names_bucket}", user_filter)
         except NotFoundError:
             return []
         if not info.state.subjects:
@@ -2182,8 +2184,8 @@ class NatsRelay:
         error = validate_reclaimable_name(name)
         if error is not None:
             raise ValueError(error)
-        names_kv = await self._ensure_names_kv()
-        await names_kv.put(self._sid_hint_key(user, session_id), name.encode())
+        kv = await self._ensure_names_kv()
+        await kv.put(self._sid_hint_key(user, session_id), name.encode())
 
     # -- Session history (wtmp) --
 

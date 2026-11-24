@@ -313,7 +313,11 @@ class TestSingleConnectionDelivery:
                 await delivery.notify()
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        infos = [r for r in caplog.records if r.levelno == logging.INFO]
+        infos = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO and r.name == channel.logger.name
+        ]
         assert len(warnings) == 2
         assert "Tool list change (session kept)" in warnings[0].getMessage()
         assert "TimeoutError" in warnings[0].getMessage()

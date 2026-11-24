@@ -22,6 +22,7 @@ import pytest
 from fastmcp.client.transports import FastMCPTransport
 from watchdog.observers import Observer
 
+import biff.arrival_handler as arrival_handler
 import biff.directory_kqueue as dk
 import biff.failure_log as failure_log
 import biff.local_watch as local_watch
@@ -217,7 +218,7 @@ class TestWatchFailureReporting:
         with LocalWatch(tmp_path, lambda: None) as healthy:
             assert healthy.unhealthy_reason(canary_timeout=15.0) is None
         # Every thread is alive and the directory is right, but no event comes.
-        monkeypatch.setattr(local_watch.ArrivalHandler, "on_any_event", _deaf)
+        monkeypatch.setattr(arrival_handler.ArrivalHandler, "on_any_event", _deaf)
         monkeypatch.setattr(local_watch, "DirectoryKqueue", _DeafKqueue)
         with LocalWatch(tmp_path, lambda: None) as deaf:
             reason = deaf.unhealthy_reason(canary_timeout=1.0)
