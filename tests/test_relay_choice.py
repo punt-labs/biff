@@ -358,6 +358,20 @@ class TestLocalRelayLocation:
             RelayLocation.ensure(RelayLocation.of(repo).path)
         assert list(elsewhere.iterdir()) == []
 
+    def test_a_symlinked_gitignore_is_replaced_not_followed(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _clone(tmp_path / "app")
+        owned = repo / ".punt-labs" / "local" / "biff"
+        owned.mkdir(parents=True)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("keep\n")
+        (owned / ".gitignore").symlink_to(outside)
+        RelayLocation.ensure(RelayLocation.of(repo).path)
+        assert outside.read_text() == "keep\n"
+        assert not (owned / ".gitignore").is_symlink()
+        assert (owned / ".gitignore").read_text() == "*\n"
+
     def test_data_dir_override_is_honored(self, tmp_path: Path) -> None:
         repo = _clone(tmp_path / "app", ("origin", "git@github.com:o/r.git"))
         override = tmp_path / "operator-relay"

@@ -284,5 +284,7 @@ class RelayLocation:
     def _ignore_everything(owned: Path) -> None:
         """Keep a ``.gitignore`` of ``*`` in biff's own ``local/biff``."""
         ignore = owned / ".gitignore"
+        if ignore.is_symlink():
+            ignore.unlink()
         if not ignore.is_file() or ignore.read_text() != "*\n":
             ignore.write_text("*\n")
