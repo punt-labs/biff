@@ -4,6 +4,20 @@
 
 ### Added
 
+- Channel events: in channel mode the server sends a `notifications/claude/channel`
+  event when mail, a wall, a talk invite or a talk message arrives. Events are
+  fixed templates with no bodies; senders appear only when both parts are plain
+  identifiers (user at most 39 characters) and are labelled claimed and
+  unverified; a talk invite tells the model to ask the user. The sender keeps a
+  last-sent record per kind, advanced only after a send completes, sends nothing
+  before `notifications/initialized` or while `/mesg` is off, and is limited to
+  one event per kind per 30 seconds and 10 per 10 minutes. An event the limit
+  held is sent by one one-shot timer that exists only while one is held. Mail is
+  detected by the new `Relay.inbox_high_water`, not by the unread count, so a
+  flat or flapping count cannot hide an arrival. A relay reconnect re-runs the
+  sender. The server instructions gain a paragraph that treats bodies as
+  untrusted.
+
 - Start-up channel warning: at SessionStart the Claude Code plugin checks the
   channel gates a hook can see: the feature-flag opt-outs
   (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,

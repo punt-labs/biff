@@ -246,6 +246,8 @@ class _ConnectionHealth:
         # instead of relying on which timeouts happened to be noticed.
         self._total_attempts = 0
         self._total_timeouts = 0
+        # Called after each in-place reconnect; see ``add_reconnect_listener``.
+        self._reconnect_listeners: list[Callable[[], None]] = []
 
     @staticmethod
     def _host_of(url: str) -> str:
@@ -354,6 +356,12 @@ class _ConnectionHealth:
         self._timeout_count = 0
         self._wedge_onset_at = None
         self._force_reconnect_fired = False
+        for listener in self._reconnect_listeners:
+            listener()
+
+    def on_reconnect(self, callback: Callable[[], None]) -> None:
+        """Call *callback* from :meth:`record_reconnected`."""
+        self._reconnect_listeners.append(callback)
 
     def record_closed(self) -> None:
         """Log an INFO when the connection closes for good.
@@ -1793,6 +1801,16 @@ class NatsRelay:
             pass
         return UnreadSummary(count=tty_count + user_count)
 
+    def add_reconnect_listener(self, callback: Callable[[], None]) -> None:
+        """Call *callback* after each in-place reconnect, once subscriptions are live.
+
+        Core NATS replays nothing published while the connection was down, so a
+        listener reads durable state and announces what it missed.  The callback
+        runs on the event loop and must not block.
+        """
+        self._health.on_reconnect(callback)
+        logger.debug("reconnect listener added for %s", self._repo_name)
+
     async def inbox_high_water(self, session_key: str) -> int:
         """Return the larger stream sequence of the last message in either inbox.
 
@@ -1801,23 +1819,21 @@ class NatsRelay:
         order matters.  A read deletes the message, so the value can fall or
         be 0, but the next arrival takes a sequence above every earlier one.
         """
-        subjects = (
+        seqs = [0]
+        for subject in (
             self._subject_for_key(session_key),
             self._user_subject(session_key.split(":")[0]),
-        )
-        seqs = [await self._last_sequence(subject) for subject in subjects]
+        ):
+            js, _ = await self._ensure_connected()
+            try:
+                raw = await self._tracked(
+                    "get_last_msg", js.get_last_msg(self._stream_name, subject)
+                )
+            except (NotFoundError, BucketNotFoundError):
+                logger.debug("no inbox message on %s in %s", subject, self._repo_name)
+                continue
+            seqs.append(raw.seq or 0)
         return max(seqs)
-
-    async def _last_sequence(self, subject: str) -> int:
-        """Return the stream sequence of the last message on *subject*, or 0."""
-        js, _ = await self._ensure_connected()
-        try:
-            raw = await self._tracked(
-                "get_last_msg", js.get_last_msg(self._stream_name, subject)
-            )
-        except (NotFoundError, BucketNotFoundError):
-            return 0
-        return raw.seq or 0
 
     # -- Presence --
 

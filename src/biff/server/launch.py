@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from biff.caller_identity import CallerIdentity
 from biff.config import ResolvedConfig, is_enabled
 from biff.plugins.claude_code.statusline import UNREAD_DIR
-from biff.server.state import RepoToggle, ServerState, create_state
+from biff.server.state import RepoToggle, ServerState
+from biff.server.state_factory import create_state
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,6 @@ class McpLaunch:
     """Build session resources from resolved configuration and launch identity."""
 
     _resolved: ResolvedConfig
-    caller: CallerIdentity | None
     toggle: RepoToggle
 
     def state(self) -> ServerState:

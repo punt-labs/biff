@@ -66,6 +66,7 @@ def track_activity(
         async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> str:
             if state.dormant:
                 return _DISABLED_NOTICE
+            state.emitter.tool_called()
             return await fn(*args, **kwargs)
 
         return wrapper

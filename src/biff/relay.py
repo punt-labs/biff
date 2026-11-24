@@ -301,8 +301,9 @@ class DormantRelay:
         """Return an empty result while disabled."""
         return UnreadSummary()
 
-    async def inbox_high_water(self, session_key: str) -> int:  # noqa: ARG002
+    async def inbox_high_water(self, session_key: str) -> int:
         """Return 0: no mail arrives while disabled."""
+        del session_key
         return 0
 
     async def fetch_user_inbox(self, user: str) -> list[Message]:  # noqa: ARG002
@@ -529,6 +530,8 @@ class LocalRelay:
         A read marks a line in place and never removes one, so the number only
         rises, by exactly one for each arrival.
         """
+        if not self._data_dir.exists():
+            return 0  # no mail has ever been delivered here
         user = session_key.split(":")[0]
         paths = (self._inbox_path_for_key(session_key), self._user_inbox_path(user))
         return sum(1 for path in paths for line in self._lines(path) if line.strip())

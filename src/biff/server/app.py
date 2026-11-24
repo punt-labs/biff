@@ -1244,5 +1244,6 @@ def create_server(
         lambda caller: RelayLifecycle.tool_call(accept_caller(caller)), default_caller
     )
     mcp.configure_transport(state.tool_events, _SessionCaptureMiddleware(), policy)
+    mcp.attach_emitter(state.emitter)
     register_all_tools(mcp, state)
     return mcp

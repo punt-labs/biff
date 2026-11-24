@@ -617,6 +617,7 @@ async def _reconcile_always_on_sub(
     fresh = await resubscribe()
     if fresh is not None:
         gate.mark()
+        state.emitter.reconnected()  # core NATS replays nothing sent while unbound
         state.wake.wake()
     return fresh
 
@@ -1167,6 +1168,7 @@ async def poll_inbox(
             wanted = (outcome.is_arrival, gate.pending, seen.failed, rebuilt, due)
             if any(wanted):
                 seen = await _safe_tick(mcp, state, seen, gate=gate, due=due)
+                await state.emitter.check()  # arrivals only; never on a cadence
             if reap is not None:
                 await _safe_reap(reap)
             # Owed notifications retry every iteration, not only on tick work.

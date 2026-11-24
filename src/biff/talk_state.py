@@ -96,6 +96,8 @@ class TalkState:
     """
 
     __slots__ = (
+        "_invite_arrivals",
+        "_message_arrivals",
         "_my_key",
         "_my_tty",
         "_my_tty_name",
@@ -120,6 +122,8 @@ class TalkState:
     _partner_key: str
     _pending: dict[str, PendingInvite]
     _queue: deque[QueuedNotification]
+    _invite_arrivals: int
+    _message_arrivals: int
 
     def __new__(
         cls,
@@ -143,6 +147,8 @@ class TalkState:
         self._partner_key = session_key
         self._pending = {}
         self._queue = deque()
+        self._invite_arrivals = 0
+        self._message_arrivals = 0
         return self
 
     # -- Read-only state --
@@ -241,6 +247,57 @@ class TalkState:
         queue = self._queue
         return tuple(dict.fromkeys(q.notif.nfrom for q in queue if q.notif.is_invite))
 
+    # -- Arrivals (DES-087): what the channel emitter orders by --
+
+    @property
+    def invite_arrivals(self) -> int:
+        """Invite frames accepted so far; it never falls.
+
+        A drain, the move of an invite from queued to pending, an overflow and a
+        withdrawal never lower it, and a peer session that invites again counts
+        again, because an invite's session key is not an arrival identity.
+        """
+        return self._invite_arrivals
+
+    @property
+    def message_arrivals(self) -> int:
+        """Partner messages accepted so far in a connected talk; it never falls.
+
+        Counted after the partner-key check (DES-046), so a message from any
+        other session, or one that arrives before a talk is accepted, is not an
+        arrival.
+        """
+        return self._message_arrivals
+
+    def has_live_invite(self, *, now: float | None = None) -> bool:
+        """Whether an invite is held that is younger than ``PENDING_INVITE_TTL``.
+
+        A queued frame counts from its enqueue stamp and a pending invite from
+        its arrival.  The rate window can hold an event longer than the TTL, so
+        this is checked at send time and an expired invite is never announced.
+        """
+        self.expire_stale_invites(now=now)
+        return bool(self._pending) or any(q.notif.is_invite for q in self._queue)
+
+    def latest_inviter(self) -> tuple[str, str] | None:
+        """Return the ``(user, tty)`` an unexpired invite claims, newest first."""
+        self.expire_stale_invites()
+        queued = [q for q in self._queue if q.notif.is_invite]
+        if queued:
+            notif = queued[-1].notif
+            return notif.nfrom, notif.nfrom_tty
+        if self._pending:
+            newest = max(self._pending.values(), key=lambda p: p.arrived)
+            return newest.user, newest.tty
+        return None
+
+    def has_partner_message(self) -> bool:
+        """Whether a message from the connected partner waits to be drained."""
+        return self._phase is TalkPhase.CONNECTED and any(
+            q.notif.ntype == "message" and q.notif.nfrom_key == self._partner_key
+            for q in self._queue
+        )
+
     # -- Receive (talk.tex ReceiveNotification family) --
 
     def receive(self, raw: Mapping[str, object]) -> bool:
@@ -272,7 +329,19 @@ class TalkState:
         if len(self._queue) >= MAX_TALK_QUEUE:
             self._queue.popleft()  # ReceiveOverflow — drop-oldest
         self._queue.append(QueuedNotification(notif, time.monotonic()))
+        self._count_arrival(notif)
         return True
+
+    def _count_arrival(self, notif: TalkNotification) -> None:
+        """Count an accepted invite, or a message from the connected partner."""
+        if notif.is_invite:
+            self._invite_arrivals += 1
+        elif (
+            notif.ntype == "message"
+            and self._phase is TalkPhase.CONNECTED
+            and notif.nfrom_key == self._partner_key
+        ):
+            self._message_arrivals += 1
 
     def _withdraw(self, inviter: str, withdraw_key: str) -> bool:
         """Cancel an invite only when the frame's key matches (WithdrawArrive).

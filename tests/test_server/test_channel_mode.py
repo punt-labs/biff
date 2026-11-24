@@ -405,6 +405,57 @@ class TestHandshakeOnly:
         assert result == {"ok": True}
 
 
+class TestHandshakeOnlyTellsTheEmitter:
+    """The client's readiness reaches the channel emitter (O1)."""
+
+    @staticmethod
+    def _gate() -> tuple[_HandshakeOnly[object], MagicMock]:
+        runner = MagicMock()
+        runner.on_request = AsyncMock(return_value={"ok": True})
+        runner.on_notify = AsyncMock()
+        runner.connection.protocol_version = "2025-11-25"
+        emitter = MagicMock()
+        return _HandshakeOnly(runner, emitter), emitter
+
+    async def test_initialize_closes_the_gate(self) -> None:
+        gate, emitter = self._gate()
+        await gate.on_request(MagicMock(), "initialize", {})
+        emitter.initializing.assert_called_once_with()
+
+    async def test_initialized_opens_the_gate_after_the_runner_has_it(self) -> None:
+        gate, emitter = self._gate()
+        await gate.on_notify(MagicMock(), "notifications/initialized", None)
+        emitter.initialized.assert_called_once_with()
+
+    async def test_other_notifications_do_not_open_it(self) -> None:
+        gate, emitter = self._gate()
+        await gate.on_notify(MagicMock(), "notifications/cancelled", None)
+        emitter.initialized.assert_not_called()
+
+    async def test_the_instructions_name_bodies_as_untrusted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        server = ChannelServer[object]("biff", instructions="base")
+        to_client, _from_server = anyio.create_memory_object_stream[SessionMessage](1)
+        to_server, from_client = anyio.create_memory_object_stream[
+            SessionMessage | Exception
+        ](1)
+
+        @asynccontextmanager
+        async def stdio() -> AsyncGenerator[tuple[object, object]]:
+            yield from_client, to_client
+
+        monkeypatch.setattr(channel_server, "stdio_server", stdio)
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(server.serve_channel_stdio)
+            await anyio.sleep(0.05)
+            await to_server.aclose()
+
+        assert server.instructions is not None
+        assert server.instructions.startswith("base")
+        assert "untrusted" in server.instructions
+
+
 class TestServeChannelStdio:
     """The real ``serve_channel_stdio`` over memory streams."""
 
