@@ -813,6 +813,34 @@ class TestLoadMcpConfig:
         assert resolved.config.kind == "agent"
 
     @patch("biff.identity.get_github_identity", return_value=_FROM_GIT)
+    def test_biff_user_env_names_the_agent_without_an_override(
+        self, _mock_gh: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The SessionStart hook passes no override; BIFF_USER still names the
+        # agent, so the hook and the MCP server register one /who row.
+        monkeypatch.setenv("BIFF_USER", "devin")
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo, handle="devin")
+        resolved = load_mcp_config(start=repo)
+        assert resolved.config.user == "devin"
+        assert resolved.config.kind == "agent"
+
+    @patch("biff.identity.get_github_identity", return_value=_FROM_GIT)
+    def test_override_outside_the_handle_grammar_stays_plain(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        # A case-insensitive checkout would match ``Devin`` to ``devin.yaml``;
+        # the handle grammar keeps it a plain override.
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo, handle="devin")
+        (repo / ".punt-labs/ethos/identities/devin.yaml").rename(
+            repo / ".punt-labs/ethos/identities/Devin.yaml"
+        )
+        resolved = load_mcp_config(start=repo, user_override="Devin")
+        assert resolved.config.user == "Devin"
+        assert resolved.config.kind == ""
+
+    @patch("biff.identity.get_github_identity", return_value=_FROM_GIT)
     def test_user_override_naming_a_human_identity_stays_plain(
         self, _mock_gh: object, tmp_path: Path
     ) -> None:

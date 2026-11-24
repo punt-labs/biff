@@ -64,12 +64,10 @@ def get_github_identity() -> GitHubIdentity | None:
             # still leaving a trail for the uncommon cases.
             logger.debug("gh api user failed (exit %d)", result.returncode)
             return None
-        parts = result.stdout.strip().split("\t", maxsplit=1)
-        login = parts[0].strip()
-        if not login:
+        login, _, display_name = result.stdout.strip().partition("\t")
+        if not login.strip():
             return None
-        display_name = parts[1].strip() if len(parts) > 1 else ""
-        return GitHubIdentity(login=login, display_name=display_name)
+        return GitHubIdentity(login=login.strip(), display_name=display_name.strip())
     except FileNotFoundError:
         return None
 
@@ -599,8 +597,9 @@ def resolve_mcp_identity(
 
     Raises :class:`SystemExit` when no identity source succeeds.
     """
-    if user_override is not None:
-        path = _resolve_identity_path(base_repo_root, user_override)
+    if user_override := user_override or os.environ.get("BIFF_USER", "").strip():
+        handle_ok = _AGENT_HANDLE_RE.fullmatch(user_override)
+        path = handle_ok and _resolve_identity_path(base_repo_root, user_override)
         if agent := path and _build_agent_identity(path, user_override):
             return agent.handle, agent.display_name, agent.kind
         return user_override, "", ""

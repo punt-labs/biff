@@ -390,7 +390,7 @@ Without `-s`, a command runs as the first of: `BIFF_SESSION`; the Claude Code se
 
 Biff needs a git repo and a GitHub identity. It reads your username and display name from `gh auth`.
 
-`--user <handle>` overrides it; when the repo registers that handle as a `kind: agent` ethos identity, the session is flagged `[A]` in `/who`. `BIFF_OWNER` names the human behind an agent for the MGR column when `git config user.name` is the bot's.
+`--user <handle>` (or `BIFF_USER`) overrides it; when the repo registers that handle as a `kind: agent` ethos identity, the session is flagged `[A]` in `/who`. `BIFF_OWNER` names the human behind an agent for the MGR column when `git config user.name` is the bot's.
 
 Without a configuration file, biff uses the local relay: sessions on this machine find each other and nothing leaves it. Add a configuration file when you want a fixed team roster, cross-machine presence through a NATS relay, or a different set of peer repos. Commit it as `.punt-labs/biff/config.yaml`:
 

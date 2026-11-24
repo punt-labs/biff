@@ -6,10 +6,11 @@
 
 - `--user <handle>` (CLI and `biff mcp`) naming a `kind: agent` identity in
   `.punt-labs/ethos/identities/` makes the session that agent: `/who` flags it
-  `[A]` and it takes the identity's display name. `BIFF_OWNER` names the human
-  behind an agent for `/who`'s MGR column, ahead of `git config user.name`, so
-  hosted agents such as Devin, whose git user is the bot, show
-  `devin [A] jmf-pobox`.
+  `[A]` and it takes the identity's display name. `BIFF_USER` is the host's
+  default for `--user` (CLI, MCP server and SessionStart hook), and
+  `BIFF_OWNER` names the human behind an agent for `/who`'s MGR column, ahead
+  of `git config user.name`, so hosted agents such as Devin, whose git user is
+  the bot, show `devin [A] jmf-pobox` with no per-call flags.
 - `biff install` creates `~/.punt-labs/biff/` and its `active/`, `current/`,
   `logs/`, `sessions/` and `unread/` subdirectories (private,
   `0700`, existing ones tightened), on CLI-only installs too, and `install.sh`

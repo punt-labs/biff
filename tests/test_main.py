@@ -110,6 +110,18 @@ class TestGlobalFlags:
         )
         mock_who.assert_awaited_once()
 
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_biff_user_env_sets_the_identity_override(
+        self, mock_who: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BIFF_USER supplies --user, so hosted agents need no flag per call."""
+        monkeypatch.setenv("BIFF_USER", "devin")
+        mock_who.return_value = CommandResult(text="ok")
+        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
+            result = runner.invoke(app, ["who"])
+        assert result.exit_code == 0
+        mock_sess.assert_called_once_with(user_override="devin", session_ref=None)
+
 
 class TestVersionCommand:
     def test_prints_version(self) -> None:
@@ -271,6 +283,25 @@ class TestMcpCommand:
         result = runner.invoke(app, ["mcp", "--user", "kai"])
         assert result.exit_code == 0
         mock_mcp.run_stdio.assert_called_once_with(channel=False)
+
+    @patch("biff.server.transport_runtime.create_server")
+    @patch("biff.server.launch.StateBlueprint.build", return_value=_STATE)
+    @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
+    def test_biff_user_env_names_the_user_and_the_flag_wins(
+        self,
+        mock_config: MagicMock,
+        _mock_state: MagicMock,
+        mock_server: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("BIFF_USER", "devin")
+        mock_server.return_value = MagicMock()
+        runner.invoke(app, ["mcp"])
+        assert mock_config.call_args.kwargs["user_override"] == "devin"
+        runner.invoke(app, ["--user", "flag", "mcp"])
+        assert mock_config.call_args.kwargs["user_override"] == "flag"
+        runner.invoke(app, ["mcp", "--user", "kai"])
+        assert mock_config.call_args.kwargs["user_override"] == "kai"
 
     @patch("biff.server.transport_runtime.create_server")
     @patch("biff.server.launch.StateBlueprint.build", return_value=_STATE)

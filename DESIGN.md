@@ -8973,16 +8973,23 @@ agent.
 1. An explicit override that names a `kind: agent` identity in the repo's
    `.punt-labs/ethos/identities/` takes that identity's kind and display name.
    The path-traversal guard of DES-040 applies; a human or missing identity
-   leaves the override plain, so DES-053 is unchanged.
-2. `BIFF_OWNER`, when nonempty, is captured as `owner_git` ahead of
+   leaves the override plain, so DES-053 is unchanged. The handle grammar of
+   DES-040 applies too, so a case-insensitive checkout cannot match `Devin` to
+   `devin.yaml`.
+2. `BIFF_USER` is the host's default for `--user`: the root CLI reads it for
+   every command, and the agent-first identity chain reads it when no override
+   is passed, so the SessionStart hook and the MCP server register the same
+   `/who` row. It names the identity only; unstamped MCP tool calls still need
+   an explicit `biff mcp --user`, as with the root `--user` flag.
+3. `BIFF_OWNER`, when nonempty, is captured as `owner_git` ahead of
    `git config user.name`. It declares who launched the agent from the
    environment that launched it, the same source as the git config it
    precedes; it is not a reporting model and is not authentication. MGR's
    addressability and self-exclusion rules still apply.
 
-**Delivery.** The org blueprint exports `BIFF_OWNER=jmf-pobox` and provisions the gitignored `devin.yaml`
-(`kind: agent`) per repo, as `devin-plugin/hooks.json` already does; Devin
-keeps passing `--user devin` on each call.
+**Delivery.** The org blueprint exports `BIFF_USER=devin` and
+`BIFF_OWNER=jmf-pobox` and provisions the gitignored `devin.yaml`
+(`kind: agent`) per repo, as `devin-plugin/hooks.json` already does.
 
 **Alternatives:** where the owner and kind come from.
 
@@ -8994,11 +9001,10 @@ keeps passing `--user devin` on each call.
 - *Leave `--user` as a plain handle and require `.punt-labs/ethos.yaml`.*
   Rejected: Devin works in repos that do not configure ethos, so `[A]` would
   depend on each repo's setup.
-- *A `BIFF_USER` environment form of `--user`.* Rejected: a box-wide variable
-  is inherited by every process, so a Claude Code session or an MCP launch
-  without a caller stamp would take the override silently and register a
-  second, unstamped `/who` row.
+- *`BIFF_USER` bound only to the root `--user` flag.* Rejected: the
+  SessionStart hook resolves identity without the CLI, so it would register a
+  second `/who` row under the default identity.
 
-**Outcome:** with `BIFF_OWNER=jmf-pobox` set, `biff --user devin` in a Devin
+**Outcome:** with `BIFF_USER=devin` and `BIFF_OWNER=jmf-pobox` set, a Devin
 session in `punt-labs/vox` shows `devin:tty53 [A] jmf-pobox` in `/who`, the
 same shape as the `claude` agent on Jim's machine.
