@@ -1793,6 +1793,32 @@ class NatsRelay:
             pass
         return UnreadSummary(count=tty_count + user_count)
 
+    async def inbox_high_water(self, session_key: str) -> int:
+        """Return the larger stream sequence of the last message in either inbox.
+
+        A last-message-by-subject lookup creates no consumer (DES-015).  The
+        stream is shared by every inbox, so sequences have gaps; only their
+        order matters.  A read deletes the message, so the value can fall or
+        be 0, but the next arrival takes a sequence above every earlier one.
+        """
+        subjects = (
+            self._subject_for_key(session_key),
+            self._user_subject(session_key.split(":")[0]),
+        )
+        seqs = [await self._last_sequence(subject) for subject in subjects]
+        return max(seqs)
+
+    async def _last_sequence(self, subject: str) -> int:
+        """Return the stream sequence of the last message on *subject*, or 0."""
+        js, _ = await self._ensure_connected()
+        try:
+            raw = await self._tracked(
+                "get_last_msg", js.get_last_msg(self._stream_name, subject)
+            )
+        except (NotFoundError, BucketNotFoundError):
+            return 0
+        return raw.seq or 0
+
     # -- Presence --
 
     async def update_session(self, session: UserSession) -> None:

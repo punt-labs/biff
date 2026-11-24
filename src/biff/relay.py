@@ -148,6 +148,16 @@ class Relay(Protocol):
         """Return the unread count for a session."""
         ...
 
+    async def inbox_high_water(self, session_key: str) -> int:
+        """Return a number that rises whenever mail arrives for the session.
+
+        It orders arrivals and is never a count: a read may lower it, and it is
+        0 for an inbox that has never held mail.  A mail that arrives later is
+        always above every value returned earlier, even when the unread count
+        is flat (two read, two arrive).
+        """
+        ...
+
     # -- Messages (user inbox) --
 
     async def fetch_user_inbox(self, user: str) -> list[Message]:
@@ -290,6 +300,10 @@ class DormantRelay:
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:  # noqa: ARG002
         """Return an empty result while disabled."""
         return UnreadSummary()
+
+    async def inbox_high_water(self, session_key: str) -> int:  # noqa: ARG002
+        """Return 0: no mail arrives while disabled."""
+        return 0
 
     async def fetch_user_inbox(self, user: str) -> list[Message]:  # noqa: ARG002
         """Return an empty result while disabled."""
@@ -508,6 +522,16 @@ class LocalRelay:
         tty_count = len(await self.fetch(session_key))
         user_count = len(await self.fetch_user_inbox(user))
         return UnreadSummary(count=tty_count + user_count)
+
+    async def inbox_high_water(self, session_key: str) -> int:
+        """Count the message lines ever delivered to the session's two inboxes.
+
+        A read marks a line in place and never removes one, so the number only
+        rises, by exactly one for each arrival.
+        """
+        user = session_key.split(":")[0]
+        paths = (self._inbox_path_for_key(session_key), self._user_inbox_path(user))
+        return sum(1 for path in paths for line in self._lines(path) if line.strip())
 
     # -- Messages (user inbox) --
 

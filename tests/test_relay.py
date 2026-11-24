@@ -774,3 +774,43 @@ class TestSessionTtyHint:
     async def test_rejects_invalid_session_id_on_get(self, relay: LocalRelay) -> None:
         with pytest.raises(ValueError, match="Invalid routing id"):
             await relay.get_session_tty_hint("kai", "evil.injected")
+
+
+class TestInboxHighWater:
+    """`inbox_high_water` orders mail; it is never a count (DES-087)."""
+
+    async def test_empty_inbox_is_zero(self, relay: LocalRelay) -> None:
+        assert await relay.inbox_high_water("eric:tty2") == 0
+
+    async def test_rises_for_session_and_broadcast_mail(
+        self, relay: LocalRelay
+    ) -> None:
+        await relay.deliver(Message(from_user="kai", to_user="eric:tty2", body="a"))
+        first = await relay.inbox_high_water("eric:tty2")
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="b"))
+        assert await relay.inbox_high_water("eric:tty2") > first > 0
+
+    async def test_rises_when_the_unread_count_is_flat(self, relay: LocalRelay) -> None:
+        key = "eric:tty2"
+        for body in ("a", "b"):
+            await relay.deliver(Message(from_user="kai", to_user=key, body=body))
+        before = await relay.inbox_high_water(key)
+        await relay.mark_read(key, [m.id for m in await relay.fetch(key)])
+        for body in ("c", "d"):
+            await relay.deliver(Message(from_user="kai", to_user=key, body=body))
+        assert (await relay.get_unread_summary(key)).count == 2
+        assert await relay.inbox_high_water(key) > before
+
+    async def test_a_read_never_lowers_it(self, relay: LocalRelay) -> None:
+        key = "eric:tty2"
+        await relay.deliver(Message(from_user="kai", to_user=key, body="a"))
+        before = await relay.inbox_high_water(key)
+        await relay.mark_read(key, [m.id for m in await relay.fetch(key)])
+        assert await relay.inbox_high_water(key) == before
+
+    async def test_other_inboxes_do_not_raise_it(self, relay: LocalRelay) -> None:
+        key = "eric:tty2"
+        await relay.deliver(Message(from_user="kai", to_user=key, body="a"))
+        before = await relay.inbox_high_water(key)
+        await relay.deliver(Message(from_user="kai", to_user="eric:tty9", body="x"))
+        assert await relay.inbox_high_water(key) == before
