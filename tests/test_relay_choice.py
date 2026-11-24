@@ -310,6 +310,25 @@ class TestLocalRelayLocation:
         assert RelayLocation.of(worktree).path == main.resolve() / self._ZONE
         assert (worktree / ".git").is_file()
 
+    def test_sibling_submodules_keep_their_own_relays(self, tmp_path: Path) -> None:
+        lib = _clone(tmp_path / "lib")
+        sup = _clone(tmp_path / "super")
+        for name in ("one", "two"):
+            _git(
+                sup,
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                str(lib),
+                name,
+            )
+        one = RelayLocation.of(sup / "one").path
+        two = RelayLocation.of(sup / "two").path
+        assert one == (sup / "one").resolve() / self._ZONE
+        assert two == (sup / "two").resolve() / self._ZONE
+
     def test_subdirectory_resolves_to_the_checkout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

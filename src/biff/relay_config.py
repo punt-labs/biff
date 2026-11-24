@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self, cast
 
-from biff._stdlib import get_repo_common_root
+from biff._stdlib import find_git_root, get_repo_common_root
 from biff.models import RelayAuth
 
 DEMO_RELAY_URL = "tls://connect.ngs.global"
@@ -248,8 +248,14 @@ class RelayLocation:
         The relay is private runtime state of the repo's owning store, its main
         checkout: ``<store>/.punt-labs/local/biff/relay/``.  A linked worktree
         shares its main checkout's relay; two separate checkouts never share.
+        A submodule, whose git directory lives under its superproject's
+        ``.git/modules/``, owns its own relay.
         """
-        store = Path(get_repo_common_root(str(repo_root)) or repo_root).resolve()
+        common = get_repo_common_root(str(repo_root))
+        store = Path(common or repo_root)
+        if common and not (store / ".git").exists():
+            store = find_git_root(repo_root) or repo_root
+        store = store.resolve()
         path = store / ".punt-labs" / "local" / "biff" / "relay"
         return cls(path, f"private to the repo's main checkout ({store})")
 
