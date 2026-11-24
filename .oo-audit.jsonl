@@ -105,3 +105,6 @@
 {"ts":"2026-11-24T05:02:48Z","commit":"5cb5709","source":null,"files_scored":1,"files_improved":0,"files_regressed":1,"verdict":"rebaseline-files","reason":"Devin Review fix on PL-1443: provision_home refuses a symlinked home entry","deltas":{"src/biff/_stdlib.py":{"module_size":[195.0,197.0]}},"removed":[],"improved":{}}
 {"ts":"2026-11-24T16:20:16Z","commit":"10ed228","source":null,"files_scored":157,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/biff/identity.py":{"module_size":[341.0,339.0]}},"removed":[]}
 {"ts":"2026-11-24T16:29:59Z","commit":"600416f","source":null,"files_scored":157,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{},"removed":[]}
+{"ts":"2026-11-24T16:32:52Z","commit":"8f011a8","source":null,"files_scored":157,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{},"removed":[]}
+{"ts":"2026-11-24T16:33:08Z","commit":"8f011a8","source":null,"files_scored":157,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{},"removed":[]}
+{"ts":"2026-11-24T16:33:28Z","commit":"8f011a8","source":null,"files_scored":157,"files_improved":0,"files_regressed":0,"verdict":"pass","deltas":{},"removed":[]}

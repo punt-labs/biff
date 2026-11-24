@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # step 3, invariant 10) guarding against path-traversal payloads in the
 # ``agent`` field of ``.punt-labs/ethos.yaml``.
 _AGENT_HANDLE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_QUOTED_RE = re.compile(r"([\"'])(.*)\1")
+_QUOTED_RE = re.compile(r"([\"'])(.*)\1")  # a git value stored quoted
 
 
 @dataclass(frozen=True)
@@ -599,8 +599,9 @@ def resolve_mcp_identity(
     Raises :class:`SystemExit` when no identity source succeeds.
     """
     if user_override := (user_override or os.environ.get("BIFF_USER", "")).strip():
-        handle_ok = _AGENT_HANDLE_RE.fullmatch(user_override)
-        path = handle_ok and _resolve_identity_path(base_repo_root, user_override)
+        path = _AGENT_HANDLE_RE.fullmatch(user_override) and _resolve_identity_path(
+            base_repo_root, user_override
+        )
         if agent := path and _build_agent_identity(path, user_override):
             return agent.handle, agent.display_name, agent.kind
         return user_override, "", ""
@@ -645,7 +646,4 @@ def owner_name(repo_root: Path | None) -> str:
         logger.debug("git user.name is unset (git exited %d)", result.returncode)
         return ""
     name = result.stdout.strip()
-    # A value with spaces or special characters is stored quoted in the file.
-    if quoted := _QUOTED_RE.fullmatch(name):
-        name = quoted[2].strip()
-    return name
+    return quoted[2].strip() if (quoted := _QUOTED_RE.fullmatch(name)) else name
