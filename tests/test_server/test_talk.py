@@ -155,7 +155,8 @@ class TestFormatAgentDrain:
         # bare user, no dangling colon; body renders its fallback line
         expected = (
             f"{HEADER_PREFIX}eric [untrusted]: hi\n"
-            f"{HEADER_PREFIX}eric:tty2 [untrusted]: (message contained no printable text)"
+            f"{HEADER_PREFIX}eric:tty2 [untrusted]: "
+            "(message contained no printable text)"
         )
         assert rendered == expected
 
