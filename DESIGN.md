@@ -8921,7 +8921,9 @@ directory, with modes `0700` and `0600`.
 punt-kit's filesystem standard (FS-1 to FS-8) and repo-local state policy
 (PLD-2, PLD-3) put repository-bound runtime state in the owning store's
 `.punt-labs/local/<tool>/` and reserve `~/.punt-labs/<tool>/` for
-repository-independent state. Biff now follows them in three places:
+repository-independent state.
+
+**Decision:** biff follows them in three places:
 
 1. **One home-root authority.** The CLI session store and the per-repo session
    pointer derive `sessions/` and `current/` from `biff_data_dir()` instead of
@@ -8938,14 +8940,14 @@ repository-independent state. Biff now follows them in three places:
    CLI-only install gets them too (FS-8, PY-FS-2). An install that cannot
    create them fails naming the error.
 
-### Why the relay left the home tree
+**Alternatives:** where the local relay lives.
 
 | Option | Same-name repos apart | Worktrees share | Clones share | PLD-2/PLD-3 |
 |--------|-----------------------|-----------------|--------------|-------------|
 | `~/.punt-labs/biff/relay/<repo-key>/` (DES-090) | Yes | Yes | Yes | No: repo-bound state in the home tree |
 | `.punt-labs/local/biff/relay/` in the main checkout (chosen) | Yes | Yes | No | Yes |
 
-Cost: two separate clones of one repo on one machine no longer share a local
+**Outcome:** two separate clones of one repo on one machine no longer share a local
 relay; they reach each other through a NATS relay. The `<repo-key>`
 derivation (remote normalization, filesystem-remote hashing) is removed with
 the location it served.
