@@ -17,6 +17,8 @@ Usage::
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -210,7 +212,25 @@ class SDKClient:
 
         options = _make_options(self.user, self.data_dir, max_turns=self.max_turns)
         messages: list[Any] = [msg async for msg in query(prompt=text, options=options)]
+        return self._record(messages)
 
+    @asynccontextmanager
+    async def live_prompt(self, text: str) -> AsyncGenerator[SDKResult]:
+        """Like ``prompt``, but keep the session and its biff server running.
+
+        biff deletes a session when its server exits, so a teammate sees
+        this one in ``who`` only inside the ``async with`` block.
+        """
+        from claude_agent_sdk import ClaudeSDKClient
+
+        options = _make_options(self.user, self.data_dir, max_turns=self.max_turns)
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(text)
+            messages: list[Any] = [msg async for msg in client.receive_response()]
+            yield self._record(messages)
+
+    def _record(self, messages: list[Any]) -> SDKResult:
+        """Record tool interactions in the transcript; return the result."""
         tool_calls = _extract_calls(messages)
         tool_outputs = _extract_outputs(messages)
         result_text, is_error, cost_usd = _extract_result(messages)

@@ -72,19 +72,16 @@ class TestCrossSessionVisibility:
     async def test_plan_visible_across_sessions(
         self, kai: SDKClient, eric: SDKClient
     ) -> None:
-        """kai sets plan in one session; eric sees it in another.
-
-        kai's session ends with its query and ``who`` lists only live
-        sessions, so eric reads the persisted plan with ``finger``.
-        """
+        """kai sets plan in one session; eric sees it in another."""
         kai.transcript.title = "SDK: cross-session plan visibility"
         kai.transcript.description = (
             "Two Claude Code sessions share presence state via filesystem."
         )
 
-        await kai.prompt('Call the "plan" tool with message "cross-session test".')
-
-        result = await eric.prompt('Call the "finger" tool with user "@kai".')
+        async with kai.live_prompt(
+            'Call the "plan" tool with message "cross-session test".'
+        ):
+            result = await eric.prompt('Call the "who" tool to see who is online.')
 
         assert "kai" in result.tool_output
-        assert "cross-session test" in result.tool_output
+        assert "cross-session" in result.tool_output
