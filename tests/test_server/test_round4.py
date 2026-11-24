@@ -668,3 +668,53 @@ class TestStoppingANeverStartedWatchTouchesNothing:
         keep.write_text("x")
         LocalWatch(tmp_path, lambda: None).stop()
         assert keep.exists()
+
+
+class TestReclaimSurvivesAnotherSessionsCleanup:
+    def test_an_entry_gone_between_listing_and_lstat_is_skipped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from biff.abandoned_canaries import AbandonedCanaries
+
+        root = tmp_path / "canaries"
+        root.mkdir(mode=0o700)
+        dead = root / "4194303-abc"
+        dead.mkdir()
+        gone = root / "4194302-def"  # listed, then removed by another session
+        real_iterdir = type(root).iterdir
+
+        def listing(self: Path) -> Iterator[Path]:
+            yield gone
+            yield from real_iterdir(self)
+
+        monkeypatch.setattr(type(root), "iterdir", listing)
+        AbandonedCanaries.reclaim(root)
+        assert not dead.exists()  # the rest was still reclaimed
+
+    def test_another_os_error_is_logged_and_skipped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from biff.abandoned_canaries import AbandonedCanaries
+
+        root = tmp_path / "canaries"
+        root.mkdir(mode=0o700)
+        dead = root / "4194303-abc"
+        dead.mkdir()
+        odd = root / "4194302-def"
+        odd.mkdir()
+        real_lstat = type(root).lstat
+
+        def lstat(self: Path) -> object:
+            if self == odd:
+                raise PermissionError(13, "denied")
+            return real_lstat(self)
+
+        monkeypatch.setattr(type(root), "lstat", lstat)
+        with caplog.at_level(logging.INFO, logger="biff.abandoned_canaries"):
+            AbandonedCanaries.reclaim(root)
+        assert not dead.exists()
+        assert odd.exists()
+        assert any("denied" in r.getMessage() for r in caplog.records)

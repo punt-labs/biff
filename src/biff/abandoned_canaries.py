@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -10,6 +11,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _PROBE_NAME = re.compile(r"(\d+)-[0-9a-f]+")
 
@@ -48,10 +51,19 @@ class AbandonedCanaries:
     def reclaim(root: Path) -> None:
         """Remove every probe directory in *root* whose process is gone."""
         for entry in root.iterdir():
-            found = _PROBE_NAME.fullmatch(entry.name)
-            is_dir = stat.S_ISDIR(entry.lstat().st_mode)  # a link is not one
-            if found and is_dir and not AbandonedCanaries._is_running(int(found[1])):
-                shutil.rmtree(entry, ignore_errors=True)
+            try:
+                AbandonedCanaries._reap(entry)
+            except FileNotFoundError:
+                continue  # another session removed it first
+            except OSError as exc:
+                logger.info("Skipping watch probe %s: %s", entry.name, exc)
+
+    @staticmethod
+    def _reap(entry: Path) -> None:
+        found = _PROBE_NAME.fullmatch(entry.name)
+        is_dir = stat.S_ISDIR(entry.lstat().st_mode)  # a link is not one
+        if found and is_dir and not AbandonedCanaries._is_running(int(found[1])):
+            shutil.rmtree(entry, ignore_errors=True)
 
     @staticmethod
     def _is_running(pid: int) -> bool:

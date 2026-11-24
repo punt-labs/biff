@@ -43,8 +43,11 @@
       "type_ignore": 1
     },
     "src/biff/nats_relay.py": {
-      "noqa": 5,
+      "noqa": 4,
       "pyright_ignore": 12
+    },
+    "src/biff/nats_support.py": {
+      "noqa": 1
     },
     "src/biff/plugins/claude_code/_hook_entry.py": {
       "noqa": 14,
@@ -141,5 +144,5 @@
       "per_file_ignores": 4
     }
   },
-  "updated_at": "2026-11-24T00:28:43Z"
+  "updated_at": "2026-11-24T00:42:43Z"
 }

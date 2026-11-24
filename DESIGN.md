@@ -8414,7 +8414,8 @@ one INFO changed/unchanged outcome with fixed artifact labels after each
 completed enablement operation. Marker accounting examines the directory entry
 without following symlinks: replacing a symlink on enable or removing a
 dangling symlink on disable is a change. `_nats_connection.py` owns shared
-session/name bucket lifetime settings and connection-attempt diagnostics.
+session/name bucket lifetime settings and connection-attempt diagnostics, and
+`nats_support.py` adds the per-episode logging of the inbox wake poke.
 It logs an outage's first error at INFO, demotes repeats to DEBUG, and records
 an INFO recovery or terminal summary with a failure count and exception class.
 Recovery and termination reset the episode counter. Relay generation guards

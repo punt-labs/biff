@@ -57,6 +57,7 @@
   "biff.markers": "kernel",
   "biff.models": "wire",
   "biff.nats_relay": "engine",
+  "biff.nats_support": "engine",
   "biff.plugins": "plugins",
   "biff.plugins.claude_code": "claude_code",
   "biff.plugins.claude_code._hook_cli": "claude_code",

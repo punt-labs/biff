@@ -23,7 +23,6 @@ only — zero consumers created (DES-015).
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import logging
 import ssl
@@ -51,7 +50,6 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
-from biff._nats_connection import NatsConnectionSetup
 from biff.models import (
     Message,
     RelayAuth,
@@ -61,6 +59,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
+from biff.nats_support import NatsSupport
 from biff.tty import (
     SID_HINT_NAMESPACE,
     build_session_key,
@@ -77,8 +76,6 @@ from biff.wtmp_reader import (
 if TYPE_CHECKING:
     from nats.js.client import JetStreamContext
     from nats.js.kv import KeyValue
-
-    from biff.relay_errors import RelayLog
 
 logger = logging.getLogger(__name__)
 
@@ -493,10 +490,6 @@ class NatsRelay:
         self._tls_handshake_first = tls_handshake_first
         self._name = name
         self._repo_name = repo_name
-        # Resolved at runtime: the type is only needed to annotate it.
-        self._poke_log: RelayLog = importlib.import_module(
-            "biff.relay_errors"
-        ).RelayLog(logger)
         # Validate stream_prefix — must be a simple alphanumeric-dash token.
         # Dots, wildcards, or spaces would break NATS subject routing.
         if not stream_prefix or not all(c.isalnum() or c == "-" for c in stream_prefix):
@@ -526,7 +519,7 @@ class NatsRelay:
         self._connect_lock = asyncio.Lock()
         self._wtmp_available: bool = False
         self._health = _ConnectionHealth(url)
-        self._setup = NatsConnectionSetup()
+        self._setup = NatsSupport()
         # Monotonic per-dial token.  Each new client dialed in
         # ``_open_connection`` bumps it; the connection callbacks capture the
         # value in force at their registration and no-op when it no longer
@@ -1619,12 +1612,11 @@ class NatsRelay:
         payload; the subscriber (``subscribe_inbox_notify``) only wakes the
         poller, which recomputes the unread count on its own next tick.
         """
-        try:
-            nc = await self._live_nc_or_reconnect()
-            await nc.publish(self.inbox_notify_subject(repo, user), b"1")
-            self._poke_log.recovered(f"Inbox wake poke in {repo}")
-        except Exception as exc:  # noqa: BLE001 — notification is best-effort
-            self._poke_log.failed(f"Inbox wake poke in {repo}", exc)
+        await self._setup.poke(
+            self._live_nc_or_reconnect,
+            lambda: self.inbox_notify_subject(repo, user),
+            f"Inbox wake poke in {repo}",
+        )
 
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.
