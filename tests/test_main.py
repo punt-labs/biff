@@ -777,7 +777,7 @@ class TestInstallProvisionsHome:
 
         assert record.read_text() == '{"keep": true}'
 
-    def test_reinstall_leaves_a_symlinked_entrys_target_alone(
+    def test_install_refuses_a_symlinked_home_entry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         elsewhere = tmp_path / "elsewhere"
@@ -786,7 +786,10 @@ class TestInstallProvisionsHome:
         home = tmp_path / ".punt-labs" / "biff"
         home.mkdir(parents=True)
         (home / "unread").symlink_to(elsewhere)
-        self._install(tmp_path, monkeypatch, claude=False)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        result = runner.invoke(app, ["install"])
+        assert result.exit_code == 1
+        assert "symlinked" in result.output
         assert elsewhere.stat().st_mode & 0o777 == 0o755
 
     def test_reinstall_tightens_an_existing_open_directory(

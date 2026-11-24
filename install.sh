@@ -152,8 +152,10 @@ ok "$BINARY $(command -v "$BINARY")"
 # --- Home directories (FS-8; biff install creates the same set) ---
 
 for dir in "" active current logs sessions unread; do
-  mkdir -p "$HOME/.punt-labs/biff/$dir"
-  [ -L "$HOME/.punt-labs/biff/$dir" ] || chmod 700 "$HOME/.punt-labs/biff/$dir"
+  path="$HOME/.punt-labs/biff${dir:+/$dir}"
+  [ -L "$path" ] && fail "Refusing symlinked biff home entry $path"
+  mkdir -p "$path"
+  chmod 700 "$path"
 done
 
 # --- Steps 4-6: Claude Code plugin (skipped in CLI-only mode) ---
