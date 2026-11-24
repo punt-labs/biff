@@ -24,7 +24,13 @@ logger = logging.getLogger(__name__)
 class Instructed(Protocol):
     """A server whose instructions text can be extended."""
 
-    instructions: str | None
+    @property
+    def instructions(self) -> str | None:
+        """The text the server tells a client at ``initialize``."""
+        ...
+
+    @instructions.setter
+    def instructions(self, value: str | None) -> None: ...
 
 
 class ClientGate(Protocol):

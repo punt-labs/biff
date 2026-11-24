@@ -462,6 +462,7 @@ class TestWatchTellsTheEmitter:
         server.attach_emitter(
             MagicMock(instructions="UNTRUSTED-PARAGRAPH", close=AsyncMock())
         )
+        reply = None
         async with anyio.create_task_group() as tg:
             tg.start_soon(server.serve_channel_stdio)
             await anyio.sleep(0.05)
@@ -480,6 +481,7 @@ class TestWatchTellsTheEmitter:
                 reply = (await to_client.receive()).message
             await to_server.aclose()
 
+        assert reply is not None
         result = reply.model_dump(by_alias=True)["result"]
         assert result["instructions"] == "base\n\nUNTRUSTED-PARAGRAPH"
 

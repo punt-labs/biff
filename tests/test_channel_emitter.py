@@ -23,7 +23,7 @@ from biff.relay import LocalRelay
 from biff.server import channel
 from biff.server.channel import ChannelLink
 from biff.server.channel_content import EventKind
-from biff.server.channel_emitter import ChannelEmitter
+from biff.server.channel_emitter import RETRY_SECONDS, ChannelEmitter
 from biff.server.channel_rate import RateLimit
 from biff.talk_state import PENDING_INVITE_TTL, TalkState
 
@@ -838,10 +838,10 @@ class TestTimer:
         await rig.emitter.check()
         assert len(rig.sink.frames) == 2
 
-    async def test_a_timeout_re_arms_once_and_a_second_drops_that_kind_alone(
+    async def test_a_first_timeout_re_arms_and_a_second_drops_the_kind(
         self, rig: _Rig
     ) -> None:
-        """O8: the first timeout re-arms that kind; the second releases only it."""
+        """O8: the first timeout re-arms the kind; the second releases it."""
         rig.open()
         await rig.mail()
         await rig.wall()
@@ -1364,3 +1364,260 @@ class TestAuditLog:
         assert [r.getMessage() for r in caplog.records] == [
             "channel events held: the client is not initialised"
         ]
+
+
+def _partner(rig: _Rig) -> None:
+    rig.source.talk.begin_connected(
+        partner="eric", partner_tty="tty9", partner_key=_PEER
+    )
+
+
+def _partner_message(rig: _Rig, body: str = "b") -> None:
+    rig.emitter.receive_frame(
+        {
+            "type": "message",
+            "from": "eric",
+            "from_key": _PEER,
+            "to_key": _ME,
+            "body": body,
+        }
+    )
+
+
+class TestTimerDropPerKind:
+    async def test_a_held_wall_that_is_replaced_by_our_own_is_dropped(
+        self, rig: _Rig
+    ) -> None:
+        """O4: TimerDrop for a wall."""
+        rig.open()
+        await rig.wall(text="one")
+        await rig.emitter.check()
+        rig.clock.advance(1)
+        await rig.wall(text="two")
+        await rig.emitter.check()  # held by the window
+        assert rig.emitter.held == {EventKind.WALL}
+        await rig.wall(user="kai", tty="tty1", text="mine")  # replaces it
+        rig.clock.advance(31)
+
+        await rig.emitter.deferred_send()
+
+        assert len(rig.sink.frames) == 1
+        assert rig.emitter.held == frozenset()
+        assert not rig.emitter.is_timer_armed()
+
+    async def test_a_held_talk_message_that_was_drained_is_dropped(
+        self, rig: _Rig
+    ) -> None:
+        """O4: TimerDrop for a talk message."""
+        rig.open()
+        _partner(rig)
+        _partner_message(rig)
+        await rig.emitter.check()
+        _partner_message(rig)
+        await rig.emitter.check()  # held by the window
+        assert rig.emitter.held == {EventKind.TALK_MESSAGE}
+        rig.source.talk.drain_for_agent()
+        rig.clock.advance(31)
+
+        await rig.emitter.deferred_send()
+
+        assert len(rig.sink.frames) == 1
+        assert rig.emitter.held == frozenset()
+
+
+class TestRecordAdvancesToTheValueReadBeforeTheSend:
+    async def test_a_wall_posted_during_the_send_is_announced_later(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        await rig.wall(text="one")
+
+        async def posts_another() -> None:
+            rig.sink.on_send.clear()
+            rig.clock.advance(1)
+            await rig.wall(text="two")
+
+        rig.sink.on_send.append(posts_another)
+        await rig.emitter.check()
+        rig.clock.advance(31)
+        await rig.emitter.check()
+
+        assert [m["kind"] for m in rig.sink.metas] == ["wall", "wall"]
+
+    async def test_an_invite_arriving_during_the_send_is_announced_later(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        rig.invite()
+
+        async def another_invite() -> None:
+            rig.sink.on_send.clear()
+            rig.invite(user="ann", tty="tty3", key="ann:x")
+
+        rig.sink.on_send.append(another_invite)
+        await rig.emitter.check()
+        rig.clock.advance(31)
+        await rig.emitter.check()
+
+        assert len(rig.sink.frames) == 2
+        assert "ann:tty3" in rig.sink.contents[1]
+
+    async def test_a_message_arriving_during_the_send_is_announced_later(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        _partner(rig)
+        _partner_message(rig)
+
+        async def another_message() -> None:
+            rig.sink.on_send.clear()
+            _partner_message(rig)
+
+        rig.sink.on_send.append(another_message)
+        await rig.emitter.check()
+        rig.clock.advance(31)
+        await rig.emitter.check()
+
+        assert [m["kind"] for m in rig.sink.metas] == ["talk_message"] * 2
+
+
+class TestOwnWallAndCounters:
+    async def test_our_wall_replacing_an_unannounced_teammates_wall_announces_nothing(
+        self, rig: _Rig
+    ) -> None:
+        """O3: posting a wall replaces the current one, so it is no longer live."""
+        rig.open()
+        await rig.wall(user="eric", tty="tty9", text="theirs")
+        await rig.wall(user="kai", tty="tty1", text="mine")
+
+        await rig.emitter.check()
+
+        assert rig.sink.frames == []
+
+    async def test_a_queue_overflow_never_lowers_the_invite_counter(
+        self, rig: _Rig
+    ) -> None:
+        """O3: after 150 invites overflow the queue, a new one still counts."""
+        rig.open()
+        for _ in range(150):
+            rig.invite()
+        await rig.emitter.check()
+        rig.source.talk.drain_for_agent()
+        rig.clock.advance(31)
+        rig.invite()
+
+        await rig.emitter.check()
+
+        assert len(rig.sink.frames) == 2
+
+    async def test_a_reconnect_never_marks_a_talk_frame(self, rig: _Rig) -> None:
+        """O10: only mail and wall can be missed; talk frames are not recovered."""
+        rig.open()
+        rig.invite()
+        await rig.emitter.check()
+        rig.clock.advance(31)
+        rig.emitter.reconnected()
+
+        await rig.emitter.check()
+
+        assert len(rig.sink.frames) == 1
+
+
+class TestRetryThenGated:
+    async def test_a_gated_firing_clears_the_retry_so_the_next_timeout_retries(
+        self, rig: _Rig
+    ) -> None:
+        """O8: TimerGated releases the kind, including its retry count."""
+        rig.open()
+        await rig.mail()
+        rig.sink.stall = True
+        await rig.emitter.check()  # times out once: held for one retry
+        await rig.mesg(enabled=False)
+        rig.clock.advance(2)
+        await rig.emitter.deferred_send()  # released, record unchanged
+        assert rig.emitter.held == frozenset()
+        await rig.mesg(enabled=True)
+
+        await rig.emitter.check()  # times out once more
+
+        assert rig.emitter.held == {EventKind.MAIL}  # held again, not asleep
+
+    async def test_a_gated_firing_releases_every_held_kind(self, rig: _Rig) -> None:
+        """O8: two kinds held, mesg off at firing: both released, both still owed."""
+        rig.open()
+        await rig.mail()
+        await rig.wall(text="one")
+        await rig.emitter.check()
+        await rig.mail()
+        rig.clock.advance(1)
+        await rig.wall(text="two")
+        await rig.emitter.check()
+        assert rig.emitter.held == {EventKind.MAIL, EventKind.WALL}
+        await rig.mesg(enabled=False)
+        rig.clock.advance(31)
+
+        await rig.emitter.deferred_send()
+
+        assert rig.emitter.held == frozenset()
+        assert not rig.emitter.is_timer_armed()
+        await rig.mesg(enabled=True)
+        await rig.emitter.check()
+        assert len(rig.sink.frames) == 4
+
+
+class TestRetryDelay:
+    async def test_the_re_armed_kind_waits_the_retry_delay(self, rig: _Rig) -> None:
+        rig.open()
+        await rig.mail()
+        rig.sink.stall = True
+        await rig.emitter.check()  # times out once
+        rig.sink.stall = False
+
+        rig.clock.advance(RETRY_SECONDS - 0.5)
+        await rig.emitter.deferred_send()
+        assert rig.sink.frames == []  # not yet due
+
+        rig.clock.advance(0.5)
+        await rig.emitter.deferred_send()
+        assert len(rig.sink.frames) == 1
+
+
+class TestCloseCancelsTheHandle:
+    async def test_close_cancels_the_armed_handle(self, rig: _Rig) -> None:
+        rig.open()
+        await rig.mail()
+        await rig.emitter.check()
+        await rig.mail()
+        await rig.emitter.check()
+        handle = rig.emitter._timer
+        assert handle is not None
+
+        await rig.emitter.close()
+
+        assert handle.cancelled()
+
+
+class TestFiredHandle:
+    async def test_a_fired_timer_is_not_armed_while_its_send_runs(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        await rig.mail()
+        await rig.emitter.check()
+        await rig.mail()
+        await rig.emitter.check()
+        assert rig.emitter.is_timer_armed()
+        armed_during_send: list[bool] = []
+
+        async def note() -> None:
+            armed_during_send.append(rig.emitter.is_timer_armed())
+
+        rig.sink.on_send.append(note)
+        rig.clock.advance(31)
+
+        rig.emitter._fire()
+        await asyncio.sleep(0.05)
+
+        assert armed_during_send == [False]
+        assert not rig.emitter.is_timer_armed()
+        assert len(rig.sink.frames) == 2
