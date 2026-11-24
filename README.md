@@ -450,6 +450,29 @@ creates missing local team configuration and Devin identity records in
 created files from Git without overwriting existing configuration. It
 does not run `biff enable` or change repository enablement policy.
 
+### Codex, OpenCode and other MCP clients
+
+Biff identifies the caller of every tool call from a `_caller` argument that
+Claude Code's PreToolUse hook stamps. A client with no such hook (Codex,
+OpenCode) has nothing to stamp, so `biff mcp` refuses its calls as unidentified.
+Launch the server with `--user` (biff 1.24.0 or newer) to declare the one
+caller for that process:
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.biff]
+command = "biff"
+args = ["mcp", "--user", "codex"]
+```
+
+```json
+{"mcp": {"servers": {"biff": {"type": "local", "command": ["biff", "mcp", "--user", "opencode"]}}}}
+```
+
+Only an explicit `--user` on a stdio launch relaxes the refusal. The Claude
+Code plugin passes none, so its server still refuses an unstamped call.
+`--user` names the biff identity, so pick a handle that no other agent uses.
+
 ## Channels Warning (Claude Code)
 
 When Claude Code starts in a biff-enabled repository, biff checks whether new

@@ -4,6 +4,9 @@
 
 ### Added
 
+- README: "Codex, OpenCode and other MCP clients" shows how a harness with no
+  stamping hook declares its caller with `biff mcp --user <handle>`; the
+  Claude Code plugin launch passes none and keeps refusing unstamped calls.
 - Start-up channel warning: at SessionStart the Claude Code plugin checks the
   channel gates a hook can see: the feature-flag opt-outs
   (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,
