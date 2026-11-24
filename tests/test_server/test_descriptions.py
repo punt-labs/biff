@@ -403,6 +403,8 @@ class TestTalkDescriptionAcceptHint:
 
         assert "talk jfreeman:tty6" in desc
         assert "75abc665" not in desc
+        assert "(unverified) wants to talk" in desc
+        assert "ask the user before accepting" in desc
 
 
 class TestTalkDescriptionQueuedInvite:
@@ -435,7 +437,9 @@ class TestTalkDescriptionQueuedInvite:
         desc = _talk_description(talk)
 
         assert "[TALK]" in desc
-        assert "eric wants to talk" in desc
+        assert "eric (unverified) wants to talk" in desc
+        assert "ask the user before accepting" in desc
+        assert "to accept." not in desc
         assert "new message" not in desc
 
     def test_queued_chat_message_reads_as_message(self, tmp_path: Path) -> None:

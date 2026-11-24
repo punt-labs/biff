@@ -105,6 +105,8 @@ class TestFormatAgentDrain:
 
         assert "talk jfreeman:tty6" in rendered
         assert "75abc665" not in rendered
+        assert "(unverified) wants to talk" in rendered
+        assert "ask the user before accepting" in rendered
 
     def test_escapes_neutralized(self) -> None:
         """Remote body/sender can't inject terminal escapes."""

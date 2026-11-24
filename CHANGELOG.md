@@ -25,7 +25,8 @@
   sent event (kind and count only) and per hold or gate. The `read_messages`
   table, the wall banner and `talk_read` lines mark message text as
   `[untrusted]`. A drained talk message followed by another queued frame is no
-  longer announced.
+  longer announced. The `talk` tool description and `talk_read` name an invite
+  as `(unverified)` and tell the model to ask the user before accepting.
 
 - Start-up channel warning: at SessionStart the Claude Code plugin checks the
   channel gates a hook can see: the feature-flag opt-outs
