@@ -114,8 +114,7 @@ async def main() -> None:
             sys.exit(f"MCP server did not list read_messages: {sorted(names)}")
         result = await session.call_tool("read_messages", {})
         text = "".join(getattr(part, "text", "") for part in result.content)
-        failed = getattr(result, "is_error", getattr(result, "isError", False))
-        if failed or body not in text:
+        if result.is_error or body not in text:
             sys.exit(f"MCP read_messages did not return the message: {text!r}")
 
 

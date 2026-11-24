@@ -342,9 +342,12 @@ checkout:
 | Published package | `published-smoke` | `scripts/smoke-release.sh published` installs `punt-biff==<version>` from production PyPI on Linux and macOS and repeats the CLI and MCP round trip. |
 | Published relay image | `published-image-smoke` | Pulls `biff-relay:<version>`, checks it is the candidate digest, and runs tier 3b's presence and messaging tests against it (the full tier ran on that digest before promotion). |
 
-Run the candidate check locally with `make smoke-release`. A failed
-post-release check means the published version is broken: yank or ship a
-fix, never retag.
+Run the candidate check locally with `make smoke-release`. When a
+post-release check fails, read the failing step first. A `pip install` or
+`docker pull` that fails before the artifact runs can be registry
+propagation or an outage, not the release: rerun the job. A failed check
+against the installed package or the pulled image means the published
+version is broken: yank or ship a fix, never retag.
 
 ## Fixture model
 
@@ -423,11 +426,22 @@ driven from unit tests. Everything else is expected to be near-total —
 
 ### Measuring coverage
 
-```bash
-# pytest-cov conflicts with beartype import hooks. Use coverage directly:
-COVERAGE_CORE=sysmon uv run coverage run --source=biff -m pytest -q
-uv run coverage report -m --omit="*/testing/*,*/data/*"
-```
+`make coverage` writes an HTML report to `htmlcov/`; `make coverage-ci`
+writes `coverage.xml`. Both measure line and branch coverage of `src/biff`
+executed in the default pytest process (coverage.py directly, because
+pytest-cov conflicts with beartype's import hooks). They do not count code
+running in `biff mcp` children, the installed wheel, shell scripts, or the
+opt-in marker tiers.
 
-Run this yourself for current numbers per module — a frozen table here
-is exactly the kind of thing this file no longer does.
+The Tests workflow runs `make coverage-ci` on every PR and on main and
+uploads `coverage.xml` as the `coverage-<sha>` artifact. Run `make coverage`
+yourself for current numbers per module — a frozen table here is exactly
+the kind of thing this file no longer does.
+
+### Installed wheel
+
+`make test-wheel` builds a wheel and runs `scripts/smoke-release.sh
+candidate` against it: a clean virtual environment and HOME, the installed
+CLI writing and reading a message, and the installed `biff mcp` server
+returning it over stdio. The Tests workflow runs it on Ubuntu and macOS for
+every PR; the required `test` check fails if it or the coverage job fails.
