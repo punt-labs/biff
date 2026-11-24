@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from biff.testing import Transcript
 
 if TYPE_CHECKING:
-    from claude_agent_sdk import ClaudeAgentOptions
+    from claude_agent_sdk import ClaudeAgentOptions, Message
 
 _MCP_TOOL_PREFIX = "mcp__biff__"
 
@@ -211,7 +211,9 @@ class SDKClient:
         from claude_agent_sdk import query
 
         options = _make_options(self.user, self.data_dir, max_turns=self.max_turns)
-        messages: list[Any] = [msg async for msg in query(prompt=text, options=options)]
+        messages: list[Message] = [
+            msg async for msg in query(prompt=text, options=options)
+        ]
         return self._record(messages)
 
     @asynccontextmanager
@@ -226,10 +228,10 @@ class SDKClient:
         options = _make_options(self.user, self.data_dir, max_turns=self.max_turns)
         async with ClaudeSDKClient(options=options) as client:
             await client.query(text)
-            messages: list[Any] = [msg async for msg in client.receive_response()]
+            messages: list[Message] = [msg async for msg in client.receive_response()]
             yield self._record(messages)
 
-    def _record(self, messages: list[Any]) -> SDKResult:
+    def _record(self, messages: list[Message]) -> SDKResult:
         """Record tool interactions in the transcript; return the result."""
         tool_calls = _extract_calls(messages)
         tool_outputs = _extract_outputs(messages)
