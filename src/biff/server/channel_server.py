@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from contextlib import suppress
 from functools import cached_property
 from typing import TYPE_CHECKING, Self
 
@@ -17,8 +16,8 @@ from mcp.shared.jsonrpc_dispatcher import JSONRPCDispatcher
 from mcp.types import INVALID_REQUEST, PROTOCOL_VERSION_META_KEY
 
 from biff.server.channel import CHANNEL_CAPABILITY, ChannelLink
+from biff.server.channel_handshake import ChannelHandshake, ClientGate
 from biff.server.mcp_protocol import NotificationServer
-from biff.server.tools import _descriptions
 from biff.usage import McpUsageMiddleware
 
 if TYPE_CHECKING:
@@ -49,21 +48,16 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
         """The link to the live client, for whatever sends channel events."""
         return ChannelLink()
 
+    _emitter: ClientGate | None = None
+
+    def attach_emitter(self, emitter: ClientGate) -> None:
+        """Name the emitter that sends events over this server's channel link."""
+        self._emitter = emitter
+
     @staticmethod
     async def capture_handshake_session(ctx: Context | None) -> None:
-        """Store the session the handshake opened (``CaptureSession`` in the model).
-
-        A session that cannot be read is logged, not hidden: in channel mode it
-        is the only session there will be, and every notification would stay
-        owed.
-        """
-        session = None
-        with suppress(RuntimeError):
-            session = ctx.session if ctx is not None else None
-        if session is None:
-            logger.warning("Handshake session not captured; changes stay owed")
-        else:
-            await _descriptions.handshake_delivery.capture_session(session)
+        """Store the session the handshake opened; see :class:`ChannelHandshake`."""
+        await ChannelHandshake.capture(ctx)
 
     def observe_usage(self, usage: UsageCapture) -> None:
         """Record each tool call's usage through *usage*."""
@@ -94,10 +88,12 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
         """
         server = self._mcp_server
         link = self.channel_link
+        # First: the SDK answers ``initialize`` from these options, and the
+        # server's instructions are read when they are built.
+        ChannelHandshake.open(server, link, self._emitter)
         options = server.create_initialization_options(
             experimental_capabilities={CHANNEL_CAPABILITY: {}}
         )
-        _descriptions.handshake_delivery.serve_single_connection(link)
         token = set_transport("stdio")
         try:
             async with (
@@ -116,9 +112,12 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
                 )
                 try:
                     gate = _HandshakeOnly(runner)
-                    await dispatcher.run(gate.on_request, runner.on_notify)
+                    hooks = ChannelHandshake.watch(
+                        self._emitter, gate.on_request, runner.on_notify
+                    )
+                    await dispatcher.run(*hooks)
                 finally:
-                    link.detach()
+                    await ChannelHandshake.close(link, self._emitter)
                     try:
                         await aclose_shielded(connection)
                     finally:

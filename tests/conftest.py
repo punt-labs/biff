@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import socket
@@ -20,6 +21,35 @@ from tools.test_quarantine import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Undo what a test's in-process ``biff`` command did to the logging tree.
+
+    ``biff mcp`` and ``biff serve`` configure the ``biff`` logger (level and
+    handlers) through ``configure_logging``; run in-process by ``CliRunner`` that
+    left INFO enabled on ``biff.*`` for every later test, so a test that expected
+    INFO to be dropped passed or failed by file order.
+    """
+    loggers = [
+        logging.getLogger(),
+        *(
+            logger
+            for logger in logging.root.manager.loggerDict.values()
+            if isinstance(logger, logging.Logger)
+        ),
+    ]
+    saved = [
+        (logger, logger.level, logger.handlers[:], logger.propagate, logger.disabled)
+        for logger in loggers
+    ]
+    yield
+    for logger, level, handlers, propagate, disabled in saved:
+        logger.handlers[:] = handlers
+        logger.setLevel(level)
+        logger.propagate = propagate
+        logger.disabled = disabled
 
 
 @pytest.fixture(autouse=True, name="_disable_usage_capture")

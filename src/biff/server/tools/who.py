@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.formatting import format_dead_footnote, format_who
-from biff.relay import dead_sessions, live_sessions
+from biff.presence_liveness import dead_sessions, live_sessions
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import update_current_session

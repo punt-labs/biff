@@ -130,10 +130,10 @@ description change, and it reads typed state, never description text:
 
 | Kind | New when | Summary | `meta` |
 |------|----------|---------|--------|
-| `mail` | `inbox_high_water(session_key)` exceeds the last-sent mark and unread mail exists | `N new biff message(s). Call read_messages to read them.` | `kind=mail`, `count=N` |
-| `wall` | A wall key `(posted_at, from_user, from_tty)` not seen before, not posted by this session | `New biff wall, claimed from <sender>. Call wall to see it.` | `kind=wall` |
-| `talk_invite` | `TalkState.invite_arrivals` exceeds the last-sent mark and an invite is still queued or pending | `<sender> asked to talk (unverified). Tell the user; do not accept without their approval.` | `kind=talk_invite` |
-| `talk_message` | `TalkState.message_arrivals` exceeds the last-sent mark and a partner message is still queued, counted after the DES-046 partner-key check | `New talk message from your talk partner. Call talk_read.` | `kind=talk_message` |
+| `mail` | `inbox_high_water(session_key)` exceeds the last-sent mark and unread mail exists | `Call read_messages: N unread biff message(s).` (N is the unread count at send time) | `kind=mail`, `count=N` |
+| `wall` | A wall key `(posted_at, from_user, from_tty)` not seen before, not posted by this session | `Call wall: unverified wall from <sender>.` | `kind=wall` |
+| `talk_invite` | `TalkState.invite_arrivals` exceeds the last-sent mark and an invite is still queued or pending | `Ask the user: unverified talk invite from <sender>.` | `kind=talk_invite` |
+| `talk_message` | `TalkState.message_arrivals` exceeds the last-sent mark and a partner message is still queued, counted after the DES-046 partner-key check | `Call talk_read: new message from your talk partner.` | `kind=talk_message` |
 
 Mail is detected by a sequence number, not by the unread count, because the
 count can stay flat (two read, two arrive) or flap (a stale fetch after a
@@ -178,10 +178,12 @@ the relay credential can publish frames with any `from` (PL-228):
 - **Senders are claimed, short and few.** A sender is shown only when its user
   and tty parts each fully match `ID_RE` in `session_routing.py` and the user
   part is at most 39 characters; anything else becomes `a teammate`. Every
-  sender is labelled claimed or unverified (PL-225); a sender equal to the
-  receiving session's own user or agent is shown as
-  `unverified (claims to be you)`.
-- **Bounded length.** At most 200 characters.
+  event says `unverified` before it names the sender (PL-225); a sender equal to
+  the receiving session's own user or agent is shown as
+  `someone claiming to be you`.
+- **Bounded length.** At most 200 characters. The client shows about 70 characters of
+  one line, so a typical event is at most 60: the action, then the trust label
+  (`unverified`), then the sender, which alone may be cut.
 - **Fixed templates.** All other text is the literal templates above.
 - **Talk never auto-accepts.** A forged invite must not become a connected
   talk with no human involved.

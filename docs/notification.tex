@@ -4451,7 +4451,8 @@ $LiveKind$ (Section~\ref{sec:chanhelpers}), read off the base state:
   $kMail$ & $unreadCount > 0$ \\
   $kWall$ & $wallLive = ztrue$ \\
   $kTalkInvite$ & an invite is pending and $pendingAge < maxInviteAge$ \\
-  $kTalkMsg$ & $talkQueued > 0$ \\
+  $kTalkMsg$ & $talkQueued > 0$ (the code counts only queued message frames
+    from the accepted partner; $talkQueued$ counts every queued frame) \\
 \end{tabular}
 \end{center}
 so a mail that has been read, a wall that has expired, an invite that has
@@ -5664,10 +5665,15 @@ probcli docs/notification.tex -p DEFAULT_SETSIZE 2 -card USER 1 \
 \subsection{What the implementation owes}
 \label{sec:chanobligations}
 
-A zero-GAP audit of this section against the \texttt{ChannelEmitter} tests
-is not yet possible: the emitter is not written.  The constraints below are
-what its tests (PL-1350) owe; each names the schema or invariant that states
-it.  A test is owed for the refusal as well as for the success.
+The \texttt{ChannelEmitter} (PL-1350) is written; its tests are in
+\texttt{tests/test\_channel\_emitter.py}, \texttt{tests/test\_channel\_wiring.py}
+(the production call sites, driven with a real emitter),
+\texttt{tests/test\_channel\_content.py}, \texttt{tests/test\_relay.py} and
+\texttt{tests/test\_nats/test\_inbox\_high\_water.py}.  Each constraint below
+names the schema or invariant that states it and, in the pull request that
+introduced the emitter, the named tests that prove it; a test exists for the
+refusal as well as for the success.  Obligation~12 (polling) belongs to
+PL-1337, not to the emitter.
 
 \begin{enumerate}
   \item \emph{Initialisation gate.}  No event before
