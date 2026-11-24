@@ -81,7 +81,8 @@ class TestCrossSessionVisibility:
         async with kai.live_prompt(
             'Call the "plan" tool with message "cross-session test".'
         ):
-            result = await eric.prompt('Call the "who" tool to see who is online.')
+            who = await eric.prompt('Call the "who" tool to see who is online.')
+            finger = await eric.prompt('Call the "finger" tool with user "@kai".')
 
-        assert "kai" in result.tool_output
-        assert "cross-session" in result.tool_output
+        assert "kai:" in who.tool_output
+        assert "cross-session test" in finger.tool_output
