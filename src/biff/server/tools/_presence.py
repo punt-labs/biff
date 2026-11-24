@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Self
 
 from biff.models import UserSession
-from biff.relay import live_sessions
+from biff.presence_liveness import live_sessions
 
 
 @dataclass(frozen=True, slots=True)

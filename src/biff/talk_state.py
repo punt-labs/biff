@@ -190,11 +190,7 @@ class TalkState:
         The session-scoped form ``/who`` shows and ``talk user:tty`` resolves,
         used when naming the current partner in a "already in a talk" refusal.
         """
-        return (
-            f"{self._partner}:{self._partner_tty}"
-            if self._partner_tty
-            else self._partner
-        )
+        return ":".join(filter(None, (self._partner, self._partner_tty)))
 
     @property
     def pending_invites(self) -> Mapping[str, PendingInvite]:
@@ -206,6 +202,11 @@ class TalkState:
         """
         self.expire_stale_invites()
         return dict(self._pending)
+
+    def peek(self) -> tuple[tuple[TalkNotification, ...], dict[str, PendingInvite]]:
+        """Return the queued frames and the pending invites, draining neither."""
+        self.expire_stale_invites()
+        return tuple(q.notif for q in self._queue), dict(self._pending)
 
     @property
     def queued(self) -> int:

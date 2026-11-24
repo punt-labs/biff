@@ -6,7 +6,7 @@ from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
 from biff.ethos_team import EthosTeams
 from biff.formatting import format_finger, format_finger_multi
-from biff.relay import live_sessions
+from biff.presence_liveness import live_sessions
 from biff.server.tools._session import resolve_tty_name
 from biff.tty import parse_address
 

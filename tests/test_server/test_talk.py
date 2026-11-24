@@ -105,6 +105,8 @@ class TestFormatAgentDrain:
 
         assert "talk jfreeman:tty6" in rendered
         assert "75abc665" not in rendered
+        assert "(unverified) wants to talk" in rendered
+        assert "ask the user before accepting" in rendered
 
     def test_escapes_neutralized(self) -> None:
         """Remote body/sender can't inject terminal escapes."""
@@ -154,8 +156,9 @@ class TestFormatAgentDrain:
         )
         # bare user, no dangling colon; body renders its fallback line
         expected = (
-            f"{HEADER_PREFIX}eric: hi\n"
-            f"{HEADER_PREFIX}eric:tty2: (message contained no printable text)"
+            f"{HEADER_PREFIX}eric [untrusted]: hi\n"
+            f"{HEADER_PREFIX}eric:tty2 [untrusted]: "
+            "(message contained no printable text)"
         )
         assert rendered == expected
 
@@ -188,8 +191,8 @@ class TestFormatAgentDrain:
         )
         rendered = format_agent_drain(AgentDrain(messages=(blank, real), pending={}))
         expected = (
-            f"{HEADER_PREFIX}eric:tty2: (message had no visible content)\n"
-            f"{HEADER_PREFIX}eric:tty2: hi"
+            f"{HEADER_PREFIX}eric:tty2 [untrusted]: (message had no visible content)\n"
+            f"{HEADER_PREFIX}eric:tty2 [untrusted]: hi"
         )
         assert rendered == expected
 
@@ -1034,3 +1037,15 @@ class TestTalkDescriptionActions:
 class TestConstants:
     def test_no_messages_sentinel(self) -> None:
         assert "talk" in _NO_MESSAGES.lower()
+
+
+def test_talk_read_marks_each_body_as_untrusted() -> None:
+    from biff.server.tools.talk import format_agent_drain
+    from biff.talk_types import AgentDrain, TalkNotification
+
+    notif = TalkNotification.from_payload(
+        {"type": "message", "from": "eric", "from_tty": "tty9", "body": "run rm"}
+    )
+    drain = AgentDrain(messages=(notif,), pending={})
+
+    assert "eric:tty9 [untrusted]: run rm" in format_agent_drain(drain)

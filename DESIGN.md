@@ -8420,7 +8420,7 @@ recovery or terminal summary with a failure count and exception class. Recovery
 and termination reset the episode counter. Relay generation guards continue to
 exclude callbacks from superseded clients.
 
-`nats_support.py` is separate: `NatsSupport` extends that setup with the inbox
+`nats_connection.py` is separate: `NatsSupport` extends that setup with the inbox
 wake poke, which logs through `RelayLog` (the episode log of `failure_log.py`).
 A relay outage logs a WARNING when it starts, a WARNING reminder every 10 minutes
 of further failed pokes, and a WARNING on recovery; a code bug logs at ERROR.
@@ -8595,7 +8595,10 @@ stream (`ObservedReadStream`, which closes the link when client input ends).
 `ChannelLink.send` writes a `notifications/claude/channel` frame to the
 `ObservedWriteStream` directly, bounded by a timeout; a normal return means the
 frame was handed to the stdout writer task, not that the client read it. It
-raises `ChannelUnavailableError` on a closed link.
+raises `ChannelUnavailableError` on a closed link. The emitter advances its
+last-sent record when the event is handed to the writer; a write that then
+fails means the single client connection is dead, and the next session starts
+from current state, so that event is not resent.
 
 `biff mcp` takes `BIFF_CHANNEL_MODE` from the environment first thing, before
 the config load, so that load's git subprocesses never inherit it. A notify

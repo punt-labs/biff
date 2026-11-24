@@ -47,10 +47,8 @@ from biff.server.channel import (
     ChannelUnavailableError,
     take_channel_mode,
 )
-from biff.server.channel_server import (
-    ChannelServer,
-    _HandshakeOnly,
-)
+from biff.server.channel_handshake import ChannelHandshake
+from biff.server.channel_server import ChannelServer, _HandshakeOnly
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
@@ -405,6 +403,97 @@ class TestHandshakeOnly:
         assert result == {"ok": True}
 
 
+class TestWatchTellsTheEmitter:
+    """The client's readiness reaches the channel emitter (O1)."""
+
+    @staticmethod
+    def _watched() -> tuple[AsyncMock, AsyncMock, MagicMock, type[ChannelHandshake]]:
+        on_request, on_notify = AsyncMock(return_value={}), AsyncMock()
+        emitter = MagicMock()
+        return on_request, on_notify, emitter, ChannelHandshake
+
+    async def test_initialize_closes_the_gate_before_the_runner_answers(self) -> None:
+        on_request, on_notify, emitter, handshake = self._watched()
+        request, _ = handshake.watch(emitter, on_request, on_notify)
+        await request(MagicMock(), "initialize", {})
+        emitter.initializing.assert_called_once_with()
+        on_request.assert_awaited_once()
+
+    async def test_other_requests_do_not_close_it(self) -> None:
+        on_request, on_notify, emitter, handshake = self._watched()
+        request, _ = handshake.watch(emitter, on_request, on_notify)
+        await request(MagicMock(), "tools/list", {})
+        emitter.initializing.assert_not_called()
+
+    async def test_initialized_opens_the_gate_after_the_runner_has_it(self) -> None:
+        on_request, on_notify, emitter, handshake = self._watched()
+        _, notify = handshake.watch(emitter, on_request, on_notify)
+        await notify(MagicMock(), "notifications/initialized", None)
+        on_notify.assert_awaited_once()
+        emitter.initialized.assert_called_once_with()
+
+    async def test_other_notifications_do_not_open_it(self) -> None:
+        on_request, on_notify, emitter, handshake = self._watched()
+        _, notify = handshake.watch(emitter, on_request, on_notify)
+        await notify(MagicMock(), "notifications/cancelled", None)
+        emitter.initialized.assert_not_called()
+
+    async def test_with_no_emitter_the_callbacks_are_unchanged(self) -> None:
+        on_request, on_notify, _emitter, handshake = self._watched()
+        assert handshake.watch(None, on_request, on_notify) == (on_request, on_notify)
+
+    async def test_the_initialize_reply_carries_the_untrusted_paragraph(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The SDK answers ``initialize`` from the options built at serve time."""
+        to_client_send, to_client = anyio.create_memory_object_stream[SessionMessage](
+            10
+        )
+        to_server, from_client = anyio.create_memory_object_stream[
+            SessionMessage | Exception
+        ](10)
+
+        @asynccontextmanager
+        async def stdio() -> AsyncGenerator[tuple[object, object]]:
+            yield from_client, to_client_send
+
+        monkeypatch.setattr(channel_server, "stdio_server", stdio)
+        server = ChannelServer[object]("biff", instructions="base")
+        server.attach_emitter(
+            MagicMock(instructions="UNTRUSTED-PARAGRAPH", close=AsyncMock())
+        )
+        reply = None
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(server.serve_channel_stdio)
+            await anyio.sleep(0.05)
+            request = JSONRPCRequest(
+                jsonrpc="2.0",
+                id=1,
+                method="initialize",
+                params={
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            )
+            await to_server.send(SessionMessage(message=request))
+            with anyio.fail_after(2):
+                reply = (await to_client.receive()).message
+            await to_server.aclose()
+
+        assert reply is not None
+        result = reply.model_dump(by_alias=True)["result"]
+        assert result["instructions"] == "base\n\nUNTRUSTED-PARAGRAPH"
+
+    async def test_opening_twice_adds_the_paragraph_once(self) -> None:
+        server = ChannelServer[object]("biff", instructions="base")
+        emitter = MagicMock(instructions="UNTRUSTED-PARAGRAPH")
+        link = server.channel_link
+        ChannelHandshake.open(server, link, emitter)
+        ChannelHandshake.open(server, link, emitter)
+        assert server.instructions == "base\n\nUNTRUSTED-PARAGRAPH"
+
+
 class TestServeChannelStdio:
     """The real ``serve_channel_stdio`` over memory streams."""
 
@@ -481,7 +570,7 @@ class TestMcpEntry:
                 "biff.server.transport_runtime.create_server",
                 return_value=ChannelServer[object]("biff"),
             ),
-            patch("biff.server.launch.create_state"),
+            patch("biff.server.launch.StateBlueprint.build"),
             patch("biff.server.entrypoints.load_mcp_config"),
             patch.object(ChannelServer, "serve_channel_stdio", serve_channel),
             patch.object(ChannelServer, "run", run),
@@ -1132,7 +1221,7 @@ class TestTheFlagDoesNotLeakIntoConfigLoadSubprocesses:
                 "biff.server.transport_runtime.create_server",
                 return_value=ChannelServer[object]("biff"),
             ),
-            patch("biff.server.launch.create_state"),
+            patch("biff.server.launch.StateBlueprint.build"),
             patch("biff.server.entrypoints.load_mcp_config", side_effect=load_config),
             patch.object(ChannelServer, "serve_channel_stdio", serve_channel),
         ):
