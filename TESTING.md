@@ -75,14 +75,8 @@ Quarantine a confirmed flaky test, not an entire optional tier. Register
 The expiry must be within 14 days; review the list on Nightly and fix or
 remove the case by expiry. An expired or malformed mark fails collection.
 
-## Open deviations (TST-1, TST-5 to TST-8, TST-10)
+## Open deviations (TST-5, TST-7, TST-8, TST-10)
 
-- **Local NATS tiers fail on main.** Tier 2b has 14 failures and tier 3c
-  one; both ran on no trigger before Nightly. Nightly stays red until
-  [PL-1427][local-nats] is fixed. Owner: biff maintainers. Review by
-  2026-12-07.
-- **Unproven Nightly jobs.** The hosted, agent and alert jobs have not yet
-  run in GitHub Actions; the hosted tier passed in the rollout VM.
 - **Candidate scope.** The candidate and published checks exercise the CLI,
   the MCP server over stdio and the relay image, but not the hosted relay
   or a real Claude session against the exact candidate, nor the published
@@ -467,5 +461,4 @@ every PR; the required `test` check fails if it or the coverage job fails.
 [nightly-ci]: .github/workflows/nightly.yml
 [release-ci]: .github/workflows/release.yml
 [hosted-ci]: .github/workflows/hosted-nats.yml
-[local-nats]: https://linear.app/punt-labs/issue/PL-1427/fix-biffs-local-nats-tiers-failing-on-main-cli-multi-user-nats-local
 [deviations]: https://linear.app/punt-labs/issue/PL-1428/close-biff-testing-standard-deviations
