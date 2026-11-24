@@ -8747,7 +8747,7 @@ Ethos binary and installed hook shims; policy files alone do not install them.
 ## DES-090: The Local Relay Is the Default; Demo and NATS Relays Are Opt-In
 
 **Date:** 2026-11-22
-**Status:** SETTLED
+**Status:** SETTLED; item 3 (relay location) superseded by DES-091
 **Topic:** Which relay a repo uses when none is configured, how a relay is
 chosen in `config.yaml`, and where the local relay keeps its files
 **Supersedes:** the demo-relay default in DES-037 (the "demo relay + bundled
@@ -8910,3 +8910,44 @@ with an isolated `HOME` and no network relay, ran `biff status`
 that the second user read; two clones of one remote (ssh, and https with a
 trailing slash) and a linked worktree of a no-remote repo shared one relay
 directory, with modes `0700` and `0600`.
+
+## DES-091: Biff Paths Follow the Filesystem Standard
+
+**Date:** 2026-11-24
+**Status:** SETTLED
+**Topic:** Where biff's home and repo-local state live, and what install creates
+(amends DES-090 item 3)
+
+punt-kit's filesystem standard (FS-1 to FS-8) and repo-local state policy
+(PLD-2, PLD-3) put repository-bound runtime state in the owning store's
+`.punt-labs/local/<tool>/` and reserve `~/.punt-labs/<tool>/` for
+repository-independent state.
+
+**Decision:** biff follows them in three places:
+
+1. **One home-root authority.** The CLI session store and the per-repo session
+   pointer derive `sessions/` and `current/` from `biff_data_dir()` instead of
+   rebuilding `~/.punt-labs/biff` (FS-3, PY-PLD-1).
+2. **The local relay lives in the main checkout's private zone,
+   `.punt-labs/local/biff/relay/`.** The owning store is the repo's common
+   root, so a linked worktree shares its main checkout's relay and deleting
+   the worktree leaves it. biff's `local/biff/` holds a `.gitignore` of `*`, so
+   relay state never enters shared history even in a repo without the org
+   gitignore block, and a zone reached through a symlink is refused. `--data-dir` still overrides it.
+3. **`biff install` provisions the home tree.** It creates `~/.punt-labs/biff/`
+   and `active/`, `current/`, `logs/`, `sessions/` and `unread/` (`0700`,
+   idempotent, existing contents untouched) before the plugin step, so a
+   CLI-only install gets them too (FS-8, PY-FS-2). An install that cannot
+   create them fails naming the error.
+
+**Alternatives:** where the local relay lives.
+
+| Option | Same-name repos apart | Worktrees share | Clones share | PLD-2/PLD-3 |
+|--------|-----------------------|-----------------|--------------|-------------|
+| `~/.punt-labs/biff/relay/<repo-key>/` (DES-090) | Yes | Yes | Yes | No: repo-bound state in the home tree |
+| `.punt-labs/local/biff/relay/` in the main checkout (chosen) | Yes | Yes | No | Yes |
+
+**Outcome:** two separate clones of one repo on one machine no longer share a local
+relay; they reach each other through a NATS relay. The `<repo-key>`
+derivation (remote normalization, filesystem-remote hashing) is removed with
+the location it served.

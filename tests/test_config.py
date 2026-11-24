@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from biff._stdlib import _parse_repo_slug, biff_data_dir
+from biff._stdlib import _parse_repo_slug
 from biff.config import (
     _apply_env_relay_overrides,
     _ConfigFields,
@@ -385,8 +385,9 @@ class TestLoadCliConfig:
         assert resolved.config.display_name == "Kai Chen"
         assert resolved.config.team == ("kai", "eric")
         assert resolved.config.relay_url == "nats://localhost:4222"
-        assert resolved.data_dir.parent == biff_data_dir() / "relay"
-        assert resolved.data_dir.name.startswith(f"{repo.name}-")
+        assert resolved.data_dir == (
+            repo.resolve() / ".punt-labs" / "local" / "biff" / "relay"
+        )
         assert resolved.repo_root == repo
 
     @patch("biff.identity.get_github_identity", return_value=_KAI)

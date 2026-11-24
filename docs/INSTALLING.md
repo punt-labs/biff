@@ -112,16 +112,11 @@ The `members` list controls who appears in `/who`. The `relay` section chooses h
 
 ## Relay Configuration
 
-With no `relay` section, biff uses the **local relay**: sessions on this machine find each other and exchange messages through files under `~/.punt-labs/biff/relay/<repo-key>/`. It needs no network, no server and no credentials. The directory and its files are private to you (directories `0700`, files `0600`). `biff doctor` and `biff status` print the directory.
+With no `relay` section, biff uses the **local relay**: sessions on this machine find each other and exchange messages through files in the repo's private zone, `.punt-labs/local/biff/relay/` in the main checkout. It needs no network, no server and no credentials. The directory and its files are private to you (directories `0700`, files `0600`), and biff ignores `.punt-labs/local/biff/` in git so relay state never enters shared history. `biff doctor` and `biff status` print the directory.
 
-`<repo-key>` identifies the repo, so every clone and worktree of one repo on this machine shares one relay, and two different repos never do:
+A linked worktree resolves to its main checkout, so every worktree of one checkout shares one relay. Separate clones each have their own relay, even when they share a directory name; sessions in two clones of one repo reach each other only through a NATS relay. `--data-dir` overrides the directory.
 
-- **Repo with a remote** (`origin`, or the only remote): a readable slug of the remote's `owner/repo` plus a short hash of its normalized identity, such as `punt-labs__biff-1a2b3c4d`. The identity is the lowercase host plus the lowercase `owner/repo`, without a trailing `/` or `.git`, so `git@github.com:Punt-Labs/biff.git` and `https://github.com/punt-labs/biff/` are one repo, while `owner/my.repo` and `owner/my-repo`, or the same `owner/repo` on GitHub and GitLab, are not. A non-default port (not 22, 80, 443 or 9418) is part of the identity, so two servers on one host stay apart, and a repo reached on port 2222 over ssh and on 443 over https counts as two; a bracketed IPv6 host is a host. Only the repository'"'"'s own git config names the remote, never your global config.
-- **A remote that is not `owner/repo`** (a GitLab subgroup): `remote-` plus a hash of its normalized URL, so its clones still share one relay.
-- **A filesystem remote** (a path, a relative path or a `file://` URL): `remote-` plus a hash of the absolute path it opens (a relative path resolves from the repo's main checkout, the case is kept, and a checkout and its `.git` directory are one repository).
-- **Repo with no remote**: the directory name plus a hash of the repo's absolute path (the main checkout's, for a linked worktree), so a worktree shares its main checkout and two unrelated repos that share a directory name do not.
-
-To reset a repo's local relay, delete its directory. The relay is real time on the machine only; it never leaves it.
+To reset a repo's local relay, delete `.punt-labs/local/biff/relay/` in its main checkout. The relay is real time on the machine only; it never leaves it.
 
 Choose another relay with `relay.type` in `config.yaml` (shared) or `config.local.yaml` (yours). These are advanced setups, for sessions that must see each other across machines.
 

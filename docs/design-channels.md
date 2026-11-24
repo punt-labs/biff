@@ -29,7 +29,8 @@ presence, plans), reached through two entry points that any harness can use:
 the `biff` CLI and the `biff mcp` server. With NATS, both receive arrivals by
 push: the always-on inbox, wall and talk subscriptions and the wake poke
 (DES-062). With no relay configured, biff uses the local filesystem relay
-(DES-090): JSONL inboxes under `~/.punt-labs/biff/relay/<repo-key>/`, no
+(DES-090, DES-091): JSONL inboxes under the main checkout's
+`.punt-labs/local/biff/relay/`, no
 network, no shared credentials. The local relay has no push of its own, so it
 gets a filesystem watch (section 6). The public demo NATS relay is the opt-in
 `relay: {type: demo}`.

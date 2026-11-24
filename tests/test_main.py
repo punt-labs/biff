@@ -732,6 +732,95 @@ class TestNatsErrorStaysOffTerminal:
         assert len(file_text.splitlines()) == 1
 
 
+class TestInstallProvisionsHome:
+    """``install`` creates the home tree (FS-8) and keeps existing data."""
+
+    _SUBDIRS = ("active", "current", "logs", "sessions", "unread")
+
+    @staticmethod
+    def _install(home: Path, monkeypatch: pytest.MonkeyPatch, *, claude: bool) -> None:
+        def which(_cmd: str) -> str | None:
+            return "/usr/bin/claude" if claude else None
+
+        def plugin_ok(
+            cmd: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr("shutil.which", which)
+        monkeypatch.setattr("subprocess.run", plugin_ok)
+        result = runner.invoke(app, ["install"])
+        assert result.exit_code == 0, result.output
+
+    @pytest.mark.parametrize("claude", [True, False], ids=["plugin", "cli-only"])
+    def test_fresh_install_creates_private_home_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, claude: bool
+    ) -> None:
+        self._install(tmp_path, monkeypatch, claude=claude)
+
+        root = tmp_path / ".punt-labs" / "biff"
+        assert root.is_dir()
+        assert root.stat().st_mode & 0o777 == 0o700
+        for name in self._SUBDIRS:
+            assert (root / name).is_dir(), name
+
+    def test_reinstall_keeps_existing_data(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._install(tmp_path, monkeypatch, claude=False)
+        record = tmp_path / ".punt-labs" / "biff" / "sessions" / "cli-x" / "s.json"
+        record.parent.mkdir()
+        record.write_text('{"keep": true}')
+
+        self._install(tmp_path, monkeypatch, claude=False)
+
+        assert record.read_text() == '{"keep": true}'
+
+    def test_install_refuses_a_symlinked_home_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir(mode=0o755)
+        elsewhere.chmod(0o755)
+        home = tmp_path / ".punt-labs" / "biff"
+        home.mkdir(parents=True)
+        (home / "unread").symlink_to(elsewhere)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        result = runner.invoke(app, ["install"])
+        assert result.exit_code == 1
+        assert "symlinked" in result.output
+        assert elsewhere.stat().st_mode & 0o777 == 0o755
+
+    def test_reinstall_tightens_an_existing_open_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unread = tmp_path / ".punt-labs" / "biff" / "unread"
+        unread.mkdir(parents=True, mode=0o755)
+        unread.chmod(0o755)
+        self._install(tmp_path, monkeypatch, claude=False)
+        assert unread.stat().st_mode & 0o777 == 0o700
+
+    def test_unwritable_home_fails_install(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refuse() -> Path:
+            raise PermissionError(13, "Permission denied", str(tmp_path))
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr("biff._stdlib.provision_home", refuse)
+
+        def no_claude(_cmd: str) -> str | None:
+            return None
+
+        monkeypatch.setattr("shutil.which", no_claude)
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 1
+        assert "home directory" in result.output
+
+
 class TestInstallWritesNoGuide:
     """``install`` is software-only: no guide file, no ``CLAUDE.md`` import.
 

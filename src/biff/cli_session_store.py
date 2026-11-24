@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Self, cast, get_args
 
+from biff._stdlib import biff_data_dir
 from biff.cli_session_lock import SessionLock
 from biff.session_routing import ID_RE, MAX_ID_LENGTH, SessionIdError
 
@@ -185,7 +186,7 @@ class CliSessionStore:
     @classmethod
     def default(cls) -> Self:
         """Return the store at ``~/.punt-labs/biff/sessions``."""
-        return cls(Path.home() / ".punt-labs" / "biff" / "sessions")
+        return cls(biff_data_dir() / "sessions")
 
     def create(self, record: CliSessionRecord) -> None:
         """Persist a new record; refuse an id that exists or is not a CLI id."""

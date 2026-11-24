@@ -359,6 +359,30 @@ def biff_data_dir() -> Path:
 
 BIFF_DATA_DIR = biff_data_dir()
 
+_HOME_SUBDIRS = ("active", "current", "logs", "sessions", "unread")
+
+
+def provision_home() -> Path:
+    """Create ``~/.punt-labs/biff/`` and its required subdirectories.
+
+    Idempotent: existing directories and their contents are left untouched,
+    so repeating ``biff install`` never discards data.  Every directory is
+    private (``0700``), tightened if it already exists.
+
+    Raises:
+        OSError: An entry is a symlink (its target's permissions are not biff's
+            to judge or change), or a directory cannot be created.
+    """
+    root = biff_data_dir()
+    for path in (root, *(root / name for name in _HOME_SUBDIRS)):
+        if path.is_symlink():
+            msg = f"refusing symlinked biff home entry {path}"
+            raise OSError(msg)
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.chmod(0o700)
+    return root
+
+
 # ── Session lifecycle helpers ────────────────────────────────────────
 
 

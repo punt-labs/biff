@@ -4,6 +4,13 @@
 
 ### Added
 
+- `biff install` creates `~/.punt-labs/biff/` and its `active/`, `current/`,
+  `logs/`, `sessions/` and `unread/` subdirectories (private,
+  `0700`, existing ones tightened), on CLI-only installs too, and `install.sh`
+  creates the same set. Reinstalling leaves existing contents
+  untouched; a home that cannot be created fails the install. The session
+  store and per-repo session pointer now derive their paths from the one
+  home-root resolver.
 - Channel events: in channel mode the server sends a `notifications/claude/channel`
   event when mail, a wall, a talk invite or a talk message arrives. Events are
   fixed templates with no bodies; senders appear only when both parts are plain
@@ -111,13 +118,16 @@
   `config.local.yaml`: `relay: {type: demo}`. Repos that already set
   `relay.url` see no change. Supersedes the demo-relay default of DES-037
   (DES-090).
-- The local relay keeps its files in `~/.punt-labs/biff/relay/<repo-key>/`
-  instead of `/tmp/biff/<directory-name>/`, private to you (directories `0700`,
-  files `0600`). They survive a reboot. `<repo-key>` is a slug plus a hash of
-  the remote's normalized identity (host, `owner/repo`, no trailing `/` or
-  `.git`), so ssh and https clones, and every worktree, of one repo share one
-  relay while different repos never do; a repo with no remote is keyed by its
-  common root. Content in `/tmp/biff/` is not migrated.
+- The local relay keeps its files in the repo's private zone,
+  `.punt-labs/local/biff/relay/` in the main checkout, instead of
+  `/tmp/biff/<directory-name>/`, private to you (directories `0700`, files
+  `0600`, and `.punt-labs/local/biff/` ignored by git). They survive a reboot. A
+  linked worktree shares its main checkout's relay; separate clones, including
+  two with the same directory name, each have their own. `--data-dir` still
+  overrides the directory. **Breaking:** content in
+  `/tmp/biff/<directory-name>/` is not migrated; to keep undelivered mail, copy
+  its `*.jsonl` inbox files into the main checkout's
+  `.punt-labs/local/biff/relay/` before starting a session.
 - The relay is chosen per config file: the highest file that sets `relay.type`
   or `relay.url` decides, so a personal `url` beats a committed `type`.
   Malformed relay config (not a mapping, non-string `url`, unknown key,
