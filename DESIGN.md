@@ -8525,9 +8525,13 @@ server may keep exactly (a) connection liveness, being the NATS 5-second
 subscription check, the local relay's 60-second watch check (tracked on elapsed
 time, so steady wakes cannot starve it; it verifies the watch's threads, the
 directory's device and inode, and a canary entry that an event must report (the
-canary lives in a per-process directory under the system temp directory, never
-inside a watched directory, so starting, checking or closing a watch wakes no
-other session; a signal exit leaves it behind and the next start reclaims it), and
+canary lives in a per-process directory under biff's private per-user state
+(`watch-canaries`, mode 0700, owned by the user), never inside a watched directory
+and never in a shared one, so starting, checking or closing a watch wakes no
+other session; a root that is a link, foreign or open to others is refused with a
+warning and a random exclusive temp directory is used; a signal exit leaves the
+probe behind and the next start reclaims dead processes' probes without following
+links), and
 rebuilds the watch, logging onset and recovery) and the session heartbeat (60 seconds, which also carries the
 throttled org-repo refresh and keeps the session alive in the relay), and (b)
 one-shot deadline wakes armed only while something with an expiry is displayed:

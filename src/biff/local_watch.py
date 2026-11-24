@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, ClassVar, Self
 from watchdog.observers import Observer
 from watchdog.utils import UnsupportedLibcError
 
+from biff._stdlib import biff_data_dir
 from biff.abandoned_canaries import AbandonedCanaries
 from biff.arrival_handler import ArrivalHandler
 from biff.directory_kqueue import DirectoryKqueue
@@ -114,11 +115,10 @@ class LocalWatch:
 
     JOIN_SECONDS: ClassVar[float] = DirectoryKqueue.JOIN_SECONDS
     CANARY_SECONDS: ClassVar[float] = 10.0
-    # Not inside any watched directory: creating or removing a probe there would
-    # wake every other session that watches the same directory.
-    CANARY_ROOT: ClassVar[Path] = (
-        Path(tempfile.gettempdir()) / f"biff-canary-{os.getuid()}"
-    )
+    # Biff's private per-user state, never inside a watched directory (creating
+    # or removing a probe there would wake every other session that watches it)
+    # and never a shared one (a predictable path there can be planted).
+    CANARY_ROOT: ClassVar[Path | None] = None
 
     __slots__ = (
         "_canary",
@@ -144,7 +144,7 @@ class LocalWatch:
     _canary_kqueue: DirectoryKqueue | None
     _stuck_kqueue: DirectoryKqueue | None
     _canary: threading.Event
-    _canary_dir: Path
+    _canary_dir: Path | None
     _lock: threading.RLock
     _closed: bool
 
@@ -160,7 +160,7 @@ class LocalWatch:
         self._canary_kqueue = None
         self._stuck_kqueue = None
         self._canary = threading.Event()
-        self._canary_dir = self.CANARY_ROOT / f"{os.getpid()}-{id(self):x}"
+        self._canary_dir = None
         self._lock = threading.RLock()
         self._closed = False
         return self
@@ -185,25 +185,40 @@ class LocalWatch:
                 self._data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                 info = self._data_dir.stat()
                 self._identity = (info.st_dev, info.st_ino)
-                self.CANARY_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
-                AbandonedCanaries.reclaim(self.CANARY_ROOT)
-                self._canary_dir.mkdir(mode=0o700, exist_ok=True)
+                canary_dir = self._canary_dir = self._private_canary_dir()
                 observer = Observer()
                 for path, loop, notify in (
                     (self._data_dir, self._loop, self._on_change),
-                    (self._canary_dir, None, self._canary.set),
+                    (canary_dir, None, self._canary.set),
                 ):
                     handler = ArrivalHandler(loop, notify)
                     observer.schedule(handler, str(path), recursive=False)
                 observer.start()
                 self._observer = observer
                 if sys.platform == "darwin":
-                    self._start_kqueue()
+                    self._start_kqueue(canary_dir)
             except BaseException:
                 self._teardown(observer)
                 raise
 
-    def _start_kqueue(self) -> None:
+    def _private_canary_dir(self) -> Path:
+        """Return this watch's fresh probe directory, under a root only we use.
+
+        A root that is not private and ours is refused (a warning, and a random
+        exclusive directory in the system temp directory instead).
+        """
+        root = self.CANARY_ROOT or biff_data_dir() / "watch-canaries"
+        if AbandonedCanaries.secure(root):
+            AbandonedCanaries.reclaim(root)
+            path = root / f"{os.getpid()}-{id(self):x}"
+            path.mkdir(mode=0o700, exist_ok=True)
+            return path
+        logger.warning(
+            "Watch probe directory %s is not private; using a temporary", root
+        )
+        return Path(tempfile.mkdtemp(prefix="biff-canary-"))
+
+    def _start_kqueue(self, canary_dir: Path) -> None:
         stuck = self._stuck_kqueue
         if stuck is not None and stuck.is_alive:
             logger.warning("Not starting a second kqueue over one that will not stop")
@@ -211,7 +226,7 @@ class LocalWatch:
         self._stuck_kqueue = None
         self._kqueue = DirectoryKqueue(self._data_dir, self._wake)
         # The canary is proven by this prompt path on macOS; FSEvents may lag it.
-        self._canary_kqueue = DirectoryKqueue(self._canary_dir, self._canary.set)
+        self._canary_kqueue = DirectoryKqueue(canary_dir, self._canary.set)
 
     def _wake(self) -> None:
         try:
@@ -259,6 +274,8 @@ class LocalWatch:
         return None
 
     def _canary_reason(self, timeout: float) -> str | None:
+        if self._canary_dir is None:
+            return "watch not started"
         ping = self._canary_dir / "userinbox-canary.jsonl"
         self._canary.clear()
         try:
@@ -295,7 +312,9 @@ class LocalWatch:
             self._stuck_kqueue = kqueue
         if canary_kqueue is not None:
             canary_kqueue.stop()
-        shutil.rmtree(self._canary_dir, ignore_errors=True)
+        canary_dir, self._canary_dir = self._canary_dir, None
+        if canary_dir is not None:
+            shutil.rmtree(canary_dir, ignore_errors=True)
         _reset_dead_inotify_reader()
 
     def __enter__(self) -> Self:

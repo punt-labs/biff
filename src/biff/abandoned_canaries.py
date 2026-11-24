@@ -1,28 +1,56 @@
-"""Reclaim the probe directories that exited sessions left in a watched directory."""
+"""The private directory of watch probes, and reclaiming those of exited sessions."""
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import stat
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+_PROBE_NAME = re.compile(r"(\d+)-[0-9a-f]+")
+
 
 class AbandonedCanaries:
-    """Probe directories named ``<pid>-<id>`` whose process has exited.
+    """Probe directories named ``<pid>-<id>`` under one private root.
 
     A signal ends a server without running the watch's cleanup, so its probe
-    directory stays behind.  A running session's probe is never touched.
+    directory stays behind.  The root is only trusted when it is a real
+    directory owned by this user and closed to everyone else, and nothing
+    under it is followed through a link.  A running session's probe is never
+    touched.
     """
+
+    @staticmethod
+    def secure(root: Path) -> bool:
+        """Create *root* (mode 0700) or accept it only if it is private and ours."""
+        try:
+            root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            root.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        except OSError:
+            return False
+        try:
+            info = root.lstat()
+        except OSError:
+            return False
+        return (
+            stat.S_ISDIR(info.st_mode)
+            and info.st_uid == os.getuid()
+            and stat.S_IMODE(info.st_mode) == 0o700
+        )
 
     @staticmethod
     def reclaim(root: Path) -> None:
         """Remove every probe directory in *root* whose process is gone."""
         for entry in root.iterdir():
-            pid = entry.name.partition("-")[0]
-            if pid.isdigit() and not AbandonedCanaries._is_running(int(pid)):
+            found = _PROBE_NAME.fullmatch(entry.name)
+            is_dir = stat.S_ISDIR(entry.lstat().st_mode)  # a link is not one
+            if found and is_dir and not AbandonedCanaries._is_running(int(found[1])):
                 shutil.rmtree(entry, ignore_errors=True)
 
     @staticmethod

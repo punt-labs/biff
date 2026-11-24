@@ -354,6 +354,7 @@ class TestAbandonedProbeDirectories:
         live = root / f"{os.getpid()}-other"
         for d in (dead, live):
             d.mkdir(parents=True)
+        root.chmod(0o700)
         with LocalWatch(tmp_path, lambda: None):
             pass
         assert not dead.exists()
@@ -592,3 +593,78 @@ class TestAFailedInboxPokeIsLoggedPerEpisode:
             (True, False),
             (False, True),
         ]
+
+
+class TestTheProbeRootIsPrivate:
+    @staticmethod
+    def _victim(tmp_path: Path) -> Path:
+        victim = tmp_path / "victim"
+        (victim / "4194303-abc").mkdir(parents=True)  # looks like a dead probe
+        return victim
+
+    async def test_a_planted_symlink_root_is_refused_and_nothing_is_deleted(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        victim = self._victim(tmp_path)
+        root = tmp_path / "root"
+        root.symlink_to(victim)
+        monkeypatch.setattr(LocalWatch, "CANARY_ROOT", root)
+        with (
+            caplog.at_level(logging.WARNING, logger="biff.local_watch"),
+            LocalWatch(tmp_path, lambda: None) as watch,
+        ):
+            assert watch.unhealthy_reason(canary_timeout=15.0) is None
+        assert (victim / "4194303-abc").exists()
+        assert [p.name for p in victim.iterdir()] == ["4194303-abc"]
+        assert any("probe directory" in r.getMessage() for r in caplog.records)
+
+    async def test_a_root_open_to_others_is_refused(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        root = self._victim(tmp_path)
+        root.chmod(0o777)
+        monkeypatch.setattr(LocalWatch, "CANARY_ROOT", root)
+        with (
+            caplog.at_level(logging.WARNING, logger="biff.local_watch"),
+            LocalWatch(tmp_path, lambda: None),
+        ):
+            pass
+        assert (root / "4194303-abc").exists()
+        assert any("probe directory" in r.getMessage() for r in caplog.records)
+
+    async def test_a_symlink_entry_in_a_good_root_is_not_followed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        outside = tmp_path / "outside"
+        (outside / "keep").mkdir(parents=True)
+        root = tmp_path / "root"
+        root.mkdir(mode=0o700)
+        (root / "4194303-abc").symlink_to(outside)
+        monkeypatch.setattr(LocalWatch, "CANARY_ROOT", root)
+        with LocalWatch(tmp_path, lambda: None):
+            pass
+        assert (outside / "keep").exists()
+
+    async def test_a_private_root_is_created_with_mode_0700(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "state" / "watch-canaries"
+        monkeypatch.setattr(LocalWatch, "CANARY_ROOT", root)
+        with LocalWatch(tmp_path, lambda: None):
+            assert (root.stat().st_mode & 0o777) == 0o700
+
+
+class TestStoppingANeverStartedWatchTouchesNothing:
+    async def test_the_watched_directory_survives_a_stop_before_a_start(
+        self, tmp_path: Path
+    ) -> None:
+        keep = tmp_path / "userinbox-kai.jsonl"
+        keep.write_text("x")
+        LocalWatch(tmp_path, lambda: None).stop()
+        assert keep.exists()
