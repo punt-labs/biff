@@ -777,6 +777,15 @@ class TestInstallProvisionsHome:
 
         assert record.read_text() == '{"keep": true}'
 
+    def test_reinstall_tightens_an_existing_open_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unread = tmp_path / ".punt-labs" / "biff" / "unread"
+        unread.mkdir(parents=True, mode=0o755)
+        unread.chmod(0o755)
+        self._install(tmp_path, monkeypatch, claude=False)
+        assert unread.stat().st_mode & 0o777 == 0o700
+
     def test_unwritable_home_fails_install(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -201,7 +201,14 @@ if [ "$SKIP_PLUGIN" = "0" ]; then
   cleanup_https_rewrite
 fi
 
-# --- Step 7: Verify ---
+# --- Step 7: Home directories (FS-8; biff install creates the same set) ---
+
+for dir in "" active current logs sessions unread; do
+  mkdir -p "$HOME/.punt-labs/biff/$dir"
+  chmod 700 "$HOME/.punt-labs/biff/$dir"
+done
+
+# --- Step 8: Verify ---
 
 info "Verifying installation..."
 printf '\n'

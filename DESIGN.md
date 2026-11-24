@@ -8926,9 +8926,9 @@ repository-independent state. Biff now follows them in three places:
 2. **The local relay lives in the main checkout's private zone,
    `.punt-labs/local/biff/relay/`.** The owning store is the repo's common
    root, so a linked worktree shares its main checkout's relay and deleting
-   the worktree leaves it. `local/` gets a `.gitignore` of `*` when biff creates
-   the directory, so relay state never enters shared history even in a repo
-   without the org gitignore block. `--data-dir` still overrides it.
+   the worktree leaves it. biff's `local/biff/` holds a `.gitignore` of `*`, so
+   relay state never enters shared history even in a repo without the org
+   gitignore block, and a zone reached through a symlink is refused. `--data-dir` still overrides it.
 3. **`biff install` provisions the home tree.** It creates `~/.punt-labs/biff/`
    and `active/`, `current/`, `logs/`, `sessions/` and `unread/` (`0700`,
    idempotent, existing contents untouched) before the plugin step, so a

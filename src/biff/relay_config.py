@@ -257,19 +257,32 @@ class RelayLocation:
     def ensure(data_dir: Path) -> None:
         """Create *data_dir* 0700, tightening it if it already exists.
 
-        In a repo's private zone (``.punt-labs/local/biff/relay``) the ``local``
-        and ``biff`` directories are tightened too, and ``local/`` gets a
-        ``.gitignore`` of ``*`` so relay state never enters shared history.  Any
-        other parent of a custom data directory is left as it is.
+        In a repo's private zone (``.punt-labs/local/biff/relay``) biff's own
+        ``local/biff`` directory is tightened too and holds a ``.gitignore`` of
+        ``*``, so relay state never enters shared history; the zone must not
+        pass through a symlink.  Any other parent of a custom data directory is
+        left as it is.
         """
         in_zone = data_dir.parts[-4:] == (".punt-labs", "local", "biff", "relay")
-        zone = data_dir.parent.parent
-        for path in (zone, data_dir.parent, data_dir) if in_zone else (data_dir,):
+        if in_zone:
+            RelayLocation._refuse_symlinks(data_dir)
+        for path in (data_dir.parent, data_dir) if in_zone else (data_dir,):
             path.mkdir(mode=0o700, parents=True, exist_ok=True)
             path.chmod(0o700)
         if in_zone:
-            try:
-                with (zone / ".gitignore").open("x") as ignore:
-                    ignore.write("*\n")
-            except FileExistsError:
-                pass
+            RelayLocation._ignore_everything(data_dir.parent)
+
+    @staticmethod
+    def _refuse_symlinks(data_dir: Path) -> None:
+        """Raise ``OSError`` when the zone path passes through a symlink."""
+        for path in (data_dir, *data_dir.parents[:3]):
+            if path.is_symlink():
+                msg = f"refusing a relay directory reached through symlink {path}"
+                raise OSError(msg)
+
+    @staticmethod
+    def _ignore_everything(owned: Path) -> None:
+        """Keep a ``.gitignore`` of ``*`` in biff's own ``local/biff``."""
+        ignore = owned / ".gitignore"
+        if not ignore.is_file() or ignore.read_text() != "*\n":
+            ignore.write_text("*\n")

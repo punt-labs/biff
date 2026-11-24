@@ -112,7 +112,7 @@ The `members` list controls who appears in `/who`. The `relay` section chooses h
 
 ## Relay Configuration
 
-With no `relay` section, biff uses the **local relay**: sessions on this machine find each other and exchange messages through files in the repo's private zone, `.punt-labs/local/biff/relay/` in the main checkout. It needs no network, no server and no credentials. The directory and its files are private to you (directories `0700`, files `0600`), and biff ignores `.punt-labs/local/` in git so relay state never enters shared history. `biff doctor` and `biff status` print the directory.
+With no `relay` section, biff uses the **local relay**: sessions on this machine find each other and exchange messages through files in the repo's private zone, `.punt-labs/local/biff/relay/` in the main checkout. It needs no network, no server and no credentials. The directory and its files are private to you (directories `0700`, files `0600`), and biff ignores `.punt-labs/local/biff/` in git so relay state never enters shared history. `biff doctor` and `biff status` print the directory.
 
 A linked worktree resolves to its main checkout, so every worktree of one checkout shares one relay. Separate clones each have their own relay, even when they share a directory name; sessions in two clones of one repo reach each other only through a NATS relay. `--data-dir` overrides the directory.
 

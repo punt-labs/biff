@@ -366,13 +366,13 @@ def provision_home() -> Path:
     """Create ``~/.punt-labs/biff/`` and its required subdirectories.
 
     Idempotent: existing directories and their contents are left untouched,
-    so repeating ``biff install`` never discards data.  New directories are
-    private (``0700``).
+    so repeating ``biff install`` never discards data.  Every directory is
+    private (``0700``), tightened if it already exists.
     """
     root = biff_data_dir()
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    for name in _HOME_SUBDIRS:
-        (root / name).mkdir(mode=0o700, exist_ok=True)
+    for path in (root, *(root / name for name in _HOME_SUBDIRS)):
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.chmod(0o700)
     return root
 
 

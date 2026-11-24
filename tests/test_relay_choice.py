@@ -329,9 +329,10 @@ class TestLocalRelayLocation:
     ) -> None:
         repo = _clone(tmp_path / "app")
         RelayLocation.ensure(RelayLocation.of(repo).path)
-        zone = repo / ".punt-labs" / "local"
-        for path in (zone, zone / "biff", zone / "biff" / "relay"):
+        owned = repo / ".punt-labs" / "local" / "biff"
+        for path in (owned, owned / "relay"):
             assert path.stat().st_mode & 0o777 == 0o700, path
+        (owned / "relay" / "inbox-kai.jsonl").write_text("{}\n")
         status = subprocess.run(  # noqa: S603
             ["git", "-C", str(repo), "status", "--porcelain"],  # noqa: S607
             check=True,
@@ -340,13 +341,22 @@ class TestLocalRelayLocation:
         )
         assert status.stdout == ""
 
-    def test_existing_gitignore_in_the_zone_is_kept(self, tmp_path: Path) -> None:
+    def test_a_stale_gitignore_in_biffs_zone_is_replaced(self, tmp_path: Path) -> None:
         repo = _clone(tmp_path / "app")
-        zone = repo / ".punt-labs" / "local"
-        zone.mkdir(parents=True)
-        (zone / ".gitignore").write_text("custom\n")
+        owned = repo / ".punt-labs" / "local" / "biff"
+        owned.mkdir(parents=True)
+        (owned / ".gitignore").write_text("other\n")
         RelayLocation.ensure(RelayLocation.of(repo).path)
-        assert (zone / ".gitignore").read_text() == "custom\n"
+        assert (owned / ".gitignore").read_text() == "*\n"
+
+    def test_a_symlinked_zone_is_refused(self, tmp_path: Path) -> None:
+        repo = _clone(tmp_path / "app")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (repo / ".punt-labs").symlink_to(elsewhere)
+        with pytest.raises(OSError, match="symlink"):
+            RelayLocation.ensure(RelayLocation.of(repo).path)
+        assert list(elsewhere.iterdir()) == []
 
     def test_data_dir_override_is_honored(self, tmp_path: Path) -> None:
         repo = _clone(tmp_path / "app", ("origin", "git@github.com:o/r.git"))

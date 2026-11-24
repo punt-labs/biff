@@ -6,7 +6,8 @@
 
 - `biff install` creates `~/.punt-labs/biff/` and its `active/`, `current/`,
   `logs/`, `sessions/` and `unread/` subdirectories (private,
-  `0700`), on CLI-only installs too. Reinstalling leaves existing contents
+  `0700`, existing ones tightened), on CLI-only installs too, and `install.sh`
+  creates the same set. Reinstalling leaves existing contents
   untouched; a home that cannot be created fails the install. The session
   store and per-repo session pointer now derive their paths from the one
   home-root resolver.
@@ -96,7 +97,7 @@
 - The local relay keeps its files in the repo's private zone,
   `.punt-labs/local/biff/relay/` in the main checkout, instead of
   `/tmp/biff/<directory-name>/`, private to you (directories `0700`, files
-  `0600`, and `.punt-labs/local/` ignored by git). They survive a reboot. A
+  `0600`, and `.punt-labs/local/biff/` ignored by git). They survive a reboot. A
   linked worktree shares its main checkout's relay; separate clones, including
   two with the same directory name, each have their own. `--data-dir` still
   overrides the directory. **Breaking:** content in
