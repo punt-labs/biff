@@ -21,10 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _User = Annotated[
-    str | None,
-    typer.Option(
-        envvar="BIFF_USER", help="Your username. Auto-detected from GitHub CLI."
-    ),
+    str | None, typer.Option(help="Your username. Auto-detected from GitHub CLI.")
 ]
 _DataDir = Annotated[
     Path | None,
