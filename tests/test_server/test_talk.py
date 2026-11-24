@@ -154,8 +154,8 @@ class TestFormatAgentDrain:
         )
         # bare user, no dangling colon; body renders its fallback line
         expected = (
-            f"{HEADER_PREFIX}eric: hi\n"
-            f"{HEADER_PREFIX}eric:tty2: (message contained no printable text)"
+            f"{HEADER_PREFIX}eric [untrusted]: hi\n"
+            f"{HEADER_PREFIX}eric:tty2 [untrusted]: (message contained no printable text)"
         )
         assert rendered == expected
 
@@ -188,8 +188,8 @@ class TestFormatAgentDrain:
         )
         rendered = format_agent_drain(AgentDrain(messages=(blank, real), pending={}))
         expected = (
-            f"{HEADER_PREFIX}eric:tty2: (message had no visible content)\n"
-            f"{HEADER_PREFIX}eric:tty2: hi"
+            f"{HEADER_PREFIX}eric:tty2 [untrusted]: (message had no visible content)\n"
+            f"{HEADER_PREFIX}eric:tty2 [untrusted]: hi"
         )
         assert rendered == expected
 
