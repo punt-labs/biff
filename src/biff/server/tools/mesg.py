@@ -44,7 +44,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             nats.errors.Error: A NATS request or connection fails.
         """
         set_biff_enabled(enabled=enabled)
-        state.emitter.set_mesg(enabled=enabled)
         await update_current_session(state, biff_enabled=enabled)
         await refresh_read_messages(mcp, state)
         return f"is {'y' if enabled else 'n'}"

@@ -399,7 +399,7 @@ def format_dead_footnote(dead: list[UserSession]) -> str:
     """Render a trailing summary line for KV rows that died without deregistering.
 
     A session that shuts down cleanly deletes its own KV row, so a row
-    :func:`~biff.relay.dead_sessions` still finds is a session that stopped
+    :func:`~biff.presence_liveness.dead_sessions` still finds is a session that stopped
     heartbeating without cleanup — killed, wedged, or its host vanished
     (DES-057). The main ``/who`` table only ever renders *live* rows, so
     this signal would otherwise be invisible until the 3-day storage TTL

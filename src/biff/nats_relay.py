@@ -31,7 +31,6 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from nats.aio.client import DEFAULT_CONNECT_TIMEOUT, Client as NatsClient
@@ -59,7 +58,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
-from biff.nats_support import NatsSupport
+from biff.nats_connection import NatsSupport, sanitize_relay_url, scrub_validation_error
 from biff.tty import (
     SID_HINT_NAMESPACE,
     build_session_key,
@@ -166,54 +165,6 @@ async def safe_close(nc: NatsClient) -> None:
             raise
 
 
-def sanitize_relay_url(url: str) -> str:
-    """Return ``host[:port]`` from the first server in *url*, dropping creds.
-
-    A NATS URL may embed ``user:pass@`` and may be a comma-separated
-    cluster list. Never log or embed userinfo in a message -- log lines,
-    warnings, and exception text must use this instead of the raw
-    (credential-bearing) URL. Unparseable input yields a placeholder
-    rather than echoing the raw URL.
-    """
-    first = url.split(",", 1)[0].strip()
-    if "//" not in first:  # urlsplit needs a // authority to find creds/host
-        first = "//" + first
-    try:
-        parts = urlsplit(first)
-        host, port = parts.hostname, parts.port
-    except ValueError:
-        return "<unknown host>"
-    if host is None:
-        return "<unknown host>"
-    if ":" in host:  # IPv6 — bracket regardless of port
-        host = f"[{host}]"
-    return f"{host}:{port}" if port is not None else host
-
-
-def _scrub_validation_error(exc: ValidationError | ValueError) -> str:
-    """Render a validation failure without leaking the frame content.
-
-    ``ValidationError.__str__`` embeds ``input_value`` — the raw frame body,
-    which for a talk/mail frame is private plaintext.  Return only the field
-    locations and error types, with input, url, and context stripped, so a
-    poison-frame log line cannot leak a message body.  A plain ``ValueError``
-    (no structured errors) degrades to its type name — never its message.
-
-    Safe only for models whose validation-error ``loc`` cannot contain
-    input-derived keys: no ``extra='forbid'`` and no dict-keyed fields.  On such
-    a model ``loc`` would carry attacker-controlled key names and this would
-    leak input — reuse elsewhere must re-verify that invariant.
-    """
-    if not isinstance(exc, ValidationError):
-        return type(exc).__name__
-    return "; ".join(
-        f"{'.'.join(str(part) for part in err['loc'])}:{err['type']}"
-        for err in exc.errors(
-            include_input=False, include_url=False, include_context=False
-        )
-    )
-
-
 class _ConnectionHealth:
     """Single source of connection-health diagnostics for :class:`NatsRelay`.
 
@@ -246,8 +197,6 @@ class _ConnectionHealth:
         # instead of relying on which timeouts happened to be noticed.
         self._total_attempts = 0
         self._total_timeouts = 0
-        # Called after each in-place reconnect; see ``add_reconnect_listener``.
-        self._reconnect_listeners: list[Callable[[], None]] = []
 
     @staticmethod
     def _host_of(url: str) -> str:
@@ -356,12 +305,6 @@ class _ConnectionHealth:
         self._timeout_count = 0
         self._wedge_onset_at = None
         self._force_reconnect_fired = False
-        for listener in self._reconnect_listeners:
-            listener()
-
-    def on_reconnect(self, callback: Callable[[], None]) -> None:
-        """Call *callback* from :meth:`record_reconnected`."""
-        self._reconnect_listeners.append(callback)
 
     def record_closed(self) -> None:
         """Log an INFO when the connection closes for good.
@@ -546,6 +489,7 @@ class NatsRelay:
         # reconnected one — it is true in both — so the epoch carries the datum
         # ``is_connected`` does not.
         self._reconnect_epoch = 0
+        self._reconnect_listeners: list[Callable[[], None]] = []
         # Session keys for which heartbeat() has already logged a missing-
         # session warning -- caps the warning at once per key rather than
         # once per heartbeat tick, which runs on a fixed interval forever.
@@ -800,6 +744,8 @@ class NatsRelay:
             # client object and _generation are unchanged — nats-py reconnects
             # in place — so the epoch is the only signal that this happened.
             self._reconnect_epoch += 1
+            for listener in self._reconnect_listeners:
+                listener()  # subscriptions are live again
 
         async def _on_closed() -> None:
             if self._generation != generation:
@@ -1686,7 +1632,7 @@ class NatsRelay:
                             subject.removeprefix(self._subject_prefix + ".").count(".")
                         ],
                         len(raw.data),
-                        _scrub_validation_error(exc),
+                        scrub_validation_error(exc),
                     )
                     await raw.term()
                     continue
@@ -1808,7 +1754,7 @@ class NatsRelay:
         listener reads durable state and announces what it missed.  The callback
         runs on the event loop and must not block.
         """
-        self._health.on_reconnect(callback)
+        self._reconnect_listeners.append(callback)
         logger.debug("reconnect listener added for %s", self._repo_name)
 
     async def inbox_high_water(self, session_key: str) -> int:

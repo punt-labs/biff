@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from biff.ethos_team import EthosTeams
 from biff.formatting import format_finger, format_finger_multi
-from biff.relay import live_sessions
+from biff.presence_liveness import live_sessions
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import resolve_tty_name, update_current_session

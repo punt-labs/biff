@@ -228,7 +228,7 @@ def _check_relay() -> CheckResult:
     """Check the relay: the local one needs no network, a NATS one must connect."""
     # Lazy import -- keep doctor's module-level imports free of nats_relay
     # (and its eager `import nats`) for checks that don't need it.
-    from biff.nats_relay import sanitize_relay_url
+    from biff.nats_connection import sanitize_relay_url
 
     relay_url, relay_auth, tls = _resolve_relay_config()
     if relay_url is None:

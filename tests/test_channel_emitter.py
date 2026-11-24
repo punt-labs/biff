@@ -11,14 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from biff.models import Message, UnreadSummary, WallPost
+from biff.models import Message, UnreadSummary, UserSession, WallPost
 from biff.relay import LocalRelay
 from biff.server import channel
 from biff.server.channel import ChannelLink
@@ -28,6 +28,8 @@ from biff.server.channel_rate import RateLimit
 from biff.talk_state import PENDING_INVITE_TTL, TalkState
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from mcp.shared.message import SessionMessage
 
 _ME = "kai:abc12345"
@@ -53,14 +55,13 @@ class _Sink:
     def __init__(self) -> None:
         self.frames: list[dict[str, object]] = []
         self.stall = False
-        self.on_send: list[object] = []
+        self.on_send: list[Callable[[], Awaitable[None]]] = []
 
     async def send(self, item: SessionMessage, /) -> None:
         if self.stall:
             await asyncio.sleep(3600)
         for hook in self.on_send:
-            if callable(hook):
-                await hook()
+            await hook()
         self.frames.append(json.loads(item.message.model_dump_json()))
 
     async def aclose(self) -> None:
@@ -85,12 +86,18 @@ class _CountingRelay(LocalRelay):
     scripted: list[int] | None = None
     reads = 0
     fails_with: Exception | None = None
+    session_fails_with: Exception | None = None
 
     async def inbox_high_water(self, session_key: str) -> int:
         self.reads += 1
         if self.fails_with is not None:
             raise self.fails_with
         return await super().inbox_high_water(session_key)
+
+    async def get_session(self, session_key: str) -> UserSession | None:
+        if self.session_fails_with is not None:
+            raise self.session_fails_with
+        return await super().get_session(session_key)
 
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:
         if self.scripted:
@@ -112,7 +119,7 @@ class _Rig:
     sink: _Sink
     clock: _Clock
     link: ChannelLink
-    wakes: list[int] = field(default_factory=list)
+    wakes: list[int]
 
     async def mail(self, n: int = 1, *, to: str = _ME, sender: str = "eric") -> None:
         for i in range(n):
@@ -136,7 +143,7 @@ class _Rig:
     def invite(
         self, *, user: str = "eric", tty: str = "tty9", key: str = _PEER
     ) -> None:
-        self.source.talk.receive(
+        self.emitter.receive_frame(
             {
                 "type": "invite",
                 "from": user,
@@ -149,6 +156,12 @@ class _Rig:
 
     def open(self) -> None:
         self.emitter.initialized()
+
+    async def mesg(self, *, enabled: bool) -> None:
+        """Write the session record the way ``/mesg`` does."""
+        await self.source.relay.update_session(
+            UserSession(user="kai", tty="abc12345", biff_enabled=enabled)
+        )
 
 
 @pytest.fixture
@@ -166,11 +179,6 @@ def rig(tmp_path: Path) -> _Rig:
     link.observe(sink)
     emitter.serve(link)
     return _Rig(emitter, source, sink, clock, link, wakes)
-
-
-async def _quiet(rig: _Rig) -> None:
-    """Let any armed timer's task finish, as the loop would."""
-    await asyncio.sleep(0)
 
 
 @pytest.fixture(autouse=True)
@@ -231,26 +239,37 @@ class TestMesg:
     ) -> None:
         """O2."""
         rig.open()
-        rig.emitter.set_mesg(enabled=False)
+        await rig.mesg(enabled=False)
         await rig.mail(2)
         await rig.wall()
 
         await rig.emitter.check()
         assert rig.sink.frames == []
 
-        rig.emitter.set_mesg(enabled=True)
+        await rig.mesg(enabled=True)
         await rig.emitter.check()
         assert sorted(m["kind"] for m in rig.sink.metas) == ["mail", "wall"]
 
         await rig.emitter.check()
         assert len(rig.sink.frames) == 2
 
-    async def test_mesg_on_asks_the_poller_for_a_pass(self, rig: _Rig) -> None:
-        """O2."""
-        rig.emitter.set_mesg(enabled=False)
+    async def test_a_tool_call_asks_the_poller_for_a_pass(self, rig: _Rig) -> None:
+        """O2: ``/mesg y`` is a tool call; the pass after it sends what was held."""
         rig.wakes.clear()
-        rig.emitter.set_mesg(enabled=True)
+        rig.emitter.tool_called()
         assert rig.wakes == [1]
+
+    async def test_an_unreadable_session_record_closes_the_gate_loudly(
+        self, rig: _Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """O2."""
+        rig.open()
+        await rig.mail()
+        rig.source.relay.session_fails_with = TimeoutError()
+        with caplog.at_level("WARNING", logger="biff.server.channel_emitter"):
+            await rig.emitter.check()
+        assert rig.sink.frames == []
+        assert [r.levelname for r in caplog.records] == ["WARNING"]
 
 
 # -- O3: owed is derived, per kind ----------------------------------------------
@@ -424,7 +443,7 @@ class TestTalk:
         rig.source.talk.begin_connected(
             partner="eric", partner_tty="tty9", partner_key=_PEER
         )
-        rig.source.talk.receive(
+        rig.emitter.receive_frame(
             {
                 "type": "message",
                 "from": "eric",
@@ -446,7 +465,7 @@ class TestTalk:
         rig.source.talk.begin_connected(
             partner="eric", partner_tty="tty9", partner_key=_PEER
         )
-        rig.source.talk.receive(
+        rig.emitter.receive_frame(
             {
                 "type": "message",
                 "from": "x",
@@ -473,11 +492,11 @@ class TestTalk:
             "to_key": _ME,
             "body": "b",
         }
-        rig.source.talk.receive(frame)
+        rig.emitter.receive_frame(frame)
         await rig.emitter.check()
         rig.source.talk.drain_for_agent()
         rig.clock.advance(31)
-        rig.source.talk.receive(frame)
+        rig.emitter.receive_frame(frame)
         await rig.emitter.check()
         assert len(rig.sink.frames) == 2
 
@@ -518,7 +537,7 @@ class TestNeverStale:
         rig.source.talk.begin_connected(
             partner="eric", partner_tty="tty9", partner_key=_PEER
         )
-        rig.source.talk.receive(
+        rig.emitter.receive_frame(
             {
                 "type": "message",
                 "from": "eric",
@@ -764,7 +783,7 @@ class TestTimer:
         await rig.emitter.check()
         await rig.mail()
         await rig.emitter.check()
-        rig.emitter.set_mesg(enabled=False)
+        await rig.mesg(enabled=False)
         rig.clock.advance(31)
 
         await rig.emitter.deferred_send()
@@ -772,7 +791,7 @@ class TestTimer:
         assert len(rig.sink.frames) == 1
         assert rig.emitter.held == frozenset()
         assert not rig.emitter.is_timer_armed()
-        rig.emitter.set_mesg(enabled=True)
+        await rig.mesg(enabled=True)
         await rig.emitter.check()
         assert len(rig.sink.frames) == 2  # still owed: the record never moved
 
@@ -877,15 +896,6 @@ class TestRetry:
         await rig.emitter.check()
         assert len(rig.sink.frames) == 1
 
-    async def test_a_tool_call_with_nothing_dormant_does_not_wake_the_poller(
-        self, rig: _Rig
-    ) -> None:
-        """O9: a tool call costs no pass when nothing is owed."""
-        rig.open()
-        rig.wakes.clear()
-        rig.emitter.tool_called()
-        assert rig.wakes == []
-
     async def test_a_reconnect_retries_it(self, rig: _Rig) -> None:
         """O9, O10."""
         await self._dormant_mail(rig)
@@ -928,14 +938,17 @@ class TestReconnect:
         quiet.reconnected()
         assert quiet.held == frozenset()
 
-    def test_the_nats_relay_reports_an_in_place_reconnect(self) -> None:
+    async def test_the_nats_relay_reports_an_in_place_reconnect(self) -> None:
         """O10: the listener the emitter registers is called by the relay."""
         from biff.nats_relay import NatsRelay
 
         relay = NatsRelay(url="nats://127.0.0.1:1", repo_name="x")
         called: list[int] = []
         relay.add_reconnect_listener(lambda: called.append(1))
-        relay._health.record_reconnected()
+        callbacks = relay._connection_callbacks(relay._generation)
+
+        await callbacks["reconnected_cb"]()
+
         assert called == [1]
 
 
@@ -963,8 +976,7 @@ class TestChannelModeOff:
         woken: list[int] = []
         off = ChannelEmitter(rig.source, lambda: woken.append(1))
         off.initialized()
-        off.set_mesg(enabled=False)
-        off.set_mesg(enabled=True)
+        off.tool_called()
         off.reconnected()
         assert woken == []
 
@@ -995,7 +1007,7 @@ class TestNoBodies:
         rig.source.talk.begin_connected(
             partner="eric", partner_tty="tty9", partner_key=_PEER
         )
-        rig.source.talk.receive(
+        rig.emitter.receive_frame(
             {
                 "type": "message",
                 "from": "eric",

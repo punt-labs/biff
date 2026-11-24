@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from biff.config import ResolvedConfig, is_enabled
 from biff.plugins.claude_code.statusline import UNREAD_DIR
 from biff.server.state import RepoToggle, ServerState
-from biff.server.state_factory import create_state
+from biff.server.state_factory import StateBlueprint
 
 
 @dataclass(frozen=True)
 class McpLaunch:
-    """Build session resources from resolved configuration and launch identity."""
+    """Build session resources from resolved configuration."""
 
     _resolved: ResolvedConfig
     toggle: RepoToggle
@@ -20,12 +20,12 @@ class McpLaunch:
     def state(self) -> ServerState:
         """Create initially unbound resources; the lifespan establishes presence."""
         resolved = self._resolved
-        return create_state(
+        return StateBlueprint(
             resolved.config,
             resolved.data_dir,
+            self.toggle,
             unread_dir=UNREAD_DIR,
             dormant=not is_enabled(resolved.repo_root),
             repo_root=resolved.repo_root,
             repo_common_root=resolved.repo_common_root,
-            toggle=self.toggle,
-        )
+        ).build()

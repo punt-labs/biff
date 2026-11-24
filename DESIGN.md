@@ -8420,7 +8420,7 @@ recovery or terminal summary with a failure count and exception class. Recovery
 and termination reset the episode counter. Relay generation guards continue to
 exclude callbacks from superseded clients.
 
-`nats_support.py` is separate: `NatsSupport` extends that setup with the inbox
+`nats_connection.py` is separate: `NatsSupport` extends that setup with the inbox
 wake poke, which logs through `RelayLog` (the episode log of `failure_log.py`).
 A relay outage logs a WARNING when it starts, a WARNING reminder every 10 minutes
 of further failed pokes, and a WARNING on recovery; a code bug logs at ERROR.

@@ -55,44 +55,6 @@ SESSION_TTL_SECONDS = 259_200  # 3 days — covers weekends; KV storage retentio
 # TTL — used to hide dead sessions from presence before their KV entry
 # expires.
 PRESENCE_LIVENESS_SECONDS = 120.0
-# Threshold for reporting a session as "stopped responding" in the /who
-# footnote (DES-057).  Wider than PRESENCE_LIVENESS_SECONDS on purpose: a
-# session that misses a single heartbeat tick (laptop sleep, GC pause)
-# already drops out of live_sessions() for that one poll and self-heals on
-# the next tick.  Reporting it as dead in the same breath would flap it
-# into and back out of the footnote.  3x the liveness window tolerates
-# several consecutive missed ticks (~4 missed heartbeats past the liveness
-# cutoff) before treating the row as a genuine orphan.
-DEAD_REPORT_SECONDS = PRESENCE_LIVENESS_SECONDS * 3
-
-
-def live_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
-    """Return only sessions whose last heartbeat is within the liveness window.
-
-    Drops dead sessions (shut down, killed, or wedged) whose KV entry has not
-    yet hit the longer storage TTL, so every presence surface (``who``,
-    ``finger``) reflects who is actually reachable.
-    """
-    now = datetime.now(UTC)
-    return [
-        s for s in sessions if s.is_live(now=now, ttl_seconds=PRESENCE_LIVENESS_SECONDS)
-    ]
-
-
-def dead_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
-    """Return KV rows that outlived the process that wrote them.
-
-    A session that shuts down cleanly deletes its own KV row and writes a
-    wtmp logout event (``server/app.py``'s exit path). A row that is still
-    PRESENT here but fails :meth:`~biff.models.UserSession.is_live` at
-    :data:`DEAD_REPORT_SECONDS` is therefore a session that died without
-    deregistering — killed, wedged, or a host that vanished — the orphan
-    signature :func:`live_sessions` silently drops (DES-057).
-    """
-    now = datetime.now(UTC)
-    return [
-        s for s in sessions if not s.is_live(now=now, ttl_seconds=DEAD_REPORT_SECONDS)
-    ]
 
 
 def atomic_write(path: Path, content: str) -> None:
@@ -530,11 +492,11 @@ class LocalRelay:
         A read marks a line in place and never removes one, so the number only
         rises, by exactly one for each arrival.
         """
-        if not self._data_dir.exists():
+        if not self._data_dir.is_dir():
             return 0  # no mail has ever been delivered here
         user = session_key.split(":")[0]
         paths = (self._inbox_path_for_key(session_key), self._user_inbox_path(user))
-        return sum(1 for path in paths for line in self._lines(path) if line.strip())
+        return sum(len(self._lines(path)) for path in paths)
 
     # -- Messages (user inbox) --
 

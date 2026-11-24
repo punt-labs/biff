@@ -157,8 +157,7 @@ def _write_sentinel(repo_name: str, session_key: str) -> None:
     """
     d = sentinel_dir(repo_name)
     d.mkdir(parents=True, exist_ok=True)
-    safe = session_key.replace(":", "-")
-    (d / safe).write_text(session_key)
+    (d / session_key.replace(":", "-")).write_text(session_key)
 
 
 def _remove_sentinel(repo_name: str, session_key: str) -> None:
@@ -169,8 +168,7 @@ def _remove_sentinel(repo_name: str, session_key: str) -> None:
     that attempt actually succeeds, or every future reaper tick would
     redundantly re-process an already-deleted session.
     """
-    safe = session_key.replace(":", "-")
-    (sentinel_dir(repo_name) / safe).unlink(missing_ok=True)
+    (sentinel_dir(repo_name) / session_key.replace(":", "-")).unlink(missing_ok=True)
 
 
 # (action, exception types it may raise, fixed stderr label for a failure)

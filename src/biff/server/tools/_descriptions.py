@@ -618,7 +618,6 @@ async def _reconcile_always_on_sub(
     if fresh is not None:
         gate.mark()
         state.emitter.reconnected()  # core NATS replays nothing sent while unbound
-        state.wake.wake()
     return fresh
 
 
@@ -680,7 +679,7 @@ async def subscribe_talk(
                     }
                     if TalkNotification.from_payload(frame).is_wake_poke:
                         gate.mark()  # a targeted message's wake poke, not a talk frame
-                    woke = state.talk.receive(frame)
+                    woke = state.emitter.receive_frame(frame)
                 else:
                     # A non-dict payload (a legacy ``b"1"`` bare wake) carries
                     # no frame — it cannot be a modeled talk frame either, so
@@ -1165,8 +1164,7 @@ async def poll_inbox(
             nats_due, watch_due = nats.due(), watch.due()
             rebuilt = await keeper.acheck() if watch_due else False
             due = _seconds_until_deadline(state, seen) <= 0
-            wanted = (outcome.is_arrival, gate.pending, seen.failed, rebuilt, due)
-            if any(wanted):
+            if any((outcome.is_arrival, gate.pending, seen.failed, rebuilt, due)):
                 seen = await _safe_tick(mcp, state, seen, gate=gate, due=due)
                 await state.emitter.check()  # arrivals only; never on a cadence
             if reap is not None:

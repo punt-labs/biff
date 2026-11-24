@@ -1,6 +1,6 @@
 """Unit tests for NatsRelay connection-health diagnostic logging.
 
-Covers the ``_ConnectionHealth`` single-source log points and the
+Covers the ``ConnectionHealth`` single-source log points and the
 ``_tracked`` wedge onset/recovery choke point:
 
 - A simulated half-open wedge (JS/KV raising ``nats: timeout``) logs the
@@ -242,7 +242,7 @@ class TestWedgeOnsetRecovery:
 class TestForceReconnectLatch:
     """The proactive force-reconnect fires once per wedge episode.
 
-    ``_ConnectionHealth`` owns the consecutive-timeout counter and the
+    ``ConnectionHealth`` owns the consecutive-timeout counter and the
     once-per-episode latch; ``NatsRelay._tracked`` acts on the decision.
     """
 

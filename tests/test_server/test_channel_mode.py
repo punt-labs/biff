@@ -47,10 +47,8 @@ from biff.server.channel import (
     ChannelUnavailableError,
     take_channel_mode,
 )
-from biff.server.channel_server import (
-    ChannelServer,
-    _HandshakeOnly,
-)
+from biff.server.channel_handshake import ChannelHandshake
+from biff.server.channel_server import ChannelServer, _HandshakeOnly
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
@@ -405,37 +403,50 @@ class TestHandshakeOnly:
         assert result == {"ok": True}
 
 
-class TestHandshakeOnlyTellsTheEmitter:
+class TestWatchTellsTheEmitter:
     """The client's readiness reaches the channel emitter (O1)."""
 
     @staticmethod
-    def _gate() -> tuple[_HandshakeOnly[object], MagicMock]:
-        runner = MagicMock()
-        runner.on_request = AsyncMock(return_value={"ok": True})
-        runner.on_notify = AsyncMock()
-        runner.connection.protocol_version = "2025-11-25"
+    def _watched() -> tuple[AsyncMock, AsyncMock, MagicMock, type[ChannelHandshake]]:
+        on_request, on_notify = AsyncMock(return_value={}), AsyncMock()
         emitter = MagicMock()
-        return _HandshakeOnly(runner, emitter), emitter
+        return on_request, on_notify, emitter, ChannelHandshake
 
-    async def test_initialize_closes_the_gate(self) -> None:
-        gate, emitter = self._gate()
-        await gate.on_request(MagicMock(), "initialize", {})
+    async def test_initialize_closes_the_gate_before_the_runner_answers(self) -> None:
+        on_request, on_notify, emitter, handshake = self._watched()
+        request, _ = handshake.watch(emitter, on_request, on_notify)
+        await request(MagicMock(), "initialize", {})
         emitter.initializing.assert_called_once_with()
+        on_request.assert_awaited_once()
+
+    async def test_other_requests_do_not_close_it(self) -> None:
+        on_request, on_notify, emitter, handshake = self._watched()
+        request, _ = handshake.watch(emitter, on_request, on_notify)
+        await request(MagicMock(), "tools/list", {})
+        emitter.initializing.assert_not_called()
 
     async def test_initialized_opens_the_gate_after_the_runner_has_it(self) -> None:
-        gate, emitter = self._gate()
-        await gate.on_notify(MagicMock(), "notifications/initialized", None)
+        on_request, on_notify, emitter, handshake = self._watched()
+        _, notify = handshake.watch(emitter, on_request, on_notify)
+        await notify(MagicMock(), "notifications/initialized", None)
+        on_notify.assert_awaited_once()
         emitter.initialized.assert_called_once_with()
 
     async def test_other_notifications_do_not_open_it(self) -> None:
-        gate, emitter = self._gate()
-        await gate.on_notify(MagicMock(), "notifications/cancelled", None)
+        on_request, on_notify, emitter, handshake = self._watched()
+        _, notify = handshake.watch(emitter, on_request, on_notify)
+        await notify(MagicMock(), "notifications/cancelled", None)
         emitter.initialized.assert_not_called()
+
+    async def test_with_no_emitter_the_callbacks_are_unchanged(self) -> None:
+        on_request, on_notify, _emitter, handshake = self._watched()
+        assert handshake.watch(None, on_request, on_notify) == (on_request, on_notify)
 
     async def test_the_instructions_name_bodies_as_untrusted(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         server = ChannelServer[object]("biff", instructions="base")
+        server.attach_emitter(MagicMock(instructions="untrusted bodies"))
         to_client, _from_server = anyio.create_memory_object_stream[SessionMessage](1)
         to_server, from_client = anyio.create_memory_object_stream[
             SessionMessage | Exception
@@ -532,7 +543,7 @@ class TestMcpEntry:
                 "biff.server.transport_runtime.create_server",
                 return_value=ChannelServer[object]("biff"),
             ),
-            patch("biff.server.launch.create_state"),
+            patch("biff.server.launch.StateBlueprint.build"),
             patch("biff.server.entrypoints.load_mcp_config"),
             patch.object(ChannelServer, "serve_channel_stdio", serve_channel),
             patch.object(ChannelServer, "run", run),
@@ -1183,7 +1194,7 @@ class TestTheFlagDoesNotLeakIntoConfigLoadSubprocesses:
                 "biff.server.transport_runtime.create_server",
                 return_value=ChannelServer[object]("biff"),
             ),
-            patch("biff.server.launch.create_state"),
+            patch("biff.server.launch.StateBlueprint.build"),
             patch("biff.server.entrypoints.load_mcp_config", side_effect=load_config),
             patch.object(ChannelServer, "serve_channel_stdio", serve_channel),
         ):

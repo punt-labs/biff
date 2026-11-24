@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from biff.server.state import ServerState
 
 _P = ParamSpec("_P")
+type _Tool[**P] = Callable[P, Awaitable[str]]
 
 _DISABLED_NOTICE = (
     "biff is disabled in this repo. Run `biff enable` (or /biff enable), "
@@ -39,12 +40,7 @@ _DISABLED_NOTICE = (
 )
 
 
-def track_activity(
-    state: ServerState,
-) -> Callable[
-    [Callable[_P, Awaitable[str]]],
-    Callable[_P, Awaitable[str]],
-]:
+def track_activity(state: ServerState) -> Callable[[_Tool[_P]], _Tool[_P]]:
     """Guard on enablement, then run.
 
     When *state* is dormant (biff disabled for this repo), the wrapped
@@ -59,15 +55,14 @@ def track_activity(
             ...
     """
 
-    def decorator(
-        fn: Callable[_P, Awaitable[str]],
-    ) -> Callable[_P, Awaitable[str]]:
+    def decorator(fn: _Tool[_P]) -> _Tool[_P]:
         @wraps(fn)
         async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> str:
             if state.dormant:
                 return _DISABLED_NOTICE
-            state.emitter.tool_called()
-            return await fn(*args, **kwargs)
+            result = await fn(*args, **kwargs)
+            state.emitter.tool_called()  # mesg may have changed; a dormant kind retries
+            return result
 
         return wrapper
 

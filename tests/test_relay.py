@@ -9,13 +9,8 @@ from pathlib import Path
 import pytest
 
 from biff.models import Message, UserSession
-from biff.relay import (
-    DEAD_REPORT_SECONDS,
-    PRESENCE_LIVENESS_SECONDS,
-    LocalRelay,
-    dead_sessions,
-    live_sessions,
-)
+from biff.presence_liveness import DEAD_REPORT_SECONDS, dead_sessions, live_sessions
+from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
 
 
 @pytest.fixture
