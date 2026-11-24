@@ -367,9 +367,11 @@ def provision_home() -> Path:
 
     Idempotent: existing directories and their contents are left untouched,
     so repeating ``biff install`` never discards data.  Every directory is
-    private (``0700``), tightened if it already exists.  A symlinked entry
-    raises ``OSError``: its target's permissions are not biff's to judge or
-    change.
+    private (``0700``), tightened if it already exists.
+
+    Raises:
+        OSError: An entry is a symlink (its target's permissions are not biff's
+            to judge or change), or a directory cannot be created.
     """
     root = biff_data_dir()
     for path in (root, *(root / name for name in _HOME_SUBDIRS)):
