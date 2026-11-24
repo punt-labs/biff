@@ -528,7 +528,8 @@ def resolve_human_identity(
 ) -> tuple[str, str, str]:
     """Return (user, display_name, kind) from the human-identity chain.
 
-    Chain: ``user_override`` -> ``get_github_identity()`` -> ``get_os_user()``.
+    Chain: ``user_override`` or ``BIFF_USER`` -> ``get_github_identity()`` ->
+    ``get_os_user()``.
     An override resolves as in :func:`resolve_mcp_identity`.
     A resolved GitHub login that matches a ``kind: agent`` identity in
     ``.punt-labs/ethos/identities/`` is rejected and treated the same as
@@ -587,7 +588,8 @@ def resolve_mcp_identity(
 ) -> tuple[str, str, str]:
     """Return (user, display_name, kind) from the agent-first identity chain.
 
-    Chain: ``user_override`` -> :func:`resolve_agent_identity_from_disk` ->
+    Chain: ``user_override`` or ``BIFF_USER`` ->
+    :func:`resolve_agent_identity_from_disk` ->
     :func:`get_github_identity` -> :func:`get_os_user`.
     An override naming a ``kind: agent`` identity in
     ``.punt-labs/ethos/identities/`` is that agent, with its kind and name.
