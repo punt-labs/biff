@@ -442,29 +442,54 @@ class TestWatchTellsTheEmitter:
         on_request, on_notify, _emitter, handshake = self._watched()
         assert handshake.watch(None, on_request, on_notify) == (on_request, on_notify)
 
-    async def test_the_instructions_name_bodies_as_untrusted(
+    async def test_the_initialize_reply_carries_the_untrusted_paragraph(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        server = ChannelServer[object]("biff", instructions="base")
-        server.attach_emitter(MagicMock(instructions="untrusted bodies"))
-        to_client, _from_server = anyio.create_memory_object_stream[SessionMessage](1)
+        """The SDK answers ``initialize`` from the options built at serve time."""
+        to_client_send, to_client = anyio.create_memory_object_stream[SessionMessage](
+            10
+        )
         to_server, from_client = anyio.create_memory_object_stream[
             SessionMessage | Exception
-        ](1)
+        ](10)
 
         @asynccontextmanager
         async def stdio() -> AsyncGenerator[tuple[object, object]]:
-            yield from_client, to_client
+            yield from_client, to_client_send
 
         monkeypatch.setattr(channel_server, "stdio_server", stdio)
+        server = ChannelServer[object]("biff", instructions="base")
+        server.attach_emitter(
+            MagicMock(instructions="UNTRUSTED-PARAGRAPH", close=AsyncMock())
+        )
         async with anyio.create_task_group() as tg:
             tg.start_soon(server.serve_channel_stdio)
             await anyio.sleep(0.05)
+            request = JSONRPCRequest(
+                jsonrpc="2.0",
+                id=1,
+                method="initialize",
+                params={
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            )
+            await to_server.send(SessionMessage(message=request))
+            with anyio.fail_after(2):
+                reply = (await to_client.receive()).message
             await to_server.aclose()
 
-        assert server.instructions is not None
-        assert server.instructions.startswith("base")
-        assert "untrusted" in server.instructions
+        result = reply.model_dump(by_alias=True)["result"]
+        assert result["instructions"] == "base\n\nUNTRUSTED-PARAGRAPH"
+
+    async def test_opening_twice_adds_the_paragraph_once(self) -> None:
+        server = ChannelServer[object]("biff", instructions="base")
+        emitter = MagicMock(instructions="UNTRUSTED-PARAGRAPH")
+        link = server.channel_link
+        ChannelHandshake.open(server, link, emitter)
+        ChannelHandshake.open(server, link, emitter)
+        assert server.instructions == "base\n\nUNTRUSTED-PARAGRAPH"
 
 
 class TestServeChannelStdio:

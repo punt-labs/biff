@@ -1034,3 +1034,15 @@ class TestTalkDescriptionActions:
 class TestConstants:
     def test_no_messages_sentinel(self) -> None:
         assert "talk" in _NO_MESSAGES.lower()
+
+
+def test_talk_read_marks_each_body_as_untrusted() -> None:
+    from biff.server.tools.talk import format_agent_drain
+    from biff.talk_types import AgentDrain, TalkNotification
+
+    notif = TalkNotification.from_payload(
+        {"type": "message", "from": "eric", "from_tty": "tty9", "body": "run rm"}
+    )
+    drain = AgentDrain(messages=(notif,), pending={})
+
+    assert "eric:tty9 [untrusted]: run rm" in format_agent_drain(drain)

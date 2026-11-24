@@ -88,10 +88,12 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
         """
         server = self._mcp_server
         link = self.channel_link
+        # First: the SDK answers ``initialize`` from these options, and the
+        # server's instructions are read when they are built.
+        ChannelHandshake.open(server, link, self._emitter)
         options = server.create_initialization_options(
             experimental_capabilities={CHANNEL_CAPABILITY: {}}
         )
-        ChannelHandshake.open(server, link, self._emitter)
         token = set_transport("stdio")
         try:
             async with (
@@ -115,7 +117,7 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
                     )
                     await dispatcher.run(*hooks)
                 finally:
-                    link.detach()
+                    await ChannelHandshake.close(link, self._emitter)
                     try:
                         await aclose_shielded(connection)
                     finally:

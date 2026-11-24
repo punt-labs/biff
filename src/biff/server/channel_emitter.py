@@ -17,16 +17,22 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Hashable
+from contextlib import suppress
 from datetime import datetime
 from typing import TYPE_CHECKING, Self
 
-from biff.failure_log import EpisodeLog
-from biff.relay_errors import RELAY_ERRORS
-from biff.server.channel import ChannelLink, ChannelUnavailableError
+from biff.relay_errors import RelayLog
+from biff.server.channel import ChannelUnavailableError
 from biff.server.channel_arrivals import Arrivals
 from biff.server.channel_content import EventKind
+from biff.server.channel_gate import Gate, SendGate
 from biff.server.channel_rate import RateLimit, RateWindow
-from biff.server.channel_reading import ArrivalSource, Reading, ReconnectNotifier
+from biff.server.channel_reading import (
+    ArrivalSource,
+    EventSink,
+    Reading,
+    ReconnectNotifier,
+)
 from biff.talk_types import TalkNotification
 
 if TYPE_CHECKING:
@@ -38,7 +44,9 @@ logger = logging.getLogger(__name__)
 RETRY_SECONDS = 1.0
 """How long after a timed-out send the deferred send tries that kind again."""
 
-_EXPECTED = (ChannelUnavailableError, *RELAY_ERRORS)
+MAX_READ_RETRIES = 3
+"""Failed reads of one kind in a row before the deferred retry gives up."""
+
 
 INSTRUCTIONS = (
     "CHANNEL EVENTS. In this session biff sends short channel events when mail,"
@@ -65,12 +73,14 @@ class ChannelEmitter:
     _source: ArrivalSource
     _arrivals: Arrivals
     _wake: Callable[[], None]
-    _link: ChannelLink | None
+    _link: EventSink | None
     _rate: RateWindow
     _clock: Callable[[], float]
-    _log: EpisodeLog
+    _log: RelayLog
+    _misses: dict[EventKind, int]
+    _is_listening: bool
     _lock: asyncio.Lock
-    _is_initialized: bool
+    _gate: SendGate
     _due: dict[EventKind, float]
     _retried: set[EventKind]
     _dormant: dict[EventKind, Hashable]
@@ -101,9 +111,11 @@ class ChannelEmitter:
         self._link = None
         self._clock = clock
         self._rate = RateWindow(limit or RateLimit(), clock)
-        self._log = EpisodeLog(logger, _EXPECTED)
+        self._log = RelayLog(logger)
+        self._misses = {}
+        self._is_listening = False
         self._lock = asyncio.Lock()
-        self._is_initialized = False
+        self._gate = SendGate(source)
         self._due = {}
         self._retried = set()
         self._dormant = {}
@@ -148,7 +160,7 @@ class ChannelEmitter:
             self._arrivals.count(TalkNotification.from_payload(raw))
         return woke
 
-    def serve(self, link: ChannelLink) -> None:
+    def serve(self, link: EventSink) -> None:
         """Turn channel mode on for the connection *link* carries.
 
         Registers for the relay's in-place reconnects, so mail that arrived while
@@ -157,24 +169,29 @@ class ChannelEmitter:
         """
         self._link = link
         relay = self._source.relay
-        if isinstance(relay, ReconnectNotifier):
+        if isinstance(relay, ReconnectNotifier) and not self._is_listening:
+            self._is_listening = True
             relay.add_reconnect_listener(self.reconnected)
 
     def initializing(self) -> None:
         """Close the gate: the client sent ``initialize`` and is not yet ready."""
-        self._is_initialized = False
+        self._gate.initializing()
 
     def initialized(self) -> None:
         """Open the gate: the client sent ``notifications/initialized``."""
-        self._is_initialized = True
+        self._gate.initialized()
         if self.is_enabled:
             self._wake()
 
     def reconnected(self) -> None:
-        """Run the sender once: the relay is back and may have missed an arrival."""
+        """Wake the poller: the relay is back and may have missed an arrival.
+
+        In channel mode the next pass also lets a kind that timed out twice try
+        again.
+        """
         if self.is_enabled:
             self._frees_dormant = True
-            self._wake()
+        self._wake()
 
     def tool_called(self) -> None:
         """Ask for a pass after a tool call; a kind that timed out twice retries.
@@ -190,18 +207,38 @@ class ChannelEmitter:
 
     async def check(self) -> None:
         """Announce whatever is owed; called on a poller pass an arrival caused."""
-        if self._link is None or not self._is_initialized:
-            return  # nothing to read: channel mode is off, or the client is not ready
+        if self._link is None:
+            return  # channel mode is off
         async with self._lock:
-            if await self._is_gated():
-                return
-            frees, self._frees_dormant = self._frees_dormant, False
-            for kind in EventKind:
-                reading = await self._read(kind)
-                if reading is None or self._is_asleep(reading, frees=frees):
-                    continue
-                await self._consider(reading)
+            gate = await self._gate.state()
+            if gate is Gate.OPEN:
+                frees, self._frees_dormant = self._frees_dormant, False
+                for kind in EventKind:
+                    reading = await self._read(kind)
+                    if reading is None:
+                        self._retry(kind)
+                    elif not self._is_asleep(reading, frees=frees):
+                        await self._consider(reading)
+            elif gate is Gate.UNREADABLE:
+                for kind in EventKind:
+                    self._retry(kind)
             self._rearm()
+
+    async def close(self) -> None:
+        """Stop for good: cancel the timer, end a firing in progress, drop the link.
+
+        The channel loop calls it when the connection ends, before the relay
+        closes, so a timer can never read a relay that is going away.
+        """
+        self._cancel_timer()
+        task, self._timer_task = self._timer_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        self._link = None
+        self._due.clear()
+        self._retried.clear()
 
     async def deferred_send(self) -> None:
         """Handle the one-shot timer: send, drop or release each kind that is due.
@@ -212,41 +249,41 @@ class ChannelEmitter:
         more try.  It never wakes a kind that went dormant.
         """
         async with self._lock:
-            self._timer = None
+            if self._link is None or not self._link.is_open:
+                self._due.clear()  # the connection ended; nothing to read or send
+                self._retried.clear()
+                return
+            gate = await self._gate.state()
             now = self._clock()
-            gated = await self._is_gated()
             for kind in [k for k, due in self._due.items() if due <= now]:
-                if gated:
-                    self._release(kind)
-                    continue
-                reading = await self._read(kind)
-                if reading is None:
-                    self._release(kind)
+                reading = await self._read(kind) if gate is Gate.OPEN else None
+                if gate is Gate.CLOSED:
+                    logger.info("channel event (%s) released, still owed", kind.value)
+                    self._release(kind)  # mesg off or not initialised: stays owed
+                elif reading is None:
+                    self._retry(kind)
                 else:
                     await self._consider(reading)
             self._rearm()
 
-    async def _is_gated(self) -> bool:
-        """Whether no event may go out: no link, not initialised, or mesg off.
+    def _retry(self, kind: EventKind) -> None:
+        """Hold *kind* for one more deferred try after a failed read; then give up.
 
-        Mesg is read from the session record (``/mesg n`` writes it), so the
-        answer is current whichever tool turned it off.  A record that cannot be
-        read closes the gate, loudly: an event that ignored mesg could not be
-        taken back.
+        The cap keeps a persistent failure from becoming a cadence; the next
+        arrival, tool call or reconnect tries again.
         """
-        if self._link is None or not self._is_initialized:
-            return True
-        source = self._source
-        try:
-            session = await source.relay.get_session(source.session_key)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.debug("channel mesg read failed", exc_info=True)
-            self._log.failed("channel mesg read", exc)
-            return True
-        self._log.recovered("channel mesg read")
-        return session is not None and not session.biff_enabled
+        misses = self._misses.get(kind, 0) + 1
+        if misses > MAX_READ_RETRIES:
+            self._misses.pop(kind, None)
+            self._release(kind)
+            logger.warning(
+                "channel %s: giving up the retry after %d failed reads",
+                kind.value,
+                MAX_READ_RETRIES,
+            )
+            return
+        self._misses[kind] = misses
+        self._due[kind] = self._clock() + RETRY_SECONDS
 
     def _is_asleep(self, reading: Reading, *, frees: bool) -> bool:
         """Whether *reading*'s kind timed out twice and nothing has woken it."""
@@ -267,6 +304,12 @@ class ChannelEmitter:
             return
         wait = self._rate.opens_in(reading.kind)
         if wait > 0:
+            if reading.kind not in self._due:
+                logger.info(
+                    "channel event (%s) held %.0fs by the rate limit",
+                    reading.kind.value,
+                    wait,
+                )
             self._due[reading.kind] = self._clock() + wait
             return
         await self._send(reading)
@@ -277,7 +320,12 @@ class ChannelEmitter:
         self._retried.discard(kind)
 
     async def _send(self, reading: Reading) -> None:
-        """Send *reading*'s event and advance the record only if the send completes."""
+        """Send *reading*'s event; the record advances once it is handed to the writer.
+
+        A normal return means the frame reached the stdout writer task, not that
+        the client read it.  If that write then fails the single client
+        connection is dead, and the next session starts from current state.
+        """
         link, event, kind = self._link, reading.event, reading.kind
         if link is None or event is None:
             return
@@ -287,11 +335,19 @@ class ChannelEmitter:
         except TimeoutError as exc:
             self._log.failed(label, exc)
             self._timed_out(reading)
-        except Exception as exc:  # a closed link arms nothing; a bug logs at ERROR
+        except ChannelUnavailableError:
+            logger.warning("%s not sent: the client connection is closed", label)
+            self._release(kind)
+        except Exception as exc:  # a bug in the sender logs at ERROR
             logger.debug("%s failed", label, exc_info=True)
             self._log.failed(label, exc)
             self._release(kind)
         else:
+            logger.info(
+                "channel event (%s) sent, count=%s",
+                kind.value,
+                event.meta.get("count", "-"),
+            )
             reading.commit()
             self._rate.record(kind)
             self._release(kind)
@@ -309,17 +365,22 @@ class ChannelEmitter:
 
     # -- The one timer -------------------------------------------------------
 
-    def _rearm(self) -> None:
-        """Arm the deferred send for the earliest held kind; cancel it if none."""
+    def _cancel_timer(self) -> None:
+        """Cancel the armed timer, if any."""
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+
+    def _rearm(self) -> None:
+        """Arm the deferred send for the earliest held kind; cancel it if none."""
+        self._cancel_timer()
         if not self._due or self._link is None or not self._link.is_open:
             return
         delay = max(min(self._due.values()) - self._clock(), 0.0)
         self._timer = asyncio.get_running_loop().call_later(delay, self._fire)
 
     def _fire(self) -> None:
+        self._timer = None  # this handle has fired; a check may arm the next one
         self._timer_task = asyncio.ensure_future(self._run_deferred())
 
     async def _run_deferred(self) -> None:
@@ -343,4 +404,5 @@ class ChannelEmitter:
             self._log.failed(label, exc)
             return None
         self._log.recovered(label)
+        self._misses.pop(kind, None)
         return reading

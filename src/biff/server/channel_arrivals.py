@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime
 from typing import TYPE_CHECKING, Self
 
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
     from biff.models import WallPost
 
 type WallKey = tuple[datetime, str, str]
+
+_INVITE_LOG = 256  # accepted invites remembered, to name a live one
 
 
 class Arrivals:
@@ -32,7 +35,7 @@ class Arrivals:
     _walls_sent: set[WallKey]
     _invites_seen: int
     _messages_seen: int
-    _inviter: tuple[str, str]
+    _invites: deque[tuple[int, str, str, str]]
 
     def __new__(cls, source: ArrivalSource) -> Self:
         """Create records in which nothing has been sent or seen."""
@@ -44,7 +47,7 @@ class Arrivals:
         self._walls_sent = set()
         self._invites_seen = 0
         self._messages_seen = 0
-        self._inviter = ("", "")
+        self._invites = deque(maxlen=_INVITE_LOG)
         return self
 
     def count(self, notif: TalkNotification) -> None:
@@ -56,7 +59,9 @@ class Arrivals:
         talk = self._source.talk
         if notif.is_invite:
             self._invites_seen += 1
-            self._inviter = (notif.nfrom, notif.nfrom_tty)
+            self._invites.append(
+                (self._invites_seen, notif.nfrom_key, notif.nfrom, notif.nfrom_tty)
+            )
         elif (
             notif.ntype == "message"
             and talk.phase is TalkPhase.CONNECTED
@@ -125,18 +130,31 @@ class Arrivals:
         return wall.from_user == user and wall.from_tty in names
 
     def _invite(self) -> Reading:
-        """Read invites: newer when a counted arrival was never announced."""
+        """Read invites: newer when a live one arrived after the last announcement.
+
+        The sender comes from an invite that is still queued or pending, never
+        from one that was withdrawn or has expired.
+        """
         talk = self._source.talk
+        frames, pending = talk.peek()
+        live = {n.nfrom_key for n in frames if n.is_invite}
+        live |= {p.session_key for p in pending.values()}
+        newest = max(
+            (entry for entry in self._invites if entry[1] in live),
+            key=lambda entry: entry[0],
+            default=None,
+        )
         count = self._invites_seen
         event = None
-        if talk.pending_invites or talk.queued_invite_users:  # not expired, not drained
+        if newest is not None:
             user = self._source.session_key.partition(":")[0]
-            sender = Sender.claimed(*self._inviter, own_user=user)
-            event = ChannelEvent.talk_invite(sender)
+            event = ChannelEvent.talk_invite(
+                Sender.claimed(newest[2], newest[3], own_user=user)
+            )
         return Reading(
             EventKind.TALK_INVITE,
             count,
-            count > self._invites_sent,
+            newest is not None and newest[0] > self._invites_sent,
             event,
             lambda: self._sent_invite(count),
         )
@@ -148,7 +166,10 @@ class Arrivals:
         """Read talk messages: newer when a partner arrival was never announced."""
         talk = self._source.talk
         count = self._messages_seen
-        is_queued = talk.phase is TalkPhase.CONNECTED and talk.queued > 0
+        frames = talk.peek()[0] if talk.phase is TalkPhase.CONNECTED else ()
+        is_queued = any(
+            n.ntype == "message" and n.nfrom_key == talk.partner_key for n in frames
+        )
         event = ChannelEvent.talk_message() if is_queued else None
         return Reading(
             EventKind.TALK_MESSAGE,

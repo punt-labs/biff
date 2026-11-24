@@ -17,11 +17,9 @@ from biff.session_routing import ID_RE
 MAX_EVENT_LENGTH = 200
 MAX_SENDER_USER_LENGTH = 39
 
-_WALL = "New biff wall from {}. Call wall to see it."
-_INVITE = (
-    "Talk invite from {}. Ask the user whether to talk"
-    " and wait for their answer; do not reply to it yourself."
-)
+# The actionable part first: the client shows one line and cuts the rest.
+_WALL = "Call wall to read: new biff wall from {}."
+_INVITE = "Ask the user: talk invite from {}."
 _ANONYMOUS = "a teammate (claimed, unverified)"
 _OWN_IDENTITY = "unverified (claims to be you)"
 
@@ -88,9 +86,9 @@ class ChannelEvent:
 
     @classmethod
     def mail(cls, count: int) -> Self:
-        """Announce *count* unread messages; names no sender."""
+        """Announce the *count* messages unread now (not the new ones); no sender."""
         noun = "message" if count == 1 else "messages"
-        text = f"{count} new biff {noun}. Call read_messages to read them."
+        text = f"Call read_messages: {count} unread biff {noun}."
         return cls(EventKind.MAIL, text, count)
 
     @classmethod
@@ -106,7 +104,7 @@ class ChannelEvent:
     @classmethod
     def talk_message(cls) -> Self:
         """Announce a message from the connected partner; names no sender."""
-        text = "New talk message from your talk partner. Call talk_read."
+        text = "Call talk_read: new message from your talk partner."
         return cls(EventKind.TALK_MESSAGE, text)
 
 

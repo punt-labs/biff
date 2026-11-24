@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from biff.server.channel_content import ChannelEvent, EventKind
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from biff.relay import Relay
     from biff.talk_state import TalkState
 
@@ -29,6 +31,23 @@ class ArrivalSource(Protocol):
     @property
     def session_key(self) -> str:
         """This session's ``user:tty`` key."""
+        ...
+
+
+class EventSink(Protocol):
+    """Where an event goes: one connection to a client that takes events.
+
+    The emitter's detection, content, rate limit and last-sent record know
+    nothing of the transport; ``ChannelLink`` is the Claude Code one.
+    """
+
+    @property
+    def is_open(self) -> bool:
+        """Whether the connection can still carry an event."""
+        ...
+
+    async def send(self, content: str, meta: Mapping[str, str]) -> None:
+        """Hand one event to the connection; raise if it cannot take it."""
         ...
 
 

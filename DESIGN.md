@@ -8595,7 +8595,10 @@ stream (`ObservedReadStream`, which closes the link when client input ends).
 `ChannelLink.send` writes a `notifications/claude/channel` frame to the
 `ObservedWriteStream` directly, bounded by a timeout; a normal return means the
 frame was handed to the stdout writer task, not that the client read it. It
-raises `ChannelUnavailableError` on a closed link.
+raises `ChannelUnavailableError` on a closed link. The emitter advances its
+last-sent record when the event is handed to the writer; a write that then
+fails means the single client connection is dead, and the next session starts
+from current state, so that event is not resent.
 
 `biff mcp` takes `BIFF_CHANNEL_MODE` from the environment first thing, before
 the config load, so that load's git subprocesses never inherit it. A notify

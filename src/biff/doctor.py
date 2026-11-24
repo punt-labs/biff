@@ -228,7 +228,7 @@ def _check_relay() -> CheckResult:
     """Check the relay: the local one needs no network, a NATS one must connect."""
     # Lazy import -- keep doctor's module-level imports free of nats_relay
     # (and its eager `import nats`) for checks that don't need it.
-    from biff.nats_connection import sanitize_relay_url
+    from biff.nats_connection import Scrub
 
     relay_url, relay_auth, tls = _resolve_relay_config()
     if relay_url is None:
@@ -236,7 +236,7 @@ def _check_relay() -> CheckResult:
     # A NATS URL may embed user:pass@ -- doctor's success/failure messages
     # go straight to the operator's terminal, so they must never echo the
     # raw credential-bearing URL.
-    host = sanitize_relay_url(relay_url)
+    host = Scrub.relay_url(relay_url)
 
     try:
         reachable = asyncio.run(

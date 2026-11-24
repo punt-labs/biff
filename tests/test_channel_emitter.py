@@ -349,7 +349,7 @@ class TestWall:
         await rig.wall(text="SECRET-WALL")
         await rig.emitter.check()
         assert rig.sink.contents == [
-            "New biff wall from eric:tty9 (claimed, unverified). Call wall to see it."
+            "Call wall to read: new biff wall from eric:tty9 (claimed, unverified)."
         ]
 
     async def test_this_sessions_own_wall_emits_nothing(self, rig: _Rig) -> None:
@@ -396,7 +396,9 @@ class TestWall:
         rig.open()
         await rig.wall(user="e" * 128)
         await rig.emitter.check()
-        assert rig.sink.contents[0].startswith("New biff wall from a teammate (claimed")
+        assert rig.sink.contents[0].startswith(
+            "Call wall to read: new biff wall from a teammate (claimed"
+        )
 
 
 class TestTalk:
@@ -454,7 +456,7 @@ class TestTalk:
         )
         await rig.emitter.check()
         assert rig.sink.contents == [
-            "New talk message from your talk partner. Call talk_read."
+            "Call talk_read: new message from your talk partner."
         ]
 
     async def test_a_message_from_another_session_is_not_announced(
@@ -530,6 +532,30 @@ class TestNeverStale:
 
         assert len(rig.sink.frames) == 1
         assert rig.emitter.held == frozenset()
+
+    async def test_a_drained_message_followed_by_another_frame_is_not_announced(
+        self, rig: _Rig
+    ) -> None:
+        """O4: only a queued message from the accepted partner is live."""
+        rig.open()
+        rig.source.talk.begin_connected(
+            partner="eric", partner_tty="tty9", partner_key=_PEER
+        )
+        rig.emitter.receive_frame(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_key": _PEER,
+                "to_key": _ME,
+                "body": "b",
+            }
+        )
+        rig.source.talk.drain_for_agent()
+        rig.invite(user="sam", key="sam:third")  # queued, and not a message
+
+        await rig.emitter.check()
+
+        assert "talk_message" not in [m["kind"] for m in rig.sink.metas]
 
     async def test_a_drained_message_queue_is_not_announced(self, rig: _Rig) -> None:
         """O4."""
@@ -977,7 +1003,6 @@ class TestChannelModeOff:
         off = ChannelEmitter(rig.source, lambda: woken.append(1))
         off.initialized()
         off.tool_called()
-        off.reconnected()
         assert woken == []
 
 
@@ -1062,3 +1087,280 @@ class TestFailureLogging:
             await rig.emitter.check()
         assert [r.levelname for r in caplog.records] == ["WARNING"]
         assert rig.sink.metas == [{"kind": "wall"}]
+
+
+# -- failed reads and a closed link are never silent ---------------------------
+
+
+class TestFailedReads:
+    async def test_a_read_that_fails_once_is_retried_by_the_deferred_send(
+        self, rig: _Rig
+    ) -> None:
+        """A relay hiccup must not strand an arrival until the next one."""
+        rig.open()
+        await rig.mail()
+        rig.source.relay.fails_with = TimeoutError()
+        await rig.emitter.check()
+        rig.source.relay.fails_with = None
+        assert rig.emitter.held == {EventKind.MAIL}
+        assert rig.emitter.is_timer_armed()
+
+        rig.clock.advance(2)
+        await rig.emitter.deferred_send()
+
+        assert rig.sink.metas == [{"kind": "mail", "count": "1"}]
+
+    async def test_a_read_that_keeps_failing_gives_up_and_logs_it(
+        self, rig: _Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The retry is capped, so persistent failure is not a cadence."""
+        rig.open()
+        await rig.mail()
+        rig.source.relay.fails_with = TimeoutError()
+        with caplog.at_level("WARNING", logger="biff.server.channel_emitter"):
+            await rig.emitter.check()
+            for _ in range(10):
+                rig.clock.advance(2)
+                await rig.emitter.deferred_send()
+        assert rig.emitter.held == frozenset()
+        assert not rig.emitter.is_timer_armed()
+        assert any("giving up" in r.getMessage() for r in caplog.records)
+
+    async def test_a_gate_read_that_fails_is_retried(self, rig: _Rig) -> None:
+        rig.open()
+        await rig.mail()
+        rig.source.relay.session_fails_with = TimeoutError()
+        await rig.emitter.check()
+        rig.source.relay.session_fails_with = None
+        assert rig.emitter.is_timer_armed()
+
+        rig.clock.advance(2)
+        await rig.emitter.deferred_send()
+
+        assert rig.sink.metas == [{"kind": "mail", "count": "1"}]
+
+    async def test_a_mesg_read_failure_at_firing_holds_the_kind_again(
+        self, rig: _Rig
+    ) -> None:
+        """Mesg off releases; mesg unreadable does not."""
+        rig.open()
+        await rig.mail()
+        await rig.emitter.check()
+        await rig.mail()
+        await rig.emitter.check()  # held by the rate window
+        rig.clock.advance(31)
+        rig.source.relay.session_fails_with = TimeoutError()
+
+        await rig.emitter.deferred_send()
+
+        assert rig.emitter.held == {EventKind.MAIL}
+        assert rig.emitter.is_timer_armed()
+        rig.source.relay.session_fails_with = None
+        rig.clock.advance(2)
+        await rig.emitter.deferred_send()
+        assert [m["count"] for m in rig.sink.metas] == ["1", "2"]
+
+    async def test_a_reading_that_fails_at_firing_holds_the_kind_again(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        await rig.mail()
+        await rig.emitter.check()
+        await rig.mail()
+        await rig.emitter.check()
+        rig.clock.advance(31)
+        rig.source.relay.fails_with = TimeoutError()
+
+        await rig.emitter.deferred_send()
+
+        assert rig.emitter.held == {EventKind.MAIL}
+        rig.source.relay.fails_with = None
+        rig.clock.advance(2)
+        await rig.emitter.deferred_send()
+        assert len(rig.sink.frames) == 2
+
+
+class TestClose:
+    async def test_close_cancels_the_timer_and_reads_nothing_after(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        await rig.mail()
+        await rig.emitter.check()
+        await rig.mail()
+        await rig.emitter.check()
+        assert rig.emitter.is_timer_armed()
+        reads = rig.source.relay.reads
+
+        await rig.emitter.close()
+        rig.clock.advance(31)
+        await rig.emitter.deferred_send()
+        await rig.emitter.check()
+
+        assert not rig.emitter.is_timer_armed()
+        assert rig.source.relay.reads == reads
+        assert not rig.emitter.is_enabled
+
+    async def test_a_timer_that_fires_after_the_link_closed_reads_nothing(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        await rig.mail()
+        await rig.emitter.check()
+        await rig.mail()
+        await rig.emitter.check()
+        rig.link.detach()
+        reads = rig.source.relay.reads
+        rig.clock.advance(31)
+
+        await rig.emitter.deferred_send()
+
+        assert rig.source.relay.reads == reads
+        assert rig.emitter.held == frozenset()
+
+    async def test_a_closed_link_is_not_logged_as_will_retry(
+        self, rig: _Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rig.open()
+        await rig.mail()
+        rig.link.detach()
+        with caplog.at_level("DEBUG", logger="biff.server.channel_emitter"):
+            await rig.emitter.check()
+        messages = [r.getMessage() for r in caplog.records]
+        assert not any("will retry" in m for m in messages)
+        assert any("closed" in m for m in messages)
+
+    async def test_a_check_that_rearms_while_the_timer_waits_leaves_one_timer(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        await rig.mail()
+        await rig.emitter.check()
+        await rig.mail()
+        await rig.emitter.check()
+        em = rig.emitter
+        async with em._lock:  # a check in progress when the timer fires
+            em._fire()
+            await asyncio.sleep(0)
+            em._rearm()
+            armed_by_check = em._timer
+        await asyncio.sleep(0.01)
+        assert armed_by_check is not None
+        assert armed_by_check.cancelled()
+
+
+class TestOutsideChannelMode:
+    async def test_a_reconnect_still_wakes_the_poller(self, rig: _Rig) -> None:
+        """A subscription rebind must wake the default-mode poller too."""
+        woken: list[int] = []
+        off = ChannelEmitter(rig.source, lambda: woken.append(1))
+        off.reconnected()
+        assert woken == [1]
+        assert off.held == frozenset()
+
+
+class TestWithdrawnInvite:
+    async def test_a_withdrawn_invite_is_not_announced_under_its_senders_name(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        rig.invite()  # eric, announced
+        await rig.emitter.check()
+        rig.clock.advance(31)
+        rig.invite(user="ann", tty="tty3", key="ann:x")
+        rig.emitter.receive_frame(
+            {"type": "withdraw", "from": "ann", "from_key": "ann:x", "to_key": _ME}
+        )
+
+        await rig.emitter.check()
+
+        assert len(rig.sink.frames) == 1
+        assert "ann" not in rig.sink.contents[0]
+
+    async def test_the_sender_is_the_newest_live_invite(self, rig: _Rig) -> None:
+        rig.open()
+        rig.invite()
+        rig.invite(user="ann", tty="tty3", key="ann:x")
+        await rig.emitter.check()
+        assert "ann:tty3" in rig.sink.contents[0]
+
+
+class TestPartnerMessagesOnly:
+    async def test_a_queued_invite_after_a_drain_is_not_a_message(
+        self, rig: _Rig
+    ) -> None:
+        """Covered by TestNeverStale; here with an end frame as the other frame."""
+        rig.open()
+        rig.source.talk.begin_connected(
+            partner="eric", partner_tty="tty9", partner_key=_PEER
+        )
+        rig.emitter.receive_frame(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_key": _PEER,
+                "to_key": _ME,
+                "body": "b",
+            }
+        )
+        rig.source.talk.drain_for_agent()
+        rig.source.talk.begin_connected(
+            partner="eric", partner_tty="tty9", partner_key=_PEER
+        )
+        rig.emitter.receive_frame(
+            {"type": "end", "from": "eric", "from_key": _PEER, "to_key": _ME}
+        )
+        await rig.emitter.check()
+        assert "talk_message" not in [m["kind"] for m in rig.sink.metas]
+
+
+class TestAuditLog:
+    """biff.log lets a user reconstruct what was announced, without any body."""
+
+    async def test_a_sent_event_logs_its_kind_and_count_only(
+        self, rig: _Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rig.open()
+        await rig.mail(2, sender="mallory")
+        with caplog.at_level("INFO", logger="biff.server.channel_emitter"):
+            await rig.emitter.check()
+        lines = [r.getMessage() for r in caplog.records]
+        assert "channel event (mail) sent, count=2" in lines
+        assert not any("SECRET" in m or "mallory" in m for m in lines)
+
+    async def test_a_held_event_is_logged_once(
+        self, rig: _Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rig.open()
+        await rig.mail()
+        await rig.emitter.check()
+        with caplog.at_level("INFO", logger="biff.server.channel_emitter"):
+            await rig.mail()
+            await rig.emitter.check()
+            await rig.mail()
+            await rig.emitter.check()
+        held = [r.getMessage() for r in caplog.records if "held" in r.getMessage()]
+        assert len(held) == 1
+        assert "by the rate limit" in held[0]
+
+    async def test_mesg_off_and_back_are_logged_once_each(
+        self, rig: _Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rig.open()
+        await rig.mesg(enabled=False)
+        with caplog.at_level("INFO", logger="biff.server.channel_emitter"):
+            await rig.emitter.check()
+            await rig.emitter.check()
+            await rig.mesg(enabled=True)
+            await rig.emitter.check()
+        lines = [r.getMessage() for r in caplog.records]
+        assert lines == ["channel events held: mesg is off", "channel events flowing"]
+
+    async def test_waiting_for_initialize_is_logged(
+        self, rig: _Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("INFO", logger="biff.server.channel_emitter"):
+            await rig.emitter.check()
+        assert [r.getMessage() for r in caplog.records] == [
+            "channel events held: the client is not initialised"
+        ]

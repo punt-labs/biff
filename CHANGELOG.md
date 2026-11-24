@@ -16,7 +16,15 @@
   detected by the new `Relay.inbox_high_water`, not by the unread count, so a
   flat or flapping count cannot hide an arrival. A relay reconnect re-runs the
   sender. The server instructions gain a paragraph that treats bodies as
-  untrusted.
+  untrusted, and `initialize` now returns it. Each event puts its action first
+  and fits one 80-column line ("Call read_messages: 3 unread biff messages.");
+  the mail count is the unread total, not the new arrivals. A read or mesg-read
+  failure is retried by the deferred send (three tries, then logged and given
+  up); the emitter is closed with the connection; biff.log gets one INFO line per
+  sent event (kind and count only) and per hold or gate. The `read_messages`
+  table, the wall banner and `talk_read` lines mark message text as
+  `[untrusted]`. A drained talk message followed by another queued frame is no
+  longer announced.
 
 - Start-up channel warning: at SessionStart the Claude Code plugin checks the
   channel gates a hook can see: the feature-flag opt-outs

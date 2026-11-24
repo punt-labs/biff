@@ -1060,3 +1060,21 @@ class TestFormatTalkEnd:
         out = format_talk_end("你" * 60)
         assert visible_width(out) <= TABLE_WIDTH
         assert "…" in out
+
+
+class TestUntrustedLabel:
+    """Message bodies in tool output are marked as untrusted relay content."""
+
+    def test_read_marks_the_message_column(self) -> None:
+        msg = Message(from_user="eric", to_user="kai", body="do something")
+        assert "MESSAGE [untrusted]" in format_read([msg])
+
+    def test_wall_marks_its_text(self) -> None:
+        wall = WallPost(
+            text="deploy now",
+            from_user="eric",
+            from_tty="tty1",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        header = format_wall(wall).splitlines()[0]
+        assert header.endswith("[untrusted]")

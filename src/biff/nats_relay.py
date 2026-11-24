@@ -58,7 +58,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
-from biff.nats_connection import NatsSupport, sanitize_relay_url, scrub_validation_error
+from biff.nats_connection import NatsSupport, Scrub
 from biff.tty import (
     SID_HINT_NAMESPACE,
     build_session_key,
@@ -200,8 +200,8 @@ class _ConnectionHealth:
 
     @staticmethod
     def _host_of(url: str) -> str:
-        """Return ``host[:port]`` from *url*. See :func:`sanitize_relay_url`."""
-        return sanitize_relay_url(url)
+        """Return ``host[:port]`` from *url*; see ``Scrub.relay_url``."""
+        return Scrub.relay_url(url)
 
     @property
     def consecutive_timeouts(self) -> int:
@@ -832,7 +832,7 @@ class NatsRelay:
                 with suppress(Exception):
                     await safe_close(nc)
         if error_kind is not None:
-            host = sanitize_relay_url(self._url)
+            host = Scrub.relay_url(self._url)
             raise RelayConnectError(f"Relay connection failed: {host}")
         self._setup.finish("recovered")
         return nc
@@ -1632,7 +1632,7 @@ class NatsRelay:
                             subject.removeprefix(self._subject_prefix + ".").count(".")
                         ],
                         len(raw.data),
-                        scrub_validation_error(exc),
+                        Scrub.validation_error(exc),
                     )
                     await raw.term()
                     continue

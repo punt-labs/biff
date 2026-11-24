@@ -116,7 +116,7 @@ def format_agent_drain(drain: AgentDrain) -> str:
             continue
         if not notif.nbody:
             continue
-        lines.append(f"{HEADER_PREFIX}{label}: {visible_text(notif.nbody)}")
+        lines.append(f"{HEADER_PREFIX}{label} [untrusted]: {visible_text(notif.nbody)}")
     return "\n".join(lines)
 
 

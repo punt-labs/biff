@@ -7,6 +7,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Protocol
 
 from biff.server.channel import ChannelLink
+from biff.server.channel_reading import EventSink
 from biff.server.tools import _descriptions
 
 if TYPE_CHECKING:
@@ -34,11 +35,14 @@ class ClientGate(Protocol):
         """The paragraph the server instructions gain in channel mode."""
         ...
 
-    def serve(self, link: ChannelLink) -> None:
+    def serve(self, link: EventSink) -> None:
         """Turn channel mode on for the connection *link* carries."""
 
     def initializing(self) -> None:
         """Close the gate: the client sent ``initialize`` and is not yet ready."""
+
+    async def close(self) -> None:
+        """Stop sending: the connection has ended."""
 
     def initialized(self) -> None:
         """Open the gate: the client sent ``notifications/initialized``."""
@@ -58,7 +62,8 @@ class ChannelHandshake:
         if emitter is not None:
             emitter.serve(link)
             base = server.instructions or ""
-            server.instructions = f"{base}\n\n{emitter.instructions}"
+            if emitter.instructions not in base:  # once, however often this runs
+                server.instructions = f"{base}\n\n{emitter.instructions}"
 
     @staticmethod
     def watch(
@@ -92,6 +97,13 @@ class ChannelHandshake:
                 emitter.initialized()
 
         return request, notify
+
+    @staticmethod
+    async def close(link: ChannelLink, emitter: ClientGate | None) -> None:
+        """End the connection's side of channel mode: detach *link*, stop *emitter*."""
+        link.detach()
+        if emitter is not None:
+            await emitter.close()
 
     @staticmethod
     async def capture(ctx: Context | None) -> None:

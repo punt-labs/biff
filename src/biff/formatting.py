@@ -689,7 +689,7 @@ def format_wall(wall: WallPost) -> str:
     text = visible_text(wall.text)
     chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
     body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
-    return f"▶  WALL from {sender} ({remaining} remaining)\n{body}"
+    return f"▶  WALL from {sender} ({remaining} remaining) [untrusted]\n{body}"
 
 
 def format_wall_confirmation(post: WallPost) -> str:
@@ -848,7 +848,7 @@ def format_talk_end(label: str) -> str:
 READ_SPECS: list[ColumnSpec] = [
     ColumnSpec("FROM", min_width=10),
     ColumnSpec("DATE", min_width=16),
-    ColumnSpec("MESSAGE", min_width=10, fixed=False),
+    ColumnSpec("MESSAGE [untrusted]", min_width=10, fixed=False),
 ]
 
 

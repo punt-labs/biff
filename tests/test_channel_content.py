@@ -53,32 +53,32 @@ class TestSender:
 class TestTemplates:
     def test_mail_names_a_count_and_no_sender(self) -> None:
         event = ChannelEvent.mail(3)
-        assert event.content == "3 new biff messages. Call read_messages to read them."
+        assert event.content == "Call read_messages: 3 unread biff messages."
         assert event.meta == {"kind": "mail", "count": "3"}
 
     def test_one_message_is_singular(self) -> None:
-        assert ChannelEvent.mail(1).content.startswith("1 new biff message.")
+        assert (
+            ChannelEvent.mail(1).content == "Call read_messages: 1 unread biff message."
+        )
 
     def test_wall_names_a_claimed_sender(self) -> None:
         sender = Sender.claimed("eric", "tty9", own_user=_OWN)
         event = ChannelEvent.wall(sender)
         assert event.content == (
-            "New biff wall from eric:tty9 (claimed, unverified). Call wall to see it."
+            "Call wall to read: new biff wall from eric:tty9 (claimed, unverified)."
         )
         assert event.meta == {"kind": "wall"}
 
     def test_a_talk_invite_tells_the_model_to_ask_the_user(self) -> None:
         sender = Sender.claimed("eric", "tty9", own_user=_OWN)
         event = ChannelEvent.talk_invite(sender)
-        assert "ask the user" in event.content.lower()
+        assert event.content.startswith("Ask the user")
         assert "accept" not in event.content.lower()
         assert event.meta == {"kind": "talk_invite"}
 
     def test_a_talk_message_names_no_sender(self) -> None:
         event = ChannelEvent.talk_message()
-        assert (
-            event.content == "New talk message from your talk partner. Call talk_read."
-        )
+        assert event.content == "Call talk_read: new message from your talk partner."
         assert event.meta == {"kind": "talk_message"}
 
     @pytest.mark.parametrize(
@@ -97,3 +97,34 @@ class TestTemplates:
     def test_meta_uses_a_closed_key_set(self) -> None:
         kinds = {kind.value for kind in EventKind}
         assert kinds == {"mail", "wall", "talk_invite", "talk_message"}
+
+
+class TestFitsOneLine:
+    """The client shows one line: a typical event fits 80 columns."""
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            ChannelEvent.mail(120),
+            ChannelEvent.wall(Sender.claimed("eric", "tty9", own_user=_OWN)),
+            ChannelEvent.talk_invite(Sender.claimed("eric", "tty9", own_user=_OWN)),
+            ChannelEvent.talk_message(),
+        ],
+    )
+    def test_a_typical_event_is_at_most_80_columns(self, event: ChannelEvent) -> None:
+        assert len(event.content) <= 80
+
+    def test_the_action_comes_first(self) -> None:
+        sender = Sender.claimed("eric", "tty9", own_user=_OWN)
+        starts = [
+            ChannelEvent.mail(2).content,
+            ChannelEvent.wall(sender).content,
+            ChannelEvent.talk_invite(sender).content,
+            ChannelEvent.talk_message().content,
+        ]
+        assert [c.split(":")[0] for c in starts] == [
+            "Call read_messages",
+            "Call wall to read",
+            "Ask the user",
+            "Call talk_read",
+        ]

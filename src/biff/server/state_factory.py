@@ -45,20 +45,14 @@ class StateBlueprint:
 
     def build(self) -> ServerState:
         """Create the ``ServerState`` this blueprint describes."""
-        selected = self.relay or RelaySelector(self.config, self.data_dir).select(
-            dormant=self.dormant
-        )
+        tty, hostname, pwd = self._identity()
         return ServerState(
             config=self.config,
-            relay=selected,
-            # Loader mirrors this fallback: ``get_repo_common_root == ""`` ->
-            # ``repo_root``.  A ``None`` from a test that never threaded the common
-            # root routes markers through the shared ``hints/default`` bucket via
-            # ``Path("")``, matching the fail-open contract in DES-054.
-            repo_common_root=self.repo_common_root or self.repo_root or Path(),
-            tty=self.tty or generate_tty(),
-            hostname=self.hostname or get_hostname(),
-            pwd=self.pwd or get_pwd(),
+            relay=self._selected_relay(),
+            repo_common_root=self._common_root(),
+            tty=tty,
+            hostname=hostname,
+            pwd=pwd,
             unread_path=self.unread_path,
             unread_dir=self.unread_dir,
             owns_relay=self.relay is None,
@@ -66,4 +60,28 @@ class StateBlueprint:
             repo_root=self.repo_root,
             org_repos=self.org_repos or frozenset(),
             toggle=self.toggle,
+        )
+
+    def _selected_relay(self) -> Relay:
+        """Return the explicit relay, or the one the configuration selects."""
+        return self.relay or RelaySelector(self.config, self.data_dir).select(
+            dormant=self.dormant
+        )
+
+    def _common_root(self) -> Path:
+        """Return the repo's common root, falling back as the loader does.
+
+        Loader mirrors this fallback: ``get_repo_common_root == ""`` ->
+        ``repo_root``.  A ``None`` from a test that never threaded the common
+        root routes markers through the shared ``hints/default`` bucket via
+        ``Path("")``, matching the fail-open contract in DES-054.
+        """
+        return self.repo_common_root or self.repo_root or Path()
+
+    def _identity(self) -> tuple[str, str, str]:
+        """Return ``(tty, hostname, pwd)``, generated where not given."""
+        return (
+            self.tty or generate_tty(),
+            self.hostname or get_hostname(),
+            self.pwd or get_pwd(),
         )
