@@ -143,7 +143,10 @@ def main(
         bool, typer.Option("--quiet", "-q", help="Suppress product command output.")
     ] = False,
     user: Annotated[
-        str | None, typer.Option("--user", help="Identity override (e.g. for CI bots).")
+        str | None,
+        typer.Option(
+            "--user", envvar="BIFF_USER", help="Identity override (e.g. for CI bots)."
+        ),
     ] = None,
     session: Annotated[
         str | None,

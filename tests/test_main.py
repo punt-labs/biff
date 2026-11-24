@@ -110,6 +110,18 @@ class TestGlobalFlags:
         )
         mock_who.assert_awaited_once()
 
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_biff_user_env_sets_the_identity_override(
+        self, mock_who: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BIFF_USER supplies --user, so hosted agents need no flag per call."""
+        monkeypatch.setenv("BIFF_USER", "devin")
+        mock_who.return_value = CommandResult(text="ok")
+        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
+            result = runner.invoke(app, ["who"])
+        assert result.exit_code == 0
+        mock_sess.assert_called_once_with(user_override="devin", session_ref=None)
+
 
 class TestVersionCommand:
     def test_prints_version(self) -> None:

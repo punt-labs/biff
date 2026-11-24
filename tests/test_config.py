@@ -449,6 +449,49 @@ class TestLoadCliConfig:
         resolved = load_cli_config(start=tmp_path, user_override="claude")
         assert resolved.config.owner_git == "jmf-pobox"
 
+    @patch("biff.identity.git_user_name", return_value="Devin AI")
+    @patch("biff.identity.get_os_user", return_value="ubuntu")
+    @patch("biff.identity.get_github_identity", return_value=None)
+    def test_biff_owner_names_the_owner_over_git_user_name(
+        self,
+        _mock_git: object,
+        _mock_os: object,
+        _mock_name: object,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A hosted agent's git user.name is the bot; BIFF_OWNER names its human.
+        monkeypatch.setenv("BIFF_OWNER", "jmf-pobox")
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=tmp_path, user_override="devin")
+        assert resolved.config.owner_git == "jmf-pobox"
+
+    @patch("biff.identity.git_user_name", return_value="jmf-pobox")
+    @patch("biff.identity.get_os_user", return_value="jim")
+    @patch("biff.identity.get_github_identity", return_value=None)
+    def test_empty_biff_owner_falls_back_to_git_user_name(
+        self,
+        _mock_git: object,
+        _mock_os: object,
+        _mock_name: object,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("BIFF_OWNER", "")
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=tmp_path, user_override="claude")
+        assert resolved.config.owner_git == "jmf-pobox"
+
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
+    def test_user_override_naming_an_agent_identity_is_that_agent(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo, handle="devin")
+        resolved = load_cli_config(start=repo, user_override="devin")
+        assert resolved.config.user == "devin"
+        assert resolved.config.kind == "agent"
+
     @patch("biff.identity.get_os_user", return_value=None)
     @patch("biff.identity.get_github_identity", return_value=None)
     def test_exits_when_all_user_sources_fail(
@@ -787,6 +830,32 @@ class TestLoadMcpConfig:
         _write_agent_identity_fixture(repo)
         resolved = load_mcp_config(start=repo, user_override="from-cli")
         assert resolved.config.user == "from-cli"
+        assert resolved.config.kind == ""
+
+    @patch("biff.identity.get_github_identity", return_value=_FROM_GIT)
+    def test_user_override_naming_an_agent_identity_is_that_agent(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        # Devin launches ``biff mcp --user devin`` with no ethos.yaml; the
+        # registered ``kind: agent`` identity still flags the session [A].
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo, handle="devin")
+        resolved = load_mcp_config(start=repo, user_override="devin")
+        assert resolved.config.user == "devin"
+        assert resolved.config.display_name == "Claude Agento"
+        assert resolved.config.kind == "agent"
+
+    @patch("biff.identity.get_github_identity", return_value=_FROM_GIT)
+    def test_user_override_naming_a_human_identity_stays_plain(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        identities = repo / ".punt-labs" / "ethos" / "identities"
+        identities.mkdir(parents=True)
+        (identities / "kai.yaml").write_text("handle: kai\nname: Kai\nkind: human\n")
+        resolved = load_mcp_config(start=repo, user_override="kai")
+        assert resolved.config.user == "kai"
+        assert resolved.config.display_name == ""
         assert resolved.config.kind == ""
 
     @patch("biff.config.find_git_root", return_value=None)

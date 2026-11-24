@@ -464,9 +464,6 @@ def _build_agent_identity(identity_path: Path, agent: str) -> EthosIdentity | No
             yaml_handle,
             agent,
         )
-    handle = agent  # Always use the validated filename-derived handle
-    name_raw = identity.get("name", handle)
-    display_name = name_raw if isinstance(name_raw, str) and name_raw else handle
     kind_raw = identity.get("kind", "")
     kind = kind_raw if isinstance(kind_raw, str) else ""
     if kind != "agent":
@@ -476,7 +473,32 @@ def _build_agent_identity(identity_path: Path, agent: str) -> EthosIdentity | No
             kind,
         )
         return None
-    return EthosIdentity(handle=handle, display_name=display_name, kind=kind)
+    return _agent_identity(identity, agent)
+
+
+def _agent_identity(identity: dict[str, object], handle: str) -> EthosIdentity:
+    """Build the agent identity for *handle*, the validated filename handle."""
+    name_raw = identity.get("name", handle)
+    display_name = name_raw if isinstance(name_raw, str) and name_raw else handle
+    return EthosIdentity(handle=handle, display_name=display_name, kind="agent")
+
+
+def _resolve_user_override(user_override: str, repo_root: Path) -> tuple[str, str, str]:
+    """Return (user, display_name, kind) for an explicit ``--user`` handle.
+
+    When the repo registers *user_override* as a ``kind: agent`` identity in
+    ``.punt-labs/ethos/identities/``, the session is that agent: it takes the
+    identity's display name and kind, so ``/who`` flags it ``[A]``.  Any other
+    identity, or none, leaves the override as a plain handle.
+    """
+    if _AGENT_HANDLE_RE.fullmatch(user_override):
+        identity_path = _resolve_identity_path(repo_root, user_override)
+        if identity_path is not None:
+            identity = _read_identity_yaml(identity_path)
+            if identity and identity.get("kind") == "agent":
+                agent = _agent_identity(identity, user_override)
+                return agent.handle, agent.display_name, agent.kind
+    return user_override, "", ""
 
 
 def resolve_agent_identity_from_disk(repo_root: Path) -> EthosIdentity | None:
@@ -535,6 +557,8 @@ def resolve_human_identity(
     """Return (user, display_name, kind) from the human-identity chain.
 
     Chain: ``user_override`` -> ``get_github_identity()`` -> ``get_os_user()``.
+    An override naming a ``kind: agent`` identity takes that identity's kind
+    (:func:`_resolve_user_override`).
     A resolved GitHub login that matches a ``kind: agent`` identity in
     ``.punt-labs/ethos/identities/`` is rejected and treated the same as
     ``get_github_identity()`` returning ``None`` -- a bot's ``GH_TOKEN``
@@ -551,7 +575,7 @@ def resolve_human_identity(
     Raises :class:`SystemExit` when no identity source succeeds.
     """
     if user_override is not None:
-        return user_override, "", ""
+        return _resolve_user_override(user_override, repo_root)
     identity = get_github_identity()
     # None means "not applicable" (no login rejected for incompleteness),
     # not "failed to compute" -- only set when the scan-incomplete branch
@@ -602,7 +626,7 @@ def resolve_mcp_identity(
     Raises :class:`SystemExit` when no identity source succeeds.
     """
     if user_override is not None:
-        return user_override, "", ""
+        return _resolve_user_override(user_override, base_repo_root)
 
     agent = resolve_agent_identity_from_disk(base_repo_root)
     if agent is not None:
