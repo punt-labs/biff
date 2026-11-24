@@ -94,7 +94,7 @@ jobs:
           python-version: "3.13"
       - run: uv sync --frozen --extra dev
       - name: Drive real Claude sessions through biff's MCP tools
-        # Each query is capped at two turns and $0.05 (tests/test_sdk/_client.py).
+        # Each query is capped at three turns and $0.05 (tests/test_sdk/_client.py).
         run: |
           test -n "$ANTHROPIC_API_KEY" || { echo 'Configure a scoped ANTHROPIC_API_KEY for Nightly QA'; exit 1; }
           make test-agent

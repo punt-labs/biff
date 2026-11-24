@@ -5,7 +5,7 @@ from __future__ import annotations
 from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
 from biff.formatting import format_dead_footnote, format_who
-from biff.relay import dead_sessions, live_sessions
+from biff.presence_liveness import dead_sessions, live_sessions
 
 
 async def who(ctx: CliContext) -> CommandResult:

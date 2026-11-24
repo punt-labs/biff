@@ -333,7 +333,7 @@ async def refresh_wall(
         wall_text = terminal_safe(current.text)
         sender = sanitized_sender(current.from_user, current.from_tty)
         tool.description = (
-            f"[WALL] {wall_text} — {sender}, "
+            f"[WALL] [untrusted] {wall_text} — {sender}, "
             f"expires in {remaining}. "
             "Use wall(clear=True) to remove."
         )
@@ -393,7 +393,8 @@ def _talk_description(talk: TalkState) -> str:
 
     An invite is rendered as "wants to talk" whether it has already drained
     into ``pendingInvites`` or is still queued and undrained — an unsolicited
-    invite must direct the agent to accept, never surface as a chat message.
+    invite must tell the agent to ask the user before accepting, never to accept
+    on its own and never surface as a chat message.
     """
     invites = talk.pending_invites
     if invites:
@@ -403,8 +404,8 @@ def _talk_description(talk: TalkState) -> str:
         # close, and talk_end returns "No active talk session" and clears
         # nothing when idle with only pending invites.
         return (
-            f"[TALK] {who} wants to talk — call talk_read to see it, then "
-            f"{terminal_safe(ordered[0].accept_command)} to accept."
+            f"[TALK] {who} (unverified) wants to talk — call talk_read, then ask "
+            f"the user before accepting ({terminal_safe(ordered[0].accept_command)})."
         )
     queued_inviters = talk.queued_invite_users
     if queued_inviters:
@@ -413,8 +414,8 @@ def _talk_description(talk: TalkState) -> str:
         # the runnable accept hint, so direct the agent there rather than
         # mislabelling it as a new message.
         return (
-            f"[TALK] {who} wants to talk — call talk_read to see it, then "
-            "talk to accept."
+            f"[TALK] {who} (unverified) wants to talk — call talk_read, then ask "
+            "the user before accepting."
         )
     if talk.queued:
         # Reached only when no invite is queued, so every queued frame is a chat
@@ -617,7 +618,7 @@ async def _reconcile_always_on_sub(
     fresh = await resubscribe()
     if fresh is not None:
         gate.mark()
-        state.wake.wake()
+        state.emitter.reconnected()  # core NATS replays nothing sent while unbound
     return fresh
 
 
@@ -679,7 +680,7 @@ async def subscribe_talk(
                     }
                     if TalkNotification.from_payload(frame).is_wake_poke:
                         gate.mark()  # a targeted message's wake poke, not a talk frame
-                    woke = state.talk.receive(frame)
+                    woke = state.emitter.receive_frame(frame)
                 else:
                     # A non-dict payload (a legacy ``b"1"`` bare wake) carries
                     # no frame — it cannot be a modeled talk frame either, so
@@ -1164,9 +1165,9 @@ async def poll_inbox(
             nats_due, watch_due = nats.due(), watch.due()
             rebuilt = await keeper.acheck() if watch_due else False
             due = _seconds_until_deadline(state, seen) <= 0
-            wanted = (outcome.is_arrival, gate.pending, seen.failed, rebuilt, due)
-            if any(wanted):
+            if any((outcome.is_arrival, gate.pending, seen.failed, rebuilt, due)):
                 seen = await _safe_tick(mcp, state, seen, gate=gate, due=due)
+                await state.emitter.check()  # arrivals only; never on a cadence
             if reap is not None:
                 await _safe_reap(reap)
             # Owed notifications retry every iteration, not only on tick work.

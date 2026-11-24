@@ -46,20 +46,18 @@ class TestSDKCanCallBiffTools:
             args=[
                 "run",
                 "biff",
-                "serve",
+                "mcp",
                 "--user",
                 "kai",
                 "--data-dir",
                 str(kai.data_dir),
-                "--transport",
-                "stdio",
             ],
         )
         async with Client(transport) as client:
             await client.call_tool("plan", {"message": "working on SDK spike"})
 
-        # SDK session: eric fingers kai
-        result = await eric.prompt('Call the "finger" tool with user "@kai".')
+            # SDK session: eric fingers kai while kai's server is live
+            result = await eric.prompt('Call the "finger" tool with user "@kai".')
 
         fingers = [tc for tc in result.tool_calls if tc.name == "finger"]
         names = [tc.name for tc in result.tool_calls]
@@ -80,9 +78,11 @@ class TestCrossSessionVisibility:
             "Two Claude Code sessions share presence state via filesystem."
         )
 
-        await kai.prompt('Call the "plan" tool with message "cross-session test".')
+        async with kai.live_prompt(
+            'Call the "plan" tool with message "cross-session test".'
+        ):
+            who = await eric.prompt('Call the "who" tool to see who is online.')
+            finger = await eric.prompt('Call the "finger" tool with user "@kai".')
 
-        result = await eric.prompt('Call the "who" tool to see who is online.')
-
-        assert "kai" in result.tool_output
-        assert "cross-session" in result.tool_output
+        assert "kai:" in who.tool_output
+        assert "cross-session test" in finger.tool_output

@@ -4,6 +4,37 @@
 
 ### Added
 
+- `biff install` creates `~/.punt-labs/biff/` and its `active/`, `current/`,
+  `logs/`, `sessions/` and `unread/` subdirectories (private,
+  `0700`, existing ones tightened), on CLI-only installs too, and `install.sh`
+  creates the same set. Reinstalling leaves existing contents
+  untouched; a home that cannot be created fails the install. The session
+  store and per-repo session pointer now derive their paths from the one
+  home-root resolver.
+- Channel events: in channel mode the server sends a `notifications/claude/channel`
+  event when mail, a wall, a talk invite or a talk message arrives. Events are
+  fixed templates with no bodies; senders appear only when both parts are plain
+  identifiers (user at most 39 characters) and are labelled claimed and
+  unverified; a talk invite tells the model to ask the user. The sender keeps a
+  last-sent record per kind, advanced only after a send completes, sends nothing
+  before `notifications/initialized` or while `/mesg` is off, and is limited to
+  one event per kind per 30 seconds and 10 per 10 minutes. An event the limit
+  held is sent by one one-shot timer that exists only while one is held. Mail is
+  detected by the new `Relay.inbox_high_water`, not by the unread count, so a
+  flat or flapping count cannot hide an arrival. A relay reconnect re-runs the
+  sender. The server instructions gain a paragraph that treats bodies as
+  untrusted, and `initialize` now returns it. Each event puts its action first
+  and is at most 60 characters ("Call read_messages: 3 unread biff messages.", "Call wall: unverified wall from eric:tty9."), so the client
+  does not cut the action or the trust label;
+  the mail count is the unread total, not the new arrivals. A read or mesg-read
+  failure is retried by the deferred send (three tries, then logged and given
+  up); the emitter is closed with the connection; biff.log gets one INFO line per
+  sent event (kind and count only) and per hold or gate. The `read_messages`
+  table, the wall banner and `talk_read` lines mark message text as
+  `[untrusted]`. A drained talk message followed by another queued frame is no
+  longer announced. The `talk` tool description and `talk_read` name an invite
+  as `(unverified)` and tell the model to ask the user before accepting.
+
 - README: "Codex, OpenCode and other MCP clients" shows how a harness with no
   stamping hook declares its caller with `biff mcp --user <handle>`; the
   Claude Code plugin launch passes none and keeps refusing unstamped calls.
@@ -90,13 +121,16 @@
   `config.local.yaml`: `relay: {type: demo}`. Repos that already set
   `relay.url` see no change. Supersedes the demo-relay default of DES-037
   (DES-090).
-- The local relay keeps its files in `~/.punt-labs/biff/relay/<repo-key>/`
-  instead of `/tmp/biff/<directory-name>/`, private to you (directories `0700`,
-  files `0600`). They survive a reboot. `<repo-key>` is a slug plus a hash of
-  the remote's normalized identity (host, `owner/repo`, no trailing `/` or
-  `.git`), so ssh and https clones, and every worktree, of one repo share one
-  relay while different repos never do; a repo with no remote is keyed by its
-  common root. Content in `/tmp/biff/` is not migrated.
+- The local relay keeps its files in the repo's private zone,
+  `.punt-labs/local/biff/relay/` in the main checkout, instead of
+  `/tmp/biff/<directory-name>/`, private to you (directories `0700`, files
+  `0600`, and `.punt-labs/local/biff/` ignored by git). They survive a reboot. A
+  linked worktree shares its main checkout's relay; separate clones, including
+  two with the same directory name, each have their own. `--data-dir` still
+  overrides the directory. **Breaking:** content in
+  `/tmp/biff/<directory-name>/` is not migrated; to keep undelivered mail, copy
+  its `*.jsonl` inbox files into the main checkout's
+  `.punt-labs/local/biff/relay/` before starting a session.
 - The relay is chosen per config file: the highest file that sets `relay.type`
   or `relay.url` decides, so a personal `url` beats a committed `type`.
   Malformed relay config (not a mapping, non-string `url`, unknown key,

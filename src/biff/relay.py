@@ -44,6 +44,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
+from biff.relay_config import RelayLocation
 from biff.session_lock import routing_lock
 from biff.tty import build_session_key, validate_reclaimable_name, validate_routing_id
 
@@ -55,44 +56,6 @@ SESSION_TTL_SECONDS = 259_200  # 3 days — covers weekends; KV storage retentio
 # TTL — used to hide dead sessions from presence before their KV entry
 # expires.
 PRESENCE_LIVENESS_SECONDS = 120.0
-# Threshold for reporting a session as "stopped responding" in the /who
-# footnote (DES-057).  Wider than PRESENCE_LIVENESS_SECONDS on purpose: a
-# session that misses a single heartbeat tick (laptop sleep, GC pause)
-# already drops out of live_sessions() for that one poll and self-heals on
-# the next tick.  Reporting it as dead in the same breath would flap it
-# into and back out of the footnote.  3x the liveness window tolerates
-# several consecutive missed ticks (~4 missed heartbeats past the liveness
-# cutoff) before treating the row as a genuine orphan.
-DEAD_REPORT_SECONDS = PRESENCE_LIVENESS_SECONDS * 3
-
-
-def live_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
-    """Return only sessions whose last heartbeat is within the liveness window.
-
-    Drops dead sessions (shut down, killed, or wedged) whose KV entry has not
-    yet hit the longer storage TTL, so every presence surface (``who``,
-    ``finger``) reflects who is actually reachable.
-    """
-    now = datetime.now(UTC)
-    return [
-        s for s in sessions if s.is_live(now=now, ttl_seconds=PRESENCE_LIVENESS_SECONDS)
-    ]
-
-
-def dead_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
-    """Return KV rows that outlived the process that wrote them.
-
-    A session that shuts down cleanly deletes its own KV row and writes a
-    wtmp logout event (``server/app.py``'s exit path). A row that is still
-    PRESENT here but fails :meth:`~biff.models.UserSession.is_live` at
-    :data:`DEAD_REPORT_SECONDS` is therefore a session that died without
-    deregistering — killed, wedged, or a host that vanished — the orphan
-    signature :func:`live_sessions` silently drops (DES-057).
-    """
-    now = datetime.now(UTC)
-    return [
-        s for s in sessions if not s.is_live(now=now, ttl_seconds=DEAD_REPORT_SECONDS)
-    ]
 
 
 def atomic_write(path: Path, content: str) -> None:
@@ -146,6 +109,16 @@ class Relay(Protocol):
 
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:
         """Return the unread count for a session."""
+        ...
+
+    async def inbox_high_water(self, session_key: str) -> int:
+        """Return a number that rises whenever mail arrives for the session.
+
+        It orders arrivals and is never a count: a read may lower it, and it is
+        0 for an inbox that has never held mail.  A mail that arrives later is
+        always above every value returned earlier, even when the unread count
+        is flat (two read, two arrive).
+        """
         ...
 
     # -- Messages (user inbox) --
@@ -291,6 +264,11 @@ class DormantRelay:
         """Return an empty result while disabled."""
         return UnreadSummary()
 
+    async def inbox_high_water(self, session_key: str) -> int:
+        """Return 0: no mail arrives while disabled."""
+        del session_key
+        return 0
+
     async def fetch_user_inbox(self, user: str) -> list[Message]:  # noqa: ARG002
         """Return an empty result while disabled."""
         return []
@@ -419,15 +397,7 @@ class LocalRelay:
 
     @staticmethod
     def _ensure_dir(data_dir: Path) -> None:
-        """Create *data_dir* 0700, tightening it if it already exists.
-
-        The per-user relay root (``.../biff/relay``) is tightened too; any
-        other parent of a custom data directory is left as it is.
-        """
-        in_relay_root = data_dir.parts[-3:-1] == ("biff", "relay")
-        for path in (data_dir.parent, data_dir) if in_relay_root else (data_dir,):
-            path.mkdir(mode=0o700, parents=True, exist_ok=True)
-            path.chmod(0o700)
+        RelayLocation.ensure(data_dir)
 
     @staticmethod
     def _validate_user(user: str) -> str:
@@ -508,6 +478,18 @@ class LocalRelay:
         tty_count = len(await self.fetch(session_key))
         user_count = len(await self.fetch_user_inbox(user))
         return UnreadSummary(count=tty_count + user_count)
+
+    async def inbox_high_water(self, session_key: str) -> int:
+        """Count the message lines ever delivered to the session's two inboxes.
+
+        A read marks a line in place and never removes one, so the number only
+        rises, by exactly one for each arrival.
+        """
+        if not self._data_dir.is_dir():
+            return 0  # no mail has ever been delivered here
+        user = session_key.split(":")[0]
+        paths = (self._inbox_path_for_key(session_key), self._user_inbox_path(user))
+        return sum(len(self._lines(path)) for path in paths)
 
     # -- Messages (user inbox) --
 

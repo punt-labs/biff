@@ -39,12 +39,9 @@ class McpServerBuilder:
 
     def create_server(self) -> ChannelServer[ServerState]:
         """Create unbound resources with the transport's default caller policy."""
-        launch = McpLaunch(
-            self._resolved,
-            CallerPolicy.for_launch(self._user, self._transport),
-            self._toggle,
-        )
-        return create_server(launch.state(), default_caller=launch.caller)
+        launch = McpLaunch(self._resolved, self._toggle)
+        caller = CallerPolicy.for_launch(self._user, self._transport)
+        return create_server(launch.state(), default_caller=caller)
 
 
 class McpLifecycleHandler(logging.Handler):

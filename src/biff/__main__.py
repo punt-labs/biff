@@ -1458,6 +1458,14 @@ def install_cmd() -> None:
     import shutil
     import subprocess
 
+    from biff._stdlib import provision_home
+
+    try:
+        provision_home()
+    except (OSError, RuntimeError) as exc:
+        print(f"Could not create biff's home directory: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1) from exc
+
     claude = shutil.which("claude")
     if not claude:
         # CLI-only install is a SUCCESS, not a partial failure: the biff CLI
