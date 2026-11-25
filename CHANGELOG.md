@@ -199,6 +199,11 @@
 
 ### Fixed
 
+- The model now reads the whole `talk`, `plan` and `wall` confirmation. The
+  output hook cut each to its first line and 60 characters, so an invite
+  confirmation stopped mid-word and a plan echo showed only `Plan:` without the
+  plan text. The result panel keeps the short line; the full text goes to the
+  model as `additionalContext`, as `who` and `read_messages` already do.
 - The start-up warning for a session without a channel flag now names an entry
   that works when the plugin is loaded with `--plugin-dir`:
   `--dangerously-load-development-channels plugin:<name>@inline`, with the name
