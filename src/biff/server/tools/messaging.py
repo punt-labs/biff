@@ -9,7 +9,7 @@ them read.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 from biff.chunking import chunk_message
@@ -81,12 +81,16 @@ async def _fetch_unread_with_retry(
     return fetched, warning
 
 
-async def _stamp_read(state: ServerState) -> None:
-    """Stamp activity after a read; NATS consumed the mail, so never raise."""
+async def _best_effort(update: Awaitable[object]) -> None:
+    """Await a read_messages presence *update*; a failure is logged, never raised.
+
+    A presence write must not stop the inbox fetch (and its retry), and after
+    the fetch NATS has consumed the mail, so raising would lose it.
+    """
     try:
-        await update_current_session(state)
-    except Exception:  # noqa: BLE001 — tool boundary; the read already succeeded
-        _log.warning("read_messages: activity stamp failed", exc_info=True)
+        await update
+    except Exception:  # noqa: BLE001 — tool boundary; the read must still succeed
+        _log.warning("read_messages: presence update failed", exc_info=True)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -176,7 +180,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         user = state.config.user
         # Mail routing reads last_tool_at, so an empty poll is not work; it only
         # keeps the presence row alive past its TTL.
-        await get_or_create_session(state)
+        await _best_effort(get_or_create_session(state))
 
         (tty_unread, user_unread), warning = await _fetch_unread_with_retry(state)
 
@@ -197,7 +201,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             await state.relay.mark_read_user_inbox(user, user_ids)
 
         await refresh_read_messages(mcp, state)
-        await _stamp_read(state)
+        await _best_effort(update_current_session(state))
 
         result = format_read(all_unread)
         return f"{warning}\n\n{result}" if warning is not None else result

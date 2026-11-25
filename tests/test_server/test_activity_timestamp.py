@@ -294,3 +294,21 @@ class TestReadsKeepPresenceAndMail:
         monkeypatch.setattr(messaging, "update_current_session", broken)
         read = await _tool_fn(state, "read_messages")
         assert "keep me" in await read()
+
+    async def test_a_failed_presence_refresh_still_reads_the_mail(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A presence timeout must not stop the inbox fetch and its retry."""
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
+        state = create_state(config, tmp_path, tty="tty1")
+        await update_current_session(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=state.session_key, body="still here")
+        )
+
+        async def timed_out(_state: object) -> None:
+            raise TimeoutError("presence lookup timed out")
+
+        monkeypatch.setattr(messaging, "get_or_create_session", timed_out)
+        read = await _tool_fn(state, "read_messages")
+        assert "still here" in await read()
