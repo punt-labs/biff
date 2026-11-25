@@ -167,8 +167,13 @@ class CheckWire:
         """
         reply = self._nc.new_inbox()
         sub = await self._nc.subscribe(reply)
-        await self._nc.flush()
-        await self._nc.publish(subject, CheckRequest(reply).to_payload())
+        try:
+            await self._nc.flush()
+            await self._nc.publish(subject, CheckRequest(reply).to_payload())
+        except BaseException:
+            # No PendingCheck exists yet, so nobody else can close the inbox.
+            await sub.unsubscribe()
+            raise
         return PendingCheck(sub, session_key)
 
     async def acknowledge(self, reply: str, ack: CheckAck) -> None:
