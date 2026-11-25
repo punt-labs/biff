@@ -191,6 +191,10 @@
 
 ### Fixed
 
+- A session whose presence row expired (for example after a long sleep) no
+  longer comes back under its old tty name without reserving it. The rebuilt row
+  reserves the name again, or takes the lowest free name when another session
+  holds it, so two sessions never show the same `user:ttyN` (PL-1630).
 - Bump punt-observe to 0.1.1: diagnostic logs now mask bare bearer
   credentials and home-directory prefixes, and URL query redaction keeps
   prose punctuation.
