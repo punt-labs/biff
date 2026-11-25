@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 [[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
-# UserPromptSubmit + PostToolUse — nudge the model to check unread biff mail.
+# UserPromptSubmit + PostToolUse — nudge the model to check unread biff mail,
+# only while the user has polling on (`/biff:read Xm`). Channel events are the
+# agent's signal where channels are live; this is part of the polling fallback.
 #
 # The MCP tool-description mutation channel (`read_messages` growing an
 # "(N unread)" suffix) never reaches the model mid-session: Claude Code
@@ -78,6 +80,16 @@ if [[ "$_enabled" == "false" ]]; then
   # for genuinely unread mail the user was never told about (Bugbot
   # finding hw_9-). Clearing here guarantees the first post-unmute tick
   # always starts from a clean "never nudged" baseline.
+  rm -f "$_nudge_file" 2>/dev/null
+  exit 0
+fi
+
+# Polling fallback only (DES-087): channel events tell the agent about
+# arrivals, and the unread file is the user's status-line display. The nudge
+# speaks only while the user has turned polling on with `/biff:read Xm`;
+# `set_poll_interval` writes `True` to the `.polling` marker for that and
+# `False` on `/biff:read n`. Anything else means stay quiet.
+if [[ "$(cat "$_unread_dir/${_session_key}.polling" 2>/dev/null)" != "True" ]]; then
   rm -f "$_nudge_file" 2>/dev/null
   exit 0
 fi

@@ -485,7 +485,10 @@ When Claude Code starts in a biff-enabled repository, biff checks whether new
 messages can reach the session on their own (as Claude Code channel events). If it
 knows they cannot, it prints a warning at startup and tells the model: why, how to
 fix it, and to poll instead with `/biff:read 2m` (`/biff-dev:read-dev 2m` for the
-development plugin). If you are already polling, ignore the warning.
+development plugin). If you are already polling, ignore the warning. Polling also
+turns on the between-turn mail nudge; without it, and with channels live, channel
+events are how the agent hears of new mail. `/biff:read n` turns polling and the
+nudge off.
 
 Biff warns you only when it can see the cause: a telemetry or feature-flag opt-out
 (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,

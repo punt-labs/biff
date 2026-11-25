@@ -9,7 +9,7 @@ them read.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 from biff.chunking import chunk_message
@@ -18,7 +18,7 @@ from biff.formatting import format_read
 from biff.models import Message
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import get_tty_name, refresh_read_messages
-from biff.server.tools._session import update_current_session
+from biff.server.tools._session import get_or_create_session, update_current_session
 from biff.server.tools._write_target import WriteRouter
 from biff.tty import parse_address
 
@@ -33,10 +33,7 @@ _log = logging.getLogger(__name__)
 _UnreadFetch = tuple[list[Message], list[Message]]
 
 # Fetch-step labels, in the order results are unpacked into _UnreadFetch.
-_TTY, _USER = (
-    "your tty inbox",
-    "your broadcast inbox",
-)
+_TTY, _USER = "your tty inbox", "your broadcast inbox"
 
 
 async def _fetch_unread_with_retry(
@@ -69,10 +66,7 @@ async def _fetch_unread_with_retry(
                 still_pending.append(label)
         pending = still_pending
 
-    fetched: _UnreadFetch = (
-        results.get(_TTY, []),
-        results.get(_USER, []),
-    )
+    fetched: _UnreadFetch = (results.get(_TTY, []), results.get(_USER, []))
     warning: str | None = None
     if pending:
         _log.warning(
@@ -85,6 +79,18 @@ async def _fetch_unread_with_retry(
             "State unknown for that inbox, not confirmed empty."
         )
     return fetched, warning
+
+
+async def _best_effort(update: Awaitable[object]) -> None:
+    """Await a read_messages presence *update*; a failure is logged, never raised.
+
+    A presence write must not stop the inbox fetch (and its retry), and after
+    the fetch NATS has consumed the mail, so raising would lose it.
+    """
+    try:
+        await update
+    except Exception:  # noqa: BLE001 — tool boundary; the read must still succeed
+        _log.warning("read_messages: presence update failed", exc_info=True)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -170,9 +176,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             TimeoutError: A relay operation exceeds its deadline.
             nats.errors.Error: A NATS request or connection fails.
         """
-        await update_current_session(state)
         session_key = state.session_key
         user = state.config.user
+        # Mail routing reads last_tool_at, so an empty poll is not work; it only
+        # keeps the presence row alive past its TTL.
+        await _best_effort(get_or_create_session(state))
 
         (tty_unread, user_unread), warning = await _fetch_unread_with_retry(state)
 
@@ -193,6 +201,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             await state.relay.mark_read_user_inbox(user, user_ids)
 
         await refresh_read_messages(mcp, state)
+        await _best_effort(update_current_session(state))
 
         result = format_read(all_unread)
         return f"{warning}\n\n{result}" if warning is not None else result

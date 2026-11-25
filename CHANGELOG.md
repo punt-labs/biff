@@ -99,6 +99,15 @@
 
 ### Changed
 
+- The status line is display for the user only. `/biff:read` no longer runs
+  `biff statusline` to decide what to read: it calls `talk_read` and
+  `read_messages` directly. The `unread-nudge` hook speaks only while the user
+  has polling on (`/biff:read Xm`): `set_poll_interval` writes a per-session
+  `.polling` marker beside the unread file at once, with no restart, and the
+  marker survives a resume along with the polling job. With channels live and no
+  polling, channel events are the agent's only signal. An empty `read_messages`
+  and every `talk_read` no longer count as activity, so an idle repo's poll no
+  longer pulls a bare-user `write` away from the repo you work in.
 - biff.log no longer says a channel event was "sent": it says the event was
   queued for the client and that display is not confirmed, because a
   notification gets no reply and Claude Code may drop it. A pipe write that

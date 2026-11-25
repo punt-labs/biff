@@ -1,5 +1,11 @@
 [
   {
+    "file": "src/biff/server/tools/messaging.py",
+    "ceiling": 2,
+    "justify": "read_messages stamps activity after the fetch; on NATS the fetch already consumed the mail, so a failed presence write must be logged, not raised, or the mail is lost. Broad catch at the MCP tool boundary (PY-EH-6).",
+    "added_at": "2026-11-25T16:33:40.546183Z"
+  },
+  {
     "file": "tests/test_python_docs.py",
     "ceiling": 1,
     "justify": "Checker regression tests intentionally run the gate as a subprocess with controlled temporary source files; scoped S603 allowance mirrors the reference adoption.",
