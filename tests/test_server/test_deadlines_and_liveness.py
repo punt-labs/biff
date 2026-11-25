@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
+import stat
 import threading
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -176,6 +178,14 @@ class TestExpiryClearsWithoutAnotherEvent:
             await _stop(task)
 
 
+def _fstat(fd: int) -> os.stat_result | None:
+    """Stat an open descriptor, or ``None`` if it closed in the meantime."""
+    try:
+        return os.fstat(fd)
+    except OSError:
+        return None
+
+
 class TestWatchLiveness:
     async def test_a_recreated_directory_is_noticed_and_rebuilt(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -200,6 +210,32 @@ class TestWatchLiveness:
             assert len(noted) == 2  # onset and recovery, once each
         finally:
             keeper.stop()
+
+    async def test_the_watch_holds_its_directory_open_so_its_inode_is_not_reused(
+        self, tmp_path: Path
+    ) -> None:
+        """A freed inode is reused on Linux, so ``st_ino`` alone can match.
+
+        A recreated directory then looks like the one that was watched, the
+        replacement goes unnoticed, and the dead inotify watch stays.  While a
+        descriptor on the directory is open the kernel cannot free its inode.
+        """
+        data = tmp_path / "relay"
+        data.mkdir()
+        watch = LocalWatch(data, lambda: None)
+        watch.start()
+        try:
+            held = data.stat()
+            open_dirs = {
+                (info.st_dev, info.st_ino)
+                for name in os.listdir("/dev/fd")
+                if (info := _fstat(int(name))) is not None
+                and stat.S_ISDIR(info.st_mode)
+            }
+            assert (held.st_dev, held.st_ino) in open_dirs
+        finally:
+            watch.close()
+        shutil.rmtree(data)
 
     async def test_a_failed_start_leaks_no_thread_and_raises(
         self, tmp_path: Path
