@@ -483,7 +483,7 @@ Code plugin passes none, so its server still refuses an unstamped call.
 
 With channels, new mail, walls and talk reach a Claude Code session on their
 own, as short channel events, so nobody has to poll. Channels need a biff
-release newer than 1.24.2; on 1.24.2 and older, poll with `/biff:read 2m`.
+release newer than 1.24.2.
 
 **Team and Enterprise plans: an Owner sets it up once.**
 
