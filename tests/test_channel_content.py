@@ -1,4 +1,4 @@
-"""Channel event content: fixed templates, no bodies, claimed senders (DES-087)."""
+"""Channel event content: fixed templates, no bodies, plain senders (DES-087)."""
 
 from __future__ import annotations
 
@@ -10,27 +10,26 @@ from biff.server.channel_content import (
     EventKind,
     Sender,
 )
-
-_OWN = "kai"
+from tests._trust_phrases import assert_no_trust_phrase
 
 
 class TestSender:
-    def test_a_valid_sender_is_shown_as_the_claimed_address(self) -> None:
-        sender = Sender.claimed("eric", "tty9", own_user=_OWN)
+    def test_a_valid_sender_is_shown_as_its_address(self) -> None:
+        sender = Sender.claimed("eric", "tty9")
         assert str(sender) == "eric:tty9"
 
-    def test_the_sessions_own_identity_claims_to_be_you(self) -> None:
-        sender = Sender.claimed("kai", "tty9", own_user=_OWN)
-        assert str(sender) == "someone claiming to be you"
+    def test_the_sessions_own_user_is_shown_as_its_address(self) -> None:
+        sender = Sender.claimed("kai", "tty9")
+        assert str(sender) == "kai:tty9"
 
     def test_a_128_char_user_is_a_teammate(self) -> None:
-        sender = Sender.claimed("e" * 128, "tty9", own_user=_OWN)
+        sender = Sender.claimed("e" * 128, "tty9")
         assert str(sender) == "a teammate"
 
     def test_a_40_char_user_is_a_teammate_and_39_is_shown(self) -> None:
-        long = Sender.claimed("e" * 40, "t", own_user=_OWN)
+        long = Sender.claimed("e" * 40, "t")
         assert str(long).startswith("a teammate")
-        assert str(Sender.claimed("e" * 39, "t", own_user=_OWN)).startswith("e" * 39)
+        assert str(Sender.claimed("e" * 39, "t")).startswith("e" * 39)
 
     @pytest.mark.parametrize(
         ("user", "tty"),
@@ -46,7 +45,7 @@ class TestSender:
     def test_a_part_outside_the_identifier_set_is_a_teammate(
         self, user: str, tty: str
     ) -> None:
-        sender = Sender.claimed(user, tty, own_user=_OWN)
+        sender = Sender.claimed(user, tty)
         assert str(sender) == "a teammate"
 
 
@@ -61,17 +60,16 @@ class TestTemplates:
             ChannelEvent.mail(1).content == "Call read_messages: 1 unread biff message."
         )
 
-    def test_wall_names_a_claimed_sender(self) -> None:
-        sender = Sender.claimed("eric", "tty9", own_user=_OWN)
+    def test_wall_names_the_sender(self) -> None:
+        sender = Sender.claimed("eric", "tty9")
         event = ChannelEvent.wall(sender)
-        assert event.content == ("Call wall: unverified wall from eric:tty9.")
+        assert event.content == "Call wall: new wall from eric:tty9."
         assert event.meta == {"kind": "wall"}
 
-    def test_a_talk_invite_tells_the_model_to_ask_the_user(self) -> None:
-        sender = Sender.claimed("eric", "tty9", own_user=_OWN)
+    def test_a_talk_invite_names_the_sender_and_talk_read(self) -> None:
+        sender = Sender.claimed("eric", "tty9")
         event = ChannelEvent.talk_invite(sender)
-        assert event.content.startswith("Ask the user")
-        assert "accept" not in event.content.lower()
+        assert event.content == "Call talk_read: talk invite from eric:tty9."
         assert event.meta == {"kind": "talk_invite"}
 
     def test_a_talk_message_names_no_sender(self) -> None:
@@ -83,10 +81,8 @@ class TestTemplates:
         "event",
         [
             ChannelEvent.mail(10**9),
-            ChannelEvent.wall(Sender.claimed("e" * 39, "t" * 128, own_user=_OWN)),
-            ChannelEvent.talk_invite(
-                Sender.claimed("e" * 39, "t" * 128, own_user=_OWN)
-            ),
+            ChannelEvent.wall(Sender.claimed("e" * 39, "t" * 128)),
+            ChannelEvent.talk_invite(Sender.claimed("e" * 39, "t" * 128)),
         ],
     )
     def test_no_event_exceeds_the_length_bound(self, event: ChannelEvent) -> None:
@@ -104,9 +100,9 @@ class TestFitsTheClientsLine:
         "event",
         [
             ChannelEvent.mail(120),
-            ChannelEvent.wall(Sender.claimed("eric", "tty9", own_user=_OWN)),
-            ChannelEvent.wall(Sender.claimed("kai", "tty9", own_user=_OWN)),
-            ChannelEvent.talk_invite(Sender.claimed("eric", "tty9", own_user=_OWN)),
+            ChannelEvent.wall(Sender.claimed("eric", "tty9")),
+            ChannelEvent.wall(Sender.claimed("kai", "tty9")),
+            ChannelEvent.talk_invite(Sender.claimed("eric", "tty9")),
             ChannelEvent.talk_message(),
         ],
     )
@@ -115,12 +111,13 @@ class TestFitsTheClientsLine:
     ) -> None:
         assert len(event.content) <= 60
 
-    def test_the_action_and_the_trust_label_come_before_the_sender(self) -> None:
-        sender = Sender.claimed("eric", "tty9", own_user=_OWN)
+    def test_the_action_comes_before_the_sender_and_no_trust_label(self) -> None:
+        sender = Sender.claimed("eric", "tty9")
         for event in (ChannelEvent.wall(sender), ChannelEvent.talk_invite(sender)):
             text = event.content
-            assert text.index("unverified") < text.index(str(sender))
+            assert text.index("Call ") < text.index(str(sender))
+            assert_no_trust_phrase(text)
         assert ChannelEvent.wall(sender).content.startswith("Call wall:")
-        assert ChannelEvent.talk_invite(sender).content.startswith("Ask the user:")
+        assert ChannelEvent.talk_invite(sender).content.startswith("Call talk_read:")
         assert ChannelEvent.mail(2).content.startswith("Call read_messages:")
         assert ChannelEvent.talk_message().content.startswith("Call talk_read:")

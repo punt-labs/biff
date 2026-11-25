@@ -105,6 +105,7 @@
   "biff.server.channel_rate": "server",
   "biff.server.channel_reading": "server",
   "biff.server.channel_server": "server",
+  "biff.server.client_summary": "server",
   "biff.server.display_queue": "server",
   "biff.server.entrypoints": "server",
   "biff.server.handshake_delivery": "server",
