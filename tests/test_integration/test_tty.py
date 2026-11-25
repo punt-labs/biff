@@ -14,6 +14,16 @@ if TYPE_CHECKING:
 class TestTtyNaming:
     """Naming a session and verifying it appears in /who and /finger."""
 
+    async def test_reserved_name_is_refused_and_presence_survives(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """``sid`` keys the resume hints, so it can never be a session name."""
+        await kai.call("tty", name="desk")
+        result = await kai.call("tty", name="sid")
+
+        assert result.startswith("Error:")
+        assert "desk" in await eric.call("who")
+
     @pytest.mark.transcript
     async def test_name_visible_in_who(
         self, kai: RecordingClient, eric: RecordingClient

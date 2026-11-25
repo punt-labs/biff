@@ -754,7 +754,7 @@ class TestSessionTtyHint:
             await relay.set_session_tty_hint("kai", self._SID, "evil.name")
 
     async def test_set_rejects_sid_namespace_name(self, relay: LocalRelay) -> None:
-        with pytest.raises(ValueError, match="namespace"):
+        with pytest.raises(ValueError, match="reserved"):
             await relay.set_session_tty_hint("kai", self._SID, "sid")
 
     async def test_rejects_invalid_session_id_on_set(self, relay: LocalRelay) -> None:

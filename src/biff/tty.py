@@ -51,6 +51,8 @@ def validate_tty_name(name: str) -> str | None:
             f"Invalid tty name {name!r}: "
             "only letters, digits, hyphens, and underscores are allowed."
         )
+    if name == SID_HINT_NAMESPACE:  # the resume hint could never record it
+        return f"tty name {name!r} is reserved."
     return None
 
 
@@ -86,14 +88,7 @@ def validate_reclaimable_name(name: str) -> str | None:
     must not land in the reclaim-hint namespace (which would collide with a
     real hint key).
     """
-    error = validate_tty_name(name)
-    if error is not None:
-        return error
-    if name == SID_HINT_NAMESPACE or name.startswith(f"{SID_HINT_NAMESPACE}."):
-        return (
-            f"reclaim name {name!r} collides with the {SID_HINT_NAMESPACE!r} namespace"
-        )
-    return None
+    return validate_tty_name(name)  # no dots, and never the namespace itself
 
 
 def generate_tty() -> str:
