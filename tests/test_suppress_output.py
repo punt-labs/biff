@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from biff.commands._messaging import Delivery
+from biff.formatting import format_talk_echo
 from biff.models import UserSession
 from biff.server.tools._write_target import WriteRouter
 
@@ -169,3 +170,37 @@ class TestWriteForwardNotice:
         )
         notice = target.report(Delivery(text="Message sent to eric.", ok=True, parts=1))
         assert _panel_summary(_run_hook("write", notice)) == notice
+
+
+def _context(output: dict[str, object]) -> str:
+    """Extract the additionalContext (what the model reads) from hook JSON."""
+    hook_out = cast("dict[str, object]", output["hookSpecificOutput"])
+    return str(hook_out.get("additionalContext", ""))
+
+
+def talk_invite_text(display: str) -> str:
+    """The invite confirmation commands/talk.py returns, longer than 60 chars."""
+    return f"Invite sent to {display}. When they accept, talk_read shows replies."
+
+
+class TestConfirmationsReachTheModel:
+    """talk, plan and wall keep a short panel line; the model gets every word."""
+
+    def test_a_long_talk_confirmation_reaches_the_model_whole(self) -> None:
+        text = talk_invite_text("claude:tty6")
+        output = _run_hook("talk", text)
+        assert len(_panel_summary(output)) <= 60
+        assert _context(output) == text
+
+    def test_a_two_line_plan_echo_keeps_the_plan_text(self) -> None:
+        text = format_talk_echo("Plan:", "rewrite the relay reconnect loop")
+        assert "\n" in text  # the echo puts the plan on its own line
+        output = _run_hook("plan", text)
+        assert _context(output) == text
+        assert "rewrite the relay reconnect loop" in _context(output)
+
+    def test_a_long_wall_confirmation_reaches_the_model_whole(self) -> None:
+        text = "Wall posted (expires 2h): " + "deploy freeze until the release" * 3
+        output = _run_hook("wall", text)
+        assert len(_panel_summary(output)) <= 60
+        assert _context(output) == text

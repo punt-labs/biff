@@ -132,8 +132,10 @@ fi
 
 # ── plan ─────────────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "plan" ]]; then
+  # Panel: the first line, cut; model: the whole echo, which puts the plan text
+  # on the lines after "Plan:" (DES-001 two-channel display).
   PLAN=$(printf '%s' "$RESULT" | head -1 | cut -c1-60)
-  emit_simple "${PLAN}"
+  emit "${PLAN}" "$RESULT"
   exit 0
 fi
 
@@ -151,7 +153,7 @@ fi
 # ── wall ─────────────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "wall" ]]; then
   FIRST=$(printf '%s' "$RESULT" | head -1 | cut -c1-60)
-  emit_simple "${FIRST}"
+  emit "${FIRST}" "$RESULT"
   exit 0
 fi
 
@@ -176,7 +178,7 @@ fi
 # ── talk ─────────────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "talk" ]]; then
   FIRST=$(printf '%s' "$RESULT" | head -1 | cut -c1-60)
-  emit_simple "${FIRST}"
+  emit "${FIRST}" "$RESULT"
   exit 0
 fi
 
