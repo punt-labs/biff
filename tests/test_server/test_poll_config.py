@@ -55,21 +55,21 @@ class TestSetPollInterval:
         fn = await _get_tool_fn(state, "set_poll_interval")
         result = await fn(interval="5s")
         assert "5s" in result
-        assert "Restart" in result
+        assert "nudges start now" in result
 
     async def test_set_valid_minutes(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
         fn = await _get_tool_fn(state, "set_poll_interval")
         result = await fn(interval="2m")
         assert "2m" in result
-        assert "Restart" in result
+        assert "after a restart" in result
 
     async def test_disable(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
         fn = await _get_tool_fn(state, "set_poll_interval")
         result = await fn(interval="n")
         assert "off" in result.lower()
-        assert "Restart" in result
+        assert "nudges stop now" in result
 
     async def test_disable_response_says_arrivals_do_not_need_polling(
         self, tmp_path: Path
@@ -198,6 +198,12 @@ class TestParseInterval:
 
         assert _parse_interval("1m") == 60.0
         assert _parse_interval("5m") == 300.0
+
+    def test_hours(self) -> None:
+        from biff.server.tools.poll_config import _parse_interval
+
+        assert _parse_interval("1h") == 3600.0
+        assert _parse_interval("2h") == 7200.0
 
     def test_disable(self) -> None:
         from biff.server.tools.poll_config import _parse_interval

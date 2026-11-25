@@ -170,7 +170,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             TimeoutError: A relay operation exceeds its deadline.
             nats.errors.Error: A NATS request or connection fails.
         """
-        await update_current_session(state)
         session_key = state.session_key
         user = state.config.user
 
@@ -178,11 +177,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         all_unread = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
 
-        if not all_unread:
+        if not all_unread:  # an empty poll is not work: mail routing reads last_tool_at
             if warning is not None:
                 return warning
             await refresh_read_messages(mcp, state)
             return "No new messages."
+        await update_current_session(state)
 
         # Mark read independently in each inbox.
         tty_ids = [m.id for m in tty_unread]

@@ -18,16 +18,12 @@ if TYPE_CHECKING:
 
     from biff.server.state import ServerState
 
-_INTERVAL_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(s|m)$")
+_INTERVAL_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(s|m|h)$")
 _INVALID = -1.0  # _parse_interval's answer for text that is not an interval
 
 
 def _parse_interval(value: str) -> float | None:
-    """Parse an interval string to seconds, or ``None`` for disable.
-
-    Accepts any ``{N}s`` or ``{N}m`` format (e.g. ``"2s"``, ``"5m"``,
-    ``"30s"``), or ``"n"`` to disable.
-    """
+    """Parse ``{N}s``, ``{N}m`` or ``{N}h`` to seconds; ``n`` (disable) is ``None``."""
     value = value.strip().lower()
     if value == "n":
         return None
@@ -37,7 +33,7 @@ def _parse_interval(value: str) -> float | None:
     amount = float(m.group(1))
     if amount <= 0:
         return _INVALID  # 0s/0m is invalid — use "n" to disable
-    return amount * 60 if m.group(2) == "m" else amount
+    return amount * {"s": 1, "m": 60, "h": 3600}[m.group(2)]
 
 
 _SET_POLL_INTERVAL_DESCRIPTION = (
@@ -45,15 +41,15 @@ _SET_POLL_INTERVAL_DESCRIPTION = (
     "timer for it: messages, walls and talk arrive by NATS push or, on the "
     "local relay, by a file watch, whatever this value is, and an explicit "
     "read recomputes the unread count. The cadence is how often /biff:read "
-    "schedules its own check. Accepts {N}s or {N}m format (e.g. 2s, 30s, "
-    "5m), or n (polling off). Persisted to config. Restart required to "
-    "take effect."
+    "schedules its own check. Accepts {N}s, {N}m or {N}h format (e.g. 2s, "
+    "5m, 1h), or n (polling off). Mail nudges between turns follow it at "
+    "once; the cadence is persisted to config and read after a restart."
 )
 
 _DISABLE_RESPONSE = (
     "Polling is off. Biff's server runs no timer either way: messages, "
     "walls and talk still arrive by NATS push or, on the local relay, by "
-    "a file watch. Restart Claude Code for the change to take effect."
+    "a file watch. Mail nudges stop now."
 )
 
 
@@ -80,7 +76,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if parsed == _INVALID:
             return (
                 f"Invalid interval: {interval}. "
-                "Use {N}s or {N}m format (e.g. 2s, 5m), or n to disable."
+                "Use {N}s, {N}m or {N}h format (e.g. 2s, 5m, 1h), or n to disable."
             )
 
         repo_root = state.repo_root
@@ -101,7 +97,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         return (
             f"Poll interval set to {interval} ({parsed}s). "
-            "Restart Claude Code for the change to take effect."
+            "Mail nudges start now; the server reads the cadence after a restart."
         )
 
     @mcp.tool(

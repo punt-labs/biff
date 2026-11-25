@@ -7,11 +7,17 @@ but live session shows its real idle time.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
+
+from fastmcp.tools.function_tool import FunctionTool
 
 from biff.formatting import WHO_SPECS, format_finger, format_who
-from biff.models import BiffConfig
+from biff.models import BiffConfig, Message
+from biff.server.app import create_server
+from biff.server.state import ServerState
 from biff.server.tools._session import update_current_session
 from tests._state import create_state
 
@@ -191,3 +197,61 @@ class TestRegistrationSetsLastToolAt:
             repo=_TEST_REPO,
         )
         assert session.last_tool_at == session.last_active
+
+
+class TestAnEmptyReadIsNotWork:
+    """An empty ``read_messages`` must not mark this repo as where the user works.
+
+    Mailbox routing sends a bare-user ``write`` to the repo with the latest
+    ``last_tool_at``, so an idle repo's empty poll tick would otherwise pull
+    mail away from the repo the user is working in.
+    """
+
+    async def test_empty_read_messages_leaves_last_tool_at_alone(
+        self, tmp_path: Path
+    ) -> None:
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
+        state = create_state(config, tmp_path, tty="tty1")
+        await update_current_session(state)
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        backdated = datetime.now(UTC) - timedelta(minutes=10)
+        await state.relay.update_session(
+            session.model_copy(update={"last_tool_at": backdated})
+        )
+
+        read = await _tool_fn(state, "read_messages")
+        assert await read() == "No new messages."
+
+        after = await state.relay.get_session(state.session_key)
+        assert after is not None
+        assert after.last_tool_at == backdated
+
+    async def test_a_read_that_returns_mail_counts_as_work(
+        self, tmp_path: Path
+    ) -> None:
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
+        state = create_state(config, tmp_path, tty="tty1")
+        await update_current_session(state)
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        backdated = datetime.now(UTC) - timedelta(minutes=10)
+        await state.relay.update_session(
+            session.model_copy(update={"last_tool_at": backdated})
+        )
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=state.session_key, body="hi")
+        )
+
+        read = await _tool_fn(state, "read_messages")
+        assert "hi" in await read()
+
+        after = await state.relay.get_session(state.session_key)
+        assert after is not None
+        assert after.last_tool_at > backdated
+
+
+async def _tool_fn(state: ServerState, name: str) -> Callable[[], Awaitable[str]]:
+    tool = await create_server(state).get_tool(name)
+    assert isinstance(tool, FunctionTool)
+    return cast("Callable[[], Awaitable[str]]", tool.fn)

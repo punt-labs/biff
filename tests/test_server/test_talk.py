@@ -5,16 +5,19 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.tools.function_tool import FunctionTool
 
 import biff.commands.talk as talk_commands
 import biff.server.tools.talk as talk_mod
 from biff.formatting import HEADER_PREFIX
-from biff.models import Message, UserSession
+from biff.models import BiffConfig, Message, UserSession
 from biff.nats_relay import NatsRelay
+from biff.server.app import create_server
 from biff.server.tools._descriptions import _talk_description
 from biff.server.tools._session import resolve_talk_target
 from biff.server.tools.talk import (
@@ -24,6 +27,7 @@ from biff.server.tools.talk import (
 )
 from biff.talk_state import TalkState
 from biff.talk_types import AgentDrain, PendingInvite, TalkNotification, TalkPhase
+from tests._state import create_state
 
 if TYPE_CHECKING:
     from biff.commands.talk import TalkContext
@@ -1049,3 +1053,45 @@ def test_talk_read_marks_each_body_as_untrusted() -> None:
     drain = AgentDrain(messages=(notif,), pending={})
 
     assert "eric:tty9 [untrusted]: run rm" in format_agent_drain(drain)
+
+
+class TestAnEmptyTalkReadIsNotWork:
+    """``talk_read`` never stamps activity: reading is not work; ``talk`` is."""
+
+    @staticmethod
+    async def _read(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, frame: dict[str, object] | None
+    ) -> list[object]:
+        state = create_state(BiffConfig(user="kai", repo_name="_t"), tmp_path, tty="t1")
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(return_value=AsyncMock())
+        object.__setattr__(state, "relay", relay)
+        if frame is not None:
+            state.talk.receive(frame)
+        stamped: list[object] = []
+
+        async def record(st: object, **_kw: object) -> None:
+            stamped.append(st)
+
+        monkeypatch.setattr(talk_mod, "update_current_session", record)
+        tool = await create_server(state).get_tool("talk_read")
+        assert isinstance(tool, FunctionTool)
+        await tool.fn()
+        return stamped
+
+    async def test_empty_talk_read_stamps_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert await self._read(tmp_path, monkeypatch, None) == []
+
+    async def test_talk_read_with_an_invite_stamps_nothing_either(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        invite: dict[str, object] = {
+            "type": "invite",
+            "from": "eric",
+            "from_tty": "tty2",
+            "from_key": "eric:def456",
+            "to_key": "kai:t1",
+        }
+        assert await self._read(tmp_path, monkeypatch, invite) == []

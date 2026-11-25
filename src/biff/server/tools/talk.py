@@ -228,7 +228,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         """
         if not isinstance(state.relay, NatsRelay):
             return "Talk requires a NATS relay connection."
-        await update_current_session(state)
+        # Reading is not work: replying with `talk` stamps activity, a poll does not.
         drain = state.talk.drain_for_agent()
         published = await _publish_agent_auto_accept(state, drain)
         await refresh_talk(mcp, state)

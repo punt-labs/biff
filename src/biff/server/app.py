@@ -716,20 +716,19 @@ async def _release_relay(state: ServerState) -> None:
 
 
 def _remove_unread_files(unread_path: Path | None) -> None:
-    """Delete the unread-status JSON and its unread-nudge.sh sidecars.
+    """Delete the unread-status JSON and its unread-nudge.sh sidecar.
 
     ``plugin/hooks/unread-nudge.sh`` tracks the last-nudged count in a
     sibling ``.nudged`` file keyed to this same path's stem. Removing only
     the JSON would let a reused PID inherit a stale sidecar whose count
-    matches its first real count, silently suppressing the initial nudge;
-    the ``.polling`` marker goes too, so polling never outlives its session.
+    matches its first real count, silently suppressing the initial nudge.
     """
     if unread_path is None:
         return
     failure: OSError | None = None
-    for suffix in (unread_path.suffix, ".nudged", ".polling"):
+    for path in (unread_path, unread_path.with_suffix(".nudged")):
         try:
-            unread_path.with_suffix(suffix).unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
         except OSError as exc:
             if failure is None:
                 failure = exc

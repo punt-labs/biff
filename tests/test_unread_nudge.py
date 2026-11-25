@@ -47,6 +47,15 @@ def test_no_nudge_unless_polling_is_on(tmp_path: Path) -> None:
     assert _run(tmp_path, unread, polling=False) == ""
 
 
+def test_no_nudge_after_polling_is_turned_off(tmp_path: Path) -> None:
+    unread = {"count": 2, "biff_enabled": True, "server_pid": 1}
+    _run(tmp_path, unread, polling=True)
+    marker = tmp_path / ".punt-labs" / "biff" / "unread" / f"{_SESSION}.polling"
+    marker.write_text("False")
+    unread["count"] = 3
+    assert _run(tmp_path, unread, polling=False) == ""
+
+
 def test_nudge_while_polling_is_on(tmp_path: Path) -> None:
     unread = {"count": 2, "biff_enabled": True, "server_pid": 1}
     out = json.loads(_run(tmp_path, unread, polling=True))
@@ -55,5 +64,7 @@ def test_nudge_while_polling_is_on(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("name", ["read.md", "read-dev.md"])
 def test_read_command_does_not_read_the_status_line(name: str) -> None:
-    text = (_HOOK.parents[1] / "commands" / name).read_text()
-    assert "biff statusline" not in text
+    command = _HOOK.parents[1] / "commands" / name
+    if not command.is_file():
+        pytest.skip(f"{name} is removed in a prod release build (release-plugin.sh)")
+    assert "biff statusline" not in command.read_text()
