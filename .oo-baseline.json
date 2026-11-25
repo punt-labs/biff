@@ -1705,9 +1705,9 @@
   "src/biff/server/tools/messaging.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.25,
+    "avg_params": 1.2,
     "max_complexity": 8.0,
-    "avg_complexity": 4.5,
+    "avg_complexity": 4.0,
     "module_size": 124.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,

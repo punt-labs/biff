@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from fastmcp.tools.function_tool import FunctionTool
 
@@ -18,8 +18,12 @@ from biff.formatting import WHO_SPECS, format_finger, format_who
 from biff.models import BiffConfig, Message
 from biff.server.app import create_server
 from biff.server.state import ServerState
+from biff.server.tools import messaging
 from biff.server.tools._session import update_current_session
 from tests._state import create_state
+
+if TYPE_CHECKING:
+    import pytest
 
 _TEST_REPO = "_test-activity-timestamp"
 
@@ -255,3 +259,38 @@ async def _tool_fn(state: ServerState, name: str) -> Callable[[], Awaitable[str]
     tool = await create_server(state).get_tool(name)
     assert isinstance(tool, FunctionTool)
     return cast("Callable[[], Awaitable[str]]", tool.fn)
+
+
+class TestReadsKeepPresenceAndMail:
+    """Reads revive an expired presence row, and a failed stamp never loses mail."""
+
+    async def test_an_empty_read_revives_an_expired_presence_row(
+        self, tmp_path: Path
+    ) -> None:
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
+        state = create_state(config, tmp_path, tty="tty1")
+        await update_current_session(state)
+        await state.relay.delete_session(state.session_key)
+
+        read = await _tool_fn(state, "read_messages")
+        assert await read() == "No new messages."
+
+        assert await state.relay.get_session(state.session_key) is not None
+
+    async def test_a_failed_stamp_still_returns_the_mail(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On NATS the fetch already consumed the mail, so it must reach the caller."""
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
+        state = create_state(config, tmp_path, tty="tty1")
+        await update_current_session(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=state.session_key, body="keep me")
+        )
+
+        async def broken(_state: object, **_kw: object) -> None:
+            raise ConnectionError("presence write failed")
+
+        monkeypatch.setattr(messaging, "update_current_session", broken)
+        read = await _tool_fn(state, "read_messages")
+        assert "keep me" in await read()

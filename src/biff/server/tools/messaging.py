@@ -18,7 +18,7 @@ from biff.formatting import format_read
 from biff.models import Message
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import get_tty_name, refresh_read_messages
-from biff.server.tools._session import update_current_session
+from biff.server.tools._session import get_or_create_session, update_current_session
 from biff.server.tools._write_target import WriteRouter
 from biff.tty import parse_address
 
@@ -33,10 +33,7 @@ _log = logging.getLogger(__name__)
 _UnreadFetch = tuple[list[Message], list[Message]]
 
 # Fetch-step labels, in the order results are unpacked into _UnreadFetch.
-_TTY, _USER = (
-    "your tty inbox",
-    "your broadcast inbox",
-)
+_TTY, _USER = "your tty inbox", "your broadcast inbox"
 
 
 async def _fetch_unread_with_retry(
@@ -69,10 +66,7 @@ async def _fetch_unread_with_retry(
                 still_pending.append(label)
         pending = still_pending
 
-    fetched: _UnreadFetch = (
-        results.get(_TTY, []),
-        results.get(_USER, []),
-    )
+    fetched: _UnreadFetch = (results.get(_TTY, []), results.get(_USER, []))
     warning: str | None = None
     if pending:
         _log.warning(
@@ -85,6 +79,14 @@ async def _fetch_unread_with_retry(
             "State unknown for that inbox, not confirmed empty."
         )
     return fetched, warning
+
+
+async def _stamp_read(state: ServerState) -> None:
+    """Stamp activity after a read; NATS consumed the mail, so never raise."""
+    try:
+        await update_current_session(state)
+    except Exception:  # noqa: BLE001 — tool boundary; the read already succeeded
+        _log.warning("read_messages: activity stamp failed", exc_info=True)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -172,17 +174,19 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         """
         session_key = state.session_key
         user = state.config.user
+        # Mail routing reads last_tool_at, so an empty poll is not work; it only
+        # keeps the presence row alive past its TTL.
+        await get_or_create_session(state)
 
         (tty_unread, user_unread), warning = await _fetch_unread_with_retry(state)
 
         all_unread = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
 
-        if not all_unread:  # an empty poll is not work: mail routing reads last_tool_at
+        if not all_unread:
             if warning is not None:
                 return warning
             await refresh_read_messages(mcp, state)
             return "No new messages."
-        await update_current_session(state)
 
         # Mark read independently in each inbox.
         tty_ids = [m.id for m in tty_unread]
@@ -193,6 +197,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             await state.relay.mark_read_user_inbox(user, user_ids)
 
         await refresh_read_messages(mcp, state)
+        await _stamp_read(state)
 
         result = format_read(all_unread)
         return f"{warning}\n\n{result}" if warning is not None else result

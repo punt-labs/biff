@@ -64,7 +64,9 @@ def test_nudge_while_polling_is_on(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("name", ["read.md", "read-dev.md"])
 def test_read_command_does_not_read_the_status_line(name: str) -> None:
+    manifest = _HOOK.parents[1] / ".claude-plugin" / "plugin.json"
+    plugin = json.loads(manifest.read_text())
+    if name == "read-dev.md" and plugin["name"] != "biff-dev":
+        pytest.skip("release-plugin.sh removes dev commands from the prod build")
     command = _HOOK.parents[1] / "commands" / name
-    if not command.is_file():
-        pytest.skip(f"{name} is removed in a prod release build (release-plugin.sh)")
     assert "biff statusline" not in command.read_text()
