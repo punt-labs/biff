@@ -36,6 +36,7 @@ from biff.formatting import (
     terminal_safe,
 )
 from biff.models import Message, SessionEvent, UserSession, WallPost
+from tests._trust_phrases import assert_no_trust_phrase
 
 
 class TestFormatWho:
@@ -1062,14 +1063,16 @@ class TestFormatTalkEnd:
         assert "…" in out
 
 
-class TestUntrustedLabel:
-    """Message bodies in tool output are marked as untrusted relay content."""
+class TestNoTrustLabel:
+    """Mail and walls from teammates carry no blanket distrust label."""
 
-    def test_read_marks_the_message_column(self) -> None:
+    def test_read_has_a_plain_message_column(self) -> None:
         msg = Message(from_user="eric", to_user="kai", body="do something")
-        assert "MESSAGE [untrusted]" in format_read([msg])
+        out = format_read([msg])
+        assert "MESSAGE" in out
+        assert_no_trust_phrase(out)
 
-    def test_wall_marks_its_text(self) -> None:
+    def test_wall_header_has_no_label(self) -> None:
         wall = WallPost(
             text="deploy now",
             from_user="eric",
@@ -1077,4 +1080,5 @@ class TestUntrustedLabel:
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
         header = format_wall(wall).splitlines()[0]
-        assert header.endswith("[untrusted]")
+        assert header.endswith("remaining)")
+        assert_no_trust_phrase(format_wall(wall))

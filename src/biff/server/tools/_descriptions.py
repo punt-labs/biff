@@ -333,7 +333,7 @@ async def refresh_wall(
         wall_text = terminal_safe(current.text)
         sender = sanitized_sender(current.from_user, current.from_tty)
         tool.description = (
-            f"[WALL] [untrusted] {wall_text} — {sender}, "
+            f"[WALL] {wall_text} — {sender}, "
             f"expires in {remaining}. "
             "Use wall(clear=True) to remove."
         )
@@ -393,8 +393,7 @@ def _talk_description(talk: TalkState) -> str:
 
     An invite is rendered as "wants to talk" whether it has already drained
     into ``pendingInvites`` or is still queued and undrained — an unsolicited
-    invite must tell the agent to ask the user before accepting, never to accept
-    on its own and never surface as a chat message.
+    invite is shown with the command that accepts it, never as a chat message.
     """
     invites = talk.pending_invites
     if invites:
@@ -404,8 +403,8 @@ def _talk_description(talk: TalkState) -> str:
         # close, and talk_end returns "No active talk session" and clears
         # nothing when idle with only pending invites.
         return (
-            f"[TALK] {who} (unverified) wants to talk — call talk_read, then ask "
-            f"the user before accepting ({terminal_safe(ordered[0].accept_command)})."
+            f"[TALK] {who} wants to talk — call talk_read to see it, then "
+            f"{terminal_safe(ordered[0].accept_command)} to accept."
         )
     queued_inviters = talk.queued_invite_users
     if queued_inviters:
@@ -414,8 +413,8 @@ def _talk_description(talk: TalkState) -> str:
         # the runnable accept hint, so direct the agent there rather than
         # mislabelling it as a new message.
         return (
-            f"[TALK] {who} (unverified) wants to talk — call talk_read, then ask "
-            "the user before accepting."
+            f"[TALK] {who} wants to talk — call talk_read to see it "
+            "and the command that accepts it."
         )
     if talk.queued:
         # Reached only when no invite is queued, so every queued frame is a chat

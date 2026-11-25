@@ -24,12 +24,14 @@ from biff.server import channel
 from biff.server.channel import ChannelLink
 from biff.server.channel_content import EventKind
 from biff.server.channel_emitter import (
+    INSTRUCTIONS,
     MAX_READ_RETRIES,
     RETRY_SECONDS,
     ChannelEmitter,
 )
 from biff.server.channel_rate import RateLimit
 from biff.talk_state import PENDING_INVITE_TTL, TalkState
+from tests._trust_phrases import assert_no_trust_phrase
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -352,7 +354,7 @@ class TestWall:
         rig.open()
         await rig.wall(text="SECRET-WALL")
         await rig.emitter.check()
-        assert rig.sink.contents == ["Call wall: unverified wall from eric:tty9."]
+        assert rig.sink.contents == ["Call wall: new wall from eric:tty9."]
 
     async def test_this_sessions_own_wall_emits_nothing(self, rig: _Rig) -> None:
         """O3."""
@@ -384,27 +386,25 @@ class TestWall:
         await rig.emitter.check()
         assert [m["kind"] for m in rig.sink.metas] == ["wall", "wall"]
 
-    async def test_a_wall_from_the_session_user_on_another_tty_claims_to_be_you(
+    async def test_a_wall_from_the_session_user_on_another_tty_names_it(
         self, rig: _Rig
     ) -> None:
-        """O3: the label for an identity equal to this session's."""
+        """O3: the session user's other tty is shown by its address."""
         rig.open()
         await rig.wall(user="kai", tty="tty7")
         await rig.emitter.check()
-        assert "someone claiming to be you" in rig.sink.contents[0]
+        assert rig.sink.contents == ["Call wall: new wall from kai:tty7."]
 
     async def test_a_128_character_sender_is_a_teammate(self, rig: _Rig) -> None:
         """O3."""
         rig.open()
         await rig.wall(user="e" * 128)
         await rig.emitter.check()
-        assert rig.sink.contents[0].startswith(
-            "Call wall: unverified wall from a teammate"
-        )
+        assert rig.sink.contents[0].startswith("Call wall: new wall from a teammate")
 
 
 class TestTalk:
-    async def test_an_invite_is_announced_once_and_says_ask_the_user(
+    async def test_an_invite_is_announced_once_and_names_talk_read(
         self, rig: _Rig
     ) -> None:
         """O3."""
@@ -413,8 +413,7 @@ class TestTalk:
         await rig.emitter.check()
         await rig.emitter.check()
         assert rig.sink.metas == [{"kind": "talk_invite"}]
-        assert "accept" not in rig.sink.contents[0].lower()
-        assert "ask the user" in rig.sink.contents[0].lower()
+        assert rig.sink.contents[0].startswith("Call talk_read: talk invite from")
         assert "SECRET" not in rig.sink.contents[0]
 
     async def test_queued_to_pending_is_not_a_new_invite(self, rig: _Rig) -> None:
@@ -1866,3 +1865,9 @@ class TestHeldMailAcrossARebind:
         await rig.emitter.check()
 
         assert len(rig.sink.frames) == 1
+
+
+def test_the_instructions_do_not_tell_the_model_to_distrust_bodies() -> None:
+    """Teammates' messages are acted on, not refused, until signed trust lands."""
+    assert_no_trust_phrase(INSTRUCTIONS)
+    assert "channel events" in INSTRUCTIONS.lower()

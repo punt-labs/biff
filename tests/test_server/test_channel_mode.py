@@ -442,7 +442,7 @@ class TestWatchTellsTheEmitter:
         on_request, on_notify, _emitter, handshake = self._watched()
         assert handshake.watch(None, on_request, on_notify) == (on_request, on_notify)
 
-    async def test_the_initialize_reply_carries_the_untrusted_paragraph(
+    async def test_the_initialize_reply_carries_the_channel_paragraph(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The SDK answers ``initialize`` from the options built at serve time."""
@@ -460,7 +460,7 @@ class TestWatchTellsTheEmitter:
         monkeypatch.setattr(channel_server, "stdio_server", stdio)
         server = ChannelServer[object]("biff", instructions="base")
         server.attach_emitter(
-            MagicMock(instructions="UNTRUSTED-PARAGRAPH", close=AsyncMock())
+            MagicMock(instructions="CHANNEL-PARAGRAPH", close=AsyncMock())
         )
         reply = None
         async with anyio.create_task_group() as tg:
@@ -483,15 +483,15 @@ class TestWatchTellsTheEmitter:
 
         assert reply is not None
         result = reply.model_dump(by_alias=True)["result"]
-        assert result["instructions"] == "base\n\nUNTRUSTED-PARAGRAPH"
+        assert result["instructions"] == "base\n\nCHANNEL-PARAGRAPH"
 
     async def test_opening_twice_adds_the_paragraph_once(self) -> None:
         server = ChannelServer[object]("biff", instructions="base")
-        emitter = MagicMock(instructions="UNTRUSTED-PARAGRAPH")
+        emitter = MagicMock(instructions="CHANNEL-PARAGRAPH")
         link = server.channel_link
         ChannelHandshake.open(server, link, emitter)
         ChannelHandshake.open(server, link, emitter)
-        assert server.instructions == "base\n\nUNTRUSTED-PARAGRAPH"
+        assert server.instructions == "base\n\nCHANNEL-PARAGRAPH"
 
 
 class TestServeChannelStdio:
