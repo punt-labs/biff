@@ -36,12 +36,9 @@ class SessionRevival:
     async def revive(self) -> UserSession:
         """Write a fresh row for this server and return it.
 
-        A stashed tty name means registration ran to completion, so the row
-        was deleted afterward; the rebuilt record resets plan, plan_source and
-        biff_enabled, which ``/who`` would show as a plausible but wrong row,
-        so the resurrection is logged.  With no stash (startup interrupted),
-        the hex-slice placeholder ``_format_who_name`` uses keeps ``tty_name``
-        non-empty, as the v1.8.0 invariant requires.
+        The rebuilt row resets plan and biff_enabled, so a revival is logged.
+        With no stashed name (startup interrupted), the hex-slice placeholder
+        keeps ``tty_name`` non-empty, as ``/who`` requires.
         """
         state = self._state
         stashed = get_tty_name()
@@ -52,10 +49,7 @@ class SessionRevival:
             )
             tty_name = await self._reserve(stashed)
         else:
-            logger.warning(
-                "Auto-creating session without a reserved tty_name; "
-                "lifespan registration may not have completed"
-            )
+            logger.warning("No reserved tty_name; startup registration did not finish")
             tty_name = state.tty[:8]
         session = UserSession(
             user=state.config.user,
@@ -73,12 +67,17 @@ class SessionRevival:
         return session
 
     async def _reserve(self, name: str) -> str:
-        """Reserve *name* again, or the lowest free name when another took it."""
-        state = self._state
-        user, key = state.config.user, state.session_key
+        """Reserve *name* again, or the lowest free name when another took it.
+
+        The stash, talk reply hints and resume hint all move with the name, as
+        the ``tty`` tool's rename does, so none advertises another's address.
+        """
+        state, user, key = self._state, self._state.config.user, self._state.session_key
         try:
             name = await claim_tty_name(state.relay, user, key, preferred=name)
         except ValueError:  # taken while this session's row was gone
             name = await claim_tty_name(state.relay, user, key)
         set_tty_name(name)
+        state.talk.set_tty_name(name)
+        await state.relay.set_session_tty_hint(user, state.tty, name)
         return name

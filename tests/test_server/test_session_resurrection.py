@@ -36,10 +36,16 @@ async def test_a_name_taken_meanwhile_is_not_reused(tmp_path: Path) -> None:
 
     revived = await get_or_create_session(gone)
 
-    assert revived.tty_name != "tty1"
-    assert get_tty_name() == revived.tty_name
-    owner = await gone.relay.get_tty_reservation_owner("kai", revived.tty_name)
-    assert owner == gone.session_key
+    assert revived.tty_name == "tty2"
+    owners = [
+        await gone.relay.get_tty_reservation_owner("kai", name)
+        for name in ("tty1", "tty2")
+    ]
+    assert owners == [newcomer.session_key, gone.session_key]
+    # Every holder of the name moves with it, as the tty tool's rename does.
+    assert get_tty_name() == "tty2"
+    assert gone.talk.my_tty_name == "tty2"
+    assert await gone.relay.get_session_tty_hint("kai", gone.tty) == "tty2"
 
 
 async def test_a_free_name_is_reserved_again(tmp_path: Path) -> None:
