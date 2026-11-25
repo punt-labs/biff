@@ -382,7 +382,7 @@ The rig (`tests/test_claude_channels/rig.py`) builds, under `/tmp` and outside
 the checkout (Claude Code imports every `CLAUDE.md` above its working
 directory), a git repo with biff enabled, a private `HOME` that holds
 `biff.log` and the relay state, and a copy of `plugin/` whose server command
-points at this checkout's `biff`. Claude Code runs with
+points at this checkout's `biff`. The `biff` and `biff-hook` shims set that home, the environment drops ambient `BIFF_*`, `CLAUDECODE` and `GIT_*` variables, and git reads no global config, so the tier can run inside Claude Code and never touches the operator's biff home (the fixture fails if a file there names the rig). Claude Code runs with
 `--setting-sources project,local`, so the operator's installed plugins start no
 second biff server. A second user, `bob`, writes mail and posts a wall through
 the `biff` CLI and publishes a talk invite as a NATS frame (no CLI verb sends
@@ -391,7 +391,7 @@ the captured pane and the `biff.log` tail on timeout, and then checks that
 `biff.log` recorded the event as sent.
 
 `BIFF_CHANNEL_LAUNCHES` (comma-separated names from `LAUNCHES` in
-`test_delivery.py`) selects which channel-flag spellings run; the default is
+`launches.py`; a blank or unknown value is an error) selects which channel-flag spellings run; the default is
 the verified one. The verified launch and the variants that do not display
 events are in [design-channels.md](docs/design-channels.md#verified-launch).
 

@@ -9,9 +9,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +41,56 @@ _SESSION_READY = re.compile(r"Session ready: (\w+) \(tty\d+\)")
 _SPACES = re.compile(r"\s+")
 _ISOLATION = ("--setting-sources", "project,local")
 _FORWARDED = ("PATH", "BIFF_USER", "PUNT_TELEMETRY")
+# Ambient variables that would steer the rig: Claude Code's own marker (a nested
+# claude refuses to start), and git's repository and config selection.
+_AMBIENT_PREFIXES = ("BIFF_", "CLAUDECODE", "CLAUDE_CODE_", "GIT_")
+
+
+def find_strays(biff_home: Path, since: float, markers: tuple[str, ...]) -> list[Path]:
+    """Return files under *biff_home* written since *since* that name a marker.
+
+    A marker is something only the rig knows (its temp root, its receiver's name);
+    other sessions on the machine write under the same directory but never name
+    these, so a hit is the rig's session reaching the operator's real biff home.
+    """
+    if not biff_home.is_dir():
+        return []
+    strays: list[Path] = []
+    for path in biff_home.rglob("*"):
+        try:
+            if not path.is_file() or path.stat().st_mtime < since:
+                continue
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        if any(marker in text or marker in path.name for marker in markers):
+            strays.append(path)
+    return strays
+
+
+@contextmanager
+def channel_rig(launch: Launch, nats_url: str) -> Generator[ChannelRig]:
+    """Yield a rig under one private temp root that is removed however it ends.
+
+    The root is under ``/tmp``, outside the checkout: Claude Code imports every
+    ``CLAUDE.md`` above its working directory, and the repo's own ``.tmp`` sits
+    under this repository.  The root is made first, so a rig that fails part way
+    through construction still has its directories removed.
+    """
+    root = Path(tempfile.mkdtemp(prefix="biff-channels-", dir="/tmp"))
+    rig: ChannelRig | None = None
+    try:
+        rig = ChannelRig(root, launch, nats_url)
+        yield rig
+    finally:
+        if rig is not None:
+            rig.close()
+        shutil.rmtree(root, ignore_errors=True)
+    # Reached only when the body raised nothing: a stray write is a failure of its
+    # own, reported after cleanup.
+    if rig is not None:
+        strays = rig.strays()
+        assert not strays, f"the rig wrote to the real biff home: {strays}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +136,9 @@ class ChannelRig:
         has no local relay, so the invite can only arrive over NATS.
         """
         self._nats_url = nats_url
+        self._root = root
+        self._real_biff_home = Path.home() / ".punt-labs" / "biff"
+        self._started = time.time()
         # One name per rig: a name shared through the NATS server would carry the
         # last rig's unread mail into this one.
         self.receiver = f"alice{uuid.uuid4().hex[:6]}"
@@ -96,7 +151,7 @@ class ChannelRig:
         self._session = "recv"
         for path in (self._home, self._repo, self._bin):
             path.mkdir(parents=True)
-        self._write_shim()
+        self._write_shims()
         self._copy_plugin()
         self._init_repo()
 
@@ -110,10 +165,15 @@ class ChannelRig:
         """The ``claude`` command line the receiver was started with."""
         return " ".join(self._launch.argv(self._plugin))
 
+    def strays(self) -> list[Path]:
+        """Return files the rig's session wrote into the operator's real biff home."""
+        return find_strays(
+            self._real_biff_home, self._started, (str(self._root), self.receiver)
+        )
+
     def start_receiver(self) -> None:
         """Start Claude Code in a detached tmux session and wait for the handshake."""
         env = self._env(self.receiver)
-        env.pop("CLAUDECODE", None)
         flags = [arg for key in _FORWARDED for arg in ("-e", f"{key}={env[key]}")]
         self._tmux(
             "new-session",
@@ -213,11 +273,19 @@ class ChannelRig:
     def _shim(self) -> str:
         return str(self._bin / "biff")
 
-    def _write_shim(self) -> None:
-        biff = Path(sys.executable).parent / "biff"
-        shim = self._bin / "biff"
-        shim.write_text(f'#!/bin/sh\nexport HOME="{self._home}"\nexec "{biff}" "$@"\n')
-        shim.chmod(0o755)
+    def _write_shims(self) -> None:
+        """Write ``biff`` and ``biff-hook`` shims that run with the private home.
+
+        Claude Code's hooks call ``biff-hook`` from ``PATH``; without its own shim
+        that is the operator's installed one, with the operator's real ``HOME``.
+        """
+        for name in ("biff", "biff-hook"):
+            target = Path(sys.executable).parent / name
+            shim = self._bin / name
+            shim.write_text(
+                f'#!/bin/sh\nexport HOME="{self._home}"\nexec "{target}" "$@"\n'
+            )
+            shim.chmod(0o755)
 
     def _copy_plugin(self) -> None:
         """Copy ``plugin/``, pointing its server command at the checkout's ``biff``.
@@ -239,31 +307,39 @@ class ChannelRig:
 
     def _init_repo(self) -> None:
         env = self._env(SENDER)
-        for args in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty"]):
-            subprocess.run(  # noqa: S603
-                ["git", *args, *(["-m", "init"] if args[0] == "commit" else [])],  # noqa: S607
-                cwd=self._repo,
-                env=env,
-                check=True,
-                capture_output=True,
-            )
-        subprocess.run(  # noqa: S603
+        hooks = self._repo / ".git" / "hooks"
+        steps = (
+            ["git", "init", "-q", "-b", "main"],
+            # A local hooks path, so ``biff enable`` never reads or writes a global one.
+            ["git", "config", "--local", "core.hooksPath", str(hooks)],
+            ["git", "commit", "-q", "--allow-empty", "-m", "init"],
             [self._shim, "--user", SENDER, "enable"],
-            cwd=self._repo,
-            env=env,
-            check=True,
-            capture_output=True,
         )
+        for argv in steps:
+            subprocess.run(  # noqa: S603
+                argv, cwd=self._repo, env=env, check=True, capture_output=True
+            )
         config = self._repo / ".punt-labs" / "biff" / "config.local.yaml"
         config.write_text(f"relay:\n  url: {self._nats_url}\n")
 
     def _env(self, user: str) -> dict[str, str]:
-        env = dict(os.environ)
+        """Build the environment for *user* from nothing the operator's shell steers.
+
+        Ambient ``BIFF_*`` (a relay URL would override the rig's), Claude Code's own
+        markers and ``GIT_*`` are dropped, and git reads no global or system config.
+        """
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(_AMBIENT_PREFIXES)
+        }
         env["PATH"] = f"{self._bin}{os.pathsep}{env['PATH']}"
         env["BIFF_USER"] = user
         env["PUNT_TELEMETRY"] = "off"
-        for key in ("CLAUDE_CODE_SESSION_ID", "BIFF_CHANNEL_MODE"):
-            env.pop(key, None)
+        env["GIT_CONFIG_GLOBAL"] = os.devnull
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "rig"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "rig@example.invalid"
         return env
 
     def _biff(self, *args: str) -> None:
@@ -279,6 +355,9 @@ class ChannelRig:
     def _tmux(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(  # noqa: S603
             ["tmux", "-L", self._socket, *args],  # noqa: S607
+            # The first call starts the tmux server, whose environment every pane
+            # inherits, so it gets the cleaned one, not the operator's shell's.
+            env=self._env(self.receiver),
             check=True,
             capture_output=True,
             text=True,
