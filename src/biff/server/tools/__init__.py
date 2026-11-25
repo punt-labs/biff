@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from biff.server.tools import (
     biff_relay,
     biff_toggle,
+    channel_ack,
     finger,
     last,
     mesg,
@@ -29,6 +30,7 @@ def register_all_tools(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register all biff tools on the server."""
     biff_relay.register(mcp, state)
     biff_toggle.register(mcp, state)
+    channel_ack.register(mcp, state)
     mesg.register(mcp, state)
     finger.register(mcp, state)
     messaging.register(mcp, state)

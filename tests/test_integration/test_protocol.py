@@ -114,6 +114,7 @@ class TestToolListing:
             "last",
             "set_poll_interval",
             "get_poll_status",
+            "channel_ack",
         }
         assert names == expected
 

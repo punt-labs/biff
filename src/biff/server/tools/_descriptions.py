@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Protocol, Self
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.relay_errors import RelayLog
+from biff.server.channel_check_sub import ChannelCheckSub
 from biff.server.display_queue import DisplayItem
 from biff.server.handshake_delivery import HandshakeDelivery
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
@@ -987,7 +988,7 @@ async def _safe_tick(
 
 
 class _AlwaysOnSubs:
-    """The poller's three always-on SUBs, with their re-subscribe latches.
+    """The poller's always-on SUBs, with their re-subscribe latches.
 
     One object holds what ``poll_inbox`` would otherwise juggle as six locals:
     :meth:`start` binds each SUB, :meth:`reconcile` re-binds any whose client
@@ -995,6 +996,7 @@ class _AlwaysOnSubs:
     """
 
     __slots__ = (
+        "_check",
         "_gate",
         "_inbox",
         "_inbox_latch",
@@ -1013,11 +1015,13 @@ class _AlwaysOnSubs:
     _talk: SubscriptionBinding | None
     _inbox: SubscriptionBinding | None
     _wall: SubscriptionBinding | None
+    _check: ChannelCheckSub
 
     def __new__(cls, state: ServerState, gate: _InboxPokeGate) -> Self:
         """Create the holder with no SUB bound yet."""
         self = super().__new__(cls)
         self._state, self._gate = state, gate
+        self._check = ChannelCheckSub(state)
         self._talk_latch = TalkNotifyLatch.for_resubscribe(logger)
         self._inbox_latch = TalkNotifyLatch(logger, _INBOX_NOTIFY_RESUBSCRIBE_MESSAGES)
         self._wall_latch = TalkNotifyLatch(logger, _WALL_NOTIFY_RESUBSCRIBE_MESSAGES)
@@ -1031,6 +1035,7 @@ class _AlwaysOnSubs:
             self._state, self._inbox_latch, self._gate
         )
         self._wall = await subscribe_wall_notify(self._state, self._wall_latch)
+        await self._check.start()
 
     async def reconcile(self) -> None:
         """Keep each SUB bound to the live client (a generation compare)."""
@@ -1044,9 +1049,10 @@ class _AlwaysOnSubs:
         self._wall = await _reconcile_wall_notify_sub(
             state, self._wall, self._wall_latch, gate
         )
+        await self._check.reconcile()
 
     async def close(self) -> None:
-        """Unsubscribe all three.
+        """Unsubscribe all of them.
 
         Each attempt is shielded from a hard cancel arriving mid-unsubscribe
         and swallows both Exception and CancelledError, so the loop always
@@ -1058,6 +1064,7 @@ class _AlwaysOnSubs:
             if sub is not None:
                 with suppress(Exception, asyncio.CancelledError):
                     await asyncio.shield(sub.handle.unsubscribe())
+        await self._check.close()
 
 
 @dataclass
