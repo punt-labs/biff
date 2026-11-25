@@ -43,6 +43,9 @@ def test_a_clean_environment_passes(value: str) -> None:
     (check,) = DoctorChecks(_NOWHERE, {"DISABLE_TELEMETRY": value}).channels()
     assert check.passed
     assert check.name == "Channels"
+    # doctor sees only its own shell, not the one Claude Code was started from
+    assert "this shell" in check.message
+    assert "Claude Code's own environment" in check.message
 
 
 def test_doctor_reports_the_shell_environment(monkeypatch: pytest.MonkeyPatch) -> None:

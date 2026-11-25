@@ -60,7 +60,10 @@ class DoctorChecks:
         """Return one failed check per closed gate, or one passed check."""
         closed = [gate for env_gate in self._gates for gate in env_gate.closed()]
         if not closed:
-            message = "no environment variable blocks channels"
+            message = (
+                "no variable in this shell blocks channels "
+                "(Claude Code's own environment is checked at its start-up)"
+            )
             return (self._result("Channels", message, passed=True),)
         return tuple(
             self._result("Channels", f"{gate.reason}. {gate.fix}") for gate in closed
