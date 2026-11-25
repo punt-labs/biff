@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from biff.changed_file import ChangedFile
+from biff.check_stamp import CheckStamp
 from biff.models import UnreadSummary
-from biff.unread import CheckStamp
 
 if TYPE_CHECKING:
     from biff.server.display_queue import DisplayItem
@@ -70,9 +70,7 @@ def write_unread_file(
         "plan": plan,
         "server_pid": os.getpid(),
     }
-    checked_at = CheckStamp.read(path)
-    if checked_at is not None:
-        data[CheckStamp.KEY] = checked_at
+    data.update(CheckStamp.carried(path))
     try:
         ChangedFile.write(path, json.dumps(data, indent=2) + "\n")
     except OSError:

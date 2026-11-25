@@ -8672,6 +8672,26 @@ bug) once per episode, besides its DEBUG traceback. A handshake session that
 cannot be read is logged. `docs/notification.tex` is unchanged by this step; its
 send-failure transitions describe the default.
 
+**Server side of the doctor's channel check (PL-1365).** A session's server
+subscribes to a core-NATS subject keyed on its `user:tty`
+(`<prefix>.channel.check.<user>:<tty>`; its third token keeps it out of the
+inbox stream) and rebinds it with the other always-on subscriptions. A request
+carries a fresh inbox name; anything else (not JSON, no reply, a reply that is
+not an inbox name) is dropped, so a forged request cannot aim the
+acknowledgement at another subject. The server accepts at most one request a
+minute, per session, on the emitter's injected clock; a refused request does
+not extend the window. An accepted request makes a token (`secrets.token_hex(16)`)
+and owes one event (`kind=channel_check`) that waits for the client to be
+initialised like any other, takes no rate-window slot and is not retried. The
+`channel_ack` tool spends the pending token once with `hmac.compare_digest`;
+a wrong or repeated token changes nothing and says so. Over NATS a match
+publishes `{session_key, token}` to the reply subject; on the local relay, one
+machine, it writes `channel_checked_at` to the per-session unread file, which
+every later rewrite of that file keeps. The model is `docs/channel-check.tex`
+(fuzz-checked, ProB-exhausted at 1177 states with the once-a-minute bound as an
+invariant). The doctor's client side (send the request, wait 30 seconds,
+print) is separate: `NatsRelay.request_channel_check` is the call it makes.
+
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
 **Amends.** DES-080, for the Claude Code plugin only; DES-061's rule that a
 failed send clears the stored session, in channel mode; DES-038's always-on

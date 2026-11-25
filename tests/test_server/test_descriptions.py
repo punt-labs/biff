@@ -897,7 +897,7 @@ class TestPollInbox:
         assert tool.description == WALL_BASE_DESCRIPTION
 
     async def test_establishes_and_tears_down_all_subs(self, tmp_path: Path) -> None:
-        """Open talk, inbox-notify, and wall-notify subscriptions together.
+        """Open the talk, inbox, wall and channel-check subscriptions together.
 
         Each subscription must be established at startup and unsubscribed on
         teardown, including subscriptions unavailable on the local relay.
@@ -906,11 +906,14 @@ class TestPollInbox:
         talk_handle = AsyncMock()
         inbox_handle = AsyncMock()
         wall_handle = AsyncMock()
+        check_handle = AsyncMock()
 
         async def fake_subscribe(subject: str, *, cb: object) -> AsyncMock:
             del cb
             if "talk" in subject:
                 return talk_handle
+            if "channel.check" in subject:
+                return check_handle
             if "wallnotify" in subject:
                 return wall_handle
             return inbox_handle
@@ -926,6 +929,9 @@ class TestPollInbox:
         )
         relay.wall_notify_subject = MagicMock(
             return_value="biff-dev._test-server.wallnotify"
+        )
+        relay.channel_check_subject = MagicMock(
+            return_value="biff-dev.channel.check.kai:tty1"
         )
         relay.get_wall = AsyncMock(return_value=None)
         relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
@@ -949,7 +955,9 @@ class TestPollInbox:
         assert any("talk" in s for s in subjects)
         assert any(s.endswith("notify.kai") and "talk" not in s for s in subjects)
         assert any(s.endswith("wallnotify") for s in subjects)
+        assert any("channel.check" in s for s in subjects)
         talk_handle.unsubscribe.assert_awaited_once()
+        check_handle.unsubscribe.assert_awaited_once()
         inbox_handle.unsubscribe.assert_awaited_once()
         wall_handle.unsubscribe.assert_awaited_once()
 
@@ -1006,7 +1014,7 @@ class TestPollInbox:
         mcp = create_server(state)
         task = asyncio.create_task(poll_inbox(mcp, state))
         await asyncio.sleep(self._FAST_INTERVAL * 3)
-        assert subscribe_calls == 3  # talk + inbox-notify + wall-notify, startup bind
+        assert subscribe_calls == 4  # talk + inbox + wall + check, startup bind
 
         # A wedge teardown/give-up close, independent of this poller —
         # exactly what the heartbeat loop's own _force_reconnect does.
@@ -1017,7 +1025,7 @@ class TestPollInbox:
         with suppress(asyncio.CancelledError):
             await task
 
-        assert subscribe_calls > 3  # reconcile ran and rebound all SUBs
+        assert subscribe_calls > 4  # reconcile ran and rebound all SUBs
 
     async def test_liveness_timeout_skips_tick_work_with_no_real_event(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1125,7 +1133,7 @@ class TestPollInbox:
         mcp = create_server(state)
         task = asyncio.create_task(poll_inbox(mcp, state))
         await asyncio.sleep(self._FAST_INTERVAL * 3)
-        assert subscribe_calls == 3  # talk + inbox-notify + wall-notify, startup bind
+        assert subscribe_calls == 4  # talk + inbox + wall + check, startup bind
         passes_at_start = relay.get_wall.await_count  # the first pass only
 
         # A wedge teardown/give-up close, independent of this poller.
@@ -1136,7 +1144,7 @@ class TestPollInbox:
         with suppress(asyncio.CancelledError):
             await task
 
-        assert subscribe_calls > 3  # reconcile ran and rebound all SUBs
+        assert subscribe_calls > 4  # reconcile ran and rebound all SUBs
         assert relay.get_wall.await_count > passes_at_start  # the rebind recomputed
 
 

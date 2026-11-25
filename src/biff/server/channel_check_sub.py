@@ -15,11 +15,14 @@ import logging
 from contextlib import suppress
 from typing import TYPE_CHECKING, Self
 
-from biff.channel_check_wire import CheckRequest
+from nats.errors import Error as NatsError
+
+from biff.channel_check_wire import CheckRequest, CheckWire
 from biff.nats_relay import NatsRelay
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
 
 if TYPE_CHECKING:
+    from nats.aio.msg import Msg
     from nats.aio.subscription import Subscription
 
     from biff.server.state import ServerState
@@ -58,11 +61,10 @@ class ChannelCheckSub:
         try:
             nc = await relay.get_nc()
             generation = relay.connection_generation
-            handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
-                relay.channel_check_subject(self._state.session_key),
-                cb=self._on_request,
+            handle = await CheckWire(nc).listen(
+                relay.channel_check_subject(self._state.session_key), self._on_request
             )
-        except Exception:  # noqa: BLE001 - a relay outage is retried, never fatal
+        except (NatsError, OSError, TimeoutError):  # an outage: retried each tick
             self._latch.record_failure()
             return
         self._latch.record_success()
@@ -88,11 +90,10 @@ class ChannelCheckSub:
             with suppress(Exception, asyncio.CancelledError):
                 await asyncio.shield(handle.unsubscribe())
 
-    async def _on_request(self, msg: object) -> None:
+    async def _on_request(self, msg: Msg) -> None:
         """Hand a well-formed request to the emitter; drop anything else."""
-        data = getattr(msg, "data", b"")
         try:
-            request = CheckRequest.from_payload(data)
+            request = CheckRequest.from_payload(msg.data)
         except ValueError:
             logger.debug("channel check request dropped: malformed", exc_info=True)
             return

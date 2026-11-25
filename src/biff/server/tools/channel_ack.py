@@ -12,8 +12,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Self
 
+from biff.check_stamp_file import CheckStampFile
 from biff.nats_relay import NatsRelay
-from biff.unread import CheckStamp
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -44,6 +44,24 @@ class ChannelAck:
         self._state = state
         return self
 
+    def install(self, mcp: FastMCP[ServerState]) -> None:
+        """Register the tool the model calls with the token."""
+        mcp.tool(name="channel_ack", description=CHANNEL_ACK_DESCRIPTION)(
+            self.channel_ack
+        )
+
+    async def channel_ack(self, token: str) -> str:
+        """Acknowledge a channel check with the token from its channel event.
+
+        Args:
+            token: The 32 hex characters the channel check event names.
+
+        Returns:
+            ``biff channel live.`` for the pending token; a wrong or repeated
+            token changes nothing and says so.
+        """
+        return await self.acknowledge(token)
+
     async def acknowledge(self, token: str) -> str:
         """Return what the model is told; publish or record the match once."""
         state = self._state
@@ -53,30 +71,15 @@ class ChannelAck:
         relay = state.relay
         if isinstance(relay, NatsRelay):
             try:
-                await relay.publish_channel_check_ack(
-                    reply, state.session_key, token
-                )
-            except Exception:  # noqa: BLE001 - a tool handler is a system boundary
+                await relay.publish_channel_check_ack(reply, state.session_key, token)
+            except Exception:
                 logger.warning("channel check reply not sent", exc_info=True)
                 return f"{LIVE[:-1]}, but the reply to biff doctor was not sent."
         elif state.unread_path is not None:
-            CheckStamp.record(state.unread_path, time.time())
+            CheckStampFile.record(state.unread_path, time.time())
         return LIVE
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register the channel_ack tool."""
-    ack = ChannelAck(state)
-
-    @mcp.tool(name="channel_ack", description=CHANNEL_ACK_DESCRIPTION)
-    async def channel_ack(token: str) -> str:
-        """Acknowledge a channel check with the token from its channel event.
-
-        Args:
-            token: The 32 hex characters the channel check event names.
-
-        Returns:
-            ``biff channel live.`` for the pending token; a wrong, repeated or
-            expired token changes nothing and says so.
-        """
-        return await ack.acknowledge(token)
+    ChannelAck(state).install(mcp)

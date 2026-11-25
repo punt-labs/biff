@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Protocol, Self, cast
 
 if TYPE_CHECKING:
-    from nats.aio.client import Client as NatsClient
+    from collections.abc import Awaitable, Callable
+
+    from nats.aio.msg import Msg
     from nats.aio.subscription import Subscription
 
 
@@ -26,11 +28,8 @@ def _fields(data: bytes, what: str) -> dict[str, object]:
         raise ValueError(msg) from exc
     if not isinstance(raw, dict):
         msg = f"channel check {what} is not an object"
-        raise ValueError(msg)  # noqa: TRY004 - a wire value, not a type misuse
-    return {
-        str(k): v
-        for k, v in raw.items()  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
-    }
+        raise ValueError(msg)
+    return cast("dict[str, object]", raw)  # a JSON object's keys are always str
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,16 +113,51 @@ class PendingCheck:
         await self._sub.unsubscribe()
 
 
+class CheckPort(Protocol):
+    """The part of a NATS client the check uses, typed so no call is unknown.
+
+    The client's own ``subscribe`` carries an unparameterised ``Future`` that
+    type checkers report as partially unknown at every call site.
+    """
+
+    def new_inbox(self) -> str:
+        """Return a fresh inbox subject."""
+        ...
+
+    async def subscribe(
+        self,
+        subject: str,
+        queue: str = "",
+        cb: Callable[[Msg], Awaitable[None]] | None = None,
+    ) -> Subscription:
+        """Subscribe to *subject*, calling *cb* for each message if given."""
+        ...
+
+    async def flush(self) -> None:
+        """Wait until the server has processed everything sent so far."""
+        ...
+
+    async def publish(self, subject: str, payload: bytes) -> None:
+        """Publish *payload* to *subject*."""
+        ...
+
+
 class CheckWire:
     """Publish and subscribe the check's messages on one NATS client."""
 
-    _nc: NatsClient
+    _nc: CheckPort
 
-    def __new__(cls, nc: NatsClient) -> Self:
+    def __new__(cls, nc: CheckPort) -> Self:
         """Use *nc* for every message."""
         self = super().__new__(cls)
         self._nc = nc
         return self
+
+    async def listen(
+        self, subject: str, cb: Callable[[Msg], Awaitable[None]]
+    ) -> Subscription:
+        """Subscribe to *subject*, calling *cb* for each message."""
+        return await self._nc.subscribe(subject, cb=cb)
 
     async def request(self, subject: str, session_key: str) -> PendingCheck:
         """Send a request to *subject* with a fresh reply inbox; return the wait.
@@ -132,7 +166,7 @@ class CheckWire:
         out, so an acknowledgement cannot arrive before anyone is listening.
         """
         reply = self._nc.new_inbox()
-        sub = await self._nc.subscribe(reply)  # pyright: ignore[reportUnknownMemberType]
+        sub = await self._nc.subscribe(reply)
         await self._nc.flush()
         await self._nc.publish(subject, CheckRequest(reply).to_payload())
         return PendingCheck(sub, session_key)

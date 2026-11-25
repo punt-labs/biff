@@ -4,6 +4,15 @@
 
 ### Added
 
+- A session's biff server answers a channel check request. The request arrives
+  over the relay (NATS) with a one-time reply subject; the server accepts at
+  most one a minute, sends one channel event carrying a fresh 128-bit token, and
+  the new `channel_ack(token)` tool spends the token (constant-time compare, once)
+  and publishes `{session_key, token}` to the reply subject. On the local relay
+  it also writes `channel_checked_at` to the per-session unread file.
+  `NatsRelay.request_channel_check(session_key)` is the call `biff doctor` will
+  use. The check only reports; it never changes delivery. Specified in
+  `docs/channel-check.tex`.
 - `biff doctor` has a Channels check. Run from the shell that starts Claude
   Code, it names each environment variable that silently stops Claude Code
   from registering biff's channel

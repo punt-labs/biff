@@ -179,7 +179,8 @@ class TestRoundTrip:
         try:
             nc = await relay.get_nc()
             subject = relay.channel_check_subject(state.session_key)
-            for junk in (b"1", b"[]", b'{"reply": 3}', b'{"reply": "biff.x.inbox.kai"}'):
+            forged = (b"1", b"[]", b'{"reply": 3}', b'{"reply": "biff.x.inbox.kai"}')
+            for junk in forged:
                 await nc.publish(subject, junk)
             await nc.flush()
             await asyncio.sleep(0.2)
