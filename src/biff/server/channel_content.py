@@ -1,9 +1,7 @@
-"""What a channel event says: fixed templates, no bodies, claimed senders (DES-087).
+"""What a channel event says: fixed templates, no bodies, short senders (DES-087).
 
-An event enters the model's context as a prompt, and anyone holding the relay
-credential can publish a frame with any ``from``.  So an event carries a count
-or a short claimed sender, never a body, and a talk invite tells the model to
-ask the user.
+An event is one line in the model's context: the tool to call and, for a wall
+or a talk invite, who sent it.  The body stays behind that tool call.
 """
 
 from __future__ import annotations
@@ -17,12 +15,11 @@ from biff.session_routing import ID_RE
 MAX_EVENT_LENGTH = 200
 MAX_SENDER_USER_LENGTH = 39
 
-# The action, then the trust label, then the sender: the client shows about 70
-# characters of one line, so only a long sender may be cut.
-_WALL = "Call wall: unverified wall from {}."
-_INVITE = "Ask the user: unverified talk invite from {}."
+# The action, then the sender: the client shows about 70 characters of one line,
+# so only a long sender may be cut.
+_WALL = "Call wall: new wall from {}."
+_INVITE = "Call talk_read: talk invite from {}."
 _ANONYMOUS = "a teammate"
-_OWN_IDENTITY = "someone claiming to be you"
 
 
 class EventKind(StrEnum):
@@ -36,17 +33,17 @@ class EventKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Sender:
-    """A sender as the model may see it: claimed, unverified, short."""
+    """A sender as the model sees it: a ``user:tty`` address, kept short."""
 
     text: str
 
     @classmethod
-    def claimed(cls, user: str, tty: str, *, own_user: str) -> Self:
-        """Label a claimed ``user:tty``, or an anonymous teammate.
+    def claimed(cls, user: str, tty: str) -> Self:
+        """Label a ``user:tty``, or an anonymous teammate.
 
         The address is shown only when each part fully matches ``ID_RE`` and the
-        user is at most 39 characters.  A claim to be the receiving session's own
-        user is named as such rather than shown.
+        user is at most 39 characters, so no control or escape text reaches the
+        model's line.
         """
         is_plain = (
             ID_RE.fullmatch(user) is not None
@@ -55,8 +52,6 @@ class Sender:
         )
         if not is_plain:
             return cls(_ANONYMOUS)
-        if user == own_user:
-            return cls(_OWN_IDENTITY)
         return cls(f"{user}:{tty}")
 
     @classmethod
@@ -94,12 +89,12 @@ class ChannelEvent:
 
     @classmethod
     def wall(cls, sender: Sender) -> Self:
-        """Announce a new wall from a claimed *sender*."""
+        """Announce a new wall from *sender*."""
         return cls(EventKind.WALL, _fit(_WALL, sender))
 
     @classmethod
     def talk_invite(cls, sender: Sender) -> Self:
-        """Announce an invite to talk; the model is told to ask the user."""
+        """Announce an invite to talk from *sender*."""
         return cls(EventKind.TALK_INVITE, _fit(_INVITE, sender))
 
     @classmethod

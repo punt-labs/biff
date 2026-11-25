@@ -106,8 +106,8 @@ def format_agent_drain(drain: AgentDrain) -> str:
     lines: list[str] = []
     for _user, invite in sorted(drain.pending.items()):
         lines.append(
-            f"{HEADER_PREFIX}{terminal_safe(invite.user)} (unverified) wants to talk"
-            f" — ask the user before accepting: {terminal_safe(invite.accept_command)}"
+            f"{HEADER_PREFIX}{terminal_safe(invite.user)} wants to talk — "
+            f"{terminal_safe(invite.accept_command)} to accept"
         )
     for notif in drain.messages:
         label = notif.sender_label  # sender_label already neutralises both halves
@@ -116,7 +116,7 @@ def format_agent_drain(drain: AgentDrain) -> str:
             continue
         if not notif.nbody:
             continue
-        lines.append(f"{HEADER_PREFIX}{label} [untrusted]: {visible_text(notif.nbody)}")
+        lines.append(f"{HEADER_PREFIX}{label}: {visible_text(notif.nbody)}")
     return "\n".join(lines)
 
 

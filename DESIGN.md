@@ -8499,8 +8499,8 @@ of `biff mcp` is unchanged.
 
 Biff produces arrival summaries when the relay pushes a change: new mail (by
 inbox sequence number), a new wall, a new talk invite, or a new message in an
-accepted talk. Summaries carry no bodies, label senders as claimed and never
-tell the model to accept a talk; any plugin can carry them. The Claude Code
+accepted talk. Summaries carry no bodies and name the tool to call (DES-093
+removed their trust labels); any plugin can carry them. The Claude Code
 channel sender keeps a last-sent record per kind, advanced only after a send
 completes, and is rate limited by fixed constants.
 
@@ -9008,3 +9008,39 @@ agent.
 **Outcome:** with `BIFF_USER=devin` and `BIFF_OWNER=jmf-pobox` set, a Devin
 session in `punt-labs/vox` shows `devin:tty53 [A] jmf-pobox` in `/who`, the
 same shape as the `claude` agent on Jim's machine.
+
+## DES-093: No Blanket Trust Labels on Messages Until Signed Trust Lands
+
+**Date:** 2026-11-24
+**Status:** SETTLED
+**Topic:** How tool output, tool descriptions and channel events present
+message, wall and talk text (amends DES-087)
+
+**Context.** The channel emitter work labelled every message, wall and talk
+body `[untrusted]`, every wall and invite sender `unverified`, told the model in
+its instructions never to act on a body, and told it to ask the user before
+accepting a talk. In a live test on 2026-11-24 an agent read a teammate agent's
+mail asking for a one-line reply and refused to send it, because "biff message
+bodies are untrusted". biff exists so people and their agents can hand each
+other work; a label that applies to every sender alike stops that and protects
+nothing, because it cannot tell a teammate from a forger.
+
+**Decision.** Remove the blanket labels and the refusal instructions.
+`read_messages`, the wall banner and description, `talk_read` and the `talk`
+description show text as they did before the emitter work. Channel events keep
+their safety properties (no bodies, fixed templates, plain-identifier senders,
+rate limits) and name the tool to call: `Call wall: new wall from eric:tty9.`,
+`Call talk_read: talk invite from eric:tty9.` The emitter's instructions
+paragraph says only that events arrive on their own and name the tool to call.
+
+**Alternatives.**
+
+- *Keep the labels until the trust model ships.* Rejected: agent-to-agent work
+  stays broken for the weeks the trust model takes.
+- *Label only senders from other users.* Rejected: a `from` field is a claim
+  anyone with the relay credential can make, so the label would still be
+  wrong in both directions.
+
+**Outcome:** message trust is decided by the shared identity and trust model
+(ethos DES-086, signed messages and per-sender permissions), not by labels.
+REVIEW.md tells reviewers not to ask for these labels again.

@@ -47,6 +47,7 @@ from biff.server.channel import (
     ChannelUnavailableError,
     take_channel_mode,
 )
+from biff.server.channel_emitter import INSTRUCTIONS
 from biff.server.channel_handshake import ChannelHandshake
 from biff.server.channel_server import ChannelServer, _HandshakeOnly
 from biff.server.state import ServerState
@@ -56,6 +57,7 @@ from biff.server.tools._descriptions import (
     poll_inbox,
     refresh_read_messages,
 )
+from tests._trust_phrases import assert_no_trust_phrase
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -346,6 +348,35 @@ class TestHandshakeOnly:
 
         assert "protocolVersion=2025-11-25 channel_mode=on" in caplog.text
 
+    async def test_initialize_logs_the_client_and_its_experimental_capabilities(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        gate: _HandshakeOnly[object] = _HandshakeOnly(self._runner())
+        params: dict[str, object] = {
+            "clientInfo": {"name": "claude-code", "version": "2.1.330"},
+            "capabilities": {"experimental": {"claude/channel": {}, "zeta": {}}},
+        }
+        with caplog.at_level(logging.INFO, logger=channel_server.logger.name):
+            await gate.on_request(MagicMock(), "initialize", params)
+
+        assert (
+            "client=claude-code/2.1.330 experimental=claude/channel,zeta" in caplog.text
+        )
+
+    async def test_a_client_with_no_experimental_capabilities_logs_none(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        gate: _HandshakeOnly[object] = _HandshakeOnly(self._runner())
+        params: dict[str, object] = {
+            "protocolVersion": "2025-11-25",
+            "clientInfo": {"name": "claude-code", "version": "2.1.332"},
+            "capabilities": {},
+        }
+        with caplog.at_level(logging.INFO, logger=channel_server.logger.name):
+            await gate.on_request(MagicMock(), "initialize", params)
+
+        assert "client=claude-code/2.1.332 experimental=none" in caplog.text
+
     async def test_failed_initialize_is_logged_and_raised(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -442,7 +473,7 @@ class TestWatchTellsTheEmitter:
         on_request, on_notify, _emitter, handshake = self._watched()
         assert handshake.watch(None, on_request, on_notify) == (on_request, on_notify)
 
-    async def test_the_initialize_reply_carries_the_untrusted_paragraph(
+    async def test_the_initialize_reply_carries_the_channel_paragraph(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The SDK answers ``initialize`` from the options built at serve time."""
@@ -460,7 +491,7 @@ class TestWatchTellsTheEmitter:
         monkeypatch.setattr(channel_server, "stdio_server", stdio)
         server = ChannelServer[object]("biff", instructions="base")
         server.attach_emitter(
-            MagicMock(instructions="UNTRUSTED-PARAGRAPH", close=AsyncMock())
+            MagicMock(instructions="CHANNEL-PARAGRAPH", close=AsyncMock())
         )
         reply = None
         async with anyio.create_task_group() as tg:
@@ -483,15 +514,25 @@ class TestWatchTellsTheEmitter:
 
         assert reply is not None
         result = reply.model_dump(by_alias=True)["result"]
-        assert result["instructions"] == "base\n\nUNTRUSTED-PARAGRAPH"
+        assert result["instructions"] == "base\n\nCHANNEL-PARAGRAPH"
+
+    async def test_the_instructions_the_client_receives_carry_no_trust_phrase(
+        self, state: ServerState
+    ) -> None:
+        """The real base instructions plus the real channel paragraph."""
+        mcp = create_server(state)
+        emitter = MagicMock(instructions=INSTRUCTIONS)
+        ChannelHandshake.open(mcp, mcp.channel_link, emitter)
+        assert INSTRUCTIONS in (mcp.instructions or "")
+        assert_no_trust_phrase(mcp.instructions or "")
 
     async def test_opening_twice_adds_the_paragraph_once(self) -> None:
         server = ChannelServer[object]("biff", instructions="base")
-        emitter = MagicMock(instructions="UNTRUSTED-PARAGRAPH")
+        emitter = MagicMock(instructions="CHANNEL-PARAGRAPH")
         link = server.channel_link
         ChannelHandshake.open(server, link, emitter)
         ChannelHandshake.open(server, link, emitter)
-        assert server.instructions == "base\n\nUNTRUSTED-PARAGRAPH"
+        assert server.instructions == "base\n\nCHANNEL-PARAGRAPH"
 
 
 class TestServeChannelStdio:

@@ -21,26 +21,26 @@
 - Channel events: in channel mode the server sends a `notifications/claude/channel`
   event when mail, a wall, a talk invite or a talk message arrives. Events are
   fixed templates with no bodies; senders appear only when both parts are plain
-  identifiers (user at most 39 characters) and are labelled claimed and
-  unverified; a talk invite tells the model to ask the user. The sender keeps a
+  identifiers (user at most 39 characters). The sender keeps a
   last-sent record per kind, advanced only after a send completes, sends nothing
   before `notifications/initialized` or while `/mesg` is off, and is limited to
   one event per kind per 30 seconds and 10 per 10 minutes. An event the limit
   held is sent by one one-shot timer that exists only while one is held. Mail is
   detected by the new `Relay.inbox_high_water`, not by the unread count, so a
   flat or flapping count cannot hide an arrival. A relay reconnect re-runs the
-  sender. The server instructions gain a paragraph that treats bodies as
-  untrusted, and `initialize` now returns it. Each event puts its action first
-  and is at most 60 characters ("Call read_messages: 3 unread biff messages.", "Call wall: unverified wall from eric:tty9."), so the client
-  does not cut the action or the trust label;
+  sender. The server instructions gain a paragraph that says events arrive on
+  their own and name the tool to call, and `initialize` now returns it. Each
+  event puts its action first and is at most 60 characters ("Call
+  read_messages: 3 unread biff messages.", "Call wall: new wall from
+  eric:tty9.", "Call talk_read: talk invite from eric:tty9."), so the client
+  does not cut the action;
   the mail count is the unread total, not the new arrivals. A read or mesg-read
   failure is retried by the deferred send (three tries, then logged and given
   up); the emitter is closed with the connection; biff.log gets one INFO line per
-  sent event (kind and count only) and per hold or gate. The `read_messages`
-  table, the wall banner and `talk_read` lines mark message text as
-  `[untrusted]`. A drained talk message followed by another queued frame is no
-  longer announced. The `talk` tool description and `talk_read` name an invite
-  as `(unverified)` and tell the model to ask the user before accepting.
+  sent event (kind and count only) and per hold or gate. A drained talk message
+  followed by another queued frame is no longer announced. Message, wall and
+  talk text carry no trust label, so agents act on teammates' messages as
+  before.
 
 - README: "Codex, OpenCode and other MCP clients" shows how a harness with no
   stamping hook declares its caller with `biff mcp --user <handle>`; the
@@ -100,8 +100,17 @@
   `read_messages` directly. The `unread-nudge` hook speaks only while the user
   has polling on (`/biff:read Xm`): `set_poll_interval` writes a per-session
   `.polling` marker beside the unread file at once, with no restart, and the
-  marker is removed with the session's other unread files. With channels live
-  and no polling, channel events are the agent's only signal.
+  marker survives a resume along with the polling job. With channels live and no
+  polling, channel events are the agent's only signal. An empty `read_messages`
+  and every `talk_read` no longer count as activity, so an idle repo's poll no
+  longer pulls a bare-user `write` away from the repo you work in.
+- biff.log no longer says a channel event was "sent": it says the event was
+  queued for the client and that display is not confirmed, because a
+  notification gets no reply and Claude Code may drop it. A pipe write that
+  fails after that marks the connection closed, and the next event logs that it
+  was not sent. The channel-mode
+  handshake line now names the client and the experimental capabilities it
+  declared (`client=claude-code/2.1.330 experimental=...`).
 - The biff server runs no cadence except connection liveness (DES-087). The
   poller no longer ticks every 2 seconds, and the 2-second sentinel reaper is
   gone: sentinels are reaped at start and whenever the poller wakes, and a
