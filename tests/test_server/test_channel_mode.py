@@ -361,14 +361,19 @@ class TestHandshakeOnly:
             "client=claude-code/2.1.330 experimental=claude/channel,zeta" in caplog.text
         )
 
-    async def test_initialize_without_client_details_logs_none(
+    async def test_a_client_with_no_experimental_capabilities_logs_none(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         gate: _HandshakeOnly[object] = _HandshakeOnly(self._runner())
+        params: dict[str, object] = {
+            "protocolVersion": "2025-11-25",
+            "clientInfo": {"name": "claude-code", "version": "2.1.332"},
+            "capabilities": {},
+        }
         with caplog.at_level(logging.INFO, logger=channel_server.logger.name):
-            await gate.on_request(MagicMock(), "initialize", {})
+            await gate.on_request(MagicMock(), "initialize", params)
 
-        assert "client=unknown/unknown experimental=none" in caplog.text
+        assert "client=claude-code/2.1.332 experimental=none" in caplog.text
 
     async def test_failed_initialize_is_logged_and_raised(
         self, caplog: pytest.LogCaptureFixture

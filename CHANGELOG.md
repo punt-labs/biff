@@ -96,8 +96,10 @@
 ### Changed
 
 - biff.log no longer says a channel event was "sent": it says the event was
-  written to the client and that display is not confirmed, because a
-  notification gets no reply and Claude Code may drop it. The channel-mode
+  queued for the client and that display is not confirmed, because a
+  notification gets no reply and Claude Code may drop it. A pipe write that
+  fails after that marks the connection closed, and the next event logs that it
+  was not sent. The channel-mode
   handshake line now names the client and the experimental capabilities it
   declared (`client=claude-code/2.1.330 experimental=...`).
 - The biff server runs no cadence except connection liveness (DES-087). The
