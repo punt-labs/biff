@@ -12,6 +12,7 @@ from biff.channel_check_wire import CheckAck, CheckRequest
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.channel_check_sub import ChannelCheckSub
+from biff.server.tools import register_channel_tools
 from tests._state import create_state
 
 if TYPE_CHECKING:
@@ -140,7 +141,9 @@ class TestRoundTrip:
             assert [meta for _, meta in link.sent] == [{"kind": "channel_check"}]
             token = link.sent[0][0].split("token ")[1].split(".")[0]
 
-            tool = await create_server(state).get_tool("channel_ack")
+            mcp = create_server(state)
+            register_channel_tools(mcp, state)
+            tool = await mcp.get_tool("channel_ack")
             assert isinstance(tool, FunctionTool)
             assert await tool.fn(token=token) == "biff channel live."
             try:

@@ -101,7 +101,6 @@ class TestServerStartup:
         expected = {
             "biff",
             "biff_relay",
-            "channel_ack",
             "finger",
             "get_poll_status",
             "last",

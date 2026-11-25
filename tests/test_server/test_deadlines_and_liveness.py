@@ -228,7 +228,7 @@ class TestWatchLiveness:
             held = data.stat()
             open_dirs = {
                 (info.st_dev, info.st_ino)
-                for name in os.listdir("/dev/fd")
+                for name in (p.name for p in Path("/dev/fd").iterdir())
                 if (info := _fstat(int(name))) is not None
                 and stat.S_ISDIR(info.st_mode)
             }

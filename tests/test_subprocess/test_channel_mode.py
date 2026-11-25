@@ -181,7 +181,7 @@ class TestChannelMode:
         assert isinstance(tools, JSONRPCResponse)
 
         names = {tool["name"] for tool in tools.result["tools"]}
-        assert {"who", "write", "read_messages"} <= names
+        assert {"who", "write", "read_messages", "channel_ack"} <= names
 
     def test_startup_record_names_the_version_and_the_mode(
         self, channel_server: _Server
@@ -226,6 +226,13 @@ class TestWithoutChannelMode:
         result = plain_server.initialize().result
 
         assert "claude/channel" not in result["capabilities"].get("experimental", {})
+
+    def test_channel_ack_is_not_registered(self, plain_server: _Server) -> None:
+        plain_server.initialize()
+        tools = plain_server.request("tools/list", {})
+        assert isinstance(tools, JSONRPCResponse)
+
+        assert "channel_ack" not in {tool["name"] for tool in tools.result["tools"]}
 
     def test_startup_record_says_channel_mode_is_off(
         self, plain_server: _Server

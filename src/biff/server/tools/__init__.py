@@ -30,7 +30,6 @@ def register_all_tools(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register all biff tools on the server."""
     biff_relay.register(mcp, state)
     biff_toggle.register(mcp, state)
-    channel_ack.register(mcp, state)
     mesg.register(mcp, state)
     finger.register(mcp, state)
     messaging.register(mcp, state)
@@ -41,3 +40,8 @@ def register_all_tools(mcp: FastMCP[ServerState], state: ServerState) -> None:
     talk.register(mcp, state)
     last.register(mcp, state)
     poll_config.register(mcp, state)
+
+
+def register_channel_tools(mcp: FastMCP[ServerState], state: ServerState) -> None:
+    """Register the tools only a channel-mode server offers."""
+    channel_ack.register(mcp, state)
