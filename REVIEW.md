@@ -19,15 +19,19 @@ against the product.
 - Errors that are swallowed or logged without the user or the model ever
   finding out.
 - Changed behavior with no test, or a test that cannot fail.
-- Secrets or tokens committed to the repository.
-- Paths built from untrusted input that escape their directory, and
-  terminal escape sequences reaching a terminal.
+- Security defects in what biff already does: committed secrets or tokens,
+  credentials leaking into logs or output, paths built from outside input
+  that escape their directory, terminal escape sequences reaching a
+  terminal, unsafe file modes, shell or argument injection, unsafe
+  deserialization.
 
-## Out of scope: message trust and security posture
+## Out of scope: security work that is not built yet
 
-Do not raise findings about any of the following. They are decided, or they
+Security findings are welcome, except about the parts of biff that are not
+built yet. Message authenticity, trust levels and per-user relay credentials
 belong to the shared trust model being designed in ethos (DES-086), which
-replaces them with signed messages and per-sender permissions.
+adds signed messages and per-sender permissions. Until it lands, do not
+raise findings about any of the following.
 
 - Whether a message, wall, plan or talk body should be treated as untrusted,
   labelled as untrusted or unverified, or kept out of the model's context.
@@ -35,8 +39,9 @@ replaces them with signed messages and per-sender permissions.
   descriptions.
 - Asking that the model be told to ignore, refuse, or "ask the user before
   acting on" a teammate's message, or before accepting a talk invite.
-- Sender spoofing, forged `from` fields, or the shared relay credential.
-  Known and tracked; signing fixes it.
+- Sender spoofing, forged `from` fields, eavesdropping on the relay, or the
+  shared relay credential. Known and tracked; signing and per-user
+  credentials fix them.
 - Bodies appearing in channel events or tool descriptions.
 - Claude Code permission rules, allow lists and hooks as a security
   boundary. They are a safety net, not security; agent-image provides
@@ -58,6 +63,6 @@ the above, and do not ask for them.
 
 ## Severity
 
-- Important: lost or misdelivered messages, crashes, leaks, races, committed
-  secrets.
+- Important: lost or misdelivered messages, crashes, leaks, races, and the
+  in-scope security defects above.
 - Nit: everything else. At most five per pull request.
