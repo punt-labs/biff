@@ -7,3 +7,4 @@
 {"ts":"2026-11-23T00:15:50Z","total":203,"by_category":{"noqa":126,"type_ignore":10,"pylint_disable":0,"pyright_ignore":31,"file_level":1,"per_file_ignores":35}}
 {"ts":"2026-11-23T23:19:57Z","verdict":"relaxed","file":"tools/test_changed.py","before":0,"after":2,"reason":"pre-commit selector runs fixed git and pytest argv without a shell, like tools/check_python_docs.py","commit":"05b6210"}
 {"ts":"2026-11-24T00:42:43Z","total":202,"by_category":{"noqa":125,"type_ignore":10,"pylint_disable":0,"pyright_ignore":31,"file_level":1,"per_file_ignores":35}}
+{"ts":"2026-11-25T16:33:40Z","verdict":"relaxed","file":"src/biff/server/tools/messaging.py","before":1,"after":2,"reason":"read_messages stamps activity after the fetch; on NATS the fetch already consumed the mail, so a failed presence write must be logged, not raised, or the mail is lost. Broad catch at the MCP tool boundary (PY-EH-6).","commit":"c90b231"}
