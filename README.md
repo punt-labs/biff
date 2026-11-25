@@ -479,6 +479,45 @@ Only an explicit `--user` on a stdio launch relaxes the refusal. The Claude
 Code plugin passes none, so its server still refuses an unstamped call.
 `--user` names the biff identity, so pick a handle that no other agent uses.
 
+## Channels (Claude Code)
+
+With channels, new mail, walls and talk reach a Claude Code session on their
+own, as short channel events, so nobody has to poll. Channels need a biff
+release newer than 1.24.2.
+
+**Team and Enterprise plans: an Owner sets it up once.**
+
+1. Organization settings > Claude Code > Channels: turn Channels on
+   (`channelsEnabled`).
+2. Add biff to `allowedChannelPlugins`:
+
+   ```json
+   {"marketplace": "punt-labs", "plugin": "biff"}
+   ```
+
+   This list replaces Anthropic's default channel list rather than adding to
+   it, so also list every other channel plugin the organization uses.
+
+**Then each user launches with:**
+
+```bash
+claude --channels plugin:biff@punt-labs
+```
+
+**Individual accounts and local testing** use the development flag, which shows
+a confirmation prompt at every launch. It skips `allowedChannelPlugins`, but on
+Team and Enterprise plans Channels must still be turned on (`channelsEnabled`):
+
+```bash
+claude --dangerously-load-development-channels plugin:biff@punt-labs
+```
+
+A plugin loaded with `--plugin-dir` is in the `inline` marketplace, so it is
+`plugin:biff-dev@inline` there (`plugin:biff@inline` for a released checkout).
+
+**Amazon Bedrock, Google Vertex AI and Microsoft Foundry:** channels are not
+available; poll with `/biff:read 2m` instead.
+
 ## Channels Warning (Claude Code)
 
 When Claude Code starts in a biff-enabled repository, biff checks whether new

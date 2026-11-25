@@ -399,9 +399,20 @@ auto-accept, rate limit) stay.
 
 ### 8. Getting channels to Claude Code users
 
-1. Org admins add biff to `allowedChannelPlugins`.
-2. Submit biff to Anthropic's official channel plugin list.
-3. Solo users without an org launch with the development flag.
+1. Team and Enterprise orgs, the primary audience: an Owner turns on Channels
+   (Organization settings > Claude Code > Channels, `channelsEnabled`) and adds
+   `{"marketplace": "punt-labs", "plugin": "biff"}` to `allowedChannelPlugins`.
+   Users then launch with `claude --channels plugin:biff@punt-labs`, with no
+   prompt. The start-up warning's fix text leads with this path. The
+   allowlist replaces Anthropic's default list, so it must also name the
+   org's other channel plugins.
+2. Submit biff to Anthropic's official channel plugin list, for individual
+   accounts.
+3. Until then, individual accounts and local testing launch with the
+   development flag, which prompts at every launch and skips the allowlist
+   but not `channelsEnabled`; the warning names it second. A `--plugin-dir` plugin is in the `inline` marketplace, so the
+   warning names `plugin:<name>@inline` for it and omits `--channels`.
+4. Amazon Bedrock, Google Vertex AI and Microsoft Foundry cannot use channels.
 
 This repo's `.envrc` deviation (DES-063) gets a test that parses `.envrc` and
 fails on any active line that exports `DISABLE_TELEMETRY`,

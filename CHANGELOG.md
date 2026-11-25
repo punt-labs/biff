@@ -107,6 +107,11 @@
 
 ### Changed
 
+- The start-up warning and README lead with the Team and Enterprise setup: an
+  Owner turns on Channels and adds biff to `allowedChannelPlugins`, then users
+  launch with `claude --channels plugin:biff@punt-labs`, with no prompt. The
+  development flag, which prompts at every launch, comes second, for local
+  testing and individual accounts. README has a new Channels setup section.
 - The status line is display for the user only. `/biff:read` no longer runs
   `biff statusline` to decide what to read: it calls `talk_read` and
   `read_messages` directly. The `unread-nudge` hook speaks only while the user

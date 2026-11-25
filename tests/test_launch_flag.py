@@ -122,12 +122,15 @@ class TestJointGate:
         (gate,) = _closed(["claude", DEV, "server:fakechat"])
         assert "not started with a channel flag for biff" in gate.reason
 
-    def test_no_flag_recommends_the_dev_flag(self) -> None:
+    def test_no_flag_leads_with_the_admin_path(self) -> None:
+        """Teams and Enterprise first: admin settings, then --channels."""
         (gate,) = _closed(["claude"])
         assert gate.notify_user
-        assert gate.fix.startswith(f"Restart Claude Code with {DEV} {BIFF}.")
-        assert "--channels" in gate.fix
-        assert "allowedChannelPlugins" in gate.fix
+        assert gate.fix.startswith("Ask your admin to turn on Channels")
+        admin = gate.fix.index("allowedChannelPlugins")
+        channels = gate.fix.index(f"--channels {BIFF}")
+        dev = gate.fix.index(f"{DEV} {BIFF}")
+        assert admin < channels < dev  # the development flag comes last
 
     def test_a_plugin_dir_session_is_told_the_inline_entry(
         self, tmp_path: Path
