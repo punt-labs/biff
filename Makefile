@@ -72,11 +72,14 @@ test-stress: ## Run hosted NATS scale tests (same prerequisites as test-live)
 	@test -n "$${BIFF_TEST_NATS_URL:-}" -a -n "$${BIFF_TEST_NATS_TOKEN:-}$${BIFF_TEST_NATS_NKEYS_SEED:-}$${BIFF_TEST_NATS_CREDS:-}" || { echo "Set BIFF_TEST_NATS_URL and one BIFF_TEST_NATS_* auth variable" >&2; exit 1; }
 	uv run pytest -m 'stress and not quarantine'
 
+test-channels: ## Drive a real interactive claude in tmux and watch channel events arrive
+	uv run pytest -m 'claude_channels and not quarantine'
+
 test-agent: ## Drive real Claude sessions through biff (requires ANTHROPIC_API_KEY)
 	@test -n "$${ANTHROPIC_API_KEY:-}" || { echo "Set a scoped ANTHROPIC_API_KEY" >&2; exit 1; }
 	uv run pytest -m 'sdk and not quarantine'
 
-.PHONY: hooks test-changed test-push test-unit test-integration test-subprocess test-cli-multi-user test-nats-local test-docker test-e2e test-nightly test-quarantine test-live test-stress test-agent
+.PHONY: hooks test-changed test-push test-unit test-integration test-subprocess test-cli-multi-user test-nats-local test-docker test-e2e test-nightly test-quarantine test-live test-stress test-channels test-agent
 
 smoke-release: ## Build a wheel and smoke-test it installed in a clean environment
 	rm -rf .tmp/smoke-dist

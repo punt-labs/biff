@@ -463,16 +463,47 @@ Checks:
 `/z-spec:check`, `/z-spec:test` and a zero-GAP `/z-spec:audit` on
 `notification.tex` gate the channel-events PR, per CLAUDE.md.
 
+## Verified launch
+
+Observed 2026-11-24 on Claude Code 2.1.332 (macOS) with the tmux tier
+(`make test-channels`, `tests/test_claude_channels/`). A session started with
+`--plugin-dir <checkout>/plugin` is the plugin `biff-dev@inline`, not
+`biff-dev@punt-labs`, so the flag that works there is:
+
+```bash
+claude --plugin-dir "$PWD/plugin" \
+  --dangerously-load-development-channels plugin:biff-dev@inline
+```
+
+Mail, a wall and a talk invite each showed in the idle session's pane as
+`← tty: Call read_messages: 1 unread biff message.`,
+`← tty: Call wall: new wall from ...` and
+`← tty: Call talk_read: talk invite from ...`, with the unread-nudge
+hook silenced and `biff.log` recording each event as queued. The launch of the
+2026-11-24 manual test, `plugin:biff-dev@punt-labs` with `--plugin-dir`, matches
+no plugin: biff logged `channel event (mail) queued` and Claude Code dropped the
+event without a message other than its banner, `plugin not installed`.
+
+| Channel flag | With | Result |
+|--------------|------|--------|
+| `plugin:biff-dev@inline` | `--plugin-dir` | Mail, wall and invite displayed |
+| `server:plugin:biff-dev:tty` | `--plugin-dir` | Mail, wall and invite displayed; the banner says `no MCP server configured with that name` and biff's start-up note wrongly says channels are not live |
+| `plugin:biff-dev@punt-labs` | `--plugin-dir` | Nothing displayed; banner `plugin not installed` |
+| `server:tty` | `--plugin-dir` | Nothing displayed; banner `no MCP server configured with that name` |
+| `plugin:biff-dev` | `--plugin-dir` | Refused at launch: entries must be tagged `plugin:<name>@<marketplace>` or `server:<name>` |
+| `plugin:biff@punt-labs` | the marketplace-installed plugin (1.24.2) | Nothing displayed; that release's manifest sets no `BIFF_CHANNEL_MODE`, so its server is not a channel |
+
 ## Testing
 
 | Tier | What it proves |
 |------|----------------|
 | Unit | Summaries per kind (content, `meta`, no body text, sender rule, each wall and invite key once, own wall not summarized, mail by sequence with flat and flapping counts); rate limit and coalescing; last-sent record unchanged on timeout, mesg off, closed window, before initialization; start-up warning text per closed gate and silence when all visible gates are open; `channel_check` rate limit, token, `channel_ack`; nudge hook only with `polling: true`; no timer other than liveness and the deferred send, which is armed only with a held arrival; mail by sequence with gaps, with a read in between and with other inboxes advancing the stream; a repeat invite from one session key is announced; a message after `talk_read` drained the queue is announced; reconnect catch-up announces mail that arrived while disconnected; a local-relay wall and a bare-user write are announced; an invite held past `PENDING_INVITE_TTL` is not announced; mail and wall held with different window openings are both sent; `channel_ack` publishes the acknowledgement on the reply subject |
 | Integration (raw stdio through the real `biff mcp` entry point) | With `BIFF_CHANNEL_MODE=1`: probe refused with -32601; `initialize` succeeds with the capability; the variable is gone from the server's environment; no channel frame before `notifications/initialized`; a relay arrival produces a `notifications/claude/channel` frame; a relayed `channel_check` produces one check frame and `channel_ack` publishes `{session_key, token}` on the request's reply subject (on the local relay it writes `channel_checked_at` to the unread file instead); a 2026-07-28 request after `initialize` is refused. Without it: probe answered with `supportedVersions ["2026-07-28"]`, capability absent, no channel frames |
-| End to end (tmux, real `claude`, local NATS) | Launched with the channel flag: no start-up warning; `biff doctor` reports `channel live`; a wall, a `write` and a talk invite each reach an idle session as a channel event within 10 seconds, with no cron running. Launched without it: the start-up warning appears (if the hook can see the flag) and doctor names the launch-flag gate; after `/biff:read 2m` the same three arrive by polling |
+| End to end (tmux, real `claude`, local `nats-server`; `make test-channels`) | Launched with the verified channel flag, nudge hook silenced, no prompt typed: mail (`biff write`), a wall (`biff wall`) and a talk invite (a published frame) each show as a channel event in the idle session's pane within 45 seconds, and `biff.log` records each event. It does not check the start-up warning, `biff doctor`, the polling fallback or a 10-second bound |
 
 The tmux harness is the spike's `harness.sh`, rewritten for current config and
-marked as its own pytest tier. Release requires one passing end-to-end run.
+marked as its own pytest tier (`claude_channels`, `make test-channels`).
+Release requires one passing end-to-end run.
 
 ## Rejected alternatives
 

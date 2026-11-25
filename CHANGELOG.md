@@ -4,6 +4,10 @@
 
 ### Added
 
+- `make test-channels` (`claude_channels` marker): an end-to-end tier that starts
+  a real interactive `claude` in tmux and checks that mail, a wall and a talk
+  invite each show as a channel event in its pane. The verified launch flag is
+  `plugin:biff-dev@inline` with `--plugin-dir`; see `docs/design-channels.md`.
 - `--user <handle>` (CLI and `biff mcp`) naming a `kind: agent` identity in
   `.punt-labs/ethos/identities/` makes the session that agent: `/who` flags it
   `[A]` and it takes the identity's display name. `BIFF_USER` is the host's

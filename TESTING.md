@@ -3,7 +3,7 @@
 This guide applies Punt Kit's [Testing standard][standard] and
 [Python rules][python-rules]. Run `make check` before opening a PR.
 
-Biff has an eight-tier testing pyramid. Each tier tests a different
+Biff has a nine-tier testing pyramid. Each tier tests a different
 boundary, at a different transport, with different infrastructure
 requirements. Run `uv run pytest --collect-only` for current test
 counts per tier — this file doesn't print them, because they drift
@@ -53,6 +53,7 @@ fits its budget; the shared-file fallback can exceed the pre-commit target.
 | E2E | `make test-e2e` | Installed wheel plus tiers 2b and 3c |
 | Live | `make test-live`; `make test-stress` | Tier 3d: `BIFF_TEST_NATS_URL` plus `BIFF_TEST_NATS_CREDS`, `_TOKEN` or `_NKEYS_SEED`; never a PR test |
 | Agent | `make test-agent` | Tier 4: scoped `ANTHROPIC_API_KEY` and the Claude Agent SDK |
+| Channels | `make test-channels` | Tier 5: `tmux`, `nats-server` and a logged-in `claude` on `PATH` |
 | Nightly | `make test-nightly` | Tiers 3a, 2b and 3c; `nats-server` on `PATH` |
 | Quarantine | `make test-quarantine`; `uv run pytest -m quarantine` | List marks, or run them with their own prerequisites |
 
@@ -92,6 +93,8 @@ maintainers. Review by 2026-12-07.
 
 ```text
                     ┌───────────┐
+                    │  Tier 5   │  Channels — a real claude TUI in tmux
+                    ├───────────┤
                     │  Tier 4   │  SDK — Claude picks the tools
                     ├───────────┤
                  ┌──┤  Tier 3d  │  Hosted NATS — real remote relay
@@ -136,6 +139,7 @@ another. The Docker-image tier (biff-kmv) shipped alongside this doc update.
 | 3d | `nats_hosted` | `BIFF_TEST_NATS_URL` / `BIFF_TEST_NATS_CREDS` (or `_TOKEN` / `_NKEYS_SEED`) pointed at a real relay |
 | 3d (subset) | `stress` | Same as `nats_hosted` — scale stress tests specifically (`tests/test_hosted_nats/test_stress.py`) |
 | 4 | `sdk` | `ANTHROPIC_API_KEY` |
+| 5 | `claude_channels` | `tmux`, `nats-server` and a logged-in interactive `claude` |
 
 `cli_multi_user` and `nats_local` both need a bare `nats-server` binary,
 but they're deliberately distinct tiers with distinct markers — 2b
@@ -362,6 +366,37 @@ enough for the model to use correctly.
 
 **Cost**: Real money per test, tens of seconds each. Requires
 `ANTHROPIC_API_KEY`.
+
+### Tier 5: Claude channels
+
+`tests/test_claude_channels/`, marker `claude_channels`. Channel events
+reach only an interactive Claude Code session, never the Agent SDK or a raw
+stdio client, so this tier starts a real `claude` in a detached tmux session
+and reads its screen.
+
+```bash
+make test-channels
+```
+
+The rig (`tests/test_claude_channels/rig.py`) builds, under `/tmp` and outside
+the checkout (Claude Code imports every `CLAUDE.md` above its working
+directory), a git repo with biff enabled, a private `HOME` that holds
+`biff.log` and the relay state, and a copy of `plugin/` whose server command
+points at this checkout's `biff`. The `biff` and `biff-hook` shims set that home, the environment drops ambient `BIFF_*`, `CLAUDECODE` and `GIT_*` variables, and git reads no global config, so the tier can run inside Claude Code and never touches the operator's biff home (the fixture fails if a file there names the rig). Claude Code runs with
+`--setting-sources project,local`, so the operator's installed plugins start no
+second biff server. A second user, `bob`, writes mail and posts a wall through
+the `biff` CLI and publishes a talk invite as a NATS frame (no CLI verb sends
+one). The test polls `tmux capture-pane` until the event text shows, fails with
+the captured pane and the `biff.log` tail on timeout, and then checks that
+`biff.log` recorded the event as queued (the log cannot say the client displayed it; the pane is the proof).
+
+`BIFF_CHANNEL_LAUNCHES` (comma-separated names from `LAUNCHES` in
+`launches.py`; a blank or unknown value is an error) selects which channel-flag spellings run; the default is
+the verified one. The verified launch and the variants that do not display
+events are in [design-channels.md](docs/design-channels.md#verified-launch).
+
+**Cost**: about a minute per launch, no model tokens beyond what Claude Code
+spends reacting to each event. It needs a logged-in `claude`.
 
 ## Release checks
 
