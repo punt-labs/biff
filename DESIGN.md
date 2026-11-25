@@ -6684,7 +6684,7 @@ external link into `DESIGN.md`.
 - Repo-relative references to the surface had to move with it:
   `tests/test_hooks_registration.py`, `tests/test_suppress_output.py`,
   `scripts/release-plugin.sh`, and `scripts/restore-dev-plugin.sh`.
-- `punt release` and `punt audit` resolve `plugin.json` via
+- `punt release run` and `punt repo audit` resolve `plugin.json` via
   `PLUGIN_MANIFEST_CANDIDATES` in punt-kit's `detect.py`, which includes
   `plugin/.claude-plugin/plugin.json` as of punt-kit v0.15.0 — a locally
   stale punt-kit install (pre-v0.15.0) will misdetect this repo as

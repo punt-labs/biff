@@ -164,9 +164,9 @@ The release process edits both files and runs `uv lock` to update `uv.lock`.
 Use semver: patch for fixes, minor for features, major for breaking changes.
 
 **Version bumps belong to the release process only.** Implementation
-PRs must NOT bump version files. `punt release` reads pyproject.toml
+PRs must NOT bump version files. `punt release run` reads pyproject.toml
 as `current` and increments it — if an implementation PR pre-bumps
-the version, `punt release` will bump PAST the intended version,
+the version, `punt release run` will bump PAST the intended version,
 creating a phantom release (COE: docs/coe-v1.11-release.md).
 The version on main between releases stays at the last released
 version.
@@ -194,7 +194,7 @@ PyPI serves `uv tool install punt-biff`. This ships the Python runtime (MCP serv
 #### Release Process
 
 Both channels release from a single workflow. Use `/punt:auto release` (the slash command),
-which runs the `punt release` CLI through the playbook executor with LLM-driven error
+which runs the `punt release run` CLI through the playbook executor with LLM-driven error
 diagnosis. It handles all 11 phases automatically: preflight, version bump, build, release PR,
 tag, CI wait, GitHub release, PyPI verify, post-release (README SHA bump), cross-repo
 propagation (punt-kit install-all.sh, marketplace catalog, website), and verification.
@@ -239,7 +239,7 @@ Three documents track different scopes. All are updated in the PR branch, before
 
 Before creating a PR, verify:
 
-- [ ] **CHANGELOG entry** under `## [Unreleased]` describes the change (do NOT bump version files — `punt release` owns that)
+- [ ] **CHANGELOG entry** under `## [Unreleased]` describes the change (do NOT bump version files — `punt release run` owns that)
 - [ ] **`plugin.json` name is `"biff-dev"`** (not `"biff"` — release scripts handle the swap)
 - [ ] **Documentation updated** per [Documentation Discipline](#documentation-discipline) (CHANGELOG, README, PR/FAQ as applicable)
 - [ ] **Quality gates pass**
@@ -452,9 +452,9 @@ make check
 
 | Tool | What It Does |
 |------|-------------|
-| `punt init` | Scaffold missing files (CI, config, permissions) |
-| `punt audit` | Check compliance against Punt Labs standards |
-| `punt audit --fix` | Auto-create missing mechanical files |
+| `punt repo init` | Scaffold missing files (CI, config, permissions) |
+| `punt repo audit` | Check compliance against Punt Labs standards |
+| `punt repo audit --fix` | Auto-create missing mechanical files |
 | `/punt reconcile` | LLM-powered contextual reconciliation (workflows, CLAUDE.md, permissions) |
 
 @.punt-labs/vox/CLAUDE.md
