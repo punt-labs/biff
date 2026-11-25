@@ -157,6 +157,14 @@ class ChannelEmitter:
         """The pending ``biff doctor`` check; the ``channel_ack`` tool spends it."""
         return self._check
 
+    def rebound(self) -> None:
+        """Start the check afresh: the server now serves another session.
+
+        A ``/clear`` or resume keeps the process but is a new session, which
+        inherits neither the old session's cooldown nor its pending token.
+        """
+        self._check = ChannelCheck(self._clock)
+
     def channel_check_requested(self, reply: str) -> None:
         """Take a doctor's check request; the next pass sends its one event.
 

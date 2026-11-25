@@ -131,6 +131,7 @@ class ServerState:
             object.__setattr__(
                 self, "unread_path", routing.unread_path(self.unread_dir)
             )
+        self.emitter.rebound()
         self.talk.rebind(
             tty=routing.routing_id, session_key=routing.session_key(self.config.user)
         )
