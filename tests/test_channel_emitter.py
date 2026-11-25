@@ -1327,7 +1327,8 @@ class TestAuditLog:
         with caplog.at_level("INFO", logger="biff.server.channel_emitter"):
             await rig.emitter.check()
         lines = [r.getMessage() for r in caplog.records]
-        assert "channel event (mail) sent, count=2" in lines
+        assert lines == ["channel event (mail) written, count=2; display not confirmed"]
+        assert not any("sent" in m for m in lines)
         assert not any("SECRET" in m or "mallory" in m for m in lines)
 
     async def test_a_held_event_is_logged_once(

@@ -95,6 +95,11 @@
 
 ### Changed
 
+- biff.log no longer says a channel event was "sent": it says the event was
+  written to the client and that display is not confirmed, because a
+  notification gets no reply and Claude Code may drop it. The channel-mode
+  handshake line now names the client and the experimental capabilities it
+  declared (`client=claude-code/2.1.330 experimental=...`).
 - The biff server runs no cadence except connection liveness (DES-087). The
   poller no longer ticks every 2 seconds, and the 2-second sentinel reaper is
   gone: sentinels are reaped at start and whenever the poller wakes, and a
