@@ -477,10 +477,11 @@ claude --plugin-dir "$PWD/plugin" \
 
 Mail, a wall and a talk invite each showed in the idle session's pane as
 `← tty: Call read_messages: 1 unread biff message.`,
-`← tty: Call wall: ...` and `← tty: Ask the user: ...`, with the unread-nudge
-hook silenced and `biff.log` recording each event as sent. The launch of the
+`← tty: Call wall: new wall from ...` and
+`← tty: Call talk_read: talk invite from ...`, with the unread-nudge
+hook silenced and `biff.log` recording each event as queued. The launch of the
 2026-11-24 manual test, `plugin:biff-dev@punt-labs` with `--plugin-dir`, matches
-no plugin: biff logged `channel event (mail) sent` and Claude Code dropped the
+no plugin: biff logged `channel event (mail) queued` and Claude Code dropped the
 event without a message other than its banner, `plugin not installed`.
 
 | Channel flag | With | Result |

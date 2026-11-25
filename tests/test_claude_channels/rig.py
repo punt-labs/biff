@@ -86,11 +86,15 @@ def channel_rig(launch: Launch, nats_url: str) -> Generator[ChannelRig]:
         if rig is not None:
             rig.close()
         shutil.rmtree(root, ignore_errors=True)
-    # Reached only when the body raised nothing: a stray write is a failure of its
-    # own, reported after cleanup.
-    if rig is not None:
-        strays = rig.strays()
-        assert not strays, f"the rig wrote to the real biff home: {strays}"
+        strays = rig.strays() if rig is not None else []
+        if strays:
+            note = f"the rig wrote to the real biff home: {strays}"
+            failure = sys.exc_info()[1]
+            if failure is None:
+                raise AssertionError(note)
+            # The scan runs however setup ended; the original failure stays the
+            # error and carries the strays as a note.
+            failure.add_note(note)
 
 
 @dataclass(frozen=True, slots=True)

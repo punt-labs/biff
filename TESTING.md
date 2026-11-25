@@ -388,7 +388,7 @@ second biff server. A second user, `bob`, writes mail and posts a wall through
 the `biff` CLI and publishes a talk invite as a NATS frame (no CLI verb sends
 one). The test polls `tmux capture-pane` until the event text shows, fails with
 the captured pane and the `biff.log` tail on timeout, and then checks that
-`biff.log` recorded the event as sent.
+`biff.log` recorded the event as queued (the log cannot say the client displayed it; the pane is the proof).
 
 `BIFF_CHANNEL_LAUNCHES` (comma-separated names from `LAUNCHES` in
 `launches.py`; a blank or unknown value is an error) selects which channel-flag spellings run; the default is

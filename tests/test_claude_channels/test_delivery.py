@@ -21,33 +21,43 @@ from tests.test_claude_channels.rig import SENDER, ChannelRig, channel_rig
 pytestmark = pytest.mark.claude_channels
 
 
-@pytest.fixture(
-    scope="module",
-    params=select_launches(os.environ.get("BIFF_CHANNEL_LAUNCHES")),
-)
-def rig(request: pytest.FixtureRequest, nats_server: str) -> Iterator[ChannelRig]:
+def _requested_launches() -> list[object]:
+    """Return the launches to run, never raising: collection must not abort.
+
+    A blank or unknown ``BIFF_CHANNEL_LAUNCHES`` becomes one case that fails when
+    the tier runs, so the default suite, which deselects this tier, still collects.
+    """
+    try:
+        names = select_launches(os.environ.get("BIFF_CHANNEL_LAUNCHES"))
+    except ValueError as exc:
+        return [pytest.param(str(exc), id="invalid-selection")]
+    return list(names)
+
+
+@pytest.fixture(scope="module", params=_requested_launches())
+def rig(request: pytest.FixtureRequest) -> Iterator[ChannelRig]:
     """A Claude Code session started with one launch, past its handshake."""
+    if request.param not in LAUNCHES:
+        pytest.fail(str(request.param), pytrace=False)
     for tool in ("tmux", "claude"):
         if shutil.which(tool) is None:
             pytest.skip(f"{tool} is not on PATH")
-    with channel_rig(LAUNCHES[request.param], nats_server) as rig:
+    nats_url: str = request.getfixturevalue("nats_server")
+    with channel_rig(LAUNCHES[request.param], nats_url) as rig:
         rig.start_receiver()
         yield rig
 
 
 def _logged(rig: ChannelRig, kind: str) -> bool:
-    """Whether biff.log records the event; ``sent`` or ``queued`` by version."""
-    return (
-        re.search(rf"channel event \({kind}\) (?:sent|queued)", rig.log_text())
-        is not None
-    )
+    """Whether biff.log records the event: queued for the client, not displayed."""
+    return re.search(rf"channel event \({kind}\) queued", rig.log_text()) is not None
 
 
 class TestChannelDelivery:
     """Each kind of arrival shows up in the receiving session's pane.
 
-    The patterns match the stable parts of the event text, the tool it names and
-    the sender, so they hold across rewordings of the trust label.
+    The log line says an event was queued for the client; only the pane shows it
+    displayed.
     """
 
     def test_mail_event_shows_in_the_pane(self, rig: ChannelRig) -> None:
@@ -60,13 +70,11 @@ class TestChannelDelivery:
     def test_wall_event_shows_in_the_pane(self, rig: ChannelRig) -> None:
         rig.post_wall("channel wall probe")
 
-        rig.wait_for_pane(rf"Call wall:.*wall from {SENDER}")
+        rig.wait_for_pane(rf"Call wall: new wall from {SENDER}")
         assert _logged(rig, "wall"), rig.log_text()
 
     def test_talk_invite_event_shows_in_the_pane(self, rig: ChannelRig) -> None:
         rig.invite_to_talk("channel talk probe")
 
-        rig.wait_for_pane(
-            rf"(?:Ask the user|Call talk_read):.*talk invite from {SENDER}"
-        )
+        rig.wait_for_pane(rf"Call talk_read: talk invite from {SENDER}")
         assert _logged(rig, "talk_invite"), rig.log_text()

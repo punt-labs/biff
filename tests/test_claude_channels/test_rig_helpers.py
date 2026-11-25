@@ -3,13 +3,86 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 import pytest
 
-from tests.test_claude_channels.launches import DEFAULT_LAUNCH, select_launches
-from tests.test_claude_channels.rig import find_strays
+from tests.test_claude_channels.launches import (
+    DEFAULT_LAUNCH,
+    LAUNCHES,
+    select_launches,
+)
+from tests.test_claude_channels.rig import (
+    REPO_ROOT,
+    ChannelRig,
+    Launch,
+    channel_rig,
+    find_strays,
+)
+
+
+def _pytest(*args: str, selection: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "BIFF_CHANNEL_LAUNCHES": selection}
+    return subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *args],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+
+
+class TestInvalidSelection:
+    @pytest.mark.parametrize("selection", ["", "nonesuch"])
+    def test_default_collection_still_succeeds(self, selection: str) -> None:
+        done = _pytest(
+            "--collect-only", "-q", "tests/test_claude_channels", selection=selection
+        )
+
+        assert done.returncode == 0, done.stdout + done.stderr
+
+    def test_running_the_tier_with_a_blank_selection_fails(self) -> None:
+        done = _pytest(
+            "-m", "claude_channels", "tests/test_claude_channels", selection=""
+        )
+
+        assert done.returncode != 0
+        assert "BIFF_CHANNEL_LAUNCHES is blank" in done.stdout
+
+
+class TestChannelRigCleanup:
+    def test_strays_are_noted_on_a_setup_failure_and_the_root_is_removed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stray = Path("/real/biff/home/handle")
+
+        def fake_strays(_self: ChannelRig) -> list[Path]:
+            return [stray]
+
+        monkeypatch.setattr(ChannelRig, "strays", fake_strays)
+        roots: list[Path] = []
+        real_init = ChannelRig.__init__
+
+        def remember(self: ChannelRig, root: Path, launch: Launch, url: str) -> None:
+            roots.append(root)
+            real_init(self, root, launch, url)
+
+        monkeypatch.setattr(ChannelRig, "__init__", remember)
+
+        with (
+            pytest.raises(RuntimeError, match="no handshake") as caught,
+            channel_rig(LAUNCHES["inline"], "nats://127.0.0.1:1"),
+        ):
+            msg = "no handshake"
+            raise RuntimeError(msg)
+
+        assert any(str(stray) in note for note in caught.value.__notes__)
+        assert not roots[0].exists()
 
 
 class TestSelectLaunches:
