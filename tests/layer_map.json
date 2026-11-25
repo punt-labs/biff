@@ -69,6 +69,7 @@
   "biff.plugins.claude_code.claude_argv": "claude_code",
   "biff.plugins.claude_code.claude_md": "claude_code",
   "biff.plugins.claude_code.claude_permissions": "claude_code",
+  "biff.plugins.claude_code.doctor_checks": "claude_code",
   "biff.plugins.claude_code.hook": "claude_code",
   "biff.plugins.claude_code.installer": "claude_code",
   "biff.plugins.claude_code.launch_flag": "claude_code",

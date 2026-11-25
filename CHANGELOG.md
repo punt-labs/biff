@@ -4,6 +4,12 @@
 
 ### Added
 
+- `biff doctor` has a Channels check. It names each environment variable that
+  silently stops Claude Code from registering biff's channel
+  (`DISABLE_TELEMETRY`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
+  `DISABLE_GROWTHBOOK`, `CLAUDE_CODE_DISABLE_FEATURE_FLAGS`, or a cloud provider
+  such as `CLAUDE_CODE_USE_BEDROCK`) with its fix. The check is informational:
+  polling still delivers messages.
 - `make test-channels` (`claude_channels` marker): an end-to-end tier that starts
   a real interactive `claude` in tmux and checks that mail, a wall and a talk
   invite each show as a channel event in its pane. The verified launch flag is
