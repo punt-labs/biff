@@ -128,9 +128,7 @@ class Arrivals:
         )
 
     def _wall_event(self, wall: WallPost) -> ChannelEvent:
-        user = self._source.session_key.partition(":")[0]
-        sender = Sender.claimed(wall.from_user, wall.from_tty, own_user=user)
-        return ChannelEvent.wall(sender)
+        return ChannelEvent.wall(Sender.claimed(wall.from_user, wall.from_tty))
 
     def _is_own(self, wall: WallPost) -> bool:
         """Whether this session posted *wall* (by display name or routing tty)."""
@@ -156,10 +154,7 @@ class Arrivals:
         count = self._invites_seen
         event = None
         if newest is not None:
-            user = self._source.session_key.partition(":")[0]
-            event = ChannelEvent.talk_invite(
-                Sender.claimed(newest[2], newest[3], own_user=user)
-            )
+            event = ChannelEvent.talk_invite(Sender.claimed(newest[2], newest[3]))
         return Reading(
             EventKind.TALK_INVITE,
             count,

@@ -65,8 +65,8 @@ class ChannelHandshake:
     def open(server: Instructed, link: ChannelLink, emitter: ClientGate | None) -> None:
         """Make *link* the one connection, and tell *emitter* and the model about it.
 
-        The server's instructions gain the emitter's paragraph on untrusted
-        bodies; the emitter learns which link to send on.
+        The server's instructions gain the emitter's paragraph on channel
+        events; the emitter learns which link to send on.
         """
         _descriptions.handshake_delivery.serve_single_connection(link)
         if emitter is not None:
