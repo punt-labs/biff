@@ -20,7 +20,13 @@ from typing import IO
 
 import pytest
 from mcp import types
-from mcp.types import INVALID_REQUEST, JSONRPCError, JSONRPCMessage, JSONRPCResponse
+from mcp.types import (
+    INVALID_REQUEST,
+    JSONRPCError,
+    JSONRPCMessage,
+    JSONRPCNotification,
+    JSONRPCResponse,
+)
 
 pytestmark = pytest.mark.subprocess
 
@@ -42,7 +48,10 @@ _INITIALIZE: dict[str, object] = {
 class _Server:
     """A ``biff mcp`` subprocess speaking newline-delimited JSON-RPC."""
 
-    def __init__(self, tmp_path: Path, *, channel_mode: bool) -> None:
+    def __init__(
+        self, tmp_path: Path, *, channel_mode: bool, relay_url: str = ""
+    ) -> None:
+        self.user = f"chan-{tmp_path.name}".lower()
         home = tmp_path / "home"
         home.mkdir()
         data_dir = tmp_path / "data"
@@ -60,11 +69,11 @@ class _Server:
                 "biff",
                 "mcp",
                 "--user",
-                f"chan-{tmp_path.name}".lower(),
+                self.user,
                 "--data-dir",
                 str(data_dir),
                 "--relay-url",
-                "",
+                relay_url,
             ],
             cwd=_REPO_ROOT,
             env=env,
@@ -73,6 +82,7 @@ class _Server:
             stderr=subprocess.DEVNULL,
             text=True,
         )
+        self.events: list[JSONRPCNotification] = []
         self._frames: queue.Queue[JSONRPCMessage | None] = queue.Queue()
         threading.Thread(target=self._pump, daemon=True).start()
         self._next_id = 0
@@ -95,6 +105,8 @@ class _Server:
             {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
         )
         while (frame := self._frames.get(timeout=_TIMEOUT)) is not None:
+            if isinstance(frame, JSONRPCNotification):
+                self.events.append(frame)
             if isinstance(frame, JSONRPCResponse | JSONRPCError) and (
                 frame.id == self._next_id
             ):
@@ -113,6 +125,23 @@ class _Server:
         assert isinstance(response, JSONRPCResponse)
         self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         return response
+
+    def channel_event(self) -> JSONRPCNotification:
+        """Return the next ``notifications/claude/channel`` frame the server sent."""
+        deadline = time.monotonic() + _TIMEOUT
+        while time.monotonic() < deadline:
+            for event in self.events:
+                if event.method == "notifications/claude/channel":
+                    self.events.remove(event)
+                    return event
+            try:
+                frame = self._frames.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if isinstance(frame, JSONRPCNotification):
+                self.events.append(frame)
+        msg = "no channel event within the timeout"
+        raise AssertionError(msg)
 
     def close_stdin(self) -> None:
         stdin = self._proc.stdin
