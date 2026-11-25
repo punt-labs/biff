@@ -16,9 +16,10 @@ from biff.plugins.claude_code.plugin_root import PluginRoot
 __all__ = ["ClaudeLaunch"]
 
 _RESTART: Final = (
-    f"Restart Claude Code with {DEV_FLAG} {BIFF_CHANNEL}. "
-    f"Organizations that list biff in allowedChannelPlugins can use "
-    f"{CHANNELS_FLAG} {BIFF_CHANNEL} instead."
+    "Ask your admin to turn on Channels and add biff (marketplace punt-labs) "
+    f"to allowedChannelPlugins, then restart Claude Code with {CHANNELS_FLAG} "
+    f"{BIFF_CHANNEL}. For local testing or an individual account, use "
+    f"{DEV_FLAG} {BIFF_CHANNEL} instead."
 )
 
 
@@ -26,9 +27,8 @@ _RESTART: Final = (
 class ClaudeLaunch:
     """One ``claude`` command line, parsed, plus the plugin it loaded biff from."""
 
-    __slots__ = ("_argv", "_env", "_raw")
+    __slots__ = ("_env", "_raw")
 
-    _argv: ClaudeArgv
     _env: Mapping[str, str]
     _raw: Sequence[str]
 
@@ -36,14 +36,13 @@ class ClaudeLaunch:
         """Parse *raw* (program first); *env* carries ``CLAUDE_PLUGIN_ROOT``."""
         self = super().__new__(cls)
         self._raw = raw
-        self._argv = ClaudeArgv(raw)
         self._env = env
         return self
 
     @property
     def argv(self) -> ClaudeArgv:
         """The channel-related flags of this command line."""
-        return self._argv
+        return ClaudeArgv(self._raw)
 
     def restart_advice(self) -> str:
         """Name the flag that would register biff on the next start.

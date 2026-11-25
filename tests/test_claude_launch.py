@@ -20,8 +20,12 @@ def _plugin(root: Path, manifest: str = '{"name": "biff-dev"}') -> dict[str, str
 
 def test_a_marketplace_session_is_told_the_punt_labs_entry() -> None:
     advice = ClaudeLaunch(["claude"], {}).restart_advice()
-    assert advice.startswith(f"Restart Claude Code with {DEV} plugin:biff@punt-labs.")
-    assert "--channels plugin:biff@punt-labs" in advice
+    assert advice == (
+        "Ask your admin to turn on Channels and add biff (marketplace punt-labs) "
+        "to allowedChannelPlugins, then restart Claude Code with --channels "
+        "plugin:biff@punt-labs. For local testing or an individual account, use "
+        f"{DEV} plugin:biff@punt-labs instead."
+    )
 
 
 def test_this_plugins_own_dir_gets_the_inline_entry(tmp_path: Path) -> None:
