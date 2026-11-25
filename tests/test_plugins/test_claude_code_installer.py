@@ -96,7 +96,7 @@ class TestGuideImport:
 class TestStatuslineCheck:
     def _check(self, settings: Path) -> tuple[bool, bool, str]:
         with patch("biff.plugins.claude_code.installer.SETTINGS_PATH", settings):
-            (result,) = ClaudeCodeInstaller().check()
+            result = ClaudeCodeInstaller().check()[0]
         return result.passed, result.required, result.message
 
     def test_configured(self, tmp_path: Path) -> None:

@@ -500,6 +500,13 @@ Settings it cannot see, such as server-managed policy, never produce a warning f
 you; the model is told only that channels may be off. On resume, clear and
 compaction only the model is told, and a `-p` run is model-only.
 
+`biff doctor` checks the same variables in the shell you run it from and prints
+one informational Channels line per blocker with its fix, for example
+`○ Channels: DISABLE_TELEMETRY is set. Unset DISABLE_TELEMETRY and restart Claude
+Code.` All the cloud-provider variables share one line. Run it from the shell that
+starts Claude Code: doctor cannot see a running session's environment, which the
+start-up warning above checks instead.
+
 ## Status Bar
 
 `biff install-statusline` adds biff to the end of your existing Claude Code status line; it does not replace it. `biff uninstall-statusline` restores the original.

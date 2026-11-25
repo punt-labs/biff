@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import os
 from typing import TYPE_CHECKING, Final, Self, final
 
 from biff.plugins.claude_code.claude_md import UNCLOSED_FENCE, ClaudeMdImport
@@ -10,12 +10,14 @@ from biff.plugins.claude_code.claude_permissions import (
     PermissionChange,
     ProjectPermissions,
 )
-from biff.plugins.claude_code.statusline import SETTINGS_PATH, read_settings
-from biff.plugins.contract import CheckResult
+from biff.plugins.claude_code.doctor_checks import DoctorChecks
+from biff.plugins.claude_code.statusline import SETTINGS_PATH
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
+
+    from biff.plugins.contract import CheckResult
 
 __all__ = ["ClaudeCodeInstaller"]
 
@@ -59,38 +61,9 @@ class ClaudeCodeInstaller:
         return self._guide(root).prune()
 
     def check(self) -> tuple[CheckResult, ...]:
-        """Report whether the status line is configured (informational)."""
-        return (_check_statusline(),)
+        """Report the status line and what blocks channels (informational)."""
+        return DoctorChecks(SETTINGS_PATH, os.environ).all()
 
     @staticmethod
     def _guide(root: Path) -> ClaudeMdImport:
         return ClaudeMdImport(root / "CLAUDE.md", _GUIDE_IMPORT)
-
-
-def _check_statusline() -> CheckResult:
-    """Check status line is configured (informational)."""
-    try:
-        settings = read_settings(SETTINGS_PATH)
-    except (json.JSONDecodeError, OSError):
-        return CheckResult(
-            name="Status line",
-            passed=False,
-            message="could not read settings.json",
-            required=False,
-        )
-    status_line = settings.get("statusLine")
-    if isinstance(status_line, dict):
-        cmd = status_line.get("command")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        if isinstance(cmd, str) and "biff statusline" in cmd:
-            return CheckResult(
-                name="Status line",
-                passed=True,
-                message="configured",
-                required=False,
-            )
-    return CheckResult(
-        name="Status line",
-        passed=False,
-        message="not configured (restart Claude Code to auto-install)",
-        required=False,
-    )
