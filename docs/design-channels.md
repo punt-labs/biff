@@ -185,8 +185,10 @@ the relay credential can publish frames with any `from` (PL-228):
   one line, so a typical event is at most 60: the action, then the sender,
   which alone may be cut.
 - **Fixed templates.** All other text is the literal templates above.
-- **Biff never accepts a talk itself.** Only an explicit `talk` call by the
-  agent does; an event announces an invite and names `talk_read`, never the
+- **Biff accepts a talk itself only when both sides invited each other.** When
+  two sessions invite each other, `talk_read` sends the accept from the
+  higher-key session; otherwise only an explicit `talk` call by the agent
+  accepts. An event announces an invite and names `talk_read`, never the
   accept command.
 
 `meta` keys use only letters, digits and underscores; `kind` is one of
