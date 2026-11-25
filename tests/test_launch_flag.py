@@ -129,32 +129,25 @@ class TestJointGate:
         assert "--channels" in gate.fix
         assert "allowedChannelPlugins" in gate.fix
 
-    @pytest.mark.parametrize("plugin_dir", [["--plugin-dir", "x"], ["--plugin-dir=x"]])
     def test_a_plugin_dir_session_is_told_the_inline_entry(
-        self, tmp_path: Path, plugin_dir: list[str]
+        self, tmp_path: Path
     ) -> None:
         """Under --plugin-dir the entry is plugin:<name>@inline, not @punt-labs."""
         manifest = tmp_path / ".claude-plugin" / "plugin.json"
         manifest.parent.mkdir()
         manifest.write_text('{"name": "biff-dev"}')
         env = {**ENV, "CLAUDE_PLUGIN_ROOT": str(tmp_path)}
-        (gate,) = _closed(["claude", *plugin_dir], env=env)
-        assert gate.fix.startswith(
-            f"Restart Claude Code with {DEV} plugin:biff-dev@inline."
-        )
-        assert "punt-labs" not in gate.fix
-
-    def test_the_inline_entry_names_a_released_plugin_too(self, tmp_path: Path) -> None:
-        manifest = tmp_path / ".claude-plugin" / "plugin.json"
-        manifest.parent.mkdir()
-        manifest.write_text('{"name": "biff"}')
-        env = {**ENV, "CLAUDE_PLUGIN_ROOT": str(tmp_path)}
         (gate,) = _closed(["claude", "--plugin-dir", str(tmp_path)], env=env)
-        assert f"{DEV} plugin:biff@inline." in gate.fix
+        assert gate.fix == f"Restart Claude Code with {DEV} plugin:biff-dev@inline."
 
-    def test_the_inline_dev_entry_opens_the_gate(self) -> None:
-        argv = ["claude", "--plugin-dir", "x", DEV, "plugin:biff-dev@inline"]
-        assert _closed(argv) == ()
+    @pytest.mark.parametrize("entry", ["plugin:biff-dev@inline", "plugin:biff@inline"])
+    def test_the_inline_entries_open_the_gate(self, entry: str) -> None:
+        """The advice for a dev or a released inline plugin must clear the warning."""
+        assert _closed(["claude", "--plugin-dir", "x", DEV, entry]) == ()
+
+    def test_a_name_that_only_starts_like_biff_is_not_biff(self) -> None:
+        (gate,) = _closed(["claude", DEV, "plugin:biffy@inline"])
+        assert "not started with a channel flag for biff" in gate.reason
 
     def test_print_mode_is_closed_for_the_model_only(self) -> None:
         (gate,) = _closed(["claude", "-p", DEV, BIFF])

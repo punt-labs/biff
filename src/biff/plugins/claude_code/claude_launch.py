@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
-import logging
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Final, Self, final
 
 from biff.plugins.claude_code.claude_argv import (
@@ -14,12 +11,10 @@ from biff.plugins.claude_code.claude_argv import (
     DEV_FLAG,
     ClaudeArgv,
 )
+from biff.plugins.claude_code.plugin_root import PluginRoot
 
 __all__ = ["ClaudeLaunch"]
 
-logger = logging.getLogger(__name__)
-
-_PLUGIN_DIR_FLAG: Final = "--plugin-dir"
 _RESTART: Final = (
     f"Restart Claude Code with {DEV_FLAG} {BIFF_CHANNEL}. "
     f"Organizations that list biff in allowedChannelPlugins can use "
@@ -53,20 +48,13 @@ class ClaudeLaunch:
     def restart_advice(self) -> str:
         """Name the flag that would register biff on the next start.
 
-        A ``--plugin-dir`` plugin belongs to the ``inline`` marketplace, so
-        ``@punt-labs`` matches nothing there and no ``allowedChannelPlugins``
-        entry can name it: only the development flag with the inline entry works.
+        A plugin loaded with ``--plugin-dir`` belongs to the ``inline``
+        marketplace, so ``@punt-labs`` matches nothing for it and no
+        ``allowedChannelPlugins`` entry can name it.  Another plugin's
+        ``--plugin-dir`` leaves a marketplace biff where it is.
         """
-        if not any(a.partition("=")[0] == _PLUGIN_DIR_FLAG for a in self._raw):
+        root = PluginRoot(self._env)
+        if not root.is_loaded_by(self._raw):
             return _RESTART
-        return f"Restart Claude Code with {DEV_FLAG} plugin:{self._name()}@inline."
-
-    def _name(self) -> str:
-        """Return the running plugin's manifest name; ``biff-dev`` when unreadable."""
-        root = Path(self._env.get("CLAUDE_PLUGIN_ROOT", ""))
-        try:
-            manifest = json.loads((root / ".claude-plugin/plugin.json").read_text())
-            return str(manifest["name"])
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            logger.info("plugin manifest unreadable: %s", type(exc).__name__)
-            return "biff-dev"
+        name = root.name or "biff-dev"
+        return f"Restart Claude Code with {DEV_FLAG} plugin:{name}@inline."

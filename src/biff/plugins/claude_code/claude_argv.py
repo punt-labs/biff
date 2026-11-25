@@ -10,7 +10,7 @@ __all__ = ["ClaudeArgv"]
 DEV_FLAG: Final = "--dangerously-load-development-channels"
 CHANNELS_FLAG: Final = "--channels"
 BIFF_CHANNEL: Final = "plugin:biff@punt-labs"
-_BIFF_DEV_PREFIX: Final = "plugin:biff-dev@"
+_BIFF_PREFIXES: Final = ("plugin:biff@", "plugin:biff-dev@")
 
 
 @final
@@ -58,11 +58,8 @@ class ClaudeArgv:
 
     @property
     def dev_names_biff(self) -> bool:
-        """Whether the development flag lists biff or its ``-dev`` plugin."""
-        return any(
-            value == BIFF_CHANNEL or value.startswith(_BIFF_DEV_PREFIX)
-            for value in self._dev
-        )
+        """Whether the development flag lists biff or biff-dev, from any marketplace."""
+        return any(value.startswith(_BIFF_PREFIXES) for value in self._dev)
 
     @property
     def channels_name_biff(self) -> bool:
