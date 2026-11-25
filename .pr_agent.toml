@@ -6,20 +6,22 @@ handle_push_trigger = false
 
 [review_agent]
 enable_incremental_review = true
+enable_review_md = true
 # comments_routing below is authoritative; the threshold restates it (High only inline).
 inline_comments_severity_threshold = 3
 issues_user_guidelines = """
 biff is a Python 3.13 package (CLI, MCP server, NATS-backed relay) plus bash plugin hooks.
 Targets: macOS and Ubuntu 24.04. Nothing else.
 Report every finding in this one pass; do not hold findings back for a later pass.
-Flag only defects reachable by a real caller of the changed code: logic errors, None paths, security, API contract breaks, concurrency, resource leaks.
+Flag only defects reachable by a real caller of the changed code: logic errors, None paths, API contract breaks, concurrency, resource leaks.
+REVIEW.md at the repo root says what is in and out of scope. Message trust, prompt injection, sender spoofing and permission rules are out of scope: do not flag them.
 Do not flag hypothetical environments (exotic env vars such as CDPATH or GIT_TRACE, control bytes in paths, tests run as root).
 Do not flag what CI enforces: ruff format/lint, mypy and pyright strict, shellcheck, markdownlint, and the OO, coupling and suppression ratchets (punt-oo-ratchet==0.4.0 from PyPI).
 Do not flag lines the PR did not change.
 Never suggest suppressions (# noqa, # type: ignore, xfail) or replacing __new__ with __init__; __new__ is the constructor by design.
 """
 compliance_user_guidelines = """
-Apply code rules only: correctness, typing, error handling, security, and the coding standards for the changed files.
+Apply code rules only: correctness, typing, error handling, and the coding standards for the changed files. Follow REVIEW.md for scope.
 Do not grade PR titles, PR descriptions, commit messages, or CHANGELOG wording.
 Do not grade agent process rules from CLAUDE.md, AGENTS.md, or WORKFLOW.md (missions, tickets, review cycles, delegation).
 """
