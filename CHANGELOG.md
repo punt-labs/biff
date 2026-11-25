@@ -95,6 +95,13 @@
 
 ### Changed
 
+- The status line is display for the user only. `/biff:read` no longer runs
+  `biff statusline` to decide what to read: it calls `talk_read` and
+  `read_messages` directly. The `unread-nudge` hook speaks only while the user
+  has polling on (`/biff:read Xm`): `set_poll_interval` writes a per-session
+  `.polling` marker beside the unread file at once, with no restart, and the
+  marker is removed with the session's other unread files. With channels live
+  and no polling, channel events are the agent's only signal.
 - The biff server runs no cadence except connection liveness (DES-087). The
   poller no longer ticks every 2 seconds, and the 2-second sentinel reaper is
   gone: sentinels are reaped at start and whenever the poller wakes, and a

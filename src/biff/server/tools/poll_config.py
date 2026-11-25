@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from biff.server.state import ServerState
 
 _INTERVAL_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(s|m)$")
+_INVALID = -1.0  # _parse_interval's answer for text that is not an interval
 
 
 def _parse_interval(value: str) -> float | None:
@@ -32,14 +33,11 @@ def _parse_interval(value: str) -> float | None:
         return None
     m = _INTERVAL_RE.match(value)
     if m is None:
-        return -1.0  # sentinel for invalid
+        return _INVALID
     amount = float(m.group(1))
     if amount <= 0:
-        return -1.0  # 0s/0m is invalid — use "n" to disable
-    unit = m.group(2)
-    if unit == "m":
-        return amount * 60
-    return amount
+        return _INVALID  # 0s/0m is invalid — use "n" to disable
+    return amount * 60 if m.group(2) == "m" else amount
 
 
 _SET_POLL_INTERVAL_DESCRIPTION = (
@@ -79,7 +77,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             OSError: The local configuration or gitignore cannot be written.
         """
         parsed = _parse_interval(interval)
-        if parsed is not None and parsed < 0:
+        if parsed == _INVALID:
             return (
                 f"Invalid interval: {interval}. "
                 "Use {N}s or {N}m format (e.g. 2s, 5m), or n to disable."
@@ -88,15 +86,16 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         repo_root = state.repo_root
         if repo_root is not None:
             existing = load_yaml_local(repo_root)
-            if parsed is None:
-                existing["poll_interval"] = 0
-            else:
-                existing["poll_interval"] = parsed
+            existing["poll_interval"] = parsed or 0  # never 0.0: that is rejected above
             write_yaml_config(repo_root, existing, local=True)
             # config.local.yaml is per-user; keep it out of git even when a
             # user has not run interactive configuration.
             ensure_gitignore_yaml(repo_root)
 
+        if state.unread_path is not None:  # the nudge hook speaks only while "True"
+            state.unread_path.with_suffix(".polling").write_text(
+                str(parsed is not None)
+            )
         if parsed is None:
             return _DISABLE_RESPONSE
 

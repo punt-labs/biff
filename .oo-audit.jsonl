@@ -108,3 +108,4 @@
 {"ts":"2026-11-24T16:32:52Z","commit":"8f011a8","source":null,"files_scored":157,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{},"removed":[]}
 {"ts":"2026-11-24T16:33:08Z","commit":"8f011a8","source":null,"files_scored":157,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{},"removed":[]}
 {"ts":"2026-11-24T16:33:28Z","commit":"8f011a8","source":null,"files_scored":157,"files_improved":0,"files_regressed":0,"verdict":"pass","deltas":{},"removed":[]}
+{"ts":"2026-11-25T14:36:16Z","commit":"f728556","source":null,"files_scored":157,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/biff/server/tools/poll_config.py":{"module_size":[82.0,81.0]}},"removed":[]}

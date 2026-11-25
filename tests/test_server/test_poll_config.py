@@ -215,3 +215,22 @@ class TestParseInterval:
 
         assert _parse_interval("  5s  ") == 5.0
         assert _parse_interval("  N  ") is None
+
+
+class TestPollingMarker:
+    """``set_poll_interval`` writes the nudge hook's ``.polling`` marker."""
+
+    async def test_setting_an_interval_marks_polling_on(self, tmp_path: Path) -> None:
+        state = _make_state(tmp_path, poll_interval=0)
+        object.__setattr__(state, "unread_path", tmp_path / "unread.json")
+        fn = await _get_tool_fn(state, "set_poll_interval")
+        await fn(interval="2m")
+        assert (tmp_path / "unread.polling").read_text() == "True"
+
+    async def test_turning_polling_off_marks_it_off(self, tmp_path: Path) -> None:
+        state = _make_state(tmp_path, poll_interval=120)
+        object.__setattr__(state, "unread_path", tmp_path / "unread.json")
+        (tmp_path / "unread.polling").write_text("True")
+        fn = await _get_tool_fn(state, "set_poll_interval")
+        await fn(interval="n")
+        assert (tmp_path / "unread.polling").read_text() == "False"
