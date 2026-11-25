@@ -65,6 +65,8 @@ def _slow_biff_hook_on_path(bin_dir: Path, *, sentinel: Path) -> dict[str, str]:
     stub.chmod(0o755)
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    # A throwaway HOME: the operator's ~/.punt-hooks-kill must not change results.
+    env["HOME"] = str(bin_dir.parent / "home")
     return env
 
 

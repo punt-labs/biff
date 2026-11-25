@@ -100,10 +100,9 @@ class TestReadCommand:
     def test_dev_exists(self) -> None:
         assert (_COMMANDS / "read-dev.md").is_file()
 
-    def test_prod_check_now_references_markers_and_tools(self) -> None:
+    def test_prod_check_now_calls_the_tools_directly(self) -> None:
         text = (_COMMANDS / "read.md").read_text()
-        assert "[TALK]" in text
-        assert "unread)" in text
+        assert "biff statusline" not in text
         assert "mcp__plugin_biff_tty__talk_read" in text
         assert "mcp__plugin_biff_tty__read_messages" in text
 
@@ -118,8 +117,7 @@ class TestReadCommand:
     )
     def test_dev_routes_to_dev_plugin(self) -> None:
         text = (_COMMANDS / "read-dev.md").read_text()
-        assert "[TALK]" in text
-        assert "unread)" in text
+        assert "biff statusline" not in text
         assert "mcp__plugin_biff-dev_tty__talk_read" in text
         assert "mcp__plugin_biff-dev_tty__read_messages" in text
         assert "mcp__plugin_biff-dev_tty__set_poll_interval" in text

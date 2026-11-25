@@ -7,7 +7,9 @@ verifies the JSON output matches expected panel summaries.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import cast
 
@@ -31,13 +33,16 @@ def _run_hook(tool_name: str, tool_response: str) -> dict[str, object]:
             "tool_response": tool_response,
         }
     )
-    result = subprocess.run(  # noqa: S603
-        ["bash", HOOK],  # noqa: S607
-        input=payload,
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+    # A throwaway HOME: the operator's ~/.punt-hooks-kill must not change results.
+    with tempfile.TemporaryDirectory() as home:
+        result = subprocess.run(  # noqa: S603
+            ["bash", HOOK],  # noqa: S607
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={**os.environ, "HOME": home},
+        )
     assert result.returncode == 0, f"Hook failed: {result.stderr}"
     return json.loads(result.stdout)  # type: ignore[no-any-return]
 
