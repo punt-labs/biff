@@ -314,7 +314,7 @@ imports = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not cli_multi_user and not nats_local and not nats_docker and not nats_hosted and not stress and not quarantine'"
+addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not cli_multi_user and not nats_local and not nats_docker and not nats_hosted and not claude_channels and not stress and not quarantine'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Per-test ceiling so a regression REPORTS (with every thread's stack
@@ -335,6 +335,7 @@ markers = [
     "nats_local: marks tests that require a locally-spawned nats-server binary (run with -m nats_local)",
     "nats_docker: marks tests that build and run the ghcr.io/punt-labs/biff-relay Docker image (run with -m nats_docker)",
     "nats_hosted: marks tests that require a hosted NATS account (run with -m nats_hosted)",
+    "claude_channels: marks tests that drive a real interactive claude in tmux (run with -m claude_channels)",
     "stress: marks scale stress tests against hosted NATS (run with -m stress)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
     "vox: marks tests that manage vox mocking themselves (opts out of _silence_vox)",
