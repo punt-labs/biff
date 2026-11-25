@@ -1868,6 +1868,81 @@ class TestHeldMailAcrossARebind:
         assert len(rig.sink.frames) == 1
 
 
+class TestChannelCheck:
+    """``docs/channel-check.tex``: a request sends exactly one check event."""
+
+    _REPLY = "_INBOX.doctor1"
+
+    async def test_a_request_sends_exactly_one_check_event(self, rig: _Rig) -> None:
+        rig.open()
+        rig.emitter.channel_check_requested(self._REPLY)
+
+        await rig.emitter.check()
+        await rig.emitter.check()
+
+        assert rig.sink.metas == [{"kind": "channel_check"}]
+        token = rig.sink.contents[0].split("token ")[1].split(".")[0]
+        assert rig.sink.contents[0] == (
+            f"biff channel check. Call channel_ack with token {token}. "
+            "Do not reply to the user."
+        )
+        assert rig.emitter.channel_check.acknowledge(token) == self._REPLY
+
+    async def test_a_request_asks_the_poller_for_a_pass(self, rig: _Rig) -> None:
+        rig.open()
+        rig.wakes.clear()
+        rig.emitter.channel_check_requested(self._REPLY)
+        assert rig.wakes == [1]
+
+    async def test_a_second_request_inside_a_minute_sends_nothing(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        rig.emitter.channel_check_requested(self._REPLY)
+        await rig.emitter.check()
+        rig.clock.advance(59)
+        rig.emitter.channel_check_requested(self._REPLY)
+        await rig.emitter.check()
+        assert len(rig.sink.frames) == 1
+
+    async def test_the_event_waits_for_the_client_to_be_initialised(
+        self, rig: _Rig
+    ) -> None:
+        rig.emitter.channel_check_requested(self._REPLY)
+        await rig.emitter.check()
+        assert rig.sink.frames == []
+
+        rig.open()
+        await rig.emitter.check()
+        assert rig.sink.metas == [{"kind": "channel_check"}]
+
+    async def test_a_check_changes_no_delivery(self, rig: _Rig) -> None:
+        """The check takes no rate slot and leaves arrivals owed."""
+        rig.open()
+        await rig.mail()
+        rig.emitter.channel_check_requested(self._REPLY)
+        await rig.emitter.check()
+        assert sorted(m["kind"] for m in rig.sink.metas) == ["channel_check", "mail"]
+        assert rig.emitter.held == frozenset()
+
+    async def test_with_channel_mode_off_a_request_is_ignored(
+        self, tmp_path: Path
+    ) -> None:
+        relay = _CountingRelay(data_dir=tmp_path)
+        talk = TalkState(relay=relay, user="kai", tty="abc12345", session_key=_ME)
+        wakes: list[int] = []
+        emitter = ChannelEmitter(_Source(relay, talk), lambda: wakes.append(1))
+        emitter.channel_check_requested(self._REPLY)
+        assert wakes == []
+        assert emitter.channel_check.acknowledge("0" * 32) is None
+
+    async def test_a_forged_reply_subject_is_ignored(self, rig: _Rig) -> None:
+        rig.open()
+        rig.emitter.channel_check_requested("biff.x.inbox.kai")
+        await rig.emitter.check()
+        assert rig.sink.frames == []
+
+
 def test_the_instructions_do_not_tell_the_model_to_distrust_bodies() -> None:
     """Teammates' messages are acted on, not refused, until signed trust lands."""
     assert_no_trust_phrase(INSTRUCTIONS)
