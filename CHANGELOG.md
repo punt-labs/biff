@@ -191,6 +191,11 @@
 
 ### Fixed
 
+- The start-up warning for a session without a channel flag now names an entry
+  that works when the plugin is loaded with `--plugin-dir`:
+  `--dangerously-load-development-channels plugin:<name>@inline`, with the name
+  read from the plugin's `plugin.json`. It used to recommend
+  `plugin:biff@punt-labs`, which matches nothing in such a session.
 - A session whose presence row expired (for example after a long sleep) no
   longer comes back under its old tty name without reserving it. The rebuilt row
   reserves the name again, or takes the lowest free name when another session

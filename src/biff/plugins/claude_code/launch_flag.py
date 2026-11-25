@@ -10,12 +10,7 @@ import psutil
 
 from biff.caller_stamp import main_agent_id
 from biff.plugins.claude_code.channel_gates import ClosedGate
-from biff.plugins.claude_code.claude_argv import (
-    BIFF_CHANNEL,
-    CHANNELS_FLAG,
-    DEV_FLAG,
-    ClaudeArgv,
-)
+from biff.plugins.claude_code.claude_launch import ClaudeLaunch
 from biff.plugins.claude_code.managed_policy import ManagedPolicy
 
 __all__ = ["LaunchFlagGate"]
@@ -23,12 +18,6 @@ __all__ = ["LaunchFlagGate"]
 logger = logging.getLogger(__name__)
 
 type ArgvReader = Callable[[int], Sequence[str]]
-
-_RESTART = (
-    f"Restart Claude Code with {DEV_FLAG} {BIFF_CHANNEL}. "
-    f"Organizations that list biff in allowedChannelPlugins can use "
-    f"{CHANNELS_FLAG} {BIFF_CHANNEL} instead."
-)
 
 
 @final
@@ -75,8 +64,8 @@ class LaunchFlagGate:
 
     def closed(self) -> tuple[ClosedGate, ...]:
         """Return the closed gate when biff cannot be registered as a channel."""
-        argv = self._argv()
-        if argv is None:
+        launch = self._launch()
+        if launch is None:
             return (
                 ClosedGate(
                     reason="launch flags could not be checked",
@@ -85,6 +74,7 @@ class LaunchFlagGate:
                     unknown=True,
                 ),
             )
+        argv = launch.argv
         if argv.is_print:
             return (
                 ClosedGate(
@@ -113,12 +103,12 @@ class LaunchFlagGate:
         return (
             ClosedGate(
                 reason="Claude Code was not started with a channel flag for biff",
-                fix=_RESTART,
+                fix=launch.restart_advice(),
             ),
         )
 
-    def _argv(self) -> ClaudeArgv | None:
-        """Return Claude Code's parsed argv, or ``None`` (logged) when unknown."""
+    def _launch(self) -> ClaudeLaunch | None:
+        """Return Claude Code's command line, or ``None`` (logged) when unknown."""
         try:
             corroborate = None if self._ancestors is None else self._ancestors()
             pid = main_agent_id(self._env, ancestors=corroborate)
@@ -131,7 +121,7 @@ class LaunchFlagGate:
             logger.info("launch_flag_unknown: CLAUDE_PID is not a live ancestor")
             return None
         try:
-            return ClaudeArgv(self._read_argv(int(pid)))
+            return ClaudeLaunch(self._read_argv(int(pid)), self._env)
         except (psutil.Error, OSError) as exc:
             logger.info(
                 "launch_flag_unknown: argv of pid %s unreadable: %s",
