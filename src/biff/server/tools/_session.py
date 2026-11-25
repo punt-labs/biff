@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from biff.models import UserSession
-from biff.server.tools._descriptions import get_tty_name
+from biff.server.tools._revival import SessionRevival
 from biff.tty import build_session_key
 
 _NO_SESSION_HINT = (
@@ -31,54 +31,12 @@ async def get_or_create_session(state: ServerState) -> UserSession:
     session, backfilling display_name, hostname, pwd, and tty_name
     from the server state when creating a fresh session.
 
-    The auto-create branch exists for test scaffolding and edge cases
-    where a tool runs before ``register_session`` has completed.  It
-    backfills ``tty_name`` from the session-local stash (set by the
-    lifespan after claim) so a created-on-tool-call row is never
-    written with an empty ``tty_name`` — guarding against a v1.8.0
-    defect resurfacing from a different code path.
+    A missing row is rebuilt by :class:`SessionRevival`, which reserves
+    its tty name again.
     """
     session = await state.relay.get_session(state.session_key)
     if session is None:
-        # Lifespan registration writes this row before any tool call.
-        # Reaching the auto-create branch means the row was deleted
-        # underneath us (reaper sentinel, TTL expiry, manual delete).
-        # ``get_tty_name()`` may not be set yet if lifespan startup was
-        # interrupted; fall back to the hex-slice placeholder that
-        # ``_format_who_name`` uses so display stays consistent and the
-        # v1.8.0 invariant (no empty ``tty_name`` rows) holds.
-        stashed = get_tty_name()
-        if stashed:
-            # tty_name was already reserved, so lifespan registration ran
-            # to completion and the session row was deleted out from under
-            # a still-running process afterward (reaper sentinel, TTL
-            # expiry, manual delete).  The record rebuilt below resets
-            # plan, plan_source, and biff_enabled to defaults, which
-            # /who then renders as a plausible-looking but wrong row --
-            # surface the resurrection rather than let it pass silently.
-            logger.warning(
-                "Session reaped mid-run; resurrecting with default "
-                "plan/biff_enabled state"
-            )
-        else:
-            logger.warning(
-                "Auto-creating session without a reserved tty_name; "
-                "lifespan registration may not have completed"
-            )
-        tty_name = stashed or state.tty[:8]
-        session = UserSession(
-            user=state.config.user,
-            tty=state.tty,
-            tty_name=tty_name,
-            hostname=state.hostname,
-            pwd=state.pwd,
-            display_name=state.config.display_name,
-            kind=state.config.kind,
-            repo=state.config.repo_name,
-            launched_by=state.config.launched_by,
-            owner_git=state.config.owner_git,
-        )
-        await state.relay.update_session(session)
+        session = await SessionRevival(state).revive()
     else:
         # Backfill fields that may be missing from pre-DES-030 sessions
         # or from sessions created before display_name was resolved.

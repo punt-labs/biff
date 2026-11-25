@@ -121,6 +121,7 @@
   "biff.server.tools._activity": "server",
   "biff.server.tools._descriptions": "server",
   "biff.server.tools._presence": "server",
+  "biff.server.tools._revival": "server",
   "biff.server.tools._session": "server",
   "biff.server.tools._tasks": "server",
   "biff.server.tools._write_target": "server",

@@ -1598,13 +1598,26 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/server/tools/_revival.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.67,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.67,
+    "module_size": 53.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/server/tools/_session.py": {
     "method_ratio": 0.167,
     "encapsulation_ratio": 1.0,
     "avg_params": 2.5,
     "max_complexity": 13.0,
-    "avg_complexity": 6.0,
-    "module_size": 119.0,
+    "avg_complexity": 5.67,
+    "module_size": 95.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.167,
     "init_violations": 0.0,
