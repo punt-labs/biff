@@ -7727,6 +7727,18 @@ modified 2026-09-13). Anthropic's own troubleshooting text for the
 identical gate: code.claude.com/docs/en/remote-control
 ("Remote Control requires feature-flag evaluation").
 
+### Amendment (2026-11-25): the template rollout re-enabled the lines
+
+`ce81632` (#468, the Ethos v4.21 storage-boundary cleanup) applied the
+canonical template to this repo and made all three lines active again, so
+every Claude Code session started from biff had channels silently off. PL-1353
+comments them out again and adds `tests/test_envrc_channels.py`, which fails
+when `DISABLE_TELEMETRY`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` or
+`DISABLE_GROWTHBOOK` is exported or `CLAUDE_CODE_ENABLE_TELEMETRY` is unset,
+so a later rollout fails `make check` instead of breaking channels unnoticed.
+`biff doctor`'s Channels check names the same variables when they come from
+anywhere else in the user's environment.
+
 ## DES-064: Caller Identity Is Harness-Declared, Never Inferred — Conform to the `mcp-caller-identity` Standard
 
 **Date:** 2026-11-10
