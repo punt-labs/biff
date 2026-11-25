@@ -17,6 +17,7 @@ from mcp.types import INVALID_REQUEST, PROTOCOL_VERSION_META_KEY
 
 from biff.server.channel import CHANNEL_CAPABILITY, ChannelLink
 from biff.server.channel_handshake import ChannelHandshake, ClientGate
+from biff.server.client_summary import ClientSummary
 from biff.server.mcp_protocol import NotificationServer
 from biff.usage import McpUsageMiddleware
 
@@ -172,8 +173,6 @@ class _HandshakeOnly[LifespanT]:
                 logger.exception("MCP initialize failed")
             raise
         if method == "initialize":
-            logger.info(
-                "MCP handshake: protocolVersion=%s channel_mode=on",
-                self._runner.connection.protocol_version,
-            )
+            client = ClientSummary.from_initialize(params)
+            logger.info(client.handshake(self._runner.connection.protocol_version))
         return result

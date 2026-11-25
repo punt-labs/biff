@@ -358,7 +358,7 @@ class ChannelEmitter:
             self._release(kind)
         else:
             logger.info(
-                "channel event (%s) sent, count=%s",
+                "channel event (%s) queued, count=%s; display not confirmed",
                 kind.value,
                 event.meta.get("count", "-"),
             )
