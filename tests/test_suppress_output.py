@@ -10,12 +10,16 @@ import json
 import os
 import subprocess
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+import biff.commands.talk as talk_commands
+from biff.cli_context import CliContext
 from biff.commands._messaging import Delivery
-from biff.formatting import format_talk_echo
-from biff.models import UserSession
+from biff.formatting import format_talk_echo, format_wall_confirmation
+from biff.models import BiffConfig, UserSession, WallPost
+from biff.relay import LocalRelay
 from biff.server.tools._write_target import WriteRouter
 
 HOOK = str(
@@ -178,29 +182,65 @@ def _context(output: dict[str, object]) -> str:
     return str(hook_out.get("additionalContext", ""))
 
 
-def talk_invite_text(display: str) -> str:
-    """The invite confirmation commands/talk.py returns, longer than 60 chars."""
-    return f"Invite sent to {display}. When they accept, talk_read shows replies."
+async def _real_invite_confirmation(tmp_path: Path) -> str:
+    """Run the real talk invite command and return its confirmation text."""
+    relay = LocalRelay(tmp_path)
+    await relay.update_session(
+        UserSession(user="eric", tty="erichex1", tty_name="tty6", repo="test")
+    )
+    kai = CliContext(
+        relay=relay,
+        config=BiffConfig(user="kai", repo_name="test"),
+        session_key="kai:kaihex01",
+        user="kai",
+        tty="kaihex01",
+        tty_name="tty1",
+    )
+    result = await talk_commands.invite(
+        kai,
+        user="eric",
+        relay_key="eric:erichex1",
+        display="eric:tty6",
+        resolve_tty="tty6",
+        message="",
+    )
+    assert not result.error
+    return result.text
+
+
+def _first_line_cut(text: str) -> str:
+    """The panel line the hook keeps: the first line, at most 60 characters."""
+    return text.splitlines()[0][:60]
 
 
 class TestConfirmationsReachTheModel:
     """talk, plan and wall keep a short panel line; the model gets every word."""
 
-    def test_a_long_talk_confirmation_reaches_the_model_whole(self) -> None:
-        text = talk_invite_text("claude:tty6")
+    async def test_a_long_talk_confirmation_reaches_the_model_whole(
+        self, tmp_path: Path
+    ) -> None:
+        text = await _real_invite_confirmation(tmp_path)
+        assert len(text) > 60  # the cut this fix is about
         output = _run_hook("talk", text)
-        assert len(_panel_summary(output)) <= 60
+        assert _panel_summary(output) == _first_line_cut(text)
         assert _context(output) == text
 
     def test_a_two_line_plan_echo_keeps_the_plan_text(self) -> None:
         text = format_talk_echo("Plan:", "rewrite the relay reconnect loop")
         assert "\n" in text  # the echo puts the plan on its own line
         output = _run_hook("plan", text)
+        assert _panel_summary(output) == _first_line_cut(text)
         assert _context(output) == text
         assert "rewrite the relay reconnect loop" in _context(output)
 
-    def test_a_long_wall_confirmation_reaches_the_model_whole(self) -> None:
-        text = "Wall posted (expires 2h): " + "deploy freeze until the release" * 3
+    def test_a_wall_confirmation_keeps_its_body(self) -> None:
+        post = WallPost(
+            text="deploy freeze until the release is tagged and verified",
+            from_user="kai",
+            expires_at=datetime.now(UTC) + timedelta(hours=2),
+        )
+        text = format_wall_confirmation(post)
+        assert "\n" in text  # the body sits below the header
         output = _run_hook("wall", text)
-        assert len(_panel_summary(output)) <= 60
+        assert _panel_summary(output) == _first_line_cut(text)
         assert _context(output) == text
