@@ -28,6 +28,8 @@ dependencies = [
     "punt-observe==0.1.1",
     "wcwidth>=0.8.2,<1",
     "watchdog>=7,<8",
+    # The biffd listener and its client (docs/design/biffd.md).
+    "websockets>=16,<17",
 ]
 
 [project.optional-dependencies]
@@ -207,9 +209,11 @@ prefixes = [
     "chunking",
     "data",
     "failure_log",
+    "log_hint",
     "logging_config",
     "markers",
     "prob_gate",
+    "run_dir",
     "session_id",
     "session_lock",
     "usage",
@@ -218,7 +222,7 @@ prefixes = [
 imports = []
 
 [tool.oo-ratchet.layers.wire]
-prefixes = ["check_stamp", "models", "session_routing", "talk_types", "unread"]
+prefixes = ["check_stamp", "frame_ack", "frame_base", "frame_client", "frame_proof", "frame_reply", "frames", "models", "session_routing", "talk_types", "unread"]
 imports = ["kernel"]
 
 [tool.oo-ratchet.layers.engine]
@@ -290,10 +294,21 @@ imports = ["kernel", "wire", "engine", "render", "plugins"]
 prefixes = ["plugins.claude_code"]
 imports = ["kernel", "wire", "engine", "render", "commands", "plugins", "service"]
 
+# The client side of the biffd protocol: it imports no engine, so no client
+# can hold a relay connection.
+[tool.oo-ratchet.layers.client]
+prefixes = ["client"]
+imports = ["kernel", "wire"]
+
+[tool.oo-ratchet.layers.daemon]
+prefixes = ["daemon"]
+imports = ["kernel", "wire", "engine", "render", "commands"]
+
 [tool.oo-ratchet.layers.cli]
 prefixes = [
     "__main__",
     "_cli_runtime",
+    "cli_app",
     "cli_session",
     "cli_session_drain",
     "cli_session_host",
@@ -316,6 +331,8 @@ imports = [
     "plugins",
     "service",
     "claude_code",
+    "client",
+    "daemon",
 ]
 
 [tool.pytest.ini_options]

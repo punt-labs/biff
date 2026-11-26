@@ -1,6 +1,8 @@
 # biffd: the Per-User Daemon
 
-Status: proposed design (DES-095). No code ships with this document.
+Status: proposed design (DES-095). Migration step 1 is built: `biff daemon
+serve`, the frames and the session records below. Nothing routes through the
+daemon yet.
 
 `biffd` is one long-running process per operating-system user. It owns every
 connection and every piece of state that biff's clients would otherwise
@@ -27,7 +29,7 @@ Terms used below:
 
 | State or duty | Why it is in the daemon |
 |---------------|-------------------------|
-| The relay connections and their reconnect lifecycle | One connection per relay target, however many sessions use it. Today every `biff mcp` process opens its own. |
+| The relay connections and their reconnect lifecycle | One connection per relay target (server, credentials and repository), however many sessions use it. Today every `biff mcp` process opens its own. |
 | Inbox and unread state | Several clients read and mark the same unread set; read-once semantics need one writer. |
 | Presence and `.plan` | One heartbeat per session, sent by the daemon, not by each client. |
 | Talk sessions | A talk has two ends and a queue (`docs/specs/talk.tex`); one owner keeps the queue bounded. |
@@ -36,10 +38,13 @@ Terms used below:
 | Private keys and signing | biffd signs on behalf of clients; a client gets a token, never a key. Custody, attestation and verification are specified in [trust-model.md](trust-model.md). |
 | Message semantics and delivery policy | Identical for every harness (R-D.4): classification, read-once behavior and what a harness may show live in the engine, so an adapter cannot differ. |
 
-One relay connection serves every session that targets the same relay. A
-repository with the local relay (`.punt-labs/local/biff/relay/`, DES-091) is its
-own target, so biffd holds one connection per distinct target and the sessions
-of one repository share it.
+One relay connection serves every session that targets the same relay. The
+target is the key `(server, credentials, repository)`: the NATS relay scopes
+its subjects, presence and wall by repository name, so two repositories on one
+NATS server are two targets, and sharing one NATS client between them is a
+later optimization. A repository with the local relay
+(`.punt-labs/local/biff/relay/`, DES-091) is its own target, so biffd holds one
+connection per distinct target and the sessions of one repository share it.
 
 ## What stays in clients
 
@@ -96,20 +101,99 @@ Every frame is a JSON object with a protocol `version`.
 
 | Frame | Direction | Content |
 |-------|-----------|---------|
-| `hello` | client to daemon, first frame | Token, client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id` and `main_agent_id` |
+| `challenge` | client to daemon, first frame | `client_nonce`: 128 random bits, fresh per connection. Nothing secret |
+| `proof` | daemon to client | `daemon_nonce` (128 random bits, fresh per connection, used once) and `mac` = HMAC-SHA256(token, `biffd-daemon-v1` + `client_nonce` + `daemon_nonce`), as hex |
+| `hello` | client to daemon, after the proof checks | `mac` = HMAC-SHA256(token, `biffd-client-v1` + `daemon_nonce` + `client_nonce`), as hex, in place of any token; client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id`, `main_agent_id` (empty when the harness states none), `cwd` (the directory the client runs in, which names the repository and so the relay target) and an optional `user` override. The daemon answers a valid hello with a `reply` whose `id` is 0 |
 | `request` | client to daemon | `id`, `method`, `params`. One `method` per command object in `commands/` |
-| `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message) |
-| `subscribe` | client to daemon | Starts the arrival subscription for the connection's session |
-| `event` | daemon to client | One arrival summary, with a per-daemon `seq` |
+| `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message). A command's `result` is `{"data": <the command's JSON payload>, "error": <bool>}` |
+| `ack` | client to daemon | `id` of a request. Sent after the client received that request's reply, when the reply set `needs_ack` (a `read` that carries mail). The daemon marks the mail read only on this frame |
+| `subscribe` | client to daemon | `id`. Starts the arrival subscription for the connection's session. The daemon replies to `id` with `{"subscribed": true}`, or with `already_subscribed` or `session_replaced` |
+| `event` | daemon to client | One arrival summary, with a per-daemon `seq`. `kind` is `unread`, `mail`, `wall`, `degraded` (the relay stopped answering) or `recovered` |
 
-A request that arrives before a valid `hello`, or with a wrong token, closes
-the connection and changes no state. A `hello` whose `version` the daemon does
+**The token never crosses the wire.** The client's port is a guess (8424
+when no port file exists), and any local process can bind a port biffd is not
+using, or reach the real daemon on loopback. So neither side hands the other
+the token or answers for it without proof of its own:
+
+1. The client sends `challenge{client_nonce}`.
+2. The daemon sends `proof{daemon_nonce, mac}`, where the MAC covers the label
+   `biffd-daemon-v1`, then both nonces, under the token. The daemon makes
+   `daemon_nonce` for this connection and keeps it nowhere else.
+3. The client checks the MAC with `hmac.compare_digest` against the one it
+   computes from its own token file. A missing, late or wrong proof ends the
+   attempt with an error naming the port and saying no credential was sent.
+4. The client sends `hello{mac, ...}` with a MAC over the label
+   `biffd-client-v1`, then `daemon_nonce` and `client_nonce`.
+5. The daemon checks it with `hmac.compare_digest`. A wrong MAC closes the
+   connection (1008) and changes no state.
+
+The labels differ and the nonces are in opposite orders, so neither side's MAC
+can be reflected back as the other's. A MAC binds both nonces, so it is good on
+one connection and is refused on any other: an impostor that records a hello
+cannot replay it, and an impostor that cannot compute the daemon's MAC never
+receives a hello at all. The daemon's answer to a challenge is not a signing
+oracle for a client MAC, because the two MACs use different labels and the
+daemon never signs the client label.
+
+**Residual.** An attacker that holds the port can still sit in the middle of a
+live, correctly proven connection by relaying both directions: it forwards the
+challenge to the real daemon and the proof and hello back and forth. It learns
+no token and no credential that works on another connection, but while it
+relays it can read and alter that connection's frames. Closing that needs a
+channel the attacker cannot sit on, a Unix socket with peer-uid checks or TLS.
+That is a separate design decision for DES-095, not made here.
+
+The client also reads the token only from a run directory at mode 0700 and a
+token file at mode 0600, both owned by the current user, and refuses otherwise
+with the `chmod` that repairs it.
+
+A frame other than a `challenge` first, a `hello` before the proof, a second
+`hello`, a request before a valid `hello`, or a wrong MAC closes the
+connection and changes no state. A `hello` whose `version` the daemon does
 not support gets an error naming both versions and the command that fixes the
-mismatch (`biff daemon restart`, or upgrade the client).
+mismatch. Until `biff daemon restart` exists it says to stop the running
+`biff daemon serve` and start it again, or upgrade the client. Both sides read
+`version` from the raw object before validating the rest of the frame, so a peer
+whose frames have another shape is still named, not closed without a word.
+
+Timeouts: the client waits 1 second to open the connection and 5 seconds for
+the proof and for the hello's reply, and each request waits 10 seconds by
+default; a miss is an error naming what timed out. The daemon answers requests
+concurrently, each reply carrying its request's `id`, and gives a hello 10
+seconds and a request 30 seconds before it replies `internal` naming the relay.
+A connection whose run a newer run replaced is closed with 1008 and the reason
+"session replaced by a newer run; reconnect".
 
 Results are `wire` data and never rendered text. The client runs `render`, so
 `biff who` prints the same table whether the command ran in the daemon or in
 today's single process.
+
+### Delivery of mail
+
+A reply that carries mail is not the end of its delivery. A socket write says
+the bytes left the daemon, not that the client read them: a client that timed
+out discards a late reply. So the daemon marks the mail read only on the
+client's `ack` for that request. A connection that ends before the `ack` leaves
+its mail unread, and the next `read` serves it again.
+
+A relay that consumes mail when it is fetched (NATS) has nothing left to mark,
+so the daemon holds fetched mail in the session's outbox until the `ack`. A
+relay that does not consume (the local relay) keeps unread mail itself, and its
+broadcast inbox is shared by every session of the user, so its outbox holds
+nothing: each `read` is built from what the relay says is unread now, and a
+message another session marked read is never served again. `more` counts the
+mail a batch leaves: held mail, plus what a consuming relay still holds behind
+its bounded fetch (NATS pulls at most 100 messages per inbox at a time). The
+reconnect summary counts held mail as unread.
+
+Two residuals remain, both at-least-once delivery rather than loss:
+
+- An abandoned read still consumes mail from a consuming relay. The client gave
+  up, so the mail is not delivered, but it has left the relay; it waits in the
+  outbox and the next `read` serves it.
+- Mail held in the outbox is lost if the daemon dies first. It had already left
+  the NATS stream, as mail a client fetched is lost if the client dies. The
+  outbox is memory, not a log.
 
 ### Subscription
 
@@ -145,7 +229,7 @@ tells daemon authors to adopt. biffd supplies one `ServiceSpec`:
 | `cli_verb` / `cli_name` | `daemon` / `biff` |
 | `health_port` | 8424, so the library's port guard refuses to install over another listener |
 | `restart_on_crash_only` | true: a clean stop by the operator stays stopped |
-| `log_path` | `~/.punt-labs/biff/logs/biffd.log` |
+| `log_path` | `~/.punt-labs/biff/logs/biff.log`: `punt-observe` names the file after the tool, so the daemon writes the log every biff process writes, with its role set to `daemon` |
 
 Commands:
 
@@ -198,9 +282,13 @@ shell. The daemon applies the session-record lifecycle of
 [mcp-caller-identity § 4.2](https://github.com/punt-labs/punt-kit/blob/main/standards/mcp-caller-identity.md)
 unchanged:
 
-- A session is keyed by `session_id` from the client's `hello`. A second client
-  for the same session id attaches to the existing record; the daemon never
-  holds two records for one id.
+- A session is keyed by `session_id` and the caller's role, from the client's
+  `hello`. A shell (`cli`) routes to different relay keys than an agent-side
+  client (`mcp`, `hook`, `plugin`), so a shell and an agent that hold one id
+  are two sessions with their own inboxes and presence rows: keyed by the id
+  alone, the second would be handed the first's inbox. A second client of the
+  same id and role attaches to the existing record; the daemon never holds two
+  records for one key, and refuses another user or relay under it.
 - A new `main_agent_id` for a known session is a new run: the daemon releases
   the previous run's subscription and pending deliveries, keeps durable state,
   and refuses calls from the replaced run with a named error.

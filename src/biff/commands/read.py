@@ -2,28 +2,26 @@
 
 from __future__ import annotations
 
-from biff.cli_context import CliContext
+from typing import TYPE_CHECKING
+
 from biff.commands._result import CommandResult
+from biff.commands.inbox import Inbox
 from biff.formatting import format_read
+
+if TYPE_CHECKING:
+    from biff.cli_context import CliContext
+
+__all__ = ["read"]
 
 
 async def read(ctx: CliContext) -> CommandResult:
     """Check inbox for new messages. Marks all as read."""
-    tty_unread = await ctx.relay.fetch(ctx.session_key)
-    user_unread = await ctx.relay.fetch_user_inbox(ctx.user)
-    all_unread = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
-
-    if not all_unread:
+    inbox = await Inbox.unread(ctx)
+    unread = inbox.messages
+    if not unread:
         return CommandResult(text="No new messages.", json_data=[])
-
-    tty_ids = [m.id for m in tty_unread]
-    user_ids = [m.id for m in user_unread]
-    if tty_ids:
-        await ctx.relay.mark_read(ctx.session_key, tty_ids)
-    if user_ids:
-        await ctx.relay.mark_read_user_inbox(ctx.user, user_ids)
-
+    await inbox.mark_read(unread)
     return CommandResult(
-        text=format_read(all_unread),
-        json_data=[m.model_dump(mode="json") for m in all_unread],
+        text=format_read(unread),
+        json_data=[m.model_dump(mode="json") for m in unread],
     )
