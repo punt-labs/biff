@@ -546,6 +546,15 @@ Code.` All the cloud-provider variables share one line. Run it from the shell th
 starts Claude Code: doctor cannot see a running session's environment, which the
 start-up warning above checks instead.
 
+With the NATS relay, doctor also checks the live path end to end. It sends each of
+your running biff sessions in the repo a channel check, waits up to 30 seconds for
+all of them at once, and prints one informational line per session:
+`✓ Channel: kai:tty1: channel live`, or `○ Channel: kai:tty1: channel not
+confirmed` followed by a pointer to the Channels lines above. A session that is
+not confirmed never fails doctor. With no running session, or with the local relay,
+doctor prints one line saying there is nothing to check or that the check needs the
+NATS relay.
+
 ## Status Bar
 
 `biff install-statusline` adds biff to the end of your existing Claude Code status line; it does not replace it. `biff uninstall-statusline` restores the original.
