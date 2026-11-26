@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- `biff daemon serve` runs biffd in the foreground. It listens on
+  `127.0.0.1:8424` (`--port` overrides; `--port 0` picks a free port), answers
+  an unauthenticated `GET /health` with its version and uptime, keeps a bearer
+  token in `~/.punt-labs/biff/run/serve.token` (mode 0600, created once) and
+  records its port in `serve.port`, which a clean shutdown removes. Nothing
+  uses the daemon yet; `biff mcp`, the CLI and the hooks still run in-process.
+
 ### Changed
 
 - `/who` no longer prints the "N sessions stopped responding (last seen ...)"

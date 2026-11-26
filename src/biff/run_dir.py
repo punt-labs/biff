@@ -1,0 +1,118 @@
+"""The biffd run directory: bearer token and port file."""
+
+from __future__ import annotations
+
+import os
+import secrets
+import stat
+from pathlib import Path
+from typing import Self, final
+
+__all__ = ["DEFAULT_PORT", "RunDir"]
+
+DEFAULT_PORT = 8424
+"""Loopback port of the daemon; the next free one in the 8420 to 8430 block."""
+
+_TOKEN_BYTES = 32
+
+
+@final
+class RunDir:
+    """Locates and guards ``~/.punt-labs/biff/run/``.
+
+    The daemon writes the token and port file; every client reads them.  The
+    path is injectable so tests never touch the real home directory.
+    """
+
+    __slots__ = ("_path",)
+
+    _path: Path
+
+    def __new__(cls, path: Path) -> Self:
+        """Create the run directory handle for *path*."""
+        self = super().__new__(cls)
+        self._path = path
+        return self
+
+    @classmethod
+    def default(cls) -> Self:
+        """Return the run directory under the current user's home tree."""
+        return cls(Path.home() / ".punt-labs" / "biff" / "run")
+
+    @property
+    def path(self) -> Path:
+        """The directory itself."""
+        return self._path
+
+    @property
+    def token_path(self) -> Path:
+        """The bearer token file."""
+        return self._path / "serve.token"
+
+    @property
+    def port_path(self) -> Path:
+        """The file naming the port a running daemon listens on."""
+        return self._path / "serve.port"
+
+    def ensure(self) -> None:
+        """Create the directory private to the user when it is absent."""
+        self._path.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def ensure_token(self) -> str:
+        """Return the token, creating it once at mode 0600.
+
+        ``O_EXCL`` makes two daemons starting together agree on one token: the
+        loser of the race reads the winner's file.
+        """
+        self.ensure()
+        try:
+            fd = os.open(self.token_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return self.read_token()
+        token = secrets.token_urlsafe(_TOKEN_BYTES)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(token)
+        return token
+
+    def read_token(self) -> str:
+        """Return the stored token.
+
+        Raises:
+            FileNotFoundError: No daemon has created the token.
+            PermissionError: The file is readable by someone but its owner.
+        """
+        path = self.token_path
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError as exc:
+            msg = f"no token at {path}: biffd has never run here"
+            raise FileNotFoundError(msg) from exc
+        if mode & 0o077:
+            msg = f"{path} has mode {mode:04o}; it must be 0600"
+            raise PermissionError(msg)
+        return path.read_text().strip()
+
+    def write_port(self, port: int) -> None:
+        """Record the port the running daemon listens on."""
+        self.ensure()
+        self.port_path.write_text(f"{port}\n")
+
+    def read_port(self) -> int:
+        """Return the recorded port, or the default when no daemon recorded one.
+
+        Raises:
+            ValueError: The port file does not hold a port number.
+        """
+        try:
+            text = self.port_path.read_text().strip()
+        except FileNotFoundError:
+            return DEFAULT_PORT
+        try:
+            return int(text)
+        except ValueError as exc:
+            msg = f"{self.port_path} holds {text!r}, not a port number"
+            raise ValueError(msg) from exc
+
+    def remove_port(self) -> None:
+        """Remove the port file; a daemon that never wrote it is not an error."""
+        self.port_path.unlink(missing_ok=True)

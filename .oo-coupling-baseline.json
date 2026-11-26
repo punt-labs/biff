@@ -7,7 +7,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/__main__.py": {
-    "efferent_coupling": 16.0,
+    "efferent_coupling": 15.0,
     "public_names": 28.0,
     "circular_imports": 0.0,
     "max_lcom": 0.533,
@@ -118,6 +118,13 @@
     "max_lcom": 0.857,
     "avg_lcom": 0.857
   },
+  "src/biff/cli_app.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/cli_context.py": {
     "efferent_coupling": 3.0,
     "public_names": 1.0,
@@ -170,6 +177,13 @@
   "src/biff/cli_session_store.py": {
     "efferent_coupling": 3.0,
     "public_names": 7.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/client/__init__.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 0.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -306,6 +320,27 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/biff/daemon/__init__.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/daemon/cli.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/daemon/server.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.667,
+    "avg_lcom": 0.667
   },
   "src/biff/data/__init__.py": {
     "efferent_coupling": 0.0,
@@ -726,6 +761,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/biff/run_dir.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.689,
+    "avg_lcom": 0.689
   },
   "src/biff/server/__init__.py": {
     "efferent_coupling": 1.0,
