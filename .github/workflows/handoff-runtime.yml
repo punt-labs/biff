@@ -95,7 +95,7 @@ jobs:
           cp -R "$runtime/cache/uv" "$scratch/uv-cache"
           cp -R "$runtime/cache/npm" "$scratch/npm-cache"
           if [[ $RUNNER_OS == Linux ]]; then
-            offline=(sudo unshare --net --setuid "$(id -u)" --setgid "$(id -g)" --)
+            offline=(sudo unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups --)
           else
             offline=(sandbox-exec -p '(version 1) (allow default) (deny network*)')
           fi
