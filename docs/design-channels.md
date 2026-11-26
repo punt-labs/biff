@@ -401,7 +401,9 @@ auto-accept, rate limit) stay.
 
 1. Team and Enterprise orgs, the primary audience: an Owner turns on Channels
    (Organization settings > Claude Code > Channels, `channelsEnabled`) and adds
-   `{"marketplace": "punt-labs", "plugin": "biff"}` to `allowedChannelPlugins`.
+   `{"marketplace": "punt-labs", "plugin": "biff"}` to `allowedChannelPlugins`
+   in the managed settings JSON (Organization settings > Claude Code > Managed
+   settings; the key has no toggle of its own).
    Users then launch with `claude --channels plugin:biff@punt-labs`, with no
    prompt. The start-up warning's fix text leads with this path. The
    allowlist replaces Anthropic's default list, so it must also name the

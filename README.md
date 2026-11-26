@@ -487,16 +487,28 @@ release newer than 1.24.2.
 
 **Team and Enterprise plans: an Owner sets it up once.**
 
-1. Organization settings > Claude Code > Channels: turn Channels on
-   (`channelsEnabled`).
-2. Add biff to `allowedChannelPlugins`:
+In the claude.ai admin console, open Organization settings > Claude Code >
+Managed settings (<https://claude.ai/admin-settings/claude-code>) and add to the
+managed settings JSON:
 
-   ```json
-   {"marketplace": "punt-labs", "plugin": "biff"}
-   ```
+```json
+{
+  "channelsEnabled": true,
+  "allowedChannelPlugins": [
+    { "marketplace": "punt-labs", "plugin": "biff" }
+  ]
+}
+```
 
-   This list replaces Anthropic's default channel list rather than adding to
-   it, so also list every other channel plugin the organization uses.
+`allowedChannelPlugins` has no field of its own; it is set only in this JSON.
+The Channels toggle on the same page sets `channelsEnabled` alone. The list
+replaces Anthropic's default channel list rather than adding to it, so also list
+every other channel plugin the organization uses. Organizations that manage
+devices instead can set the same keys through MDM or a `managed-settings.json`
+file, but only one managed source applies: the admin console wins over MDM, and
+an MDM profile that sets any policy key hides the file entirely, so put the
+channel keys in whichever source the organization already uses
+([managed settings](https://code.claude.com/docs/en/managed-settings)).
 
 **Then each user launches with:**
 
