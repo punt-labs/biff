@@ -1,6 +1,6 @@
 """Minimal NIP-OA (owner attestation) and NIP-01 event checks.
 
-Spike code for PL-1661. Mirrors docs/nips/NIP-OA.md and
+Spike code that proves the NIP-OA vectors in Python. Mirrors docs/nips/NIP-OA.md and
 crates/buzz-sdk/src/nip_oa.rs at Buzz commit 298543f.
 """
 

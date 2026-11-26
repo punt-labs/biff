@@ -71,11 +71,20 @@ def _chacha(key: bytes, nonce12: bytes, data: bytes) -> bytes:
     return cipher.encryptor().update(data)
 
 
-def encrypt(plaintext: str, key: bytes, nonce: bytes) -> str:
+def seal(padded: bytes, key: bytes, nonce: bytes) -> str:
+    """Encrypt and MAC bytes that are already padded.
+
+    `encrypt` pads correctly and calls this. Tests call it directly with
+    malformed padding to build a payload whose MAC is valid.
+    """
     chacha_key, chacha_nonce, hmac_key = message_keys(key, nonce)
-    ciphertext = _chacha(chacha_key, chacha_nonce, _pad(plaintext))
+    ciphertext = _chacha(chacha_key, chacha_nonce, padded)
     mac = hmac.new(hmac_key, nonce + ciphertext, hashlib.sha256).digest()
     return base64.b64encode(b"\x02" + nonce + ciphertext + mac).decode()
+
+
+def encrypt(plaintext: str, key: bytes, nonce: bytes) -> str:
+    return seal(_pad(plaintext), key, nonce)
 
 
 def decrypt(payload: str, key: bytes) -> str:

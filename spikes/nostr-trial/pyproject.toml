@@ -2,7 +2,9 @@
 name = "biff-nostr-trial"
 version = "0.0.0"
 description = "PL-1661 spike: NIP-OA and NIP-17 in Python. Not shipped."
-requires-python = ">=3.13"
+# coincurve 21.0.0 ships no cp314 wheel on any platform, and its sdist fails to
+# build on 3.14, so the spike must not resolve to 3.14.
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "coincurve",
     "cryptography",
