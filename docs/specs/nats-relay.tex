@@ -430,6 +430,10 @@ watcher that has been rebound more than once.
   reconnectEpoch : \nat \\
   spuriousTeardown : ZBOOL \\
   epochPending : ZBOOL
+\end{schema}
+
+\begin{schema}{ConnectionInv}
+  Connection
   \where
   connState \neq connected \implies
   kvProvisioned = zfalse \land
@@ -447,6 +451,20 @@ watcher that has been rebound more than once.
   epochPending = ztrue \implies
   connState \in \{ connected, disconnected \}
 \end{schema}
+
+The predicates of the connection are stated in $ConnectionInv$, not in
+$Connection$, and the same split is made for $SessionStore$, $Watcher$
+and $DaemonLayer$.  The reason is the translation, not the mathematics.
+An operation written $\Delta Connection$ includes the predicates of
+$Connection$ on its after-state, and ProZ turns them into guards of the
+operation; a transition that would break one is then simply not enabled,
+and the model checker never reports it.  Predicates kept in $Connection$
+would therefore be assumed by every operation rather than checked of it.
+The schemas $Connection$, $SessionStore$, $Watcher$ and $DaemonLayer$
+carry only declarations, so the operations built on them carry no
+invariant guards; the inclusion $NatsRelayState$ (\S\ref{sec:composed})
+gathers the $\ldots Inv$ schemas and the reserved schema $Invariant$
+installs them, so each predicate is checked in every reachable state.
 
 This is the generalised handle-validity invariant: valid
 JetStream, sessions-KV, and names-KV handles exist \emph{if and
@@ -637,6 +655,10 @@ adds what the clients do to it.
   daemon : DaemonState \\
   attached : \power CLIENT \\
   holdsHandle : \power CLIENT
+\end{schema}
+
+\begin{schema}{DaemonLayerInv}
+  DaemonLayer
   \where
   holdsHandle = \emptyset \\
   daemon = daemonAbsent \implies attached = \emptyset
@@ -1521,6 +1543,10 @@ rebinds, even though this operation offers a path that does not.
 \begin{schema}{SessionStore}
   sessions : SESSIONKEY \pinj KVVALUE \\
   wallValue : KVKEY \pfun KVVALUE
+\end{schema}
+
+\begin{schema}{SessionStoreInv}
+  SessionStore
   \where
   \# sessions \leq maxSessions \\
   \# wallValue \leq 1
@@ -1602,6 +1628,10 @@ and its supervisor \texttt{\_kv\_watcher\_loop}.
   phase : WatcherPhase \\
   shutdownRequested : ZBOOL \\
   restartCount : \nat
+\end{schema}
+
+\begin{schema}{WatcherInv}
+  Watcher
   \where
   restartCount \leq maxRestarts \\
   phase = stopped \implies shutdownRequested = ztrue
@@ -1738,10 +1768,10 @@ checks \texttt{shutdown.is\_set()} on every iteration.
 %%----------------------------------------------------------------------
 
 \begin{schema}{NatsRelayState}
-  Connection \\
-  SessionStore \\
-  Watcher \\
-  DaemonLayer
+  ConnectionInv \\
+  SessionStoreInv \\
+  WatcherInv \\
+  DaemonLayerInv
   \where
   phase = idle \implies restartCount = 0 \\
   daemon = daemonAbsent \implies
@@ -1762,6 +1792,19 @@ The $SessionStore$ is deliberately exempt --- it models the contents of
 the KV bucket, which the relay server keeps whether or not any daemon is
 running.  Second, a client is never attached to a closed relay: a closed
 relay is the daemon in shutdown, and $ClientAttach$ refuses it.
+
+ProZ installs a state schema's predicates as the machine-checked invariant
+only through the reserved schema name $Invariant$; without it the
+translation keeps only the typing of the components.  $Invariant$ makes
+every predicate of $ConnectionInv$, $SessionStoreInv$, $WatcherInv$,
+$DaemonLayerInv$ and $NatsRelayState$ a checked state invariant, and, the
+declaration schemas carrying no predicates, no operation assumes one: a
+transition that breaks a predicate is enabled, reaches the bad state, and
+is reported.
+
+\begin{schema}{Invariant}
+  NatsRelayState
+\end{schema}
 
 A watcher that has never left $idle$ has never been restarted.  The
 state deliberately does \emph{not} assert that an active watcher implies

@@ -363,6 +363,10 @@ is durable, so the count of unread arrivals of a session is kept
   subscribed : \power CONN \\
   shown : CONN \pfun (0 \upto maxUnread) \\
   durable : SESSION \fun (0 \upto maxUnread)
+\end{schema}
+
+\begin{schema}{DaemonSideInv}
+  DaemonSide
   \where
   \dom runOf = known \\
   \dom hello \subseteq opened \\
@@ -394,6 +398,14 @@ and $Deliver$ and $Subscribe$ below say it is told of every one (none
 lost).  When the daemon is not running there is no open connection, so no
 record is live: a restart returns every record to dormant.
 
+The predicates are stated in $DaemonSideInv$ and not in $DaemonSide$, which
+carries only the declarations.  An operation written $\Delta DaemonSide$
+includes the predicates of $DaemonSide$ on its after-state, and ProZ turns
+them into guards: a transition that would break one is not enabled, and the
+model checker cannot report it.  With the predicates in $DaemonSideInv$, which
+$DaemonWorld$ includes and the reserved schema $Invariant$ installs, an
+operation that breaks one is enabled, reaches the bad state, and is reported.
+
 A connection holds no relay handle: $DaemonSide$ has no component of that
 type, and the relay handle is a component of the daemon
 (\texttt{nats-relay.tex}, $holdsHandle$).  Invariant~1 of DES-095 is
@@ -405,7 +417,7 @@ only for a session that exists.
 
 \begin{schema}{DaemonWorld}
   RouteWorld \\
-  DaemonSide
+  DaemonSideInv
   \where
   known \subseteq sessions
 \end{schema}
