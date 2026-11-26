@@ -9313,7 +9313,9 @@ and `.github/workflows/handoff-runtime.yml` following the vox reference pattern.
 
 **Outcome:** verified end-to-end through `ethos hook subagent-stop` built from
 `punt-labs/ethos` `main` (`0e5f807`, including `#707` and `#710` native
-`prehydrate`) with pinned `linux-amd64` runtime `77aef8b9...`: cold clean run
-passes in 208.81 s (cache miss + `prehydrate` + full `make check` launch),
-warm clean run hits cache in 1.04 s, and a syntax error in
-`src/biff/__init__.py` blocks with exit status 2 in 14.15 s.
+`prehydrate`) against the published `handoff-runtime-v1` release
+(`linux-amd64` `96a6e0ae...`, `darwin-arm64` `2cd02a5b...`) fetched via
+`ethos handoff fetch-runtime`: cold clean run passes in 206.04 s (cache miss +
+`prehydrate` + full `make check` launch), warm clean run hits cache in 1.16 s,
+and a syntax error in `src/biff/__init__.py` blocks with exit status 2 in
+14.39 s.
