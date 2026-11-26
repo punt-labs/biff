@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from typing import cast
+import logging
+from typing import TYPE_CHECKING, cast
 
 from biff.cli_context import CliContext
 from biff.commands.who import who
 from biff.models import UserSession
 from biff.relay import LocalRelay
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestWho:
@@ -119,11 +123,9 @@ class TestWho:
         assert data[0]["user"] == "live"
 
     async def test_all_dead_returns_no_sessions(
-        self, ctx: CliContext, relay: LocalRelay
+        self, ctx: CliContext, relay: LocalRelay, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """When every session is stale, the main table reports no sessions,
-        but a session dead long enough is still name-free in the footnote
-        (DES-057) -- the exact orphan case that motivated this bead."""
+        """When every session is stale, /who says no sessions and logs the dead ones."""
         from datetime import UTC, datetime, timedelta
 
         now = datetime.now(UTC)
@@ -135,9 +137,9 @@ class TestWho:
                 last_active=now - timedelta(hours=12),
             )
         )
-        result = await who(ctx)
-        assert result.text == (
-            "No sessions.\n   1 session stopped responding (last seen 12h)"
-        )
-        assert "ghost" not in result.text
+        with caplog.at_level(logging.INFO):
+            result = await who(ctx)
+        # Dead sessions are for the log, never the /who output.
+        assert result.text == "No sessions."
         assert result.json_data == []
+        assert "1 session stopped responding (last seen 12h)" in caplog.text

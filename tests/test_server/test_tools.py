@@ -6,6 +6,7 @@ the registered closure, verifying it reads/writes state correctly.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -22,6 +23,7 @@ from biff.server.state import ServerState
 from tests._state import create_state
 
 if TYPE_CHECKING:
+    import pytest
     from fastmcp import FastMCP
 
 _TEST_REPO = "_test-server"
@@ -389,7 +391,9 @@ class TestWhoTool:
         assert "eric" in result
         assert "1m" in result
 
-    async def test_hides_dead_sessions(self, state: ServerState) -> None:
+    async def test_hides_dead_sessions(
+        self, state: ServerState, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Sessions past the liveness window are dropped from the main table
         but still surfaced, unnamed, in the dead-session footnote
         (DES-057) once they exceed the wider DEAD_REPORT_SECONDS threshold."""
@@ -404,10 +408,12 @@ class TestWhoTool:
             )
         )
         fn = await _get_tool_fn(state, "who")
-        result = await fn()
+        with caplog.at_level(logging.INFO):
+            result = await fn()
         assert "recent" in result
         assert "old" not in result
-        assert "stopped responding (last seen 2d)" in result
+        assert "stopped responding" not in result  # logged, never shown
+        assert "stopped responding (last seen 2d)" in caplog.text
 
     async def test_sorted_by_idle_time(self, state: ServerState) -> None:
         now = datetime.now(UTC)

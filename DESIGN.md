@@ -6813,6 +6813,16 @@ and `tests/test_commands/test_who.py::TestWho::test_all_dead_returns_no_sessions
 
 ---
 
+### Amendment (2026-11-25): the summary moves from /who to the log
+
+The footnote grew to one age per dead row: a team with a day of restarts saw
+"124 sessions stopped responding (last seen 38m, 57m, ...)" under every
+`/who`, longer than the table it followed. It told the reader nothing they
+could act on. `/who` (the MCP tool and `biff who`) now shows live sessions
+only, and logs the same summary line to biff.log at INFO through
+`dead_sessions_summary`. The output hook's footnote filter is removed with it.
+Detection (`dead_sessions`, `DEAD_REPORT_SECONDS`) is unchanged.
+
 ## DES-058: `CLAUDE_PID` Env Var Corrects DES-011's Rejected Alternative
 
 **Date:** 2026-08-22
