@@ -46,7 +46,7 @@ their interactions:
   commands via \texttt{shlex}-based parsing.  Commands return a
   \texttt{CommandResult} with text and optional JSON.  The special
   commands \texttt{exit}/\texttt{quit} terminate the loop; \texttt{talk}
-  enters a modal sub-loop (modelled in \texttt{docs/talk.tex}).
+  enters a modal sub-loop (modelled in \texttt{docs/specs/talk.tex}).
 
 \item \textbf{Prompt display} --- a threading gate (prompt gate)
   synchronises the stdin reader thread and the async event loop.
@@ -100,7 +100,7 @@ after \texttt{cli\_session} enters, and shutting down during the
 \end{zed}
 
 The REPL is either in normal command mode or in the modal talk
-sub-loop.  The talk sub-loop is modelled in \texttt{docs/talk.tex};
+sub-loop.  The talk sub-loop is modelled in \texttt{docs/specs/talk.tex};
 this specification models the mode transition.
 
 \begin{zed}
@@ -449,7 +449,7 @@ command just made.
 %%----------------------------------------------------------------------
 
 User typed \texttt{talk @user}.  REPL transitions to talk mode
-(modelled in \texttt{docs/talk.tex}).
+(modelled in \texttt{docs/specs/talk.tex}).
 
 \begin{schema}{EnterTalkMode}
   \Delta ReplState

@@ -360,6 +360,7 @@ doctor is a CLI command).
 **Date:** 2026-02-15
 **Status:** SETTLED, with a correction — there is no `biff init` command
 **Topic:** How biff determines the user's identity
+**Authorship:** see DES-094 (`docs/design/trust-model.md`)
 
 ### Design
 

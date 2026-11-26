@@ -270,7 +270,7 @@ as $notifyLost = zfalse$ had to be dropped whole in
 No-Recovery Sink}):
 
 \begin{verbatim}
-probcli docs/notification-race.tex -model_check -noltl -coverage \
+probcli docs/specs/notification-race.tex -model_check -noltl -coverage \
   -goal "raceLost = ztrue" \
   -p DEFAULT_SETSIZE 2 -p MAX_OPERATIONS 2000
 \end{verbatim}
@@ -302,7 +302,7 @@ The same file, same goal search technique, reproduces round~1's defect
 at the new three-site granularity in two steps:
 
 \begin{verbatim}
-probcli docs/notification-race.tex -model_check -noltl -coverage \
+probcli docs/specs/notification-race.tex -model_check -noltl -coverage \
   -goal "notifyLost = ztrue" \
   -p DEFAULT_SETSIZE 2 -p MAX_OPERATIONS 2000
 \end{verbatim}
@@ -328,7 +328,7 @@ committed above ($\# inFlight \leq 1$, $raceLost = zfalse$, and
 $notifyLost = zfalse$ all present):
 
 \begin{verbatim}
-probcli docs/notification-race.tex -model_check -noltl -coverage \
+probcli docs/specs/notification-race.tex -model_check -noltl -coverage \
   -p DEFAULT_SETSIZE 2 -p MAX_OPERATIONS 2000
 \end{verbatim}
 

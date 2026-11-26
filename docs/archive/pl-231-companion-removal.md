@@ -82,11 +82,11 @@ the dead-code rule.
 
 | File | Companion content |
 |---|---|
-| `docs/session-model.tex` | `:100-103`, `:154-170`, `:1322`, `:1338`, `:1385`, plus the `human` role of `RID`/`derive`/`RegisterEntry` (see 5.1). |
-| `docs/nats-relay.tex` | `SubKind` constructor `inboxNotifyCompanion` (`:228`), prose `:170-253`, `:1306-1352`, `:1628` initial `subGen`, CTL property `:1789-1842`. |
-| `docs/nats-relay-kvwatch-noreconcile.tex` | Same constructor (`:228`), initial `subGen` (`:1616`), property text `:1787-1827`. The brief says "check the variants"; this one is a full copy and must change with `nats-relay.tex`. |
-| `docs/sentinel-reap.tex` | Prose only: `:141-146` (companion key as a second carrier), `:650`, `:832` ("Companion sessions as a distinct carrier"). No formal clause depends on it. Re-run its four `probcli` commands (`:609,634,727,782`) after the prose edit as a check. |
-| `docs/nats-relay-teardown.tex`, `docs/nats-relay-teardown-unbounded.tex` | False positives ("Companion to nats-relay.tex"). No change, but they import the `SubKind`-free teardown; re-run fuzz to prove they are independent. |
+| `docs/specs/session-model.tex` | `:100-103`, `:154-170`, `:1322`, `:1338`, `:1385`, plus the `human` role of `RID`/`derive`/`RegisterEntry` (see 5.1). |
+| `docs/specs/nats-relay.tex` | `SubKind` constructor `inboxNotifyCompanion` (`:228`), prose `:170-253`, `:1306-1352`, `:1628` initial `subGen`, CTL property `:1789-1842`. |
+| `docs/specs/nats-relay-kvwatch-noreconcile.tex` | Same constructor (`:228`), initial `subGen` (`:1616`), property text `:1787-1827`. The brief says "check the variants"; this one is a full copy and must change with `nats-relay.tex`. |
+| `docs/specs/sentinel-reap.tex` | Prose only: `:141-146` (companion key as a second carrier), `:650`, `:832` ("Companion sessions as a distinct carrier"). No formal clause depends on it. Re-run its four `probcli` commands (`:609,634,727,782`) after the prose edit as a check. |
+| `docs/specs/nats-relay-teardown.tex`, `docs/specs/nats-relay-teardown-unbounded.tex` | False positives ("Companion to nats-relay.tex"). No change, but they import the `SubKind`-free teardown; re-run fuzz to prove they are independent. |
 
 ### 2.4 Docs
 
@@ -95,18 +95,18 @@ the dead-code rule.
 spec. Of the 14, two are false positives: `.claude/agents/dna.md`
 (generated) and `.punt-labs/ethos/writing-styles/norman-prose.md` (unrelated
 use of the word). The real 12 are `CHANGELOG.md`, `DESIGN.md`, `TESTING.md`,
-`docs/coe-v1.11-release.md` and the 8 `docs/*.md` files named below.
+`docs/coe/coe-v1.11-release.md` and the 8 `docs/*.md` files named below.
 
 Leader's call per direct-authoring rules; recommendation in parentheses:
 
 - Archive under `docs/archive/` with a superseded banner (do not delete):
   `docs/dual-session.md`, `docs/dual-session-ux.md`,
   `docs/agent-first-identity.md`, `docs/spec-agent-first-identity.md`,
-  `docs/design-nats-push.md`. Keep `docs/coe-dual-session-companion.md` in
+  `docs/design-nats-push.md`. Keep `docs/coe/coe-dual-session-companion.md` in
   place as history (its value is the COE).
-- Edit one reference each: `docs/biff_coordination_use_cases_v0.2.md`,
+- Edit one reference each: `docs/archive/biff_coordination_use_cases_v0.2.md`,
   `docs/session-pinned-opencode.md` (since archived as
-  `docs/archive/session-pinned-opencode.md`), `docs/coe-v1.11-release.md:37`
+  `docs/archive/session-pinned-opencode.md`), `docs/coe/coe-v1.11-release.md:37`
   (historical table row, leave), `TESTING.md:240`.
 - `CHANGELOG.md`: historical entries stay. Add `[Unreleased]` entries (7.3).
 - `DESIGN.md`: see 6.
@@ -229,14 +229,14 @@ Proof obligations (existing tests, which must stay green and are not edited):
 `tests/test_server/test_talk.py` (`resolve_talk_target` cases at `:241-310`),
 `tests/test_nats_e2e/test_talk.py:55` (bare `@user` rejected), `:179`, `:238`
 (frame carries `to_key`), and `tests/test_talk_state.py` (session-scoped
-receive filters). `docs/talk.tex` is not touched. The implementation PR
+receive filters). `docs/specs/talk.tex` is not touched. The implementation PR
 records the before and after pass of these files as the invariant proof.
-`make fuzz SPEC=docs/talk.tex` is re-run as a negative control: it must still
+`make fuzz SPEC=docs/specs/talk.tex` is re-run as a negative control: it must still
 pass untouched.
 
 ## 5. Spec re-proof plan
 
-### 5.1 `docs/session-model.tex`
+### 5.1 `docs/specs/session-model.tex`
 
 Decision: remove the `human` role from the routing layer.
 
@@ -262,9 +262,9 @@ Re-run, in order, from the repo root (`PROBCLI` defaults to
 `~/Applications/ProB/probcli`):
 
 ```bash
-make fuzz SPEC=docs/session-model.tex
+make fuzz SPEC=docs/specs/session-model.tex
 make prob-session
-probcli docs/session-model.tex -model_check -strict \
+probcli docs/specs/session-model.tex -model_check -strict \
   -card NAME 1 -card HOST 1 -card PROCESS 1 \
   -card SESSION 1 -card ALIAS 2 \
   -p DEFAULT_SETSIZE 1 -p MAXINT 4 \
@@ -282,13 +282,13 @@ Then the reachability goals (D2, D3, D4, spec `:1377-1423`), each run with the
 same cards:
 
 ```bash
-probcli docs/session-model.tex -model_check -strict -card NAME 1 -card HOST 1 \
+probcli docs/specs/session-model.tex -model_check -strict -card NAME 1 -card HOST 1 \
   -card PROCESS 1 -card SESSION 1 -card ALIAS 2 -p DEFAULT_SETSIZE 1 -p MAXINT 4 \
   -goal "lostF=ztrue & routeMode=rmAlias"
-probcli docs/session-model.tex -model_check -strict -card NAME 1 -card HOST 1 \
+probcli docs/specs/session-model.tex -model_check -strict -card NAME 1 -card HOST 1 \
   -card PROCESS 1 -card SESSION 1 -card ALIAS 2 -p DEFAULT_SETSIZE 1 -p MAXINT 4 \
   -goal "misF=ztrue & routeMode=rmAlias"
-probcli docs/session-model.tex -model_check -strict -card NAME 1 -card HOST 1 \
+probcli docs/specs/session-model.tex -model_check -strict -card NAME 1 -card HOST 1 \
   -card PROCESS 1 -card SESSION 1 -card ALIAS 2 -p DEFAULT_SETSIZE 1 -p MAXINT 4 \
   -goal "(lostF=ztrue or misF=ztrue) & routeMode=rmIdentity"
 ```
@@ -302,10 +302,10 @@ then a route-on-alias send. D3's trace is unchanged except for the dropped
 role argument. If D2 or D3 stop finding a trace, the edit over-simplified and
 must be revised before merge.
 
-Also run the z-spec zero-GAP gate: `/z-spec:audit docs/session-model.tex
+Also run the z-spec zero-GAP gate: `/z-spec:audit docs/specs/session-model.tex
 --test-dir=tests`.
 
-### 5.2 `docs/nats-relay.tex` and `docs/nats-relay-kvwatch-noreconcile.tex`
+### 5.2 `docs/specs/nats-relay.tex` and `docs/specs/nats-relay-kvwatch-noreconcile.tex`
 
 - `SubKind ::= talk | inboxNotify | inboxNotifyCompanion | kvWatch` becomes
   `SubKind ::= talk | inboxNotify | kvWatch` (`:228`).
@@ -326,18 +326,18 @@ Also run the z-spec zero-GAP gate: `/z-spec:audit docs/session-model.tex
 Re-run:
 
 ```bash
-make fuzz SPEC=docs/nats-relay.tex
-make prob SPEC=docs/nats-relay.tex PROB_SETSIZE=2
-make fuzz SPEC=docs/nats-relay-kvwatch-noreconcile.tex
-make prob SPEC=docs/nats-relay-kvwatch-noreconcile.tex PROB_SETSIZE=2
-make fuzz SPEC=docs/nats-relay-teardown.tex
-make fuzz SPEC=docs/nats-relay-teardown-unbounded.tex
-make fuzz SPEC=docs/sentinel-reap.tex
+make fuzz SPEC=docs/specs/nats-relay.tex
+make prob SPEC=docs/specs/nats-relay.tex PROB_SETSIZE=2
+make fuzz SPEC=docs/specs/nats-relay-kvwatch-noreconcile.tex
+make prob SPEC=docs/specs/nats-relay-kvwatch-noreconcile.tex PROB_SETSIZE=2
+make fuzz SPEC=docs/specs/nats-relay-teardown.tex
+make fuzz SPEC=docs/specs/nats-relay-teardown-unbounded.tex
+make fuzz SPEC=docs/specs/sentinel-reap.tex
 ```
 
 Then the per-kind CTL liveness check, three runs (one per remaining kind),
-through the z-spec plugin (`/z-spec:test docs/nats-relay.tex`) or directly
-with `probcli docs/nats-relay.tex -model_check -ctlformula "<formula for
+through the z-spec plugin (`/z-spec:test docs/specs/nats-relay.tex`) or directly
+with `probcli docs/specs/nats-relay.tex -model_check -ctlformula "<formula for
 k>"`, substituting `talk`, `inboxNotify`, `kvWatch` for `k`. Each must report
 TRUE. The restriction to `connState = connected` is also re-run for each
 kind (spec `:1802-1804`). The pre-fix negative control (`subGen(talk) = 0`
@@ -354,9 +354,9 @@ in the PR. This is a gap in the repository's reproducibility that the
 implementation should close by adding the formulas as a comment block in the
 spec.
 
-Then `/z-spec:audit docs/nats-relay.tex --test-dir=tests` must show zero GAP.
+Then `/z-spec:audit docs/specs/nats-relay.tex --test-dir=tests` must show zero GAP.
 
-`docs/sentinel-reap.tex` needs no formal change; after the prose edit its four
+`docs/specs/sentinel-reap.tex` needs no formal change; after the prose edit its four
 `probcli ... -noass -nodead` runs (`:609,634,727,782`) are re-run as given in
 the spec.
 
@@ -550,8 +550,8 @@ run concurrently in separate worktrees.
   `src/biff/server/tools/messaging.py`, `src/biff/server/tools/_session.py`
   (comment), `src/biff/config.py` (docstring only), `src/biff/formatting.py`
   (`format_read_dual` and `__all__`), and the tests in 2.2.
-- Write-set, mission 2 (`jms`): `docs/session-model.tex`, `docs/nats-relay.tex`,
-  `docs/nats-relay-kvwatch-noreconcile.tex`, `docs/sentinel-reap.tex`.
+- Write-set, mission 2 (`jms`): `docs/specs/session-model.tex`, `docs/specs/nats-relay.tex`,
+  `docs/specs/nats-relay-kvwatch-noreconcile.tex`, `docs/specs/sentinel-reap.tex`.
 - Gate: `make check`, the 3.7 grep, the 5.1 and 5.2 commands with outputs
   pasted in the PR, zero GAP audit, and the talk tests in section 4.
 - Leader-authored in the same PR (per direct-authoring rules): DESIGN.md

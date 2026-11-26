@@ -41,7 +41,7 @@ Context7 had no documentation entry for this formal-methods ProB tool.
 Before the repair, run from the Biff repository with `probcli` on PATH:
 
 ```bash
-probcli docs/session-model.tex -cbc_deadlock \
+probcli docs/specs/session-model.tex -cbc_deadlock \
   -p DEFAULT_SETSIZE 1 -p MAXINT 4 -p TIME_OUT 60000
 ```
 
@@ -98,7 +98,7 @@ The assignment violates, among others:
 The historical reachable-state comparison was:
 
 ```bash
-probcli docs/session-model.tex -model_check -strict \
+probcli docs/specs/session-model.tex -model_check -strict \
   -p DEFAULT_SETSIZE 1 -p MAXINT 4 -p TIME_OUT 60000 \
   -p MAX_INITIALISATIONS 100 -p MAX_OPERATIONS 5000
 ```
@@ -181,7 +181,7 @@ The real ProB coverage record passes the strengthened parser unchanged.
 Mixed-scope proof command (no invariant or deadlock suppression):
 
 ```bash
-probcli docs/session-model.tex -model_check -strict \
+probcli docs/specs/session-model.tex -model_check -strict \
   -card NAME 1 -card HOST 1 -card PROCESS 1 -card SESSION 1 -card ALIAS 2 \
   -p DEFAULT_SETSIZE 1 -p MAXINT 4 -p TIME_OUT 60000 \
   -p MAX_INITIALISATIONS 100 -p MAX_OPERATIONS 20000 -coverage

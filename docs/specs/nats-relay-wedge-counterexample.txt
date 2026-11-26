@@ -2,11 +2,11 @@ biff-tww proven from the model: the half-open connection wedge
 ===============================================================
 
 Artifact         : ProB counterexample trace (Pass A, pre-fix model)
-Spec             : docs/nats-relay-passA-nowedge.tex
-                   (= docs/nats-relay.tex with the single WedgeDetected
+Spec             : docs/specs/nats-relay-passA-nowedge.tex
+                   (= docs/specs/nats-relay.tex with the single WedgeDetected
                     recovery operation removed)
 Tool             : probcli (ProB) via `z-spec test`
-Command          : probcli docs/nats-relay-passA-nowedge.tex \
+Command          : probcli docs/specs/nats-relay-passA-nowedge.tex \
                      -model_check -p DEFAULT_SETSIZE 2 -p MAX_OPERATIONS 1000
 Result           : *** COUNTER EXAMPLE FOUND *** (deadlock)
 Corresponds to   : biff-tww (runtime NATS wedge), DES-041
@@ -60,7 +60,7 @@ that could leave halfOpen -- has been removed. halfOpen is therefore a
 reachable terminal state. That terminal state IS biff-tww: TCP up,
 is_closed false, every request timing out, no recovery.
 
-The fix (Pass B, docs/nats-relay.tex)
+The fix (Pass B, docs/specs/nats-relay.tex)
 -------------------------------------
 Adding the single WedgeDetected operation (halfOpen -> reconnecting,
 handles invalidated) -- the model of keepalive ping-timeout detection
@@ -68,10 +68,10 @@ firing _on_disconnect -- makes the recovery sequence
   connected --Request(reqTimeout)--> halfOpen
             --WedgeDetected-->        reconnecting
             --Reconnect-->            connected
-always available. `z-spec test docs/nats-relay.tex` then reports:
+always available. `z-spec test docs/specs/nats-relay.tex` then reports:
   ok: true, 6 states, deadlock-free, all operations covered.
 
 Regenerating this artifact
 --------------------------
-  z-spec test docs/nats-relay-passA-nowedge.tex   # ok:false, deadlock
-  z-spec test docs/nats-relay.tex                 # ok:true, deadlock-free
+  z-spec test docs/specs/nats-relay-passA-nowedge.tex   # ok:false, deadlock
+  z-spec test docs/specs/nats-relay.tex                 # ok:true, deadlock-free

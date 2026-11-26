@@ -143,38 +143,25 @@ without changing the contract.
 
 ## Room for biffd
 
-`biffd` is a planned per-user daemon that will own the NATS connection, inbox
-and unread state, presence, plans, talk state and the fan-out of arrivals.
-The MCP server, the `biff` command, the hooks and out-of-process plugins then
-become thin clients that reach it over local IPC (PL-225,
-`docs/requirements-biffd-multihost.md`, requirements R-D.1 to R-D.8). This
-standard does not design `biffd`. It keeps today's code shaped so that
-extracting `biffd` moves the engine into a new process instead of rewriting
-the code around it:
+`biffd`, the planned per-user daemon, is designed in [biffd.md](biffd.md)
+(DES-095), including the `daemon` and `client` packages that will join the
+table above. Until it lands, three rules keep today's code extractable:
 
 1. **Entry points reach the engine only through `commands`, after startup.**
    `server`, `cli` and each `plugins/<tool>` adapter call command objects, not
    relay or talk-state internals. The one exception is process startup: the
    entry point that starts a process (`cli`, or a tool's own console script)
    reads configuration, constructs the relay and passes it the delivery sinks.
-   Under
-   `biffd` those calls become IPC requests; the callers do not change.
    Measured on `968e4c5`: 41 direct engine imports in 24 entry-point modules,
-   counted as a separate, non-gating number until `biffd`'s design decides
-   which of them, such as reading configuration at startup, stay.
-2. **Arrivals leave the engine only through `DeliverySink`.** That is the
-   notification subscription `biffd` will serve to its clients (R-D.5), and
-   `biff watch` (PL-235) is its command-line form.
-3. **`wire` types stay plain data.** They will cross the IPC boundary, so they
-   hold no relay connections, file handles or callbacks.
-4. **The engine holds no per-tool state.** Message semantics and delivery
-   policy are the same for every tool (R-D.4); anything one tool needs lives
-   in its adapter.
+   counted as a separate, non-gating number.
+2. **Arrivals leave the engine only through `DeliverySink`.** `biffd` serves
+   that interface to its clients as a subscription, and `biff watch` (PL-235)
+   is its command-line form.
+3. **`wire` types stay plain data.** They cross the daemon's connection, so
+   they hold no relay connections, file handles or callbacks.
 
-Left to `biffd`'s own design: the `daemon` and `client` packages, the IPC
-protocol, how the daemon starts and stops, and how several sessions share
-it. When that design lands, those packages join the table above, and `server`
-and `cli` may import `client` instead of `engine`.
+The engine also holds no per-tool state; anything one tool needs lives in its
+adapter.
 
 ## Where new code goes
 

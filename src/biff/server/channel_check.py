@@ -1,6 +1,6 @@
 """The channel check: one token per accepted request, one acknowledgement (DES-087).
 
-``docs/channel-check.tex`` models it.  ``biff doctor`` asks a session to prove
+``docs/specs/channel-check.tex`` models it.  ``biff doctor`` asks a session to prove
 that channel events reach its model.  The server accepts at most one request a
 minute, makes a fresh 128-bit token, sends it in one channel event, and accepts
 the token back once through the ``channel_ack`` tool.  The check only reports; it
@@ -27,21 +27,11 @@ logger = logging.getLogger(__name__)
 CHECK_SECONDS = 60.0
 """A session accepts at most one check request in this many seconds."""
 
-_REPLY = re.compile(r"_INBOX\.[A-Za-z0-9_.-]{1,120}")
-
-
-def is_reply_subject(subject: str) -> bool:
-    """Whether *subject* is a fresh NATS inbox name, safe to publish an ack to.
-
-    A request is untrusted input: without this test a forged one could aim the
-    acknowledgement at any subject, a wildcard or a stream subject included.
-    """
-    return _REPLY.fullmatch(subject) is not None
-
 
 class ChannelCheck:
     """Hold the one pending check: its token, its reply subject, its send."""
 
+    _REPLY = re.compile(r"_INBOX\.[A-Za-z0-9_.-]{1,120}")
     _clock: Callable[[], float]
     _last_accepted: float | None  # absent until the first request is accepted
     _token: str | None  # absent when no check is pending
@@ -74,7 +64,7 @@ class ChannelCheck:
         extend the window.  An accepted one retires any earlier token.
         """
         now = self._clock()
-        if not is_reply_subject(reply):
+        if self._REPLY.fullmatch(reply) is None:  # a forger's subject
             return None
         if (
             self._last_accepted is not None

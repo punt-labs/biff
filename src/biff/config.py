@@ -386,7 +386,7 @@ _AUTH_ENV_FIELDS: dict[str, str] = {
 
 # The two auth env vars that name a file on disk -- fail fast if the file
 # is missing rather than let it surface later as an opaque NATS connect
-# error (docs/relay-env-overrides.md, operator ruling on open question 2).
+# error (docs/design/relay-env-overrides.md, operator ruling on open question 2).
 _AUTH_ENV_PATH_FIELDS = frozenset(
     {"BIFF_RELAY_NKEYS_SEED", "BIFF_RELAY_USER_CREDENTIALS"}
 )
@@ -408,7 +408,7 @@ def _resolved_auth_override(auth_var: str, path_value: str | None) -> RelayAuth:
 
     Fails fast for the two path-valued vars (``BIFF_RELAY_NKEYS_SEED``,
     ``BIFF_RELAY_USER_CREDENTIALS``) rather than deferring to an opaque NATS
-    connect error later (docs/relay-env-overrides.md, open question 2).
+    connect error later (docs/design/relay-env-overrides.md, open question 2).
     """
     if auth_var in _AUTH_ENV_PATH_FIELDS and not Path(cast("str", path_value)).exists():
         raise SystemExit(
@@ -441,7 +441,7 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
 
     Precedence: ``config.yaml`` < ``config.local.yaml`` < env vars < the
     CLI ``--relay-url`` override applied later in :func:`_load_base_config`
-    (docs/relay-env-overrides.md Sec 1). No-ops unless the repo-scoping
+    (docs/design/relay-env-overrides.md Sec 1). No-ops unless the repo-scoping
     gate (Sec 0) is satisfied: the SHARED ``config.yaml`` has no committed
     ``relay.url`` of its own (:attr:`_ConfigFields.relay_committed` is
     ``False`` -- this covers both true zero-config and a personal
@@ -496,7 +496,7 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
         # reset it whenever the URL changes, even when an auth env var also
         # fired in the same call. Without this, a stale file-resolved
         # tls_handshake_first=True would leak onto the new relay in exactly
-        # the case docs/relay-env-overrides.md Sec 7 documents (URL + token
+        # the case docs/design/relay-env-overrides.md Sec 7 documents (URL + token
         # set together), reopening the #383 footgun.
         tls_handshake_first = False
 

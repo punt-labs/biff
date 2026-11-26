@@ -28,13 +28,13 @@ if [ -f /etc/nats/nats.conf ]; then
   if ! grep -qE '^[[:space:]]*(authorization|accounts|nkeys)([[:space:]]|\{|:|=|$)' /etc/nats/nats.conf; then
     echo "entrypoint: /etc/nats/nats.conf does not define authorization," \
       "accounts, or nkeys -- refusing to start an unauthenticated," \
-      "network-reachable relay. See docs/self-hosted-relay.md." >&2
+      "network-reachable relay. See docs/guides/self-hosted-relay.md." >&2
     exit 1
   fi
   if grep -q 'REPLACE_WITH_A_LONG_RANDOM_TOKEN' /etc/nats/nats.conf; then
     echo "entrypoint: /etc/nats/nats.conf still has the placeholder token" \
       "from nats.conf.team.example -- replace it with a long random" \
-      "value before starting. See docs/self-hosted-relay.md." >&2
+      "value before starting. See docs/guides/self-hosted-relay.md." >&2
     exit 1
   fi
   conf=/etc/nats/base-with-user.conf

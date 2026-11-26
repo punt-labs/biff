@@ -291,7 +291,7 @@ to one keeps the exploration complete while retaining every distinction
 the properties depend on.
 
 \begin{verbatim}
-probcli docs/notification.tex -model_check -noltl -coverage \
+probcli docs/specs/notification.tex -model_check -noltl -coverage \
   -p DEFAULT_SETSIZE 2 \
   -card SOURCEKEY 1 -card SESSIONKEY 1 \
   -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 \
@@ -2588,7 +2588,7 @@ $notifyLost = ztrue \land wallDescChanged = ztrue \land talkDescChanged
 unrelated talk transitions---finds the four-step trace:
 
 \begin{verbatim}
-probcli docs/notification.tex -model_check -noltl -coverage \
+probcli docs/specs/notification.tex -model_check -noltl -coverage \
   -goal "notifyLost = ztrue & wallDescChanged = ztrue
          & talkDescChanged = zfalse" \
   -p DEFAULT_SETSIZE 2 \
@@ -2636,7 +2636,7 @@ $lastNotifyResult'$ all unchanged.  The reconnect does not recover the
 missed notification, because nothing recorded that one was owed.
 
 \begin{verbatim}
-probcli docs/notification.tex -model_check -noltl -coverage \
+probcli docs/specs/notification.tex -model_check -noltl -coverage \
   -p DEFAULT_SETSIZE 2 \
   -card USER 1 -card SOURCEKEY 1 -card SESSIONKEY 1 \
   -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 \
@@ -2726,7 +2726,7 @@ $NotificationState$ (Section~\ref{sec:state}) and set the ProB goal to
 $raceLost = ztrue$:
 
 \begin{verbatim}
-probcli docs/notification.tex -model_check -noltl -coverage \
+probcli docs/specs/notification.tex -model_check -noltl -coverage \
   -goal "raceLost = ztrue & natsConn = natsConnected
          & pendingNotify = zfalse" \
   -p DEFAULT_SETSIZE 2 \
@@ -2831,7 +2831,7 @@ and the race actually touch as their own machine and checks the
 identical property there:
 
 \begin{verbatim}
-probcli docs/notification-race.tex -model_check -noltl -coverage \
+probcli docs/specs/notification-race.tex -model_check -noltl -coverage \
   -p DEFAULT_SETSIZE 2 -p MAX_OPERATIONS 2000
 \end{verbatim}
 
@@ -4326,7 +4326,7 @@ terminates with ``all open states visited'': $598{,}824$ states,
 $9{,}938{,}416$ transitions, a complete check, not a truncated one.
 
 \begin{verbatim}
-probcli docs/notification.tex -model_check -noltl -coverage \
+probcli docs/specs/notification.tex -model_check -noltl -coverage \
   -goal "staleWithdrawHit = ztrue" \
   -p DEFAULT_SETSIZE 2 \
   -card USER 1 -card SOURCEKEY 1 -card SESSIONKEY 2 \
@@ -4421,7 +4421,7 @@ could never complete.
 %%----------------------------------------------------------------------
 
 The preceding sections model a delivery path that DES-087
-(\texttt{docs/design-channels.md}) leaves in place for display and no
+(\texttt{docs/design/design-channels.md}) leaves in place for display and no
 longer relies on for delivery: the tool-description markers and
 \texttt{tools/list\_changed}.  In the Claude~Code plugin the delivery path
 is now a \emph{channel}: biff turns each arrival into a short summary and
@@ -5372,7 +5372,7 @@ SCOPE="idleMarker = talkDescDefault & readDescDefault = talkDescDefault &
   talkConnected = zfalse & talkBare = {} & pollOn = zfalse &
   chanNewer <: {kMail, kWall} & chanUnseen <: {kMail, kWall} &
   talkPending = {} & talkQueued = 0"
-probcli docs/notification.tex -model_check -noltl -coverage \
+probcli docs/specs/notification.tex -model_check -noltl -coverage \
   -p DEFAULT_SETSIZE 2 -card USER 1 -card SOURCEKEY 1 \
   -card SESSIONKEY 1 -card QSLOT 1 -card USLOT 1 -card ASLOT 1 \
   -card PSLOT 1 -card RSLOT 1 \
@@ -5641,7 +5641,7 @@ is not modelled ($ReadMail$ empties the count), and is a test obligation.
 
 \paragraph{Reproducing a counterexample.}  Check~1, as the others:
 \begin{verbatim}
-sed '/^  chanLost = zfalse \\\\$/d' docs/notification.tex > v.tex
+sed '/^  chanLost = zfalse \\\\$/d' docs/specs/notification.tex > v.tex
 probcli v.tex -model_check -noltl -mc_mode breadth-first \
   -goal "chanLost = ztrue" -p DEFAULT_SETSIZE 2 -card USER 1 \
   -card SOURCEKEY 1 -card SESSIONKEY 1 -card QSLOT 1 -card USLOT 1 \
@@ -5654,7 +5654,7 @@ $pollRogue = zfalse$ is the last invariant and carries no trailing
 separator; delete it and the separator before it.  A sequence of the
 previous paragraph:
 \begin{verbatim}
-probcli docs/notification.tex -p DEFAULT_SETSIZE 2 -card USER 1 \
+probcli docs/specs/notification.tex -p DEFAULT_SETSIZE 2 -card USER 1 \
   -card SOURCEKEY 1 -card SESSIONKEY 1 -card QSLOT 1 -card USLOT 1 \
   -card ASLOT 1 -card PSLOT 1 -card RSLOT 2 \
   -cbc_sequence 'CaptureSession;ClientInitialized;EnsureConnected;MailArrive;
@@ -5796,7 +5796,7 @@ $FlushOwedFailUnrecorded$, is disabled by the invariant exactly as its
 siblings are (ProB enables an operation only if its post-state satisfies the
 invariants).  No new state variable was needed.
 
-\paragraph{Checks.}  \texttt{fuzz -t docs/notification.tex} reports no errors.
+\paragraph{Checks.}  \texttt{fuzz -t docs/specs/notification.tex} reports no errors.
 The five runs of Section~\ref{sec:chanchecks} are repeated with the same
 commands.  A, B, C and P prune the tool-list machinery, so the new schemas do
 not fire there and their counts are unchanged ($128{,}508$, $24{,}040$,
@@ -5817,7 +5817,7 @@ SCOPE="channelEnabled = ztrue & idleMarker = talkDescDefault &
   talkConnected = zfalse & talkBare = {} & pollOn = zfalse &
   chanNewer <: {kMail} & chanUnseen <: {kMail} & wallLive = zfalse &
   talkPending = {} & talkQueued = 0"
-probcli docs/notification.tex -model_check -noltl -coverage \
+probcli docs/specs/notification.tex -model_check -noltl -coverage \
   -p DEFAULT_SETSIZE 2 -card USER 1 -card SOURCEKEY 1 -card SESSIONKEY 1 \
   -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 -card RSLOT 1 \
   -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000 -scope "$SCOPE"
@@ -5831,7 +5831,7 @@ AG(({SCOPE & session = sessCaptured & pendingNotify = ztrue & inFlight = {}})
 true: whenever a change is owed and the session is captured, the retry is
 enabled.  And a sequence that fails the first retry and then succeeds,
 \begin{verbatim}
-probcli docs/notification.tex -p DEFAULT_SETSIZE 2 -card USER 1 \
+probcli docs/specs/notification.tex -p DEFAULT_SETSIZE 2 -card USER 1 \
   -card SOURCEKEY 1 -card SESSIONKEY 1 -card QSLOT 1 -card USLOT 1 \
   -card ASLOT 1 -card PSLOT 1 -card RSLOT 1 -p MAX_INITIALISATIONS 16 \
   -cbc_sequence 'CaptureSession;EnsureConnected;CloseConnection;

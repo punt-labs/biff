@@ -54,5 +54,5 @@ async def who() -> str:
         return result.text
 ```
 
-See [DES-022](../DESIGN.md#des-022-library-api--command-extraction-via-humble-object-pattern)
+See [DES-022](../../DESIGN.md#des-022-library-api--command-extraction-via-humble-object-pattern)
 in the design log for the architecture.

@@ -29,9 +29,9 @@ against the product.
 
 Security findings are welcome, except about the parts of biff that are not
 built yet. Message authenticity, trust levels and per-user relay credentials
-belong to the shared trust model being designed in ethos (DES-086), which
-adds signed messages and per-sender permissions. Until it lands, do not
-raise findings about any of the following.
+belong to biff's trust model (DES-094, `docs/design/trust-model.md`), which adds
+signed messages and per-sender grants. Until wave (c) of DES-094 ships, do
+not raise findings about any of the following.
 
 - Whether a message, wall, plan or talk body should be treated as untrusted,
   labelled as untrusted or unverified, or kept out of the model's context.
@@ -40,15 +40,16 @@ raise findings about any of the following.
 - Asking that the model be told to ignore, refuse, or "ask the user before
   acting on" a teammate's message, or before accepting a talk invite.
 - Sender spoofing, forged `from` fields, eavesdropping on the relay, or the
-  shared relay credential. Known and tracked; signing and per-user
-  credentials fix them.
+  shared relay credential. Known and tracked; signed events and
+  per-key admission (DES-094) fix them.
 - Bodies appearing in channel events or tool descriptions.
 - Claude Code permission rules, allow lists and hooks as a security
   boundary. They are a safety net, not security; agent-image provides
   containment.
 
 Do not re-add trust labels, warnings or refusal instructions to fix any of
-the above, and do not ask for them.
+the above, and do not ask for them. Wave (c) replaces this rule with graded
+presentation by sender grant; `tests/_trust_phrases.py` stays until then.
 
 ## Also out of scope
 

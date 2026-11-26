@@ -1,6 +1,6 @@
 # Channels: The Claude Code Plugin's Last Mile
 
-Status: proposed, awaiting operator ratification. Decision record: DES-087.
+Status: accepted, shipped in 1.25.0. Decision record: DES-087.
 Tracking: Linear project "biff: Channels delivery" (P-PL-46), epic PL-274.
 Reviewed by djb (wire), bcs (threat model), jms (formal model), alex-chen
 (failure modes) and qodo against an earlier draft; their findings that still
@@ -36,15 +36,10 @@ gets a filesystem watch (section 6). The public demo NATS relay is the opt-in
 `relay: {type: demo}`.
 
 **Plugins** adapt biff to one harness each. Each owns its harness's last mile,
-the step that gets an arrival in front of the model:
-
-| Plugin | How biff is reached | Last mile |
-|--------|---------------------|-----------|
-| Claude Code | `biff mcp`, plus hooks and slash commands in `plugin/` | Channels (this document); `/biff:read Xm` polling where channels are off |
-| Devin | `biff mcp --user` (DES-081) | Its own design |
-| opencode (native plugin) | `biff mcp` | `client.session.prompt` (research/harness-compatibility.md) |
-| codex (possible) | `biff mcp` | `codex queue` / `thread/queue/add` |
-| pi | `biff` CLI | `pi.sendMessage(..., {triggerTurn: true})` |
+the step that gets an arrival in front of the model. The per-tool table of
+installers, delivery sinks and session-start hooks is in
+[package-structure.md](package-structure.md) ("The plugin contract"); this
+document covers the Claude Code row, Channels.
 
 Biff's job is the same for every plugin: notice an arrival the moment the
 relay pushes it, and offer a short, safe summary of it. A plugin's job is to
@@ -175,12 +170,13 @@ the test for `talk_message`; messages never expire by time.
 enter a model's context as an instruction-capable prompt, and anyone holding
 the relay credential can publish frames with any `from` (PL-228):
 
-- **No bodies.** Never a message, wall or talk body.
+- **No bodies.** Never a message, wall or talk body. This holds until wave
+  (c) of DES-094, when bodies travel in events (decision brief R4).
 - **Senders are short and plain.** A sender is shown only when its user and
   tty parts each fully match `ID_RE` in `session_routing.py` and the user part
   is at most 39 characters; anything else becomes `a teammate`. Events carry no
-  trust label: whether a sender is who it claims to be is the shared trust
-  model's job (ethos DES-086), which adds signed messages.
+  trust label: whether a sender is who it claims to be is decided by signed
+  messages and per-sender grants (DES-094, [trust-model.md](trust-model.md)).
 - **Bounded length.** At most 200 characters. The client shows about 70 characters of
   one line, so a typical event is at most 60: the action, then the sender,
   which alone may be cut.
@@ -392,9 +388,9 @@ In channel mode the MCP `instructions` text gains one paragraph: channel
 events are summaries, and the only action they ask for is calling the named
 biff tool (`read_messages`, `wall`, `talk_read`). It does not label bodies or
 tell the model to refuse them: a teammate's message is acted on as it was before
-channels. A blanket untrusted label stopped agents from working together; the
-shared trust model (ethos DES-086) replaces it with signed messages and
-per-sender permissions. The code-level controls (no bodies in events, no
+channels. A blanket untrusted label stopped agents from working together; signed
+messages and per-sender grants (DES-094, [trust-model.md](trust-model.md))
+replace it. The code-level controls (no bodies in events, no
 auto-accept, rate limit) stay.
 
 ### 8. Getting channels to Claude Code users
@@ -442,7 +438,7 @@ trip for any other.
 
 ## Formal model
 
-`docs/notification.tex` gains a channel component: `EventKind ::= kMail |
+`docs/specs/notification.tex` gains a channel component: `EventKind ::= kMail |
 kWall | kTalkInvite | kTalkMsg`; per kind, the current state and the
 last-sent record; `mesgOn`; `initialized`; rate-window state; a `reconnected`
 event that re-runs the sender; and `pollOn`.
@@ -542,9 +538,9 @@ Release requires one passing end-to-end run.
   reach the client before it registers the channel.
 - **Count-based mail detection.** Misses arrivals that coincide with reads.
 - **Message bodies in summaries.** Turns every relay credential holder into a
-  prompt author (PL-228). Lifting it needs per-principal relay credentials,
-  signed bodies (PL-225), a human-set per-session sender allowlist, and the
-  rate limit.
+  prompt author (PL-228). Lifting it needs signed bodies and per-sender grants, which
+  DES-094 delivers in wave (c) ([trust-model.md](trust-model.md)); the rate
+  limit stays.
 - **Talk invite summaries that say to accept.** A forged invite would become
   a connected talk with no human involved.
 - **No rate limit.** A steady stream of forged writes would cost one model
@@ -553,32 +549,32 @@ Release requires one passing end-to-end run.
 ## Delivery plan
 
 Linear project "biff: Channels delivery" (P-PL-46). Each unit runs in its own
-worktree after ratification and ends tested and mergeable.
+worktree and ends tested and mergeable.
 
 | Wave | Unit | Owns | Merge order | Issue |
 |------|------|------|-------------|-------|
 | 0 | Prove: in channel mode `serve_loop` registers biff as a channel; the model answers a check event; whether a SessionStart hook can see Claude Code's launch flags | scratch branch only | Gates wave 1 | PL-1348 |
 | 1 | Channel mode for the Claude Code plugin: `plugin.json` env, capability, `serve_channel_stdio()`, startup record | `server/entrypoints.py`, `__main__.py` `mcp` command, `plugin.json`, `pyproject.toml` pin | After wave 0 | PL-1349 |
 | 1 | No background work except liveness; local relay file watch (inboxes, sessions, wall); reconnect catch-up hook | `server/tools/_descriptions.py` poller, `relay.py` `LocalRelay`, `nats_relay.py` `add_reconnect_listener` | Before PL-1350 | PL-1367 |
-| 1 | Formal model | `docs/notification.tex` | Before PL-1350 | PL-1351 |
+| 1 | Formal model | `docs/specs/notification.tex` | Before PL-1350 | PL-1351 |
 | 1 | Arrival summaries (biff) and channel events (plugin): content rules, last-sent record, rate limit, deferred send, instructions | new `engine/arrivals.py` (summaries and the `DeliverySink` they are handed to), new `plugins/claude_code/channel_emitter.py` (the sender, a `DeliverySink`), the relay push handler, `talk_state.py` arrival counters, `Relay.inbox_high_water`, `instructions` text | After PL-1349, PL-1351, PL-1367 | PL-1350 |
 | 1 | Start-up warning | new `plugins/claude_code/` modules, called directly by `biff-hook`; `plugins/claude_code/hook.py` | After wave 0 | PL-1368 |
 | 1 | On-demand channel check: relayed `channel_check`, token, `channel_ack` | new `server/tools/channel_ack.py` (a thin MCP adapter over a `commands` object, registered only in channel mode), the relay request handler, reply-subject publish, `unread.py` (local relay only) | After PL-1349 | PL-1365 |
-| 1 | `biff doctor`: end-to-end check and gates; docs; `.envrc` guard | `doctor.py`, README, `docs/INSTALLING.md`, `.envrc` (comment out the three DES-063 lines), its test | After PL-1365 | PL-1353 |
+| 1 | `biff doctor`: end-to-end check and gates; docs; `.envrc` guard | `doctor.py`, README, `docs/guides/INSTALLING.md`, `.envrc` (comment out the three DES-063 lines), its test | After PL-1365 | PL-1353 |
 | 1 | Polling as the exception: nudge hook only while polling is on; poll fixes | `plugin/hooks/unread-nudge.sh`, `unread.py` `polling` field, per issue | Any time | PL-1337, PL-1338, PL-1339, PL-1341 |
 | 1 | End-to-end tier | `tests/` tier and harness | Passes after the units above | PL-1352 |
 | 2 | Allowlist and official list submission | docs | After release candidate | PL-1354 |
 | 2 | Release on both channels; dogfood; push vs poll latency | release | Last | PL-1355 |
 
-## Decisions requested
+## Decisions
 
 1. **Channels belong to the Claude Code plugin**, turned on by its
    `plugin.json`, always on for every Claude Code user; `biff mcp` is
-   unchanged for every other plugin. Recommend yes.
+   unchanged for every other plugin. Accepted.
 2. **A start-up warning** when a visible gate is closed, telling the user and
-   the model to poll with `/biff:read 2m`. Recommend yes.
-3. **`biff doctor` checks the channel on demand.** Recommend yes.
+   the model to poll with `/biff:read 2m`. Accepted.
+3. **`biff doctor` checks the channel on demand.** Accepted.
 4. **Polling only when the user starts it; no background work except
-   liveness.** Recommend yes.
-5. **Summary-only, rate-limited events.** Recommend yes.
-6. **Submit to Anthropic's official channel list.** Recommend yes.
+   liveness.** Accepted.
+5. **Summary-only, rate-limited events.** Accepted.
+6. **Submit to Anthropic's official channel list.** Accepted.

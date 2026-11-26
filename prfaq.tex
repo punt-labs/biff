@@ -226,16 +226,17 @@ like this:
 /read
 \end{quote}
 
-Every command implies intent. There are no channels to monitor, no threads to
-catch up on, no emoji reactions to parse. Communication is repo-scoped and
-pull-based: when you open a project, you see only the teammates and messages
+Every command implies intent. There are no chat rooms to monitor, no threads to
+catch up on, no emoji reactions to parse. Communication is repo-scoped:
+when you open a project, you see only the teammates and messages
 for \emph{that} project --- not the ten others on the back burner. When
-someone sends you a message, your session notifies you --- your AI assistant
-mentions it naturally (``You have 2 unread messages from @kai. Want me to read
+someone sends you a message, your session notifies you --- where the harness
+supports push, a one-line channel event arrives on its own; elsewhere your AI
+assistant mentions it naturally (``You have 2 unread messages from @kai. Want me to read
 them?'') and your terminal's status bar shows a live indicator ---
 \texttt{kai:tty1(3)} in bold yellow when you have unreads,
 \texttt{kai:tty1(0)} when caught up, \texttt{kai:tty1(n)} when messages are
-off. You decide when to engage. The full command reference is in Appendix~A.
+off. The notice carries a summary; you decide when to read the message. The full command reference is in Appendix~A.
 
 Because biff speaks MCP, agents participate alongside humans as natural
 members of the team. An autonomous coding agent can \texttt{/plan} what it is
@@ -244,8 +245,11 @@ working on, \texttt{/write} a human when it needs a decision, and show up in
 \texttt{/tty} sessions, and \texttt{/who} shows host and directory per session
 so you can see where each agent is working. Workflow hooks tie into your
 development process: claiming a task auto-sets your plan, creating a PR
-triggers a \texttt{/wall} announcement. All messages are end-to-end encrypted
-via NaCl/libsodium, so the relay never sees message contents. Biff is
+triggers a \texttt{/wall} announcement. Every message is signed by its sender,
+and direct messages and talk are end-to-end encrypted, so the relay never
+sees their contents. Each person and each agent holds its own key, and an agent
+acts on its owner's behalf: a message reads ``from @claude, authorized by
+@jfreeman.'' Biff is
 designed for the humans who work alongside agents, not for agents that work
 without humans --- the same intentional, human-scale communication vocabulary
 that made BSD utilities great, updated for teams where some of the members
@@ -273,12 +277,12 @@ startup
 Getting started with biff takes three commands:
 \texttt{uv tool install punt-biff}, then \texttt{biff install} to register
 the MCP server and slash commands, then \texttt{biff doctor} to verify the
-setup. Restart Claude Code, and you are live. Biff ships with a shared relay
-on Synadia Cloud with end-to-end encryption, so there is zero infrastructure
-to provision. Team configuration lives in \texttt{.punt-labs/biff/config.yaml}
+setup. Restart Claude Code, and you are live. Biff runs on a local relay by default, and a shared relay on
+Synadia Cloud is one line of configuration away, so there is zero
+infrastructure to provision. Team configuration lives in \texttt{.punt-labs/biff/config.yaml}
 committed to your git repository --- it only needs a team member list; the
 relay URL defaults to the shared relay. Your display name is resolved
-automatically from your GitHub identity. When you clone a repo that has
+automatically from your GitHub identity, and your key is created on first use. When you clone a repo that has
 that file, biff automatically connects you to the right team. There is no account
 to create, no workspace to configure, and no browser to open. Type
 \texttt{/who} to see your teammates. Within five minutes of installation, you
@@ -306,7 +310,7 @@ purposeful, not ambient.''
 Biff is open source and available today at
 \href{https://github.com/punt-labs/biff}{github.com/punt-labs/biff}.
 Install with \texttt{uv tool install punt-biff}, then run \texttt{biff install}
-and \texttt{biff doctor}. The core tool, end-to-end encryption, and the
+and \texttt{biff doctor}. The core tool, signed and encrypted messaging, and the
 shared relay are free and always will be. For larger teams that need uptime
 guarantees, audit logs, and admin controls, biff teams is available as a
 paid tier.
@@ -374,8 +378,9 @@ paid tier.
 \end{faqpair}
 
 \begin{faqpair}{What happens to my messages? Is communication private?}\label{faq:privacy}
-  All direct messages are end-to-end encrypted using NaCl/libsodium. The
-  relay stores only ciphertext it cannot read. Biff follows a POP mail
+  Every message is signed by its sender, and direct messages and talk are
+  end-to-end encrypted (NIP-17). The relay stores only ciphertext for them
+  and cannot read it. Biff follows a POP mail
   model: messages are held only until the recipient reads them, then
   discarded. Biff is not a system of record. The shared relay is hosted on
   Synadia Cloud; teams that want data sovereignty can self-host the same
@@ -660,13 +665,14 @@ paid tier.
   \texttt{/wall} broadcasts time-limited announcements to all terminals
   with duration-based expiry and poll-based cross-session refresh.
 
-  Today, messages traverse the relay in cleartext.
   \texttt{.punt-labs/biff/config.yaml} in the repository contains the team
-  member list and optional relay configuration. It is the root of trust:
-  adding your username to it and committing it proves you have commit access to the
-  repo, which is what makes you a team member. End-to-end encryption
-  ships with biff 1.0 and will make the relay unable to read message
-  contents. See \faqref{faq:timeline} for the encryption roadmap.
+  member list and optional relay configuration. Who sent a message is
+  proved by a signature, not by a name in a field: each person and each agent
+  has its own key, an agent carries an attestation signed by its owner,
+  and each recipient keeps a signed address book that grants every sender
+  a level of trust (ignored, read, reply, act). The design is in
+  \texttt{docs/design/trust-model.md} (DES-094). See \faqref{faq:timeline} for
+  the phasing.
 \end{faqpair}
 
 \begin{faqpair}{What is the estimated development timeline?}\label{faq:timeline}
@@ -686,8 +692,14 @@ paid tier.
     (\texttt{from biff import commands}). Dev/prod plugin namespace
     isolation (\texttt{biff-dev} vs \texttt{biff}). Released and in daily
     use. See Appendix~A for the full command reference.
-    \item[Future: Security] End-to-end encryption (NaCl/libsodium),
-    GitHub identity and auth, per-repo NATS credentials.
+    \item[Future: Security] Per-person and per-agent keys, signed messages,
+    end-to-end encrypted direct messages and talk, and per-sender grants,
+    in four waves: (a) keys and owner attestation, (b) signed events over NATS
+    and encrypted DMs, (c) grants, the trust floor and graded delivery, and
+    (d) beadle email on the same grants. Message bodies join channel events
+    in wave (c). A per-user daemon, \texttt{biffd}, holds the relay
+    connection and the private keys, so the CLI, the MCP server and hooks
+    are thin clients (DES-095).
     \item[Future: Real-Time] \texttt{/pair} for session sharing with
     explicit consent.
     \item[Future: Hosted] Managed relay service (biff teams). Admin
@@ -848,10 +860,13 @@ paid tier.
 \begin{faqpair}{What are we not building?}\label{faq:not-building}
   Biff is not building:
   \begin{itemize}[leftmargin=1.5em]
-    \item \textbf{Persistent channels or temporary groups.} No channels,
-    no rooms, no \texttt{/hive}. Communication is directed: you message a
-    person or broadcast to the team. There is no concept of a persistent
-    or temporary room.
+    \item \textbf{Persistent channels or temporary groups.} No chat-app
+    channels, no rooms, no \texttt{/hive}. Communication is directed: you
+    message a person or broadcast to the team. There is no concept of a
+    persistent or temporary room. The word ``channel'' appears in two
+    technical places only: Claude Code's channel events, which are one-line
+    arrival notices, and the Nostr group events (NIP-29) that carry wall
+    messages on the wire.
     \item \textbf{Artifact sharing (\texttt{/send}).} Sending diffs, files,
     or code snippets inline is a compelling idea but out of scope for now.
     Use git, GitHub Issues, or PR comments for artifact exchange.
@@ -974,8 +989,8 @@ paid tier.
   channels: model-level awareness via tool descriptions and user-level
   awareness via the status bar. The highest-risk future component is
   \texttt{/pair}, which requires careful permission design for session
-  input sharing. End-to-end encryption (NaCl/libsodium) ships with
-  biff 1.0. No shipped component required novel technology.}
+  input sharing. Signed messages and end-to-end encrypted direct
+  messages follow the four waves of DES-094. No shipped component required novel technology.}
 
 \riskitem{Viability}{%
   \textbf{Medium risk.} The open-core model is proven in developer tools,
@@ -1121,13 +1136,22 @@ paid tier.
   \textbf{Feature} & \textbf{Description} \\
   \midrule
 
-  E2E encryption &
-  NaCl/libsodium (Curve25519 + XSalsa20-Poly1305). Messages encrypted
-  with recipient's public key; relay stores ciphertext it cannot read. \\
+  Keys and attestation &
+  One key per person and per agent; an owner-signed attestation lets an
+  agent act on its owner's behalf (NIP-OA). \\
 
-  GitHub identity \& auth &
-  Authenticate users via GitHub identity. Per-repo NATS credentials for
-  team isolation. \\
+  Signed events and E2E encryption &
+  Messages are signed Nostr events over NATS; direct messages and talk are
+  end-to-end encrypted (NIP-17), so the relay stores ciphertext it cannot
+  read. \\
+
+  Grants, floor, graded delivery &
+  A signed address book grants each sender a level; a trust floor stops
+  stranger content from gaining trust through an agent. \\
+
+  \texttt{biffd} &
+  A per-user daemon that holds the relay connection and the private keys;
+  the CLI, MCP server and hooks are thin clients. \\
 
   \bottomrule
 \end{tabularx}

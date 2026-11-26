@@ -218,7 +218,7 @@ class TestDefaultConfig:
     Every other test in this tier mounts a token-bearing ``nats.conf``, so
     ``entrypoint.sh`` always selects ``base-with-user.conf``. This is the
     only test that exercises the no-mount default path documented for the
-    individual tier in ``docs/self-hosted-relay.md``.
+    individual tier in ``docs/guides/self-hosted-relay.md``.
     """
 
     async def test_starts_healthy_with_no_config_mounted(

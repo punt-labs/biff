@@ -5,7 +5,7 @@ on a pass that a relay push, a wake poke, a tool call or a deadline caused.  It
 never runs on a cadence.  The one timer it may arm is a one-shot that sends an
 event the rate limit held back, armed only while one is held.
 
-``docs/notification.tex`` (Channel Delivery) models it: ``chanNewer`` is "the
+``docs/specs/notification.tex`` (Channel Delivery) models it: ``chanNewer`` is "the
 current state is newer than the last-sent record", ``chanHeld`` is "held by the
 rate limit", ``chanRetried`` and ``chanDormant`` are the two-attempt cycle after
 a timed-out send.

@@ -262,7 +262,7 @@ keys and the $keyBelow$ order supply the mutual-invite tie-break, and the
 free $visible$ set supplies the peer configurations:
 
 \begin{verbatim}
-probcli docs/talk.tex -model_check -noltl -coverage \
+probcli docs/specs/talk.tex -model_check -noltl -coverage \
   -card USER 1 -card TTY 1 -card MSGBODY 1 \
   -card SESSIONKEY 2 -card REPO 2 -card ORG 2 -card QSLOT 1 \
   -p MAX_INITIALISATIONS 512 -p MAX_OPERATIONS 12000
@@ -289,7 +289,7 @@ scope; exhausting them takes a third key.  Routing is irrelevant to the
 threat, so a single repository and organization keeps the check small:
 
 \begin{verbatim}
-probcli docs/talk.tex -model_check -noltl -coverage \
+probcli docs/specs/talk.tex -model_check -noltl -coverage \
   -card USER 1 -card TTY 1 -card MSGBODY 1 \
   -card SESSIONKEY 3 -card REPO 1 -card ORG 1 -card QSLOT 1 \
   -p MAX_INITIALISATIONS 512 -p MAX_OPERATIONS 20000
@@ -1395,6 +1395,12 @@ nothing in the protocol binds those fields to a verified sender, and a frame
 from any key --- visible or not --- may be published to our subject.  A frame
 is therefore \emph{forgeable}, and the specification's guarantees are stated
 against that fact rather than against an assumption of authenticity.
+
+Authenticity is the subject of \texttt{docs/design/trust-model.md}.  There, talk
+frames become signed NIP-17 events, so the signature, not the ephemeral
+session key, says who sent a frame, and the session-key safeguard described
+below is superseded once that design ships.  This specification models the
+current behaviour and is unchanged by it.
 
 The consent boundary (invariant~11) is robust under forgery on the
 \emph{connect} side.  An accept is honoured only when

@@ -914,7 +914,7 @@ class TestApplyEnvRelayOverrides:
 
     Every test clears the five env vars first via ``monkeypatch.delenv``
     (``raising=False``) so ambient state from the developer's shell (or
-    ``.envrc.local``, per docs/relay-env-overrides.md Sec 0) can never
+    ``.envrc.local``, per docs/design/relay-env-overrides.md Sec 0) can never
     leak into the assertion.
     """
 
@@ -1172,7 +1172,7 @@ class TestApplyEnvRelayOverrides:
     ) -> None:
         """Reset file-resolved TLS handshake mode when URL and auth are both set.
 
-        The CI configuration in docs/relay-env-overrides.md sets both variables;
+        The CI configuration in docs/design/relay-env-overrides.md sets both variables;
         neither URL-only nor combined overrides may inherit another relay's TLS mode.
         """
         monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")

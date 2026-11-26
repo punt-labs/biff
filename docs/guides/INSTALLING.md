@@ -194,7 +194,7 @@ Without `allow_env_override: true`, a committed `relay.url` always wins — an a
 
 **Auth requires a URL.** Setting one of the three auth vars without a resolved relay URL (from `BIFF_RELAY_URL` or the file layers) fails fast with a clear error, rather than silently ignoring that credential on the local relay.
 
-**Human interactive use:** put `BIFF_RELAY_*` in that repo's `.envrc.local` (gitignored, direnv-scoped — unloaded automatically on `cd` out of the repo), not in a bare shell `export` or a shell profile such as `~/.zshrc`. A bare export is ambient for the rest of that shell session across every repo you `cd` into, which can leak one team's credential to another team's relay. See [relay-env-overrides.md](relay-env-overrides.md) for the full design rationale.
+**Human interactive use:** put `BIFF_RELAY_*` in that repo's `.envrc.local` (gitignored, direnv-scoped — unloaded automatically on `cd` out of the repo), not in a bare shell `export` or a shell profile such as `~/.zshrc`. A bare export is ambient for the rest of that shell session across every repo you `cd` into, which can leak one team's credential to another team's relay. See [relay-env-overrides.md](../design/relay-env-overrides.md) for the full design rationale.
 
 ## Updating
 

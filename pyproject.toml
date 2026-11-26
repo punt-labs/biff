@@ -191,7 +191,7 @@ reportUnusedFunction = false
 root = "tests"
 reportPrivateUsage = false
 
-# Layers from docs/package-structure.md (DES-088).  `oo-ratchet layers` gates
+# Layers from docs/design/package-structure.md (DES-088).  `oo-ratchet layers` gates
 # imports against these tables; modules not yet moved into their package
 # directory are claimed by exact name.  A layer may import only the layers
 # listed in `imports`.

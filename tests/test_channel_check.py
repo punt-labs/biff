@@ -1,6 +1,6 @@
 """The channel check: one request a minute, one token, one acknowledgement (DES-087).
 
-``docs/channel-check.tex`` models it.  The unit tests here name the transition
+``docs/specs/channel-check.tex`` models it.  The unit tests here name the transition
 they prove (``Request``, ``RejectRequest``, ``Acknowledge``, ``RejectAck``).
 """
 
@@ -10,7 +10,7 @@ import re
 
 import pytest
 
-from biff.server.channel_check import CHECK_SECONDS, ChannelCheck, is_reply_subject
+from biff.server.channel_check import CHECK_SECONDS, ChannelCheck
 from biff.server.channel_content import ChannelEvent, CheckKind
 
 _REPLY = "_INBOX.abc123"
@@ -91,8 +91,8 @@ class TestRequest:
         assert check.request(_REPLY) is not None
 
     def test_the_reply_check_names_what_it_accepts(self) -> None:
-        assert is_reply_subject("_INBOX.Zx9-q_1.k")
-        assert not is_reply_subject("_INBOX." + "a" * 200)
+        assert ChannelCheck().request("_INBOX.Zx9-q_1.k") is not None
+        assert ChannelCheck().request("_INBOX." + "a" * 200) is None
 
 
 class TestAcknowledge:
