@@ -49,7 +49,12 @@ class _Server:
     """A ``biff mcp`` subprocess speaking newline-delimited JSON-RPC."""
 
     def __init__(
-        self, tmp_path: Path, *, channel_mode: bool, relay_url: str = ""
+        self,
+        tmp_path: Path,
+        *,
+        channel_mode: bool,
+        relay_url: str = "",
+        session_id: str = "",
     ) -> None:
         self.user = f"chan-{tmp_path.name}".lower()
         home = tmp_path / "home"
@@ -59,6 +64,8 @@ class _Server:
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
         env["HOME"] = str(home)
         env.pop("BIFF_CHANNEL_MODE", None)
+        if session_id:  # the session an unstamped call binds, as Claude Code sets it
+            env["CLAUDE_CODE_SESSION_ID"] = session_id
         if channel_mode:
             env["BIFF_CHANNEL_MODE"] = "1"
         self.log = home / ".punt-labs" / "biff" / "logs" / "biff.log"
@@ -126,9 +133,9 @@ class _Server:
         self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         return response
 
-    def channel_event(self) -> JSONRPCNotification:
+    def channel_event(self, timeout: float = _TIMEOUT) -> JSONRPCNotification:
         """Return the next ``notifications/claude/channel`` frame the server sent."""
-        deadline = time.monotonic() + _TIMEOUT
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             for event in self.events:
                 if event.method == "notifications/claude/channel":

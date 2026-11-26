@@ -14,19 +14,23 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
-from mcp.types import JSONRPCResponse
+from mcp.types import JSONRPCNotification, JSONRPCResponse
 
 from biff.caller_identity import CALLER_KEY
+from biff.config import get_repo_slug, sanitize_repo_name
 from biff.nats_relay import NatsRelay
-from tests.test_subprocess.test_channel_mode import _Server
+from tests.test_subprocess.test_channel_mode import _REPO_ROOT, _Server
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    from biff.channel_check_wire import PendingCheck
+
 pytestmark = [pytest.mark.subprocess, pytest.mark.nats_local]
 
-_REPO = "punt-labs__biff"  # what the server derives from this checkout
+# Named exactly as the server names this checkout, so a fork's origin works too.
+_REPO = sanitize_repo_name(get_repo_slug(_REPO_ROOT) or _REPO_ROOT.name)
 
 
 @pytest.fixture
@@ -52,10 +56,32 @@ async def _session_key(doctor: NatsRelay, user: str) -> str:
     raise AssertionError(msg)
 
 
+async def _request_until_heard(
+    doctor: NatsRelay, server: _Server, key: str
+) -> tuple[PendingCheck, JSONRPCNotification]:
+    """Send the check until the server's subscription is up and answers.
+
+    Presence is written before the request subscription exists, and core NATS
+    does not replay a request nobody heard, so an early one is lost; a refused
+    retry inside the minute is harmless because the first accepted one answers.
+    """
+    for _ in range(20):
+        pending = await doctor.request_channel_check(key)
+        try:
+            return pending, await asyncio.to_thread(server.channel_event, 1.0)
+        except AssertionError:
+            await pending.close()
+    msg = "the server never answered a channel check"
+    raise AssertionError(msg)
+
+
 async def test_a_request_makes_one_channel_event_and_the_ack_passes_the_policy(
     tmp_path: Path, nats_server: str, doctor: NatsRelay
 ) -> None:
-    server = _Server(tmp_path, channel_mode=True, relay_url=nats_server)
+    session_id = str(uuid.uuid4())
+    server = _Server(
+        tmp_path, channel_mode=True, relay_url=nats_server, session_id=session_id
+    )
     try:
         server.initialize()
         # An identified call binds the session, which registers its presence.
@@ -64,9 +90,8 @@ async def test_a_request_makes_one_channel_event_and_the_ack_passes_the_policy(
         )
         key = await _session_key(doctor, server.user)
 
-        pending = await doctor.request_channel_check(key)
+        pending, event = await _request_until_heard(doctor, server, key)
         try:
-            event = await asyncio.to_thread(server.channel_event)
             assert event.params is not None
             assert event.params["meta"] == {"kind": "channel_check"}
             token = re.fullmatch(
@@ -76,26 +101,28 @@ async def test_a_request_makes_one_channel_event_and_the_ack_passes_the_policy(
             )
             assert token is not None
 
+            # Stamped the way the plugin's hook stamps it, from the active session:
+            # the caller policy accepts it and the doctor's wait is confirmed.
+            stamp = {"session_id": session_id, "agent_id": server.user}
             reply = await asyncio.to_thread(
                 server.request,
                 "tools/call",
-                {"name": "channel_ack", "arguments": {"token": token[1]}},
+                {
+                    "name": "channel_ack",
+                    "arguments": {"token": token[1], CALLER_KEY: stamp},
+                },
             )
             assert _text(reply) == "biff channel live."
             assert await pending.confirmed(10)
         finally:
             await pending.close()
 
-        # A second call, stamped the way the plugin's hook stamps it, passes the
-        # policy too; the token is spent, so it changes nothing and says so.
-        stamp = {"session_id": str(uuid.uuid4()), "agent_id": server.user}
+        # An unstamped call passes the policy too (the --user default); the
+        # token is spent, so it changes nothing and says so.
         again = await asyncio.to_thread(
             server.request,
             "tools/call",
-            {
-                "name": "channel_ack",
-                "arguments": {"token": token[1], CALLER_KEY: stamp},
-            },
+            {"name": "channel_ack", "arguments": {"token": token[1]}},
         )
         assert "not accepted" in _text(again)
     finally:
