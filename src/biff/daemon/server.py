@@ -39,6 +39,7 @@ HEARTBEAT_SECONDS = 60.0
 POLL_SECONDS = 1.0
 ATTACH_SECONDS = 10.0
 REQUEST_SECONDS = 30.0
+ORG_REFRESH_SECONDS = 600.0
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class BiffDaemon:
         attach_timeout: float = ATTACH_SECONDS,
         request_timeout: float = REQUEST_SECONDS,
         read_budget: int = READ_BUDGET_BYTES,
+        org_refresh_interval: float = ORG_REFRESH_SECONDS,
     ) -> Self:
         """Create a daemon that will listen on *port* (0 picks a free one).
 
@@ -85,7 +87,10 @@ class BiffDaemon:
         self._core = DaemonCore(
             resolver=resolver or DiskResolver(),
             pool=RelayPool(relay_factory or RelayPool.selecting()),
-            sessions=SessionTable(heartbeat_interval=heartbeat_interval),
+            sessions=SessionTable(
+                heartbeat_interval=heartbeat_interval,
+                org_refresh_interval=org_refresh_interval,
+            ),
             methods=Methods(read_budget),
             seq=count(1),
             poll_interval=poll_interval,

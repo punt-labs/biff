@@ -39,6 +39,14 @@ class FakeResolver:
             msg = f"{hello.cwd} is not a biff repository"
             raise ResolveError(msg)
         name = Path(hello.cwd).name
+        if name.startswith("org-"):  # a repo of an org whose repos are discovered
+            return ResolvedSession(
+                config=BiffConfig(
+                    user=hello.user or "kai", repo_name=name, orgs=("acme",)
+                ),
+                data_dir=self._base / name,
+                repo_root=None,
+            )
         if name.startswith("nats-"):  # many repos, one relay server
             config = BiffConfig(
                 user=hello.user or "kai", repo_name=name, relay_url="nats://fake"
@@ -120,6 +128,7 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         attach_timeout=0.5,
         request_timeout=0.5,
         read_budget=4000,
+        org_refresh_interval=0.05,
     )
     await daemon.start()
     env = Harness(daemon=daemon, run_dir=run_dir, factory=factory)

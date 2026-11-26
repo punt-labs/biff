@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_context import CliContext
 from biff.daemon.attachment import Attachment
+from biff.daemon.orgs import OrgRepos
 from biff.daemon.presence import PresenceRow
 from biff.daemon.refusal import RefusalError
 from biff.daemon.tasks import Supervised
 from biff.frame_reply import ErrorCode
-from biff.nats_relay import NatsRelay
 from biff.relay_errors import RELAY_ERRORS, RelayLog
 from biff.session_id import CLAUDE_CODE_ROLE, CLI_ROLE
 from biff.session_routing import SessionRouting
@@ -57,6 +57,7 @@ class Session:
         "_context",
         "_interval",
         "_log",
+        "_orgs",
         "_presence",
         "_run",
         "_session_id",
@@ -67,6 +68,7 @@ class Session:
     _target: RelayTarget
     _context: CliContext
     _presence: PresenceRow
+    _orgs: OrgRepos
     _run: str
     _attachments: set[Attachment]
     _interval: float
@@ -80,6 +82,7 @@ class Session:
         target: RelayTarget,
         context: CliContext,
         presence: PresenceRow,
+        orgs: OrgRepos,
         run: str,
         heartbeat_interval: float,
     ) -> Self:
@@ -89,6 +92,7 @@ class Session:
         self._target = target
         self._context = context
         self._presence = presence
+        self._orgs = orgs
         self._run = run
         self._attachments = set()
         self._interval = heartbeat_interval
@@ -104,6 +108,7 @@ class Session:
         relay: Relay,
         *,
         heartbeat_interval: float,
+        org_refresh_interval: float,
     ) -> Self:
         """Create the session *hello* names and make sure the relay lists it.
 
@@ -116,12 +121,8 @@ class Session:
         routing = SessionRouting(hello.session_id, role=role)
         presence = PresenceRow(relay, config, routing, hello.cwd)
         row = await presence.ensure()
-        orgs = config.orgs
-        org_repos = (
-            await relay.discover_repos_for_orgs(orgs)
-            if orgs and isinstance(relay, NatsRelay)
-            else frozenset[str]()
-        )
+        orgs = OrgRepos(relay, config.orgs, org_refresh_interval)
+        await orgs.refresh()
         context = CliContext(
             relay=relay,
             config=config,
@@ -129,7 +130,7 @@ class Session:
             user=config.user,
             tty=routing.routing_id,
             tty_name=row.tty_name,
-            org_repos=org_repos,
+            org_repos=orgs.current,
             repo_root=resolved.repo_root,
         )
         return cls(
@@ -137,6 +138,7 @@ class Session:
             target=resolved.target,
             context=context,
             presence=presence,
+            orgs=orgs,
             run=hello.main_agent_id,
             heartbeat_interval=heartbeat_interval,
         )
@@ -224,32 +226,36 @@ class Session:
 
     async def _heartbeat(self) -> None:
         """Send the session's one presence heartbeat for as long as it is attached."""
-        ctx = self._context
         while True:
             await asyncio.sleep(self._interval)
+            ctx = self._context
             try:
                 await ctx.relay.heartbeat(ctx.session_key)
             except RELAY_ERRORS as exc:
                 self._log.failed("heartbeat", exc)
             else:
                 self._log.recovered("heartbeat")
+            if await self._orgs.refresh():
+                self._context = replace(self._context, org_repos=self._orgs.current)
 
 
 @final
 class SessionTable:
     """Every session the daemon holds, get-or-create by session id."""
 
-    __slots__ = ("_interval", "_locks", "_sessions", "_users")
+    __slots__ = ("_interval", "_locks", "_org_interval", "_sessions", "_users")
 
     _interval: float
+    _org_interval: float
     _sessions: dict[str, Session]
     _locks: defaultdict[str, asyncio.Lock]
     _users: Counter[str]
 
-    def __new__(cls, *, heartbeat_interval: float) -> Self:
-        """Create an empty table whose sessions heartbeat every interval."""
+    def __new__(cls, *, heartbeat_interval: float, org_refresh_interval: float) -> Self:
+        """Create an empty table whose sessions run their timers at these intervals."""
         self = super().__new__(cls)
         self._interval = heartbeat_interval
+        self._org_interval = org_refresh_interval
         self._sessions = {}
         self._locks = defaultdict(asyncio.Lock)
         self._users = Counter()
@@ -281,6 +287,7 @@ class SessionTable:
                     resolved,
                     relays.acquire(resolved),
                     heartbeat_interval=self._interval,
+                    org_refresh_interval=self._org_interval,
                 )
                 self._sessions[hello.session_id] = session
             else:
