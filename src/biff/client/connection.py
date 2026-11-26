@@ -373,7 +373,7 @@ class DaemonClient:
         except TimeoutError:
             msg = (
                 f"{what} got no reply from biffd within {self._request_timeout:g}s; "
-                "it may be stuck on a slow relay (see ~/.punt-labs/biff/logs/biffd.log)"
+                "it may be stuck on a slow relay (see ~/.punt-labs/biff/logs/biff.log)"
             )
             raise RequestTimeoutError(msg) from None
         finally:

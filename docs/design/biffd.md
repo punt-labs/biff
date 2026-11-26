@@ -201,7 +201,7 @@ tells daemon authors to adopt. biffd supplies one `ServiceSpec`:
 | `cli_verb` / `cli_name` | `daemon` / `biff` |
 | `health_port` | 8424, so the library's port guard refuses to install over another listener |
 | `restart_on_crash_only` | true: a clean stop by the operator stays stopped |
-| `log_path` | `~/.punt-labs/biff/logs/biffd.log` |
+| `log_path` | `~/.punt-labs/biff/logs/biff.log`: `punt-observe` names the file after the tool, so the daemon writes the log every biff process writes, with its role set to `daemon` |
 
 Commands:
 

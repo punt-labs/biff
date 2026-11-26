@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Final, Self, final
 
 from websockets.exceptions import ConnectionClosed
 
+from biff.daemon.logs import LOG_HINT
 from biff.daemon.refusal import HandshakeRefusedError, RefusalError
 from biff.daemon.resolver import ResolveError
 from biff.daemon.subscription import Subscription
@@ -43,7 +44,6 @@ _HELLO_TIMEOUT_SECONDS: Final = 5.0
 _HELLO_ID: Final = 0
 _MAX_CLOSE_REASON_BYTES: Final = 120
 _REPLACED_REASON: Final = "session replaced by a newer run; reconnect"
-_LOG_HINT: Final = "see ~/.punt-labs/biff/logs/biffd.log"
 
 
 @dataclass(frozen=True)
@@ -211,7 +211,7 @@ class ConnectionHandler:
             raise RefusalError.of(ErrorCode.INTERNAL, msg) from exc
         except Exception as exc:
             logger.exception("hello for session %s failed", hello.session_id)
-            msg = f"hello failed in biffd: {exc}; {_LOG_HINT}"
+            msg = f"hello failed in biffd: {exc}; {LOG_HINT}"
             raise RefusalError.of(ErrorCode.INTERNAL, msg) from exc
 
     async def _serve(self, ws: ServerConnection, attachment: Attachment) -> None:
@@ -299,7 +299,7 @@ class ConnectionHandler:
             return self._failure(request.id, ErrorCode.INTERNAL, msg), None
         except Exception as exc:
             logger.exception("%s failed in biffd", method)
-            msg = f"{method} failed in biffd: {exc}; {_LOG_HINT}"
+            msg = f"{method} failed in biffd: {exc}; {LOG_HINT}"
             return self._failure(request.id, ErrorCode.INTERNAL, msg), None
         return Reply(id=request.id, result=outcome.result), outcome.acknowledge
 
@@ -321,7 +321,7 @@ class ConnectionHandler:
             await self._send(ws, event)
 
         def died(_exc: BaseException) -> None:
-            reason = f"subscription failed in biffd; {_LOG_HINT}"
+            reason = f"subscription failed in biffd; {LOG_HINT}"
             Supervised.spawn(self._close(ws, _INTERNAL_ERROR, reason), "close")
 
         subscription = Subscription(

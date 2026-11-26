@@ -287,7 +287,7 @@ async def test_an_unexpected_exception_is_an_internal_reply_and_the_connection_l
 
     kai = await harness.connect("s-kai", "kai")
     monkeypatch.setattr(commands, "who", broken)
-    with pytest.raises(DaemonError, match=r"who failed in biffd.*biffd\.log") as caught:
+    with pytest.raises(DaemonError, match=r"who failed in biffd.*biff\.log") as caught:
         await kai.request("who")
     assert caught.value.code is ErrorCode.INTERNAL
     monkeypatch.undo()
@@ -328,7 +328,7 @@ async def test_a_resolver_bug_is_an_internal_hello_refusal_not_a_dead_socket(
         raise RuntimeError(msg)
 
     monkeypatch.setattr(harness.daemon._core.resolver, "resolve", boom)
-    with pytest.raises(DaemonError, match=r"biffd\.log") as caught:
+    with pytest.raises(DaemonError, match=r"biff\.log") as caught:
         await harness.connect("s-kai", "kai")
     assert caught.value.code is ErrorCode.INTERNAL
 

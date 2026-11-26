@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import os
 import socket
-from typing import TYPE_CHECKING
+import stat
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from biff.cli_app import CliApp
 from biff.daemon.environment import DaemonEnvironment
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from biff.daemon.logs import LOG_HINT, LOG_PATH
 
 runner = CliRunner()
 app = CliApp.build()
@@ -73,3 +72,25 @@ def test_serve_drops_its_own_identity_variables_and_names_them(
     assert "BIFF_RELAY_URL" in result.output
     assert "BIFF_USER" not in os.environ
     assert "BIFF_RELAY_URL" not in os.environ
+
+
+def test_serve_writes_the_log_file_that_internal_errors_point_at(
+    home: Path,
+) -> None:
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        runner.invoke(app, ["daemon", "serve", "--port", str(taken.getsockname()[1])])
+    assert Path(LOG_PATH).expanduser().is_file()
+
+
+def test_the_hint_in_an_internal_error_names_that_same_file() -> None:
+    assert LOG_PATH in LOG_HINT
+
+
+def test_the_log_file_is_private_to_the_user(home: Path) -> None:
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        runner.invoke(app, ["daemon", "serve", "--port", str(taken.getsockname()[1])])
+    assert stat.S_IMODE(Path(LOG_PATH).expanduser().stat().st_mode) == 0o600

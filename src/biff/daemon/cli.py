@@ -8,9 +8,11 @@ import os
 from typing import Annotated, final
 
 import typer
+from punt_observe.logging import Role
 
 from biff.daemon.environment import DaemonEnvironment
 from biff.daemon.server import BiffDaemon
+from biff.logging_config import configure_logging
 from biff.run_dir import DEFAULT_PORT, RunDir
 
 __all__ = ["DaemonCommands", "daemon_app"]
@@ -37,6 +39,7 @@ class DaemonCommands:
         Exits 1 with one line saying what to do when the daemon cannot start:
         the port is taken, or the run directory or token file is not private.
         """
+        configure_logging(Role.DAEMON)
         removed = DaemonEnvironment.scrub(os.environ)
         if removed:
             typer.echo(
