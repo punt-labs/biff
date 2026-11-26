@@ -504,11 +504,11 @@ managed settings JSON:
 The Channels toggle on the same page sets `channelsEnabled` alone. The list
 replaces Anthropic's default channel list rather than adding to it, so also list
 every other channel plugin the organization uses. Organizations that manage
-devices instead can put the same keys in
-`/Library/Application Support/ClaudeCode/managed-settings.json` (macOS),
-`/etc/claude-code/managed-settings.json` (Linux) or
-`C:\Program Files\ClaudeCode\managed-settings.json` (Windows); the admin
-console's settings take precedence over these files.
+devices instead can set the same keys through MDM or a `managed-settings.json`
+file, but only one managed source applies: the admin console wins over MDM, and
+an MDM profile that sets any policy key hides the file entirely, so put the
+channel keys in whichever source the organization already uses
+([managed settings](https://code.claude.com/docs/en/managed-settings)).
 
 **Then each user launches with:**
 
