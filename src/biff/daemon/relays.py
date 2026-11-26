@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from biff.models import BiffConfig, RelayAuth
+from biff.relay_errors import RELAY_ERRORS
 from biff.relay_select import RelaySelector
 
 if TYPE_CHECKING:
@@ -112,10 +113,26 @@ class RelayPool:
         return relay
 
     async def close(self) -> None:
-        """Close every relay; one that fails to close does not keep the rest open."""
+        """Close every relay.
+
+        A relay that fails to close for a reason a dead peer explains is logged
+        and does not keep the rest open.  Any other failure is a bug: it is
+        raised, as an exception group, only after every relay has been closed.
+
+        Raises:
+            ExceptionGroup: One or more relays failed to close for a reason that
+                is not a relay outage.
+        """
         relays, self._relays = list(self._relays.values()), {}
+        bugs: list[Exception] = []
         for relay in relays:
             try:
                 await relay.close()
-            except Exception:
+            except RELAY_ERRORS:
                 logger.warning("failed to close a relay", exc_info=True)
+            except Exception as exc:
+                logger.exception("a relay failed to close")
+                bugs.append(exc)
+        if bugs:
+            msg = "relays failed to close"
+            raise ExceptionGroup(msg, bugs)

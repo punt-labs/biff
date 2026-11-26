@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import stat
+import threading
 from pathlib import Path
 
 import pytest
@@ -117,3 +119,101 @@ def test_the_refusal_names_the_repair(tmp_path: Path) -> None:
     run.token_path.chmod(0o640)
     with pytest.raises(PermissionError, match=r"chmod 600"):
         run.read_token()
+
+
+def _plant_token(run: RunDir, text: str) -> None:
+    run.ensure()
+    run.token_path.write_text(text)
+    run.token_path.chmod(0o600)
+
+
+@pytest.mark.parametrize("text", ["", "\n", "short", "x" * 42, "x" * 44, "!" * 43])
+def test_a_token_of_the_wrong_shape_is_refused(tmp_path: Path, text: str) -> None:
+    run = RunDir(tmp_path / "run")
+    _plant_token(run, text)
+    with pytest.raises(ValueError, match=r"serve\.token"):
+        run.read_token()
+
+
+def test_an_empty_token_file_is_never_returned_as_a_token(tmp_path: Path) -> None:
+    """An empty key would make every HMAC computable by anyone."""
+    run = RunDir(tmp_path / "run")
+    _plant_token(run, "")
+    with pytest.raises(ValueError, match="remove it"):
+        run.ensure_token()
+
+
+def test_a_valid_token_with_a_trailing_newline_is_accepted(tmp_path: Path) -> None:
+    run = RunDir(tmp_path / "run")
+    token = run.ensure_token()
+    run.token_path.write_text(token + "\n")
+    assert run.read_token() == token
+
+
+def test_concurrent_creators_agree_on_one_complete_token(tmp_path: Path) -> None:
+    run = RunDir(tmp_path / "run")
+    run.ensure()
+    seen: list[str] = []
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(8)
+
+    def create() -> None:
+        barrier.wait()
+        try:
+            seen.append(RunDir(tmp_path / "run").ensure_token())
+        except BaseException as exc:  # noqa: BLE001 - reported by the assertion
+            errors.append(exc)
+
+    threads = [threading.Thread(target=create) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert len(set(seen)) == 1
+    assert len(seen[0]) == 43
+
+
+def test_creation_leaves_no_temporary_file(tmp_path: Path) -> None:
+    run = RunDir(tmp_path / "run")
+    run.ensure_token()
+    assert sorted(path.name for path in run.path.iterdir()) == ["serve.token"]
+
+
+def test_the_token_is_never_visible_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader at any moment before the link sees no token, not an empty one."""
+    run = RunDir(tmp_path / "run")
+    states: list[bool] = []
+    real_link = os.link
+
+    def spying_link(src: str | Path, dst: str | Path) -> None:
+        states.append(run.token_path.exists())
+        real_link(src, dst)
+
+    monkeypatch.setattr(os, "link", spying_link)
+    run.ensure_token()
+    assert states == [False]
+
+
+def test_write_port_replaces_the_file_atomically(tmp_path: Path) -> None:
+    run = RunDir(tmp_path / "run")
+    run.write_port(1111)
+    run.write_port(2222)
+    assert run.read_port() == 2222
+    assert sorted(path.name for path in run.path.iterdir()) == ["serve.port"]
+
+
+def test_remove_port_keeps_a_port_another_daemon_wrote(tmp_path: Path) -> None:
+    run = RunDir(tmp_path / "run")
+    run.write_port(2222)
+    run.remove_port(owned_by=1111)
+    assert run.read_port() == 2222
+
+
+def test_remove_port_removes_the_port_it_wrote(tmp_path: Path) -> None:
+    run = RunDir(tmp_path / "run")
+    run.write_port(1111)
+    run.remove_port(owned_by=1111)
+    assert not run.port_path.exists()

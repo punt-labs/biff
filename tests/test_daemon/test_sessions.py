@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from biff.client.connection import DaemonError
+from biff.client.connection import ConnectionLostError, DaemonError
 from biff.frame_reply import ErrorCode
 from biff.relay import LocalRelay
 from biff.session_id import CLI_ROLE
@@ -69,12 +69,15 @@ async def test_a_session_reattaches_after_detaching(harness: Harness) -> None:
     assert cast("dict[str, object]", await again.request("who"))["error"] is False
 
 
-async def test_a_new_main_agent_id_refuses_the_replaced_run(harness: Harness) -> None:
+async def test_a_new_main_agent_id_ends_the_replaced_runs_connection(
+    harness: Harness,
+) -> None:
     old = await harness.connect("s-kai", "kai", main_agent_id="run-1")
     await harness.connect("s-kai", "kai", main_agent_id="run-2")
-    with pytest.raises(DaemonError) as caught:
-        await old.request("who")
-    assert caught.value.code is ErrorCode.SESSION_REPLACED
+    with pytest.raises((DaemonError, ConnectionLostError)):
+        for _ in range(50):
+            await old.request("who")
+            await asyncio.sleep(0.02)
 
 
 async def test_the_new_run_keeps_working(harness: Harness) -> None:

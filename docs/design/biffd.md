@@ -106,8 +106,8 @@ Every frame is a JSON object with a protocol `version`.
 | `hello` | client to daemon, after the proof checks | `mac` = HMAC-SHA256(token, `biffd-client-v1` + `daemon_nonce` + `client_nonce`), as hex, in place of any token; client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id`, `main_agent_id` (empty when the harness states none), `cwd` (the directory the client runs in, which names the repository and so the relay target) and an optional `user` override. The daemon answers a valid hello with a `reply` whose `id` is 0 |
 | `request` | client to daemon | `id`, `method`, `params`. One `method` per command object in `commands/` |
 | `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message). A command's `result` is `{"data": <the command's JSON payload>, "error": <bool>}` |
-| `subscribe` | client to daemon | Starts the arrival subscription for the connection's session |
-| `event` | daemon to client | One arrival summary, with a per-daemon `seq` |
+| `subscribe` | client to daemon | `id`. Starts the arrival subscription for the connection's session. The daemon replies to `id` with `{"subscribed": true}`, or with `already_subscribed` or `session_replaced` |
+| `event` | daemon to client | One arrival summary, with a per-daemon `seq`. `kind` is `unread`, `mail`, `wall`, `degraded` (the relay stopped answering) or `recovered` |
 
 **The token never crosses the wire.** The client's port is a guess (8424
 when no port file exists), and any local process can bind a port biffd is not
@@ -150,7 +150,18 @@ A frame other than a `challenge` first, a `hello` before the proof, a second
 `hello`, a request before a valid `hello`, or a wrong MAC closes the
 connection and changes no state. A `hello` whose `version` the daemon does
 not support gets an error naming both versions and the command that fixes the
-mismatch (`biff daemon restart`, or upgrade the client).
+mismatch. Until `biff daemon restart` exists it says to stop the running
+`biff daemon serve` and start it again, or upgrade the client. Both sides read
+`version` from the raw object before validating the rest of the frame, so a peer
+whose frames have another shape is still named, not closed without a word.
+
+Timeouts: the client waits 1 second to open the connection and 5 seconds for
+the proof and for the hello's reply, and each request waits 10 seconds by
+default; a miss is an error naming what timed out. The daemon answers requests
+concurrently, each reply carrying its request's `id`, and gives a hello 10
+seconds and a request 30 seconds before it replies `internal` naming the relay.
+A connection whose run a newer run replaced is closed with 1008 and the reason
+"session replaced by a newer run; reconnect".
 
 Results are `wire` data and never rendered text. The client runs `render`, so
 `biff who` prints the same table whether the command ran in the daemon or in

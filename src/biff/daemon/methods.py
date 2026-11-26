@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import TYPE_CHECKING, Self, final
+
+from pydantic import JsonValue, TypeAdapter
+from pydantic_core import to_jsonable_python
 
 from biff import commands
 from biff.daemon.refusal import RefusalError
@@ -13,14 +15,14 @@ from biff.frame_reply import ErrorCode
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from pydantic import JsonValue
-
     from biff.cli_context import CliContext
     from biff.commands import CommandResult
 
 __all__ = ["Methods", "Params"]
 
 logger = logging.getLogger(__name__)
+
+_JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 type Handler = Callable[[CliContext, Params], Awaitable[CommandResult]]
 
@@ -138,7 +140,8 @@ class Methods:
         """Run *method* for the session *ctx* and return its wire result.
 
         The result is ``{"data": <the command's JSON payload>, "error": bool}``;
-        display text is the client's to render from the data.
+        display text is the client's to render from the data.  A payload that
+        cannot be serialised raises, rather than being turned into a string.
 
         Raises:
             RefusalError: The method is unknown or its params are invalid.
@@ -148,7 +151,7 @@ class Methods:
             msg = f"unknown method {method!r}; served: {', '.join(self.names)}"
             raise RefusalError.of(ErrorCode.UNKNOWN_METHOD, msg)
         result = await handler(ctx, Params(method, raw))
-        data: JsonValue = json.loads(json.dumps(result.json_data, default=str))
+        data = _JSON.validate_python(to_jsonable_python(result.json_data))
         return {"data": data, "error": result.error}
 
     @staticmethod

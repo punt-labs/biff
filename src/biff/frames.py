@@ -24,7 +24,7 @@ from biff.frame_reply import Reply
 
 __all__ = ["Event", "EventKind", "Frame", "FrameError", "Frames"]
 
-type EventKind = Literal["unread", "mail", "wall"]
+type EventKind = Literal["unread", "mail", "wall", "degraded", "recovered"]
 
 
 class FrameError(ValueError):
@@ -61,6 +61,26 @@ class Frames:
     ) -> str:
         """Return *frame* as a JSON object."""
         return frame.model_dump_json(exclude_none=False)
+
+    @staticmethod
+    def version_of(text: str) -> int | None:
+        """Return the protocol version *text* declares, or ``None``.
+
+        It reads the version without validating the frame, so a peer of another
+        version, whose frames may have a different shape, can still be named.
+        """
+        try:
+            raw: object = json.loads(text)
+        except ValueError:
+            return None
+        if not isinstance(raw, dict):
+            return None
+        version = cast("dict[str, object]", raw).get("version")
+        return (
+            version
+            if isinstance(version, int) and not isinstance(version, bool)
+            else None
+        )
 
     @staticmethod
     def decode(

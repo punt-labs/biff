@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Self, final
 
 from biff.frames import Event
-from biff.relay_errors import RELAY_ERRORS
+from biff.relay_errors import RELAY_ERRORS, RelayLog
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
@@ -22,6 +22,8 @@ __all__ = ["Subscription"]
 
 logger = logging.getLogger(__name__)
 
+_WHAT = "subscription check"
+
 
 @final
 class Subscription:
@@ -31,14 +33,21 @@ class Subscription:
     repository has an active wall, the wall.  Then it sends one event per later
     arrival.  An event carries counts and the wall, never a message body.
     There is no replay log: a client that reconnects starts from the summary.
+
+    A relay outage is not fatal: the subscription retries, tells the client once
+    that it is ``degraded`` and once that it ``recovered``, and writes one log
+    line per episode rather than one per poll.  Anything that is not a relay
+    error is a bug and ends the task, which the connection reports.
     """
 
-    __slots__ = ("_ctx", "_interval", "_send", "_seq")
+    __slots__ = ("_ctx", "_degraded", "_interval", "_log", "_send", "_seq")
 
     _ctx: CliContext
     _send: Callable[[Event], Awaitable[None]]
     _seq: Iterator[int]
     _interval: float
+    _log: RelayLog
+    _degraded: bool
 
     def __new__(
         cls,
@@ -57,21 +66,39 @@ class Subscription:
         self._send = send
         self._seq = seq
         self._interval = interval
+        self._log = RelayLog(logger)
+        self._degraded = False
         return self
 
     async def run(self) -> None:
         """Send the current summary, then each arrival, until cancelled."""
-        mark = await self._ctx.relay.inbox_high_water(self._ctx.session_key)
-        wall = await self._ctx.relay.get_wall()
-        await self._emit("unread", {"count": await self._unread()})
+        mark, wall, count = await self._baseline()
+        await self._emit("unread", {"count": count})
         if wall is not None:
             await self._emit("wall", self._wall_data(wall))
         while True:
             await asyncio.sleep(self._interval)
             try:
                 mark, wall = await self._arrivals(mark, wall)
-            except RELAY_ERRORS:
-                logger.info("subscription check failed (transient)", exc_info=True)
+            except RELAY_ERRORS as exc:
+                await self._outage(exc)
+            else:
+                await self._recovered()
+
+    async def _baseline(self) -> tuple[int, WallPost | None, int]:
+        """Read the starting point, retrying through an outage."""
+        relay = self._ctx.relay
+        while True:
+            try:
+                mark = await relay.inbox_high_water(self._ctx.session_key)
+                wall = await relay.get_wall()
+                count = await self._unread()
+            except RELAY_ERRORS as exc:
+                await self._outage(exc)
+                await asyncio.sleep(self._interval)
+            else:
+                await self._recovered()
+                return mark, wall, count
 
     async def _arrivals(
         self, mark: int, wall: WallPost | None
@@ -79,13 +106,25 @@ class Subscription:
         """Emit what arrived since *mark* and *wall*; return the new baseline."""
         relay = self._ctx.relay
         current = await relay.inbox_high_water(self._ctx.session_key)
+        posted = await relay.get_wall()
         # A read can lower the mark; only a rise is an arrival.
         if current > mark:
             await self._emit("mail", {"count": await self._unread()})
-        posted = await relay.get_wall()
         if posted is not None and posted != wall:
             await self._emit("wall", self._wall_data(posted))
         return current, posted
+
+    async def _outage(self, exc: Exception) -> None:
+        self._log.failed(_WHAT, exc)
+        if not self._degraded:
+            self._degraded = True
+            await self._emit("degraded", {"reason": type(exc).__name__})
+
+    async def _recovered(self) -> None:
+        self._log.recovered(_WHAT)
+        if self._degraded:
+            self._degraded = False
+            await self._emit("recovered", {})
 
     async def _unread(self) -> int:
         """Return the unread count over the session's and the user's inboxes."""

@@ -49,13 +49,13 @@ def test_reply_carries_an_error() -> None:
 
 
 def test_subscribe_and_event_round_trip() -> None:
-    assert Frames.decode(Frames.encode(Subscribe())) == Subscribe()
+    assert Frames.decode(Frames.encode(Subscribe(id=1))) == Subscribe(id=1)
     event = Event(seq=7, kind="unread", data={"count": 2})
     assert Frames.decode(Frames.encode(event)) == event
 
 
 def test_every_frame_carries_the_version() -> None:
-    assert json.loads(Frames.encode(Subscribe()))["version"] == PROTOCOL_VERSION
+    assert json.loads(Frames.encode(Subscribe(id=1)))["version"] == PROTOCOL_VERSION
 
 
 def test_unknown_frame_type_is_refused() -> None:
@@ -131,3 +131,25 @@ def test_a_hello_has_no_token_field() -> None:
     raw = _hello(token="t")
     with pytest.raises(FrameError, match="token"):
         Frames.decode(json.dumps(raw))
+
+
+def test_version_of_reads_the_version_without_validating_the_frame() -> None:
+    raw = json.dumps({"type": "hello", "version": 7, "anything": [1, 2]})
+    assert Frames.version_of(raw) == 7
+
+
+@pytest.mark.parametrize(
+    "text", ["{bad", "[1]", json.dumps({"type": "hello"}), json.dumps({"version": "1"})]
+)
+def test_version_of_is_none_when_there_is_no_integer_version(text: str) -> None:
+    assert Frames.version_of(text) is None
+
+
+def test_a_subscribe_carries_an_id_to_answer() -> None:
+    assert Frames.decode(Frames.encode(Subscribe(id=4))) == Subscribe(id=4)
+
+
+@pytest.mark.parametrize("kind", ["unread", "mail", "wall", "degraded", "recovered"])
+def test_every_event_kind_round_trips(kind: str) -> None:
+    event = Event.model_validate({"seq": 1, "kind": kind})
+    assert Frames.decode(Frames.encode(event)) == event

@@ -53,6 +53,10 @@ class Request(FrameBase):
 
 
 class Subscribe(FrameBase):
-    """Start the arrival subscription for the connection's session."""
+    """Start the arrival subscription for the connection's session.
+
+    The daemon answers with a reply to ``id``, so the client knows it started.
+    """
 
     type: Literal["subscribe"] = "subscribe"
+    id: int = Field(ge=1)

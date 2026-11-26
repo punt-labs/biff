@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 
     from tests.test_daemon.conftest import Harness
 
-_TOKEN_MARKER = "impostor-must-never-see-this-token"
+_TOKEN_MARKER = "impostor-must-never-see-this-token-AAAAAAAA"  # a valid shape
 
 
 @dataclass
@@ -254,7 +255,7 @@ async def test_unsupported_version_names_both_versions_and_the_fix(
     message = reply.error.message
     assert str(PROTOCOL_VERSION) in message
     assert str(PROTOCOL_VERSION + 1) in message
-    assert "biff daemon restart" in message
+    assert "biff daemon serve" in message
 
 
 async def test_unsupported_version_registers_no_session(harness: Harness) -> None:
@@ -406,3 +407,63 @@ async def test_a_hello_for_an_impostors_own_nonce_is_useless_to_the_real_daemon(
     mac = Handshake.client_mac(token, own_nonce, opened.challenge.client_nonce)
     hello = opened.hello(token, mac=mac)
     assert await _closes_with(opened.ws, Frames.encode(hello)) == 1008
+
+
+async def test_a_hello_of_another_version_is_named_even_if_its_shape_changed(
+    harness: Harness,
+) -> None:
+    opened = await _open(harness)
+    raw = json.loads(Frames.encode(opened.hello(harness.run_dir.read_token())))
+    raw["version"] = PROTOCOL_VERSION + 1
+    raw["a_field_version_two_added"] = True
+    async with opened.ws:
+        await opened.ws.send(json.dumps(raw))
+        reply = Frames.decode(str(await opened.ws.recv()))
+    assert isinstance(reply, Reply)
+    assert reply.error is not None
+    assert reply.error.code is ErrorCode.UNSUPPORTED_VERSION
+    assert str(PROTOCOL_VERSION + 1) in reply.error.message
+
+
+async def test_a_challenge_of_another_version_is_named_even_if_its_shape_changed(
+    harness: Harness,
+) -> None:
+    raw = {"type": "challenge", "version": PROTOCOL_VERSION + 1, "novel": "x"}
+    async with await _unproven(harness) as ws:
+        await ws.send(json.dumps(raw))
+        reply = Frames.decode(str(await ws.recv()))
+    assert isinstance(reply, Reply)
+    assert reply.error is not None
+    assert reply.error.code is ErrorCode.UNSUPPORTED_VERSION
+    assert "biff daemon serve" in reply.error.message
+
+
+async def test_a_refused_hello_is_logged_with_the_peer_and_the_reason(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    opened = await _open(harness)
+    with caplog.at_level(logging.WARNING, logger="biff.daemon.connection"):
+        await _closes_with(opened.ws, Frames.encode(opened.hello("not-the-token")))
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("127.0.0.1" in m and "MAC" in m for m in messages)
+
+
+async def test_a_bad_first_frame_is_logged_with_the_peer_and_the_reason(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="biff.daemon.connection"):
+        await _closes_with(await _unproven(harness), "{not json")
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("127.0.0.1" in m and "expected a challenge" in m for m in messages)
+
+
+async def test_a_client_that_leaves_before_the_proof_is_logged_and_registers_nothing(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    ws = await _unproven(harness)
+    with caplog.at_level(logging.WARNING, logger="biff.daemon.connection"):
+        await ws.send(Frames.encode(Challenge.fresh()))
+        await ws.close()
+        await asyncio.sleep(0.2)
+    assert _no_state(harness)
+    assert any("left" in r.getMessage() for r in caplog.records)

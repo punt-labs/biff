@@ -37,6 +37,8 @@ _LOOPBACK = "127.0.0.1"
 _MAX_FRAME_BYTES = 1_048_576
 HEARTBEAT_SECONDS = 60.0
 POLL_SECONDS = 1.0
+ATTACH_SECONDS = 10.0
+REQUEST_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,8 @@ class BiffDaemon:
         relay_factory: RelayFactory | None = None,
         heartbeat_interval: float = HEARTBEAT_SECONDS,
         poll_interval: float = POLL_SECONDS,
+        attach_timeout: float = ATTACH_SECONDS,
+        request_timeout: float = REQUEST_SECONDS,
     ) -> Self:
         """Create a daemon that will listen on *port* (0 picks a free one).
 
@@ -84,6 +88,8 @@ class BiffDaemon:
             methods=Methods(),
             seq=count(1),
             poll_interval=poll_interval,
+            attach_timeout=attach_timeout,
+            request_timeout=request_timeout,
         )
         self._server = None
         self._started = 0.0
@@ -119,13 +125,22 @@ class BiffDaemon:
         logger.info("biffd listening on %s:%d", _LOOPBACK, self._port)
 
     async def stop(self) -> None:
-        """Stop listening, close the relays and remove the port file."""
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
-        await self._core.pool.close()
-        self._run_dir.remove_port()
+        """Stop listening, close the relays and remove this daemon's port file.
+
+        Each step runs even if an earlier one raised, and the first failure
+        still propagates.  The port file is removed only while it still names
+        this daemon's port, so a late stop cannot erase its replacement's record.
+        """
+        server, self._server = self._server, None
+        try:
+            if server is not None:
+                server.close()
+                await server.wait_closed()
+        finally:
+            try:
+                await self._core.pool.close()
+            finally:
+                self._run_dir.remove_port(owned_by=self._port)
 
     async def run_foreground(self) -> None:
         """Serve until SIGINT or SIGTERM, then shut down cleanly.

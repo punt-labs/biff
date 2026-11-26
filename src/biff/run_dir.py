@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import stat
 from pathlib import Path
@@ -14,6 +15,8 @@ DEFAULT_PORT = 8424
 """Loopback port of the daemon; the next free one in the 8420 to 8430 block."""
 
 _TOKEN_BYTES = 32
+_TOKEN_LENGTH = 43  # token_urlsafe(32): ceil(32 * 4 / 3) characters
+_TOKEN_SHAPE = re.compile(rf"[A-Za-z0-9_-]{{{_TOKEN_LENGTH}}}")
 
 
 @final
@@ -67,17 +70,27 @@ class RunDir:
     def ensure_token(self) -> str:
         """Return the token, creating it once at mode 0600.
 
-        ``O_EXCL`` makes two daemons starting together agree on one token: the
-        loser of the race reads the winner's file.
+        The token is written to a temporary file in the run directory, flushed to
+        disk, and only then hard-linked into place.  ``link`` fails if the name
+        exists, so exactly one creator wins; the file appears complete or not at
+        all, never empty.  A creator that loses the race reads the winner's file.
+
+        Raises:
+            PermissionError: The run directory or an existing token file is not
+                private to the current user.
+            ValueError: An existing token file does not hold a token.
         """
         self.ensure()
-        try:
-            fd = os.open(self.token_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
+        if self.token_path.exists():
             return self.read_token()
         token = secrets.token_urlsafe(_TOKEN_BYTES)
-        with os.fdopen(fd, "w") as handle:
-            handle.write(token)
+        temp = self._write_private_temp(self.token_path, token)
+        try:
+            os.link(temp, self.token_path)
+        except FileExistsError:
+            return self.read_token()
+        finally:
+            temp.unlink(missing_ok=True)
         return token
 
     def read_token(self) -> str:
@@ -87,6 +100,9 @@ class RunDir:
             FileNotFoundError: No daemon has created the token.
             PermissionError: The directory or the file is not private to the
                 current user, so the token cannot be trusted.
+            ValueError: The file does not hold a token of the length and alphabet
+                biffd creates; an empty or short one would make every MAC
+                computable by anyone.
         """
         path = self.token_path
         if not path.exists():
@@ -94,12 +110,21 @@ class RunDir:
             raise FileNotFoundError(msg)
         self._require_private(self._path, 0o700, "chmod 700")
         self._require_private(path, 0o600, "chmod 600")
-        return path.read_text().strip()
+        token = path.read_text().strip()
+        if not _TOKEN_SHAPE.fullmatch(token):
+            msg = (
+                f"{path} does not hold a biffd token ({len(token)} characters, "
+                f"expected {_TOKEN_LENGTH} of A-Z a-z 0-9 - _); remove it and "
+                "start biffd again to create a new one"
+            )
+            raise ValueError(msg)
+        return token
 
     def write_port(self, port: int) -> None:
-        """Record the port the running daemon listens on."""
+        """Record the port the running daemon listens on, replacing the file whole."""
         self.ensure()
-        self.port_path.write_text(f"{port}\n")
+        temp = self._write_private_temp(self.port_path, f"{port}\n")
+        temp.replace(self.port_path)
 
     def read_port(self) -> int:
         """Return the recorded port, or the default when no daemon recorded one.
@@ -117,9 +142,38 @@ class RunDir:
             msg = f"{self.port_path} holds {text!r}, not a port number"
             raise ValueError(msg) from exc
 
-    def remove_port(self) -> None:
-        """Remove the port file; a daemon that never wrote it is not an error."""
+    def remove_port(self, *, owned_by: int | None = None) -> None:
+        """Remove the port file; a daemon that never wrote it is not an error.
+
+        With *owned_by*, remove it only while it still names that port, so a
+        daemon that stops late does not erase the record of the one that replaced
+        it.
+        """
+        if owned_by is not None:
+            try:
+                recorded = self.read_port() if self.port_path.exists() else None
+            except ValueError:
+                recorded = None
+            if recorded != owned_by:
+                return
         self.port_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _write_private_temp(target: Path, text: str) -> Path:
+        """Write *text* to a flushed, private temporary file beside *target*."""
+        temp = target.with_name(
+            f"{target.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+        )
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
+        return temp
 
     @staticmethod
     def _require_private(path: Path, mode: int, repair: str) -> None:

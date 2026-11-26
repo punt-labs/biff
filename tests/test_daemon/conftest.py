@@ -17,7 +17,7 @@ from biff.relay import LocalRelay
 from biff.run_dir import RunDir
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
     from biff.frame_client import ClientType, Hello
     from biff.relay import Relay
@@ -60,6 +60,7 @@ class CountingFactory:
     def __init__(self) -> None:
         self.built: list[Path] = []
         self.repos: list[str] = []
+        self.relay_type: Callable[[Path], Relay] = LocalRelay
 
     def __call__(self, resolved: ResolvedSession) -> Relay:
         # A fake NATS relay is one directory per repo, as NatsRelay is one
@@ -69,7 +70,7 @@ class CountingFactory:
             directory = directory / resolved.config.repo_name
         self.built.append(directory)
         self.repos.append(resolved.config.repo_name)
-        return LocalRelay(directory)
+        return self.relay_type(directory)
 
 
 @dataclass
@@ -116,6 +117,8 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         relay_factory=factory,
         heartbeat_interval=0.05,
         poll_interval=0.02,
+        attach_timeout=0.5,
+        request_timeout=0.5,
     )
     await daemon.start()
     env = Harness(daemon=daemon, run_dir=run_dir, factory=factory)

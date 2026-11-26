@@ -21,6 +21,7 @@ class ErrorCode(StrEnum):
     SESSION_REPLACED = "session_replaced"
     UNKNOWN_METHOD = "unknown_method"
     INVALID_PARAMS = "invalid_params"
+    ALREADY_SUBSCRIBED = "already_subscribed"
     INTERNAL = "internal"
 
 

@@ -6,6 +6,8 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, final
 
+import yaml
+
 from biff.config import load_cli_config, load_mcp_config
 from biff.daemon.relays import ResolvedSession
 
@@ -35,23 +37,30 @@ class SessionResolver(Protocol):
 class DiskResolver:
     """Reads the repository configuration under the hello's working directory.
 
-    An agent harness (``mcp`` or ``plugin``) identifies as the agent; a shell
-    or hook identifies as the human, as each does today.
+    Every client of an agent harness (``mcp``, ``plugin`` and the harness's
+    ``hook``) identifies as the agent, so the hook and the server of one session
+    name the same user.  Only a shell (``cli``) identifies as the human.
     """
 
     async def resolve(self, hello: Hello) -> ResolvedSession:
         """Load the configuration for *hello* off the event loop.
 
         Raises:
-            ResolveError: The directory is not a configured biff repository.
+            ResolveError: The directory is not a configured biff repository, or
+                its configuration cannot be read or parsed.
         """
-        load = load_mcp_config if hello.client in ("mcp", "plugin") else load_cli_config
+        agent_side = hello.client in ("mcp", "plugin", "hook")
+        load = load_mcp_config if agent_side else load_cli_config
         try:
             resolved = await asyncio.to_thread(
                 load, user_override=hello.user or None, start=Path(hello.cwd)
             )
         except SystemExit as exc:
-            msg = f"cannot resolve biff configuration for {hello.cwd}: {exc.code}"
+            detail = "no usable configuration" if exc.code is None else exc.code
+            msg = f"cannot resolve biff configuration for {hello.cwd}: {detail}"
+            raise ResolveError(msg) from exc
+        except (OSError, yaml.YAMLError, ValueError) as exc:  # ValueError: pydantic
+            msg = f"cannot resolve biff configuration for {hello.cwd}: {exc}"
             raise ResolveError(msg) from exc
         return ResolvedSession(
             config=resolved.config,

@@ -28,6 +28,23 @@
   The client also refuses a run directory that is not 0700, or a token file
   that is not 0600 or not owned by the current user, and prints the `chmod`
   that repairs it.
+- biffd no longer hangs or dies silently. A relay outage is retried: the
+  subscription tells its client `degraded` once and `recovered` once and logs
+  one line per outage. A bug in a request becomes an `internal` reply that
+  names the method and the log. Requests run concurrently and time out; the
+  client's `connect`, `request`, `subscribe` and `next_event` raise
+  `DaemonUnreachableError`, `RequestTimeoutError` or `ConnectionLostError`
+  (with the close code and reason) instead of waiting forever. `subscribe`
+  is answered, a second one is refused, and a run replaced by a newer run is
+  closed. `biff daemon serve` prints one actionable line when its port is
+  taken or its run directory is not private.
+- The biffd token file must hold a 43-character token; an empty or short file
+  is refused instead of becoming an empty MAC key. The token and port files
+  are written atomically.
+- biffd drops `BIFF_USER`, `BIFF_OWNER` and `BIFF_RELAY_*` from its own
+  environment at start and says so; a client carries its `BIFF_USER` and is
+  refused, by name, if it sets a `BIFF_RELAY_*` variable biffd cannot carry
+  yet. A session's hook and its MCP server resolve the same user.
 - The daemon keeps one relay per relay server, credentials and repository.
   Two repositories on one NATS server get two relays, each scoped to its own
   repository, so one repository's mail, presence and wall stay in its own

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from biff.daemon.relays import RelayPool, ResolvedSession
 from biff.models import BiffConfig, RelayAuth
 from biff.nats_relay import NatsRelay
@@ -91,3 +93,47 @@ def test_two_repos_on_one_nats_server_get_two_relays_scoped_to_their_repo(
     assert isinstance(a, NatsRelay)
     assert isinstance(b, NatsRelay)
     assert (a._repo_name, b._repo_name) == ("repo-a", "repo-b")
+
+
+class _ClosingRelay(LocalRelay):
+    """A local relay whose close can fail in a chosen way."""
+
+    def __init__(self, data_dir: Path, failure: BaseException | None) -> None:
+        super().__init__(data_dir)
+        self._failure = failure
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+        if self._failure is not None:
+            raise self._failure
+
+
+def _pool_of(tmp_path: Path, failures: list[BaseException | None]) -> RelayPool:
+    made = iter(failures)
+
+    def factory(resolved: ResolvedSession) -> Relay:
+        return _ClosingRelay(resolved.data_dir, next(made))
+
+    pool = RelayPool(factory)
+    for index in range(len(failures)):
+        pool.acquire(_session(tmp_path, name=f"relay-{index}"))
+    return pool
+
+
+async def test_a_relay_error_on_close_is_logged_and_the_rest_still_close(
+    tmp_path: Path,
+) -> None:
+    pool = _pool_of(tmp_path, [OSError("link down"), None])
+    await pool.close()
+    assert pool.connection_count == 0
+
+
+async def test_a_bug_on_close_surfaces_after_every_relay_was_closed(
+    tmp_path: Path,
+) -> None:
+    pool = _pool_of(tmp_path, [RuntimeError("bug"), None])
+    with pytest.raises(ExceptionGroup) as caught:
+        await pool.close()
+    assert [type(e) for e in caught.value.exceptions] == [RuntimeError]
+    assert pool.connection_count == 0
