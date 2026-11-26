@@ -1952,12 +1952,12 @@ verified by model checking with probcli (\texttt{z-spec test}):
 %%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
 %%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 4 -p MAX_INITIALISATIONS 100 \
 %%      -p MAX_OPERATIONS 5000 -model_check"
-%%   for K in talk inboxNotify kvWatch wallNotify; do
+%%   for K in talk inboxNotify kvWatch wallNotify channelCheck; do
 %%     "$PROBCLI" docs/nats-relay.tex $P -ctlformula \
 %%       "AG({connState/=closed & subGen($K)<generation} => EF {subGen($K)=generation})"
 %%   done
 %%
-%% The restriction to connState = connected (same four kinds):
+%% The restriction to connState = connected (the four earlier kinds):
 %%
 %%   for K in talk inboxNotify kvWatch wallNotify; do
 %%     "$PROBCLI" docs/nats-relay.tex $P -ctlformula \
