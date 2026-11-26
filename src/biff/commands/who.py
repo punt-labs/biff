@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
-from biff.formatting import format_dead_footnote, format_who
-from biff.presence_liveness import dead_sessions, live_sessions
+from biff.formatting import format_who, log_dead_sessions
+from biff.presence_liveness import live_sessions
 
 
 async def who(ctx: CliContext) -> CommandResult:
@@ -13,13 +13,13 @@ async def who(ctx: CliContext) -> CommandResult:
 
     Sessions whose last heartbeat is older than the liveness window are
     dead (shut down, killed, or wedged) but may linger in the KV until the
-    longer storage TTL; they are hidden from the main table. A
-    session dead long enough to rule out a single missed heartbeat is
-    still surfaced, unnamed, in a trailing footnote (DES-057).
+    longer storage TTL; they are hidden from the table. A session dead long
+    enough to rule out a single missed heartbeat is logged, not shown
+    (DES-057).
     """
     sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     live = live_sessions(sessions)
-    footnote = format_dead_footnote(dead_sessions(sessions))
+    log_dead_sessions(sessions)
     if not live:
         text = "No sessions."
         json_data: list[dict[str, object]] = []
@@ -30,6 +30,4 @@ async def who(ctx: CliContext) -> CommandResult:
         sorted_sessions = sorted(live, key=lambda s: s.last_tool_at, reverse=True)
         text = format_who(sorted_sessions)
         json_data = [s.model_dump(mode="json") for s in sorted_sessions]
-    if footnote:
-        text = f"{text}\n{footnote}"
     return CommandResult(text=text, json_data=json_data)

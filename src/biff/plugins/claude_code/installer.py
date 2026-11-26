@@ -60,9 +60,9 @@ class ClaudeCodeInstaller:
         """Remove that import from ``CLAUDE.md``."""
         return self._guide(root).prune()
 
-    def check(self) -> tuple[CheckResult, ...]:
+    def check(self, user_override: str | None) -> Iterable[CheckResult]:
         """Report the status line and what blocks channels (informational)."""
-        return DoctorChecks(SETTINGS_PATH, os.environ).all()
+        return DoctorChecks(SETTINGS_PATH, os.environ, user_override).all()
 
     @staticmethod
     def _guide(root: Path) -> ClaudeMdImport:

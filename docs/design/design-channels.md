@@ -1,0 +1,580 @@
+# Channels: The Claude Code Plugin's Last Mile
+
+Status: accepted, shipped in 1.25.0. Decision record: DES-087.
+Tracking: Linear project "biff: Channels delivery" (P-PL-46), epic PL-274.
+Reviewed by djb (wire), bcs (threat model), jms (formal model), alex-chen
+(failure modes) and qodo against an earlier draft; their findings that still
+apply are folded in below.
+
+## The design in six lines
+
+1. Biff itself (the relay, the `biff` CLI, the `biff mcp` server) already gets
+   arrivals in real time: NATS pushes to the server and the CLI.
+2. What varies is the last mile, from biff to the model, and that belongs to
+   each plugin. Claude Code's last mile is Channels.
+3. In the Claude Code plugin, channels are always on. The plugin, not the
+   user, tells `biff mcp` it is serving Claude Code.
+4. If channels cannot be live, the plugin warns the user and the model at
+   session start and tells them to poll with `/biff:read 2m`.
+5. `biff doctor`, run on demand, checks whether the channel reaches each
+   running session and names the fix.
+6. Biff does no background or scheduled work except connection liveness
+   checks and the deferred send of an arrival it held back. Polling stays
+   dormant until the user runs `/biff:read Xm`.
+
+## Biff and its plugins
+
+**Biff itself** is the relay plus everything built on it (mail, wall, talk,
+presence, plans), reached through two entry points that any harness can use:
+the `biff` CLI and the `biff mcp` server. With NATS, both receive arrivals by
+push: the always-on inbox, wall and talk subscriptions and the wake poke
+(DES-062). With no relay configured, biff uses the local filesystem relay
+(DES-090, DES-091): JSONL inboxes under the main checkout's
+`.punt-labs/local/biff/relay/`, no
+network, no shared credentials. The local relay has no push of its own, so it
+gets a filesystem watch (section 6). The public demo NATS relay is the opt-in
+`relay: {type: demo}`.
+
+**Plugins** adapt biff to one harness each. Each owns its harness's last mile,
+the step that gets an arrival in front of the model. The per-tool table of
+installers, delivery sinks and session-start hooks is in
+[package-structure.md](package-structure.md) ("The plugin contract"); this
+document covers the Claude Code row, Channels.
+
+Biff's job is the same for every plugin: notice an arrival the moment the
+relay pushes it, and offer a short, safe summary of it. A plugin's job is to
+turn that summary into whatever its harness can do. Nothing in this document
+changes how `biff mcp` behaves for any plugin other than Claude Code's.
+
+## Problem
+
+In Claude Code, biff cannot make the model act on new mail, walls or talk in
+an idle session. Tool-description changes rarely reach the model (DES-038
+amendment), the `unread-nudge` hook needs activity to fire, and
+`/biff:read <interval>` needs the user to start a cron. Roughly a dozen fix
+attempts (PRs 65, 91, 124/128/139, 176, 198/199, 204, 410/420, 414) fixed real
+server defects without closing this gap, because the gap is in the client.
+
+Claude Code Channels closes it. A server that advertises
+`capabilities.experimental["claude/channel"]` and is named in the
+`--channels` (or `--dangerously-load-development-channels`) launch flag can
+send `notifications/claude/channel`; Claude Code injects the content into the
+live session, and the model acts on it without a prompt.
+
+## Evidence
+
+All observed 2026-11-22 on keble, Claude Code 2.1.330.
+
+| Fact | How it was established |
+|------|------------------------|
+| Channels deliver a biff wall into an idle interactive session, and the model acts on it unprompted | Spike branch `spike/channels-harness` plus the `tls_handshake_first` change (#383), registered as `biff-chan`, launched with `--dangerously-load-development-channels server:biff-chan`; `biff wall` from another shell; the event rendered as `← biff-chan: [WALL] ...` and Claude replied |
+| The server sends exactly `{"method": "notifications/claude/channel", "params": {"content": "...", "meta": {"source": "biff"}}}` | Raw stdio probe against the spike server |
+| Claude Code opens with a 2026-07-28 `server/discover` probe, then falls back to `initialize` with `protocolVersion: "2025-11-25"` | Logged every byte Claude Code sent to the spike server (`tee` in front of the server) |
+| Claude Code's `initialize` declares no channel capability (`roots`, `elicitation` only) | Same log |
+| Claude Code does not register a 2026-07-28 server as a channel | Claude Code MCP docs, "Push messages with channels" |
+| The SDK's handshake-only loop (`serve_loop`) answers the probe with -32601 and then accepts `initialize`; the dual-era loop answers the probe and then refuses `initialize` with -32022 | djb drove both loops in memory with the probe followed by `initialize` |
+| `biff mcp --channels` on today's binary exits 2 with "No such option" | alex-chen ran the installed 1.24.2 binary |
+| The SDK never raises when a notification send fails on a closed stream; only a blocked write, caught by a timeout, is observable | djb, from `jsonrpc_dispatcher.py`, `connection.py`, `session.py` |
+| Feature-flag evaluation gates Channels; `DISABLE_TELEMETRY` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` close it with only "channels feature is not currently available" | DES-063; reconfirmed today after commit `ce81632` (#468) re-enabled both in `.envrc` |
+| An org admin can allow a non-Anthropic channel plugin through `allowedChannelPlugins`; otherwise it needs the dangerous development flag | Claude Code Channels docs |
+| A change detected before the client session is captured is dropped without error | Spike server stderr: first wall logged `session=False`, nothing sent |
+| NATS arrivals reach `biff mcp` by push, independent of the poll interval | `set_poll_interval` tool description; DES-062 |
+
+Consequences:
+
+- **Biff would never be registered as a channel today.** Since DES-080 the
+  server serves both protocol eras and answers the probe, so Claude Code
+  connects on 2026-07-28. The spike worked only because its older SDK failed
+  the probe. Registering needs the handshake-only loop, which only Claude Code
+  needs.
+- **Claude Code never says whether the channel is live.** It declares no
+  channel capability and acknowledges no event.
+- **Plugin and binary update separately.** Anything an old binary rejects
+  (a new flag) takes biff down entirely.
+
+## Decision
+
+### 1. The Claude Code plugin turns on channel mode
+
+`plugin/.claude-plugin/plugin.json` sets `BIFF_CHANNEL_MODE=1` in the `tty`
+server's `env`. This is part of the plugin's definition, like its command
+line; no user sets or sees it, and every Claude Code user gets channels. An
+environment variable, not a flag, because biff 1.24.2 exits 2 on an unknown
+option while ignoring an unknown variable, so plugin and binary can update in
+either order. `biff mcp` reads it once at startup and removes it from
+`os.environ`.
+
+In channel mode the server advertises `experimental["claude/channel"] = {}`
+and serves stdio on the SDK's handshake-only loop through its own runner,
+`serve_channel_stdio()` in `server/entrypoints.py`. It follows FastMCP's stdio
+runner but calls `mcp.server.runner.serve_loop` inside the low-level server's
+lifespan; that reaches into FastMCP internals (`_lifespan_manager`,
+`_mcp_server`), so `pyproject.toml` pins FastMCP's minor version. The runner
+keeps FastMCP middleware in the path, closes the write stream itself on exit,
+and refuses a 2026-07-28 request sent after `initialize`. The server logs the
+negotiated `protocolVersion` at startup.
+
+Without the variable, nothing changes: Devin (`--user`), opencode, codex,
+HTTP and the CLI keep the dual-era loop and DES-080's 2026-07-28
+subscriptions.
+
+### 2. Arrival summaries (biff) and channel events (Claude Code plugin)
+
+**Biff: arrival summaries.** An `ArrivalSummarizer` runs when the relay
+pushes a change. It is never called from a timer, a tool handler or a
+description change, and it reads typed state, never description text:
+
+| Kind | New when | Summary | `meta` |
+|------|----------|---------|--------|
+| `mail` | `inbox_high_water(session_key)` exceeds the last-sent mark and unread mail exists | `Call read_messages: N unread biff message(s).` (N is the unread count at send time) | `kind=mail`, `count=N` |
+| `wall` | A wall key `(posted_at, from_user, from_tty)` not seen before, not posted by this session | `Call wall: new wall from <sender>.` | `kind=wall` |
+| `talk_invite` | `TalkState.invite_arrivals` exceeds the last-sent mark and an invite is still queued or pending | `Call talk_read: talk invite from <sender>.` | `kind=talk_invite` |
+| `talk_message` | `TalkState.message_arrivals` exceeds the last-sent mark and a partner message is still queued, counted after the DES-046 partner-key check | `Call talk_read: new message from your talk partner.` | `kind=talk_message` |
+
+Mail is detected by a sequence number, not by the unread count, because the
+count can stay flat (two read, two arrive) or flap (a stale fetch after a
+read). A new `Relay` method, `inbox_high_water(session_key)`, returns an
+integer used only for ordering, never as a count: the sender asks whether it
+is greater than the last-sent mark, and takes `N` from the unread count
+(`get_unread_summary`, a `stream_info` read that creates no consumer;
+DES-015 holds) at send time. On NATS it is the larger of the stream sequences
+of the last message on the tty and user inbox subjects, read with a
+last-message-by-subject lookup. The stream is shared by every inbox and repo
+(DES-016), so sequences have gaps; gaps do not matter to an ordering test. A
+read deletes the message (`WORK_QUEUE`; `NatsRelay.fetch` acks it), so the
+lookup can fall or return nothing; the last-sent mark never falls, and the
+next arrival takes a higher stream sequence than any earlier one, so it still
+exceeds the mark. On the local relay it is the number of message lines in the
+two inbox files; `LocalRelay` marks messages read in place and never removes
+lines, so it only rises. Mail summaries name no senders (DES-015). Each wall
+key is summarized at most once per server process.
+
+Talk frames get the same treatment. `TalkState.receive()` is the one place a
+frame is accepted, so it increments two monotonic integers there:
+`invite_arrivals` and `message_arrivals`. They are never decremented by
+`talk_read` draining the queue, by an invite moving from queued to pending, or
+by overflow. An invite's `session_key` is not an arrival identity: a peer
+session that invites again reuses its key (`TalkState._publish` sends
+`from_key` = the sender's session key on every frame). The sender compares each
+integer with its last-sent mark and also requires the thing it describes to
+still exist, so a drained queue never produces a stale event. For an invite,
+"exists" includes age: `TalkState` gains `has_live_invite(now)`, true only when
+a queued frame (its `QueuedNotification` enqueue stamp) or a pending invite
+(`PendingInvite.arrived`) is younger than `PENDING_INVITE_TTL` (300 seconds).
+Periodic expiry (`expire_stale_invites`) stops under this design, and the rate
+window can hold an event longer than the TTL, so the check at send time is
+what stops an expired invite from being announced. A partner message queued is
+the test for `talk_message`; messages never expire by time.
+
+**Content rules**, for every summary whatever plugin carries it. Summaries
+enter a model's context as an instruction-capable prompt, and anyone holding
+the relay credential can publish frames with any `from` (PL-228):
+
+- **No bodies.** Never a message, wall or talk body. This holds until wave
+  (c) of DES-094, when bodies travel in events (decision brief R4).
+- **Senders are short and plain.** A sender is shown only when its user and
+  tty parts each fully match `ID_RE` in `session_routing.py` and the user part
+  is at most 39 characters; anything else becomes `a teammate`. Events carry no
+  trust label: whether a sender is who it claims to be is decided by signed
+  messages and per-sender grants (DES-094, [trust-model.md](trust-model.md)).
+- **Bounded length.** At most 200 characters. The client shows about 70 characters of
+  one line, so a typical event is at most 60: the action, then the sender,
+  which alone may be cut.
+- **Fixed templates.** All other text is the literal templates above.
+- **Biff accepts a talk itself only when both sides invited each other.** When
+  two sessions invite each other, `talk_read` sends the accept from the
+  higher-key session; otherwise only an explicit `talk` call by the agent
+  accepts. An event announces an invite and names `talk_read`, never the
+  accept command.
+
+`meta` keys use only letters, digits and underscores; `kind` is one of
+`channel_check`, `mail`, `wall`, `talk_invite`, `talk_message`; `count` is a
+decimal integer; no other keys.
+
+**Claude Code plugin: channel events.** In channel mode, each summary is sent
+as `notifications/claude/channel` by one small class that owns the method
+name, builds `params` from the closed `meta` set, and sends through the
+connection's untyped `notify(method, params)`. Other plugins consume the same
+summaries through their own last mile; those designs are separate.
+
+**`/mesg off`** (`biff_enabled` false) stops channel events. Nothing is lost:
+when mesg comes back on, anything still true is sent, one event per kind. Mail
+still arrives through an explicit `/biff:read`, which ignores mesg.
+
+**Rate limit**, fixed constants in `plugins/claude_code/channel_emitter.py`: at most one
+event per kind every 30 seconds and 10 events in any 10 minutes. Arrivals
+inside a window are coalesced into the next event's count.
+
+### 3. Nothing dropped, nothing stale
+
+The channel sender keeps, per kind, the last state it sent, and advances it
+only after a send completes. Whenever it runs, if current state is newer than
+that record and non-empty, an event is owed.
+
+| Situation | Effect |
+|-----------|--------|
+| Client not yet initialized | Nothing sent; sent when `notifications/initialized` arrives |
+| `/mesg off` | Nothing sent; sent when `/mesg on` runs |
+| Rate window closed | Nothing sent; the held arrival arms the deferred send (below), which sends when that kind's window opens, with current values |
+| Send timed out (`_NOTIFY_SEND_TIMEOUT`) | Record unchanged; the deferred send is re-armed once; after that the next arrival, tool call or reconnect retries |
+| Relay reconnected | The sender runs once on the reconnect and sends anything owed (below) |
+| Mail read, wall cleared, invite withdrawn before the send | Nothing owed; a late send never describes the past |
+
+**Deferred send.** The rate limit holds an event back only because an arrival
+produced it. Windows are per kind (30 seconds) and global (10 events in 10
+minutes), so held kinds can become eligible at different times. At most one
+`loop.call_later` exists, set for the earliest moment any held kind is
+eligible. When it fires it sends every held kind whose window is open, with
+current state, and arms a new one only if a kind is still held, for that
+kind's own opening. Each firing has one of four outcomes per held kind: it
+sends that kind; it finds the kind no longer owed (the user read the mail, the
+invite expired) and drops it without sending; it finds mesg off or the client
+not yet initialised and releases the kind with its last-sent record unchanged,
+so the kind stays owed and goes out when mesg comes on or the client
+initialises; or the send times out, and that kind is re-armed once. A second timeout drops that kind only: other held kinds
+keep their own openings, and the one timer is re-armed for the earliest of
+them. With nothing held, no timer exists, so it cannot recur indefinitely: a
+send that empties the held set cancels the timer. It
+is part of delivering held arrivals, not a periodic job. Later arrivals in a window only raise the state
+the pending timer will send.
+
+**Reconnect catch-up.** Mail wakes, wall pokes and talk frames reach the server
+over core NATS, which does not replay anything published while the connection
+was down. `_reconcile_always_on_sub` (`server/tools/_descriptions.py`) only
+re-subscribes when `connection_generation` changed; an in-place nats-py
+reconnect keeps the generation and advances `_reconnect_epoch` in
+`NatsRelay._on_reconnect`. Removing the unread backstop would leave mail that
+arrived during that gap unannounced. So the pair `(connection_generation,
+_reconnect_epoch)` is the trigger: `NatsRelay` gains
+`add_reconnect_listener(callback)`, and the channel sender registers the
+summarizer as the callback. The listener runs only after subscriptions are
+live again, so mail landing between the catch-up read and the rebind cannot
+be missed. After an in-place reconnect nats-py has already replayed every SUB
+(`_reconcile_always_on_sub`'s own docstring), so `_on_reconnect` calls the
+listeners. After a fresh dial `poll_inbox` rebinds the SUBs through
+`_reconcile_always_on_sub`, so that function calls the listeners after its
+`resubscribe()` succeeds, next to the `gate.mark()` it already does; the dial
+itself calls nothing. The callback then reads durable state (`inbox_high_water`, the unread count, `get_wall`)
+and sends whatever is owed. This is a reaction to a connectivity event, not a
+loop. Talk frames are core NATS only and are not durable; one lost during the
+gap is not recovered, as today.
+
+In channel mode a timed-out send keeps the stdio session. Today
+`_notify_standalone` clears the stored session on any failure and only a tool
+call restores it, so one stall would silence an idle session for good.
+
+### 4. Start-up warning (Claude Code plugin)
+
+Biff's SessionStart hook already adds context to the session. The warning is
+built in `plugins/claude_code/`, and `biff-hook` calls `StartupWarning` there
+directly (`package-structure.md`, "The plugin contract"); there is no
+`SessionStart` protocol yet, because this is its only caller. It checks every
+channel gate it can see without the model:
+
+| Gate | Check |
+|------|-------|
+| Feature flags | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`, `DISABLE_TELEMETRY` (observed in DES-063) and `CLAUDE_CODE_DISABLE_FEATURE_FLAGS` not set to a true value |
+| Provider | `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY` unset: channels need Anthropic authentication |
+| Managed policy | The effective policy does not set `channelsEnabled` to a non-true value. An absent key is no finding. The first source with a policy key wins (macOS preference domain `com.anthropic.claudecode`, then the settings files in `/Library/Application Support/ClaudeCode`, `/etc/claude-code` or `C:\Program Files\ClaudeCode`, with `managed-settings.d/*.json`), or all of them merge with `managedSourcesBehavior: "merge"`. Server-managed settings and the Windows registry are not visible to a hook, so a local `channelsEnabled` that is not true is only a model-only note ("a server-managed policy may still allow channels"), never a user warning |
+| Launch flag and allowlist, judged together | Live only when the development flag lists biff (`plugin:biff@punt-labs`, or `plugin:biff-dev@...`), which bypasses `allowedChannelPlugins`; or `--channels` lists `plugin:biff@punt-labs` and the managed policy lists biff in `allowedChannelPlugins`. With `--channels`, a local allowlist that does not list biff (or no allowlist) is a model-only note, because a server-managed policy outranks every local source and a hook cannot see it. The user is warned only when the launch itself never names biff. A `-p` run ignores channels and only the model is told. The flags come from the argv of `CLAUDE_PID`, read with `psutil`, trusted only when that process is a live ancestor of the hook (the corroboration of `caller_stamp.py`). Otherwise the gate is unknown: the hook tells only the model that launch flags could not be checked |
+
+Two biff plugins in one session (the installed plugin and a `--plugin-dir`
+one) warn once. Each hook run tries to create one marker file in biff's state
+directory, keyed on `CLAUDE_PID`, `session_id`, `source` and the current minute;
+only the creator emits. Two runs that straddle a minute boundary may both warn,
+and markers are pruned after 10 minutes. A later compaction warns again because the key includes the current minute, not because of pruning. If
+the state directory cannot be used, the hook warns without a claim. If the warning
+code itself fails, the hook logs it and tells the model that biff could not check
+whether channels are live; a gate that crashes is reported to the model as unknown, and when a gate that knows also fires, the known warning wins and the unknown ones are left out of the text.
+
+Who sees what. Every SessionStart the plugin handles gives the model the
+warning in `additionalContext`, so it survives a resume, a clear and a
+compaction. The user sees a `systemMessage` only at `startup`, and only for gates
+that know (`notify_user`): an env opt-out, a cloud provider, or a launch that
+never names biff. Gates that depend on what a hook cannot see (server-managed
+policy, an unreadable launch state, a crashed gate, a `-p` run) tell only the
+model. A saved poll cadence does not silence the warning: a durable cron job can
+expire.
+
+When a gate knows channels are off, the text is:
+
+```text
+biff: channels are not live in this session (<reason>). New messages will
+not arrive on their own. If you are not already polling, run <command>. <fix>
+```
+
+When only unknown gates fired, it is:
+
+```text
+biff: channels may not be live in this session (<reason>). If new messages
+do not arrive on their own, run <command>.
+```
+
+`<command>` is `/biff:read 2m`, or `/biff-dev:read-dev 2m` for the
+`--plugin-dir` plugin. `biff-hook` reads the top-level `name` of
+`$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` in Python; a missing or
+malformed manifest is logged at INFO and means `/biff:read 2m`.
+
+If every visible gate is open, it says nothing. The warning costs no model
+turn and changes nothing about delivery.
+
+### 5. `biff doctor` checks end to end (on demand)
+
+`biff doctor` is a one-off CLI command. For the Claude Code plugin it finds
+this user's running biff sessions in the current repo and sends each a
+`channel_check` request over the relay. A session's server then sends one
+channel event with a fresh 128-bit token (`kind=channel_check`, content
+`biff channel check. Call channel_ack with token <token>. Do not reply to the
+user.`). The request carries a one-time reply subject (a fresh NATS inbox name created
+by the doctor, which subscribes to it). The new `channel_ack(token)` tool
+compares in constant time; on a match the target's server publishes
+`{session_key, token}` to that reply subject. The acknowledgement travels over
+the relay, not through a file, because the target session may run on another
+machine and its per-session unread file (`SessionRouting.unread_path`, DES-011a)
+is local to it. On the local relay, which is single-machine by definition, the
+server also writes `channel_checked_at` to that unread file and doctor reads it
+there. Doctor waits up to 30 seconds and reports each session `channel live` or
+`channel not confirmed`, and for the latter prints the gate checks above plus
+the server-side ones (biff server connected and not in
+`disabledMcpjsonServers`; a handshake-era `protocolVersion` in the startup
+record). A session accepts at most one check request per minute. The check
+only reports.
+
+### 6. Polling and background work
+
+**Polling (Claude Code plugin).** A user whose Claude Code cannot use
+channels runs `/biff:read 2m` (any interval). That starts the plugin's poll:
+a cron that runs `/biff:read`, and the `unread-nudge` hook. Nothing polls
+until the user starts it; `/biff:read n` stops it. The nudge hook runs only
+while polling is on: the unread file carries `polling: true` while a poll
+interval is set. Bare `/biff:read` checks now, in any session.
+
+**No background work except liveness (biff).** The server runs no periodic or
+scheduled work except two things: connection liveness (NATS keepalive and
+wedge detection, DES-041, DES-042) and the deferred send of arrivals the
+rate limit held back (section 3): at most one `call_later` at a time, armed
+only while an arrival is held, ending when none is, never recurring. Everything else runs because a relay push or
+reconnect arrived, a tool was called, or the user started polling.
+
+| Periodic job today | Under this design |
+|--------------------|-------------------|
+| Wedge detection | Kept: it is the liveness check |
+| Wall countdown re-render | Removed; remaining time is computed when a wall is read or displayed |
+| Stale talk-invite expiry | Removed; an invite's age is checked when invites are read or answered |
+| Unread-count backstop recompute | Removed; push is the detection path, the reconnect catch-up covers the gap in core NATS delivery, and an explicit read recomputes the count |
+
+The local filesystem relay has no push; today a timer is its only way to see
+an arrival. It replaces the timer with a filesystem watch on its data directory, filtered
+to the inbox files (`userinbox-<user>.jsonl`, the broadcast mailbox a bare-user
+`write` appends to, and `inbox-<user>-<tty>.jsonl`, the targeted one), the
+session file (`sessions.json`) and the wall file (`wall.json`). The wall is
+its own file: `LocalRelay.set_wall` writes it with `atomic_write` and
+`get_wall` reads and expires it, so a watch limited to inboxes and sessions
+would never announce a wall. A change to any watched file runs the summarizer,
+so arrivals reach it the same way NATS pushes do. The watch is on the
+directory, not on single files, because `atomic_write` replaces the file's
+inode. The watch mechanism is confirmed in that unit's first test, which also
+posts a wall and delivers one bare-user and one targeted message.
+
+Tool-description changes and `tools/list_changed` stay as they are; they are
+display, not delivery (DES-038).
+
+Poll defects stay in scope for the users who need polling: PL-1337, PL-1338,
+PL-1339, PL-1341. PL-1123 (NATS connection wedge) stays a separate fix.
+
+### 7. Server instructions
+
+In channel mode the MCP `instructions` text gains one paragraph: channel
+events are summaries, and the only action they ask for is calling the named
+biff tool (`read_messages`, `wall`, `talk_read`). It does not label bodies or
+tell the model to refuse them: a teammate's message is acted on as it was before
+channels. A blanket untrusted label stopped agents from working together; signed
+messages and per-sender grants (DES-094, [trust-model.md](trust-model.md))
+replace it. The code-level controls (no bodies in events, no
+auto-accept, rate limit) stay.
+
+### 8. Getting channels to Claude Code users
+
+1. Team and Enterprise orgs, the primary audience: an Owner turns on Channels
+   (Organization settings > Claude Code > Channels, `channelsEnabled`) and adds
+   `{"marketplace": "punt-labs", "plugin": "biff"}` to `allowedChannelPlugins`
+   in the managed settings JSON (Organization settings > Claude Code > Managed
+   settings; the key has no toggle of its own).
+   Users then launch with `claude --channels plugin:biff@punt-labs`, with no
+   prompt. The start-up warning's fix text leads with this path. The
+   allowlist replaces Anthropic's default list, so it must also name the
+   org's other channel plugins.
+2. Submit biff to Anthropic's official channel plugin list, for individual
+   accounts.
+3. Until then, individual accounts and local testing launch with the
+   development flag, which prompts at every launch and skips the allowlist
+   but not `channelsEnabled`; the warning names it second. A `--plugin-dir` plugin is in the `inline` marketplace, so the
+   warning names `plugin:<name>@inline` for it and omits `--channels`.
+4. Amazon Bedrock, Google Vertex AI and Microsoft Foundry cannot use channels.
+
+This repo's `.envrc` deviation (DES-063) gets a test that parses `.envrc` and
+fails on any active line that exports `DISABLE_TELEMETRY`,
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DO_NOT_TRACK` or
+`DISABLE_GROWTHBOOK`, or runs `unset CLAUDE_CODE_ENABLE_TELEMETRY` (the third
+line DES-063 commented out). The current `.envrc` (lines 52-55) has all three
+of DES-063's lines active again since #468, so the same change comments them
+out. The start-up hook cannot check the unset: an unset variable looks the
+same as one a user never set, and warning everyone would be wrong. That case
+is caught by the `.envrc` test for this repo and by `biff doctor`'s round
+trip for any other.
+
+## Risks
+
+| Risk | Mitigation |
+|------|------------|
+| A hook cannot see Claude Code's launch flags, so the start-up warning misses the most common closed gate | Wave 0 finds out; if it cannot, the warning covers the gates it can see and `biff doctor` covers the rest |
+| A future Claude Code drops the fallback to `initialize`, so the plugin's server cannot connect at all | Startup record and `biff doctor` show the negotiated version; the end-to-end tier runs against each new Claude Code release |
+| Another client is started with `BIFF_CHANNEL_MODE` and cannot connect | A test asserts the variable is set only in `plugin.json`'s `tty` server `env` |
+| The model ignores the doctor check event in a working channel session | Delivery is unaffected; doctor reports `not confirmed` with every gate open, which points at the model |
+| A forged `channel_check` request costs model turns | One check per session per minute; the event carries no relay text |
+| FastMCP changes the internals the runner uses | Pinned FastMCP minor version; integration test through the real entry point |
+| Every Claude Code session reads mail on its own, widening exposure | Summary-only content, no auto-accept, rate limit |
+| Channels stay a research preview and change shape | The start-up warning tells affected users to poll |
+
+## Formal model
+
+`docs/specs/notification.tex` gains a channel component: `EventKind ::= kMail |
+kWall | kTalkInvite | kTalkMsg`; per kind, the current state and the
+last-sent record; `mesgOn`; `initialized`; rate-window state; a `reconnected`
+event that re-runs the sender; and `pollOn`.
+"Owed" is derived: current newer than last-sent and non-empty. It shares the
+existing session-capture operations and adds no parallel capture path.
+
+Checks:
+
+1. **No silent drop.** A ghost `chanLost` with invariant `chanLost = zfalse`;
+   a naive `EmitChannelUnrecorded`, enabled before initialization, sets it,
+   and ProB finds the spike's startup drop against it. The real `EmitChannel`
+   requires `initialized`.
+2. **Never stale.** An owed mail event implies unread mail exists; an owed
+   invite event implies a pending invite exists.
+3. **Rate bound.** Events sent in any window never exceed the limit.
+4. **Enabledness.** If anything is owed, the client is initialized, mesg is on
+   and the rate window is open, then `EmitChannel` is enabled.
+5. **Reachability.** From every reachable state with something owed, a state
+   with nothing owed is reachable, assuming sends eventually succeed.
+6. **Poll only on request.** The nudge and cron pull are enabled only when
+   `pollOn`.
+7. **No scheduled work.** Every operation other than the liveness check and
+   the deferred send is enabled only by an arrival, a reconnect, a tool call
+   or `pollOn`; the deferred send is enabled only while an event is held. For
+   each held kind a firing sends it, drops it because nothing is owed any
+   more, releases it because mesg is off or the client is not initialised
+   (record unchanged), or times out and re-arms it once; a second timeout
+   drops that kind alone, and the timer exists only while some kind is still
+   held. A send that empties the held set cancels the timer.
+
+`/z-spec:check`, `/z-spec:test` and a zero-GAP `/z-spec:audit` on
+`notification.tex` gate the channel-events PR, per CLAUDE.md.
+
+## Verified launch
+
+Observed 2026-11-24 on Claude Code 2.1.332 (macOS) with the tmux tier
+(`make test-channels`, `tests/test_claude_channels/`). A session started with
+`--plugin-dir <checkout>/plugin` is the plugin `biff-dev@inline`, not
+`biff-dev@punt-labs`, so the flag that works there is:
+
+```bash
+claude --plugin-dir "$PWD/plugin" \
+  --dangerously-load-development-channels plugin:biff-dev@inline
+```
+
+Mail, a wall and a talk invite each showed in the idle session's pane as
+`← tty: Call read_messages: 1 unread biff message.`,
+`← tty: Call wall: new wall from ...` and
+`← tty: Call talk_read: talk invite from ...`, with the unread-nudge
+hook silenced and `biff.log` recording each event as queued. The launch of the
+2026-11-24 manual test, `plugin:biff-dev@punt-labs` with `--plugin-dir`, matches
+no plugin: biff logged `channel event (mail) queued` and Claude Code dropped the
+event without a message other than its banner, `plugin not installed`.
+
+| Channel flag | With | Result |
+|--------------|------|--------|
+| `plugin:biff-dev@inline` | `--plugin-dir` | Mail, wall and invite displayed |
+| `server:plugin:biff-dev:tty` | `--plugin-dir` | Mail, wall and invite displayed; the banner says `no MCP server configured with that name` and biff's start-up note wrongly says channels are not live |
+| `plugin:biff-dev@punt-labs` | `--plugin-dir` | Nothing displayed; banner `plugin not installed` |
+| `server:tty` | `--plugin-dir` | Nothing displayed; banner `no MCP server configured with that name` |
+| `plugin:biff-dev` | `--plugin-dir` | Refused at launch: entries must be tagged `plugin:<name>@<marketplace>` or `server:<name>` |
+| `plugin:biff@punt-labs` | the marketplace-installed plugin (1.24.2) | Nothing displayed; that release's manifest sets no `BIFF_CHANNEL_MODE`, so its server is not a channel |
+
+## Testing
+
+| Tier | What it proves |
+|------|----------------|
+| Unit | Summaries per kind (content, `meta`, no body text, sender rule, each wall and invite key once, own wall not summarized, mail by sequence with flat and flapping counts); rate limit and coalescing; last-sent record unchanged on timeout, mesg off, closed window, before initialization; start-up warning text per closed gate and silence when all visible gates are open; `channel_check` rate limit, token, `channel_ack`; nudge hook only with `polling: true`; no timer other than liveness and the deferred send, which is armed only with a held arrival; mail by sequence with gaps, with a read in between and with other inboxes advancing the stream; a repeat invite from one session key is announced; a message after `talk_read` drained the queue is announced; reconnect catch-up announces mail that arrived while disconnected; a local-relay wall and a bare-user write are announced; an invite held past `PENDING_INVITE_TTL` is not announced; mail and wall held with different window openings are both sent; `channel_ack` publishes the acknowledgement on the reply subject |
+| Integration (raw stdio through the real `biff mcp` entry point) | With `BIFF_CHANNEL_MODE=1`: probe refused with -32601; `initialize` succeeds with the capability; the variable is gone from the server's environment; no channel frame before `notifications/initialized`; a relay arrival produces a `notifications/claude/channel` frame; a relayed `channel_check` produces one check frame and `channel_ack` publishes `{session_key, token}` on the request's reply subject (on the local relay it writes `channel_checked_at` to the unread file instead); a 2026-07-28 request after `initialize` is refused. Without it: probe answered with `supportedVersions ["2026-07-28"]`, capability absent, no channel frames |
+| End to end (tmux, real `claude`, local `nats-server`; `make test-channels`) | Launched with the verified channel flag, nudge hook silenced, no prompt typed: mail (`biff write`), a wall (`biff wall`) and a talk invite (a published frame) each show as a channel event in the idle session's pane within 45 seconds, and `biff.log` records each event. It does not check the start-up warning, `biff doctor`, the polling fallback or a 10-second bound |
+
+The tmux harness is the spike's `harness.sh`, rewritten for current config and
+marked as its own pytest tier (`claude_channels`, `make test-channels`).
+Release requires one passing end-to-end run.
+
+## Rejected alternatives
+
+- **Channel mode as the default for every `biff mcp` stdio caller** (the
+  third draft). Pushes a Claude Code requirement (the handshake-only loop)
+  onto Devin, opencode and codex, and could stop a 2026-07-28-only client from
+  connecting. Channels are the Claude Code plugin's last mile, so the plugin
+  turns them on.
+- **A `biff mcp --channels` flag.** biff 1.24.2 exits 2 on it, so a plugin
+  that updates before its binary would leave the user with no biff server.
+- **Automatic fallback chosen by a session-start check** (the second draft):
+  every session starts polling, then the check switches modes and deletes the
+  cron. More machinery than the exception deserves; the start-up warning plus
+  `/biff:read 2m` does the job.
+- **Both paths in every session** (the first draft). Duplicate deliveries and
+  more to explain.
+- **Polling removed entirely.** Users without channels would get nothing.
+- **Tell users to set `MCP_PROTOCOL_NEGOTIATION=legacy`.** Moves a silent
+  failure onto every user's machine.
+- **Emit from description changes (`handshake_delivery.notify`).** Fires on
+  count decreases, countdown ticks and talk connecting.
+- **Owed flags flushed at session capture.** A flush inside `initialize` can
+  reach the client before it registers the channel.
+- **Count-based mail detection.** Misses arrivals that coincide with reads.
+- **Message bodies in summaries.** Turns every relay credential holder into a
+  prompt author (PL-228). Lifting it needs signed bodies and per-sender grants, which
+  DES-094 delivers in wave (c) ([trust-model.md](trust-model.md)); the rate
+  limit stays.
+- **Talk invite summaries that say to accept.** A forged invite would become
+  a connected talk with no human involved.
+- **No rate limit.** A steady stream of forged writes would cost one model
+  turn each.
+
+## Delivery plan
+
+Linear project "biff: Channels delivery" (P-PL-46). Each unit runs in its own
+worktree and ends tested and mergeable.
+
+| Wave | Unit | Owns | Merge order | Issue |
+|------|------|------|-------------|-------|
+| 0 | Prove: in channel mode `serve_loop` registers biff as a channel; the model answers a check event; whether a SessionStart hook can see Claude Code's launch flags | scratch branch only | Gates wave 1 | PL-1348 |
+| 1 | Channel mode for the Claude Code plugin: `plugin.json` env, capability, `serve_channel_stdio()`, startup record | `server/entrypoints.py`, `__main__.py` `mcp` command, `plugin.json`, `pyproject.toml` pin | After wave 0 | PL-1349 |
+| 1 | No background work except liveness; local relay file watch (inboxes, sessions, wall); reconnect catch-up hook | `server/tools/_descriptions.py` poller, `relay.py` `LocalRelay`, `nats_relay.py` `add_reconnect_listener` | Before PL-1350 | PL-1367 |
+| 1 | Formal model | `docs/specs/notification.tex` | Before PL-1350 | PL-1351 |
+| 1 | Arrival summaries (biff) and channel events (plugin): content rules, last-sent record, rate limit, deferred send, instructions | new `engine/arrivals.py` (summaries and the `DeliverySink` they are handed to), new `plugins/claude_code/channel_emitter.py` (the sender, a `DeliverySink`), the relay push handler, `talk_state.py` arrival counters, `Relay.inbox_high_water`, `instructions` text | After PL-1349, PL-1351, PL-1367 | PL-1350 |
+| 1 | Start-up warning | new `plugins/claude_code/` modules, called directly by `biff-hook`; `plugins/claude_code/hook.py` | After wave 0 | PL-1368 |
+| 1 | On-demand channel check: relayed `channel_check`, token, `channel_ack` | new `server/tools/channel_ack.py` (a thin MCP adapter over a `commands` object, registered only in channel mode), the relay request handler, reply-subject publish, `unread.py` (local relay only) | After PL-1349 | PL-1365 |
+| 1 | `biff doctor`: end-to-end check and gates; docs; `.envrc` guard | `doctor.py`, README, `docs/guides/INSTALLING.md`, `.envrc` (comment out the three DES-063 lines), its test | After PL-1365 | PL-1353 |
+| 1 | Polling as the exception: nudge hook only while polling is on; poll fixes | `plugin/hooks/unread-nudge.sh`, `unread.py` `polling` field, per issue | Any time | PL-1337, PL-1338, PL-1339, PL-1341 |
+| 1 | End-to-end tier | `tests/` tier and harness | Passes after the units above | PL-1352 |
+| 2 | Allowlist and official list submission | docs | After release candidate | PL-1354 |
+| 2 | Release on both channels; dogfood; push vs poll latency | release | Last | PL-1355 |
+
+## Decisions
+
+1. **Channels belong to the Claude Code plugin**, turned on by its
+   `plugin.json`, always on for every Claude Code user; `biff mcp` is
+   unchanged for every other plugin. Accepted.
+2. **A start-up warning** when a visible gate is closed, telling the user and
+   the model to poll with `/biff:read 2m`. Accepted.
+3. **`biff doctor` checks the channel on demand.** Accepted.
+4. **Polling only when the user starts it; no background work except
+   liveness.** Accepted.
+5. **Summary-only, rate-limited events.** Accepted.
+6. **Submit to Anthropic's official channel list.** Accepted.

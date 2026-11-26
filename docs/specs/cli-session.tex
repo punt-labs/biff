@@ -1,0 +1,667 @@
+%
+% cli-session.tex
+%
+% Z Specification: the CLI named-session lifecycle.
+% A standalone state machine (live, dormant, ended) with a host pointer,
+% an alias held by at most one non-ended record, and a mailbox that
+% catches every send whose address no longer names a holder.
+%
+% Type-check: fuzz -t cli-session.tex
+% Animate:    probcli cli-session.tex -animate 20
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{The CLI Named Session: A Z Specification}
+\author{Lifecycle, Addressing, and Delivery}
+\date{November 2026}
+\hypersetup{
+  pdftitle={The CLI Named Session: A Z Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Introduction}
+% ============================================================
+
+A session started from the command line, rather than by an engine
+host, has a name that a person types: a \emph{tty alias}.  The record
+behind the name passes through three states.  It is \emph{live} while
+in use, \emph{dormant} after a retention lapse, and \emph{ended} once
+closed.  A per-repository \emph{pointer} remembers which record the
+host last used, and may point at a record that has since ended.
+
+This specification is deliberately separate from
+\texttt{session-model.tex}.  That file is the structural model of
+organisations, repositories, machines, clones, and engine sessions,
+with its own routing layer and its own $Invariant$ schema; the CLI
+session is a second lifecycle whose state overlaps none of those
+components, and bolting it on would make a large file larger than
+ProB can usefully explore.
+
+The two files are related by one correspondence.
+\texttt{session-model.tex} declares
+$ttyalias : SESSION \pinj ALIAS$, so that no alias names two live
+entries.  Here the same property is stated over the CLI records and
+this file's own $ALIAS$ set: the $tty$ field is injective over the
+\emph{non-ended} records (invariant~1).  An ended record releases its
+alias, so a recycled name never collides with the record that used to
+hold it, and never inherits that record's mail, because a new record
+takes a fresh identifier.
+
+The eight properties owed, each stated so that ProB decides it over the
+reachable state space:
+
+\begin{enumerate}
+  \item \textbf{Alias injectivity} over the non-ended records.
+  \item \textbf{Id freshness}: an identifier, once minted, is never
+    minted again.
+  \item \textbf{Frozen identity}: $tty$, $user$, $repo$, and $created$
+    of a record never change after it is made.
+  \item \textbf{Pointer validity}: every pointer entry names an
+    existing record of the pointer's own repository.
+  \item \textbf{Ended is drained}: an ended record holds no mail.
+  \item \textbf{Message conservation}: every message sent and not yet
+    read is held exactly once, in an inbox or a user mailbox.
+  \item \textbf{No wrong-session delivery}: under the rule, neither
+    latch fires; the defect operations are reachable only under the
+    defect mode, as fidelity controls.
+  \item \textbf{No auto-revive}: an ended session never becomes live
+    again; a name returns only through a new record.
+\end{enumerate}
+
+% ============================================================
+\section{Basic Types}
+% ============================================================
+
+\begin{zed}
+  [SID, ALIAS, USER, REPO, MSG]
+\end{zed}
+
+$SID$ is the identifier of a session record, minted once.  $ALIAS$ is
+the tty alias a person types.  $MSG$ is a message; its content is not
+modelled, only where it is held.
+
+\begin{zed}
+  TIME == 0 \upto 2
+\end{zed}
+
+$TIME$ is a bounded natural, so that ProB can enumerate it.
+
+\begin{zed}
+  STATE ::= live | dormant | ended
+\end{zed}
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  ROUTEMODE ::= rmRule | rmDefect
+\end{zed}
+
+$ROUTEMODE$ is a scoping parameter in the manner of
+\texttt{session-model.tex}.  Under $rmRule$ delivery follows the rule:
+a send reaches the holder of the address at send time, or the addressed
+user's mailbox when nobody holds it.  Under $rmDefect$ the defect
+operations are enabled, so that a model check can show the invariants
+\emph{do} fail when the rule is broken.
+
+% ============================================================
+\section{The Record and the World}
+% ============================================================
+
+\begin{schema}{CliRecord}
+  tty : ALIAS \\
+  user : USER \\
+  repo : REPO \\
+  created : TIME
+\end{schema}
+
+A record is made once and never altered.
+
+\begin{schema}{CliWorld}
+  records : SID \pfun CliRecord \\
+  state : SID \pfun STATE \\
+  usedids : \power SID \\
+  endedids : \power SID \\
+  current : REPO \pfun SID \\
+  inbox : SID \pfun \power MSG \\
+  usermail : USER \pfun \power MSG \\
+  sentm : \power MSG \\
+  readm : \power MSG \\
+  routeMode : ROUTEMODE \\
+  lostF : ZBOOL \\
+  wrongF : ZBOOL
+  \where
+  \dom state = \dom records \\
+  \dom inbox = \dom records \\
+  \dom usermail = USER \\
+  %%
+  %% (2) Id freshness: every id ever minted is remembered
+  %%
+  \dom records \subseteq usedids \\
+  endedids \subseteq usedids \\
+  %%
+  %% (1) Alias injectivity over the non-ended records
+  %%
+  \forall a, b : \dom state |
+    state~a \neq ended \land state~b \neq ended
+      \land (records~a).tty = (records~b).tty @ a = b \\
+  %%
+  %% (4) Pointer validity
+  %%
+  \forall r : \dom current @
+    current~r \in \dom records
+      \land (records~(current~r)).repo = r \\
+  %%
+  %% (5) Ended is drained
+  %%
+  \forall s : \dom state | state~s = ended @ inbox~s = \emptyset \\
+  %%
+  %% (6) Message conservation: what was sent and not read is held,
+  %% and held exactly once
+  %%
+  readm \subseteq sentm \\
+  \forall m : MSG @
+    m \in sentm \setminus readm \iff
+      ((\exists s : \dom inbox @ m \in inbox~s)
+        \lor (\exists u : \dom usermail @ m \in usermail~u)) \\
+  \forall s, t : \dom inbox | s \neq t @ inbox~s \cap inbox~t = \emptyset \\
+  \forall u, v : \dom usermail | u \neq v @
+    usermail~u \cap usermail~v = \emptyset \\
+  \forall s : \dom inbox; u : \dom usermail @
+    inbox~s \cap usermail~u = \emptyset \\
+  %%
+  %% (8) No auto-revive: an id that has ended is ended wherever it
+  %% still has a record
+  %%
+  \forall s : endedids \cap \dom state @ state~s = ended \\
+  %%
+  %% (7) No wrong-session delivery: under the rule, neither latch fires
+  %%
+  routeMode = rmRule \implies lostF = zfalse \\
+  routeMode = rmRule \implies wrongF = zfalse
+\end{schema}
+
+$records$ holds every record not yet expired, and $state$ gives each its
+state.  $usedids$ is grow-only and is the memory that makes an
+identifier fresh for ever; $endedids$ is the grow-only set of
+identifiers that have ended or been expired, kept so that invariant~8
+can be a state predicate rather than a transition one.  $current$ is
+the host pointer.  Mail is held as sets of messages rather than counts,
+because a count cannot say that a message is held \emph{once}: $sentm$
+and $readm$ are ghost histories of messages sent and read, and
+invariant~6 equates the held mail with their difference.  $lostF$ and
+$wrongF$ are history latches, as in \texttt{session-model.tex}.  No
+operation but a defect operation sets either, and no operation clears
+either.
+
+ProB selects $CliWorld$ through $Init$ and requires the reserved name
+$Invariant$ to install the predicates as the machine-checkable
+invariant.
+
+\begin{schema}{Invariant}
+  CliWorld
+\end{schema}
+
+% ============================================================
+\section{Initial State}
+% ============================================================
+
+\begin{schema}{Init}
+  CliWorld'
+  \where
+  records' = \emptyset \\
+  state' = \emptyset \\
+  usedids' = \emptyset \\
+  endedids' = \emptyset \\
+  current' = \emptyset \\
+  inbox' = \emptyset \\
+  usermail' = \{ u : USER @ u \mapsto \emptyset \} \\
+  sentm' = \emptyset \\
+  readm' = \emptyset \\
+  lostF' = zfalse \\
+  wrongF' = zfalse
+\end{schema}
+
+$routeMode'$ is left free, so ProB explores $rmRule$ and $rmDefect$ as
+separate branches; no operation reassigns it.
+
+% ============================================================
+\section{Frames}
+% ============================================================
+
+Each operation names what it changes and leaves the rest to one of the
+frame schemas below.  $FrozenIdentity$ is the transition form of
+invariant~3, a two-state predicate that every operation includes: a
+record present before and after is the same record.
+
+\begin{schema}{FrozenIdentity}
+  \Delta CliWorld
+  \where
+  \forall s : \dom records \cap \dom records' @ records'~s = records~s
+\end{schema}
+
+\begin{schema}{KeepFlags}
+  \Delta CliWorld
+  \where
+  routeMode' = routeMode \\
+  lostF' = lostF \\
+  wrongF' = wrongF
+\end{schema}
+
+\begin{schema}{KeepHistory}
+  \Delta CliWorld
+  \where
+  sentm' = sentm \\
+  readm' = readm
+\end{schema}
+
+\begin{schema}{KeepIds}
+  \Delta CliWorld
+  \where
+  usedids' = usedids \\
+  endedids' = endedids
+\end{schema}
+
+\begin{schema}{KeepMail}
+  \Delta CliWorld
+  \where
+  inbox' = inbox \\
+  usermail' = usermail
+\end{schema}
+
+\begin{schema}{KeepRecords}
+  \Delta CliWorld
+  \where
+  records' = records \\
+  state' = state
+\end{schema}
+
+\begin{schema}{KeepPointer}
+  \Delta CliWorld
+  \where
+  current' = current
+\end{schema}
+
+\begin{schema}{Holds}
+  CliWorld \\
+  u? : USER \\
+  a? : ALIAS
+  \where
+  \exists h : \dom state @
+    state~h \neq ended
+      \land (records~h).tty = a?
+      \land (records~h).user = u?
+\end{schema}
+
+$Holds$ is the test, not an operation: some non-ended record of user
+$u?$ holds alias $a?$.  By invariant~1 there is then exactly one.
+
+% ============================================================
+\section{Lifecycle Operations}
+% ============================================================
+
+\subsection{New}
+
+A new record takes an identifier outside $usedids$ and an alias that no
+non-ended record holds, starts $live$, has an empty inbox, and becomes
+the pointer for its repository.
+
+\begin{schema}{New}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepHistory \\
+  s? : SID \\
+  a? : ALIAS \\
+  u? : USER \\
+  r? : REPO \\
+  t? : TIME
+  \where
+  s? \notin usedids \\
+  \lnot (\exists h : \dom state @
+    state~h \neq ended \land (records~h).tty = a?) \\
+  (\exists rec : CliRecord |
+    rec.tty = a? \land rec.user = u? \land rec.repo = r?
+      \land rec.created = t? @
+    records' = records \oplus \{ s? \mapsto rec \}) \\
+  state' = state \oplus \{ s? \mapsto live \} \\
+  usedids' = usedids \cup \{ s? \} \\
+  endedids' = endedids \\
+  current' = current \oplus \{ r? \mapsto s? \} \\
+  inbox' = inbox \oplus \{ s? \mapsto \emptyset \} \\
+  usermail' = usermail
+\end{schema}
+
+\subsection{Attach}
+
+Attaching a $live$ record leaves it live; attaching a $dormant$ record
+makes it live.  An $ended$ or absent record is not enabled: the
+precondition is $state~s? \in \{live, dormant\}$, so nothing revives.
+
+\begin{schema}{Attach}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepHistory \\
+  KeepIds \\
+  KeepMail \\
+  KeepPointer \\
+  s? : SID
+  \where
+  s? \in \dom state \\
+  state~s? \in \{ live, dormant \} \\
+  records' = records \\
+  state' = state \oplus \{ s? \mapsto live \}
+\end{schema}
+
+\subsection{Lapse}
+
+\begin{schema}{Lapse}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepHistory \\
+  KeepIds \\
+  KeepMail \\
+  KeepPointer \\
+  s? : SID
+  \where
+  s? \in \dom state \\
+  state~s? = live \\
+  records' = records \\
+  state' = state \oplus \{ s? \mapsto dormant \}
+\end{schema}
+
+\subsection{Use}
+
+Use is enabled for a non-ended record only, and makes it the pointer of
+its own repository.  It writes no ended target, which is what lets
+$Select$ treat an ended target as stale.
+
+\begin{schema}{Use}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepHistory \\
+  KeepIds \\
+  KeepMail \\
+  KeepRecords \\
+  s? : SID
+  \where
+  s? \in \dom state \\
+  state~s? \neq ended \\
+  current' = current \oplus \{ (records~s?).repo \mapsto s? \}
+\end{schema}
+
+\subsection{End}
+
+Ending drains the inbox into the owner's mailbox, releases the alias
+(by leaving the non-ended set, which is all injectivity quantifies
+over), and sets $ended$.  The pointer is left alone.
+
+\begin{schema}{End}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepHistory \\
+  KeepPointer \\
+  s? : SID
+  \where
+  s? \in \dom state \\
+  state~s? \neq ended \\
+  records' = records \\
+  state' = state \oplus \{ s? \mapsto ended \} \\
+  usermail' = usermail \oplus
+    \{ (records~s?).user \mapsto
+         usermail~((records~s?).user) \cup inbox~s? \} \\
+  inbox' = inbox \oplus \{ s? \mapsto \emptyset \} \\
+  usedids' = usedids \\
+  endedids' = endedids \cup \{ s? \}
+\end{schema}
+
+\subsection{Expire}
+
+A retention lapse removes a $dormant$ or $ended$ record.  Its mail is
+drained first, and any pointer to it is cleared, so that invariant~4
+holds.  Its identifier stays in $usedids$.
+
+\begin{schema}{Expire}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepHistory \\
+  s? : SID
+  \where
+  s? \in \dom state \\
+  state~s? \in \{ dormant, ended \} \\
+  records' = \{ s? \} \ndres records \\
+  state' = \{ s? \} \ndres state \\
+  usermail' = usermail \oplus
+    \{ (records~s?).user \mapsto
+         usermail~((records~s?).user) \cup inbox~s? \} \\
+  inbox' = \{ s? \} \ndres inbox \\
+  current' = current \nrres \{ s? \} \\
+  usedids' = usedids \\
+  endedids' = endedids \cup \{ s? \}
+\end{schema}
+
+\subsection{Select}
+
+Selection resolves a repository's pointer.  A pointer whose target is
+not ended is kept as it stands.  A stale pointer, meaning an ended
+target or none, falls through to $New$.
+
+\begin{schema}{SelectHit}
+  \Xi CliWorld \\
+  r? : REPO
+  \where
+  r? \in \dom current \\
+  state~(current~r?) \neq ended
+\end{schema}
+
+\begin{schema}{SelectStale}
+  New
+  \where
+  r? \notin \dom current \lor state~(current~r?) = ended
+\end{schema}
+
+% ============================================================
+\section{Delivery}
+% ============================================================
+
+A message is addressed to a user and an alias.  Three operations
+implement the rule; two more are the defect.
+
+\subsection{SendToHolder}
+
+\begin{schema}{SendToHolder}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepIds \\
+  KeepRecords \\
+  KeepPointer \\
+  h? : SID \\
+  u? : USER \\
+  a? : ALIAS \\
+  m? : MSG
+  \where
+  h? \in \dom state \\
+  state~h? \neq ended \\
+  (records~h?).tty = a? \\
+  (records~h?).user = u? \\
+  m? \notin sentm \\
+  inbox' = inbox \oplus \{ h? \mapsto inbox~h? \cup \{ m? \} \} \\
+  usermail' = usermail \\
+  sentm' = sentm \cup \{ m? \} \\
+  readm' = readm
+\end{schema}
+
+\subsection{SendStaleToMailbox}
+
+When nobody holds the address, the message goes to the addressed user's
+mailbox, never to another user and never to a session that does not hold
+the alias.
+
+\begin{schema}{SendStaleToMailbox}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepIds \\
+  KeepRecords \\
+  KeepPointer \\
+  u? : USER \\
+  a? : ALIAS \\
+  m? : MSG
+  \where
+  \lnot (\exists h : \dom state @
+    state~h \neq ended
+      \land (records~h).tty = a?
+      \land (records~h).user = u?) \\
+  m? \notin sentm \\
+  usermail' = usermail \oplus \{ u? \mapsto usermail~u? \cup \{ m? \} \} \\
+  inbox' = inbox \\
+  sentm' = sentm \cup \{ m? \} \\
+  readm' = readm
+\end{schema}
+
+\subsection{ReadInbox and ReadMail}
+
+\begin{schema}{ReadInbox}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepIds \\
+  KeepRecords \\
+  KeepPointer \\
+  s? : SID \\
+  m? : MSG
+  \where
+  s? \in \dom inbox \\
+  m? \in inbox~s? \\
+  inbox' = inbox \oplus \{ s? \mapsto inbox~s? \setminus \{ m? \} \} \\
+  usermail' = usermail \\
+  sentm' = sentm \\
+  readm' = readm \cup \{ m? \}
+\end{schema}
+
+\begin{schema}{ReadMail}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepFlags \\
+  KeepIds \\
+  KeepRecords \\
+  KeepPointer \\
+  u? : USER \\
+  m? : MSG
+  \where
+  m? \in usermail~u? \\
+  usermail' = usermail \oplus
+    \{ u? \mapsto usermail~u? \setminus \{ m? \} \} \\
+  inbox' = inbox \\
+  sentm' = sentm \\
+  readm' = readm \cup \{ m? \}
+\end{schema}
+
+\subsection{SendMisroute (defect)}
+
+The defect: a send whose address names no holder is routed to a session
+$w?$ that does not hold it.  The operation only latches $wrongF$ and
+moves nothing, since what matters is that it fires.  It is enabled
+under $rmDefect$ alone.  With $rmDefect$ chosen, invariant~7 fails at
+the first firing, which is the evidence that the check is not vacuous.
+
+\begin{schema}{SendMisroute}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepHistory \\
+  KeepIds \\
+  KeepMail \\
+  KeepRecords \\
+  KeepPointer \\
+  u? : USER \\
+  a? : ALIAS \\
+  w? : SID
+  \where
+  routeMode = rmDefect \\
+  w? \in \dom state \\
+  \lnot (\exists h : \dom state @
+    state~h \neq ended
+      \land (records~h).tty = a?
+      \land (records~h).user = u?) \\
+  wrongF' = ztrue \\
+  lostF' = lostF \\
+  routeMode' = routeMode
+\end{schema}
+
+\subsection{SendLost (defect)}
+
+The second control: a send to a stale address that is dropped rather
+than mailed.  It latches $lostF$ and is likewise enabled only under
+$rmDefect$.
+
+\begin{schema}{SendLost}
+  \Delta CliWorld \\
+  FrozenIdentity \\
+  KeepHistory \\
+  KeepIds \\
+  KeepMail \\
+  KeepRecords \\
+  KeepPointer \\
+  u? : USER \\
+  a? : ALIAS
+  \where
+  routeMode = rmDefect \\
+  \lnot (\exists h : \dom state @
+    state~h \neq ended
+      \land (records~h).tty = a?
+      \land (records~h).user = u?) \\
+  lostF' = ztrue \\
+  wrongF' = wrongF \\
+  routeMode' = routeMode
+\end{schema}
+
+% ============================================================
+\section{Verification}
+% ============================================================
+
+\begin{verbatim}
+fuzz -t docs/specs/cli-session.tex
+probcli docs/specs/cli-session.tex -model_check -strict \
+  -card SID 2 -card ALIAS 2 -card USER 1 -card REPO 1 -card MSG 1 \
+  -p DEFAULT_SETSIZE 1 -p MAXINT 2 -p MAX_OPERATIONS 300000 -coverage
+\end{verbatim}
+
+The primary run is exhaustive at two identifiers, two aliases, one user,
+one repository, and one message: 5514 states analysed, no invariant
+violation, no deadlock.  Two identifiers suffice to exercise a recycled alias (end one,
+then $New$ the other on the same alias).  Because the invariant is
+stated as an implication on $routeMode$, it holds in both branches; the
+question the controls answer is whether the latches can fire at all:
+
+\begin{verbatim}
+probcli ... -goal "wrongF=ztrue & routeMode=rmDefect"
+probcli ... -goal "lostF=ztrue & routeMode=rmDefect"
+probcli ... -goal "(wrongF=ztrue or lostF=ztrue) & routeMode=rmRule"
+\end{verbatim}
+
+The first two goals are found, so the check is not vacuous: the latches
+are reachable when the defect is selected.  The third reports no such
+state after visiting all 5514 states: under the rule neither latch can
+fire.
+
+\end{document}

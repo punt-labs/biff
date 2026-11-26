@@ -21,7 +21,7 @@ EXPECTED_MAP = Path(__file__).with_name("layer_map.json")
 
 _INNER = ("kernel", "wire", "engine")
 
-# docs/package-structure.md, "The packages".  ``claude_code`` is the
+# docs/design/package-structure.md, "The packages".  ``claude_code`` is the
 # ``plugins/<tool>`` row; ``testing`` holds the test helpers.
 DES_088_IMPORTS: dict[str, frozenset[str]] = {
     "kernel": frozenset(),

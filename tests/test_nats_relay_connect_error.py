@@ -4,7 +4,7 @@ Every call site that expands ``RelayAuth.as_nats_kwargs()`` into
 ``nats.connect()`` must raise a redacted ``RelayConnectError`` whose
 ``__context__`` is genuinely ``None`` -- not merely display-suppressed via
 ``from None`` -- and must clear the auth kwargs dict in a ``finally`` block
-regardless of outcome (docs/relay-env-overrides.md Sec 5 item 6).
+regardless of outcome (docs/design/relay-env-overrides.md Sec 5 item 6).
 
 These tests mock the connection, so they run in tiers 1-2 (no ``nats``
 marker, no real server).
@@ -158,7 +158,7 @@ class TestConnectFailureRaisesRelayConnectError:
         """A credential-bearing URL must not appear verbatim in the message.
 
         BIFF_RELAY_URL can in principle carry ``user:pass@`` even though
-        docs/relay-env-overrides.md Sec 1 tells operators never to embed it
+        docs/design/relay-env-overrides.md Sec 1 tells operators never to embed it
         there -- the error message must not trust that operators comply.
         """
         relay = NatsRelay(

@@ -185,7 +185,7 @@ Direct function calls. No transport, no server, no relay.
   termination. No stdin thread, no NATS.
 - `test_repl_talk.py` uses pre-loaded asyncio queues to test drain
   functions, handshake detection, and accept checking. Tests derived
-  from Z specification partition analysis (docs/talk.tex).
+  from Z specification partition analysis (docs/specs/talk.tex).
 - `test_cli_session.py` mocks `NatsRelay` to test session lifecycle
   (registration, wtmp events, heartbeat, cleanup on failure).
 
@@ -393,7 +393,7 @@ the captured pane and the `biff.log` tail on timeout, and then checks that
 `BIFF_CHANNEL_LAUNCHES` (comma-separated names from `LAUNCHES` in
 `launches.py`; a blank or unknown value is an error) selects which channel-flag spellings run; the default is
 the verified one. The verified launch and the variants that do not display
-events are in [design-channels.md](docs/design-channels.md#verified-launch).
+events are in [design-channels.md](docs/design/design-channels.md#verified-launch).
 
 **Cost**: about a minute per launch, no model tokens beyond what Claude Code
 spends reacting to each event. It needs a logged-in `claude`.
@@ -444,9 +444,9 @@ transcripts to `tests/transcripts/`.
 ## Z Specifications
 
 Two formal Z specifications drive test generation via TTF partition
-analysis: `docs/talk.tex` (talk handshake, conversation, hangup) and
-`docs/repl.tex` (session lifecycle, dispatch, prompt gate,
-notifications). Run `/z-spec:audit docs/talk.tex --test-dir=tests` (and
+analysis: `docs/specs/talk.tex` (talk handshake, conversation, hangup) and
+`docs/specs/repl.tex` (session lifecycle, dispatch, prompt gate,
+notifications). Run `/z-spec:audit docs/specs/talk.tex --test-dir=tests` (and
 the same for `repl.tex`) for current partition coverage — a printed
 percentage here would go stale the same way the old test counts did.
 

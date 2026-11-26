@@ -1,6 +1,6 @@
 """Shared ephemeral talk state machine — one model, two front-ends.
 
-Models ``docs/talk.tex``: the two-phase handshake, the bounded
+Models ``docs/specs/talk.tex``: the two-phase handshake, the bounded
 notification queue, session-scoped delivery, and the mutual-invite
 tie-break.  Both the CLI REPL and the MCP server compose a single
 mutable :class:`TalkState` into their (frozen) session context, feed

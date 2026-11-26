@@ -7,10 +7,13 @@ informational: polling still delivers messages.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Self, final
 
+from biff.plugins.claude_code.channel_check_report import ChannelCheckReport
+from biff.plugins.claude_code.channel_check_target import CheckTarget
 from biff.plugins.claude_code.channel_gates import EnvGate
 from biff.plugins.claude_code.statusline import read_settings
 from biff.plugins.contract import CheckResult
@@ -25,21 +28,46 @@ __all__ = ["DoctorChecks"]
 class DoctorChecks:
     """Claude Code's doctor checks for one user settings file and environment."""
 
-    __slots__ = ("_gates", "_settings")
+    __slots__ = ("_gates", "_settings", "_target", "_user_override")
 
     _gates: tuple[EnvGate, ...]
     _settings: Path
+    _target: Callable[[str | None], CheckTarget]
+    _user_override: str | None
 
-    def __new__(cls, settings: Path, env: Mapping[str, str]) -> Self:
-        """Check *settings* (``settings.json``) and *env*, Claude Code's shell."""
+    def __new__(
+        cls,
+        settings: Path,
+        env: Mapping[str, str],
+        user_override: str | None = None,
+        target: Callable[[str | None], CheckTarget] = CheckTarget.from_environment,
+    ) -> Self:
+        """Check *settings* (``settings.json``) and *env*, Claude Code's shell.
+
+        *user_override* is ``--user``.  *target* names whose sessions the
+        end-to-end channel check asks, and where; tests pass a fake relay here.
+        """
         self = super().__new__(cls)
         self._settings = settings
+        self._user_override = user_override
+        self._target = target
         self._gates = (*EnvGate.opt_outs(env), EnvGate.provider(env))
         return self
 
-    def all(self) -> tuple[CheckResult, ...]:
-        """Return the status-line check, then the channel checks."""
-        return (self.statusline(), *self.channels())
+    def all(self) -> Iterator[CheckResult]:
+        """Yield the status line, then the channel gates, then the live check.
+
+        Lazy, so doctor prints the first two before the live check starts to
+        wait for the sessions.
+        """
+        yield self.statusline()
+        yield from self.channels()
+        yield from self.channel_check()
+
+    def channel_check(self) -> tuple[CheckResult, ...]:
+        """Ask each running session whether its channel events reach the model."""
+        target = self._target(self._user_override)
+        return asyncio.run(ChannelCheckReport(target).results())
 
     def statusline(self) -> CheckResult:
         """Report whether biff's status line is configured."""

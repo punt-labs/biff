@@ -31,6 +31,12 @@ class EventKind(StrEnum):
     TALK_MESSAGE = "talk_message"
 
 
+class CheckKind(StrEnum):
+    """The kind of the one event that is not an arrival: ``biff doctor``'s check."""
+
+    CHANNEL_CHECK = "channel_check"
+
+
 @dataclass(frozen=True, slots=True)
 class Sender:
     """A sender as the model sees it: a ``user:tty`` address, kept short."""
@@ -68,7 +74,7 @@ class Sender:
 class ChannelEvent:
     """One ``notifications/claude/channel`` payload: text and a closed ``meta``."""
 
-    kind: EventKind
+    kind: EventKind | CheckKind
     content: str
     count: int | None = None
 
@@ -79,6 +85,15 @@ class ChannelEvent:
         if self.count is not None:
             meta["count"] = str(self.count)
         return meta
+
+    @classmethod
+    def channel_check(cls, token: str) -> Self:
+        """Ask the model to acknowledge with *token*; sent only for a doctor check."""
+        text = (
+            f"biff channel check. Call channel_ack with token {token}. "
+            "Do not reply to the user."
+        )
+        return cls(CheckKind.CHANNEL_CHECK, text)
 
     @classmethod
     def mail(cls, count: int) -> Self:

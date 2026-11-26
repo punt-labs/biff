@@ -1,6 +1,6 @@
 [project]
 name = "punt-biff"
-version = "1.24.2"
+version = "1.25.0"
 description = "The dog that barked when messages arrived. A modern CLI communication tool for software engineers."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -195,7 +195,7 @@ reportUnusedFunction = false
 root = "tests"
 reportPrivateUsage = false
 
-# Layers from docs/package-structure.md (DES-088).  `oo-ratchet layers` gates
+# Layers from docs/design/package-structure.md (DES-088).  `oo-ratchet layers` gates
 # imports against these tables; modules not yet moved into their package
 # directory are claimed by exact name.  A layer may import only the layers
 # listed in `imports`.
@@ -218,7 +218,7 @@ prefixes = [
 imports = []
 
 [tool.oo-ratchet.layers.wire]
-prefixes = ["models", "session_routing", "talk_types", "unread"]
+prefixes = ["check_stamp", "models", "session_routing", "talk_types", "unread"]
 imports = ["kernel"]
 
 [tool.oo-ratchet.layers.engine]
@@ -237,6 +237,8 @@ prefixes = [
     "nats_relay",
     "relay_errors",
     "changed_file",
+    "channel_check_wire",
+    "check_stamp_file",
     "relay",
     "relay_config",
     "relay_select",

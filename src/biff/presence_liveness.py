@@ -8,12 +8,12 @@ from datetime import UTC, datetime
 from biff.models import UserSession
 from biff.relay import PRESENCE_LIVENESS_SECONDS
 
-# Threshold for reporting a session as "stopped responding" in the /who
-# footnote (DES-057).  Wider than PRESENCE_LIVENESS_SECONDS on purpose: a
+# Threshold for logging a session as "stopped responding" when /who runs
+# (DES-057).  Wider than PRESENCE_LIVENESS_SECONDS on purpose: a
 # session that misses a single heartbeat tick (laptop sleep, GC pause)
 # already drops out of live_sessions() for that one poll and self-heals on
 # the next tick.  Reporting it as dead in the same breath would flap it
-# into and back out of the footnote.  3x the liveness window tolerates
+# into and back out of the log.  3x the liveness window tolerates
 # several consecutive missed ticks (~4 missed heartbeats past the liveness
 # cutoff) before treating the row as a genuine orphan.
 DEAD_REPORT_SECONDS = PRESENCE_LIVENESS_SECONDS * 3

@@ -13,7 +13,7 @@ from biff.enablement import RepoEnablement
 from biff.plugins.contract import CheckResult, Installer, PluginRegistry
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
 
@@ -37,6 +37,7 @@ class _Tool:
     log: list[str]
     refuses: bool = False
     checks: tuple[CheckResult, ...] = field(default_factory=tuple)
+    stream: Callable[[], Iterable[CheckResult]] | None = None
 
     def preflight(self, root: Path) -> _Report:
         self.log.append(f"{self.name}:preflight")
@@ -60,8 +61,9 @@ class _Tool:
         self.log.append(f"{self.name}:unregister")
         return True
 
-    def check(self) -> tuple[CheckResult, ...]:
-        return self.checks
+    def check(self, user_override: str | None) -> Iterable[CheckResult]:
+        self.log.append(f"{self.name}:check:{user_override}")
+        return self.stream() if self.stream is not None else self.checks
 
 
 def _registry(*tools: _Tool) -> PluginRegistry:
@@ -185,6 +187,35 @@ class TestDoctorThroughRegistry:
         Diagnostics(_registry(tool)).run()
         out = capsys.readouterr().out
         assert out.index("Tool check: fine") > out.rindex("stub: ok")
+
+    def test_the_user_override_reaches_the_tool_checks(self) -> None:
+        log: list[str] = []
+        Diagnostics(_registry(_Tool("a", log)), "zed").run()
+        assert log == ["a:check:zed"]
+
+    def test_no_override_reaches_the_tool_checks_as_none(self) -> None:
+        log: list[str] = []
+        Diagnostics(_registry(_Tool("a", log))).run()
+        assert log == ["a:check:None"]
+
+    def test_a_slow_tool_check_does_not_hold_back_the_lines_before_it(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Lines print as they arrive: the wait comes after what is already known."""
+        seen_before_wait: list[str] = []
+
+        def stream() -> Iterable[CheckResult]:
+            yield CheckResult(name="Quick", passed=True, message="done")
+            seen_before_wait.append(capsys.readouterr().out)  # the slow part
+            yield CheckResult(name="Slow", passed=True, message="done")
+
+        Diagnostics(_registry(_Tool("a", [], stream=stream))).run()
+
+        (printed,) = seen_before_wait
+        assert "stub: ok" in printed  # biff's own checks
+        assert "Quick: done" in printed  # the tool's first line
+        assert "Slow" not in printed
+        assert "Slow: done" in capsys.readouterr().out
 
     def test_required_tool_failure_fails_the_run(self) -> None:
         tool = _Tool(

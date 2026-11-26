@@ -193,7 +193,7 @@ class DockerRelay:
         """Start ``image`` with no mounted ``nats.conf`` -- the default path.
 
         Matches the individual-tier ``docker run`` example in
-        ``docs/self-hosted-relay.md``: no ``-v`` mount at all, so
+        ``docs/guides/self-hosted-relay.md``: no ``-v`` mount at all, so
         ``entrypoint.sh`` selects ``base.conf`` instead of
         ``base-with-user.conf``, and no authentication is configured or
         required -- that is this tier's documented trust model.

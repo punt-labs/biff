@@ -63,12 +63,9 @@ if [[ "$TOOL_NAME" == "who" ]]; then
   if [[ "$RESULT" == "No sessions." ]]; then
     emit_simple "$RESULT"
   else
-    # Exclude the dead-session footnote (DES-057) -- it shares ROW_PREFIX
-    # with live table rows, so an unfiltered count would report orphaned
-    # sessions as online. The footnote can wrap onto continuation lines
-    # that also carry ROW_PREFIX but not the "stopped responding" text, so
-    # drop everything from the footnote's first line onward rather than
-    # filtering line-by-line.
+    # A biff server older than the plugin (a plugin-only update) may still
+    # append the dead-session footnote, which shares the row prefix and can
+    # wrap; cut it from its first line so it is never counted as online.
     COUNT=$(printf '%s' "$RESULT" | sed -E '/^   [0-9]+ sessions? stopped responding/,$d' | grep -c '^   [^ ]')
     emit "${COUNT} online" "$RESULT"
   fi

@@ -473,6 +473,9 @@ Sessions had aggressive TTLs: NATS KV 300s, application filter 120s. A user who 
 
 ## DES-009: Identity — GitHub Login
 
+> **Authorship identity: see DES-094 (2026-11-26).** This ADR remains the authority for display
+> names. Keys and owner attestation decide authorship. See `docs/design/trust-model.md`.
+
 **Date:** 2026-02-15
 **Status:** SETTLED
 **Topic:** How biff determines the user's identity
@@ -842,6 +845,10 @@ Steady-state consumer footprint drops to **zero per user**.
 | Keep preview on LocalRelay only | Inconsistent behavior across relays; dead code on the dominant deployment path |
 
 ## DES-016: Shared NATS Streams — Encryption-Aware Design
+
+> **Superseded in part by DES-094 (2026-11-26).** The encryption extension points here are replaced by NIP-17 end-to-end encrypted
+> direct messages and talk, and signed events. The stream consolidation stands.
+> See `docs/design/trust-model.md`.
 
 **Date:** 2026-02-24
 **Status:** SETTLED
@@ -1723,7 +1730,7 @@ occurred.
 **Status:** RESOLVED (PR #96)
 **Related:** DES-004 (Belt-and-Suspenders), DES-020 (Talk Description Mutation)
 **Bead:** biff-8g0
-**Specification:** `docs/notification.tex` (Z specification)
+**Specification:** `docs/specs/notification.tex` (Z specification)
 
 ### Problem
 
@@ -1812,7 +1819,7 @@ This is stronger than Approach B, which would still require a tool call to trigg
 
 #### Z Specification
 
-The fix was modeled formally in `docs/notification.tex` before implementation.
+The fix was modeled formally in `docs/specs/notification.tex` before implementation.
 The specification defines the `CaptureSession` operation (§6) and the key state
 invariant:
 
@@ -2854,7 +2861,7 @@ unreachable because the fast-path cache check exits first.
 
 ### Z Spec Divergence
 
-The Z spec (`docs/nats-relay.tex`) models `EnsureConnected` with a
+The Z spec (`docs/specs/nats-relay.tex`) models `EnsureConnected` with a
 precondition `connState ≠ closed`, implying the connection state is
 always checked.  The implementation's caching optimization violates
 this: the fast path bypasses the connection state check entirely.
@@ -2941,7 +2948,7 @@ has surfaced four distinct coordination patterns for human-agent work. Each
 has different requirements. Biff currently supports only the first; the other
 three are blocked by the repo-scoped identity model.
 
-The formal session model (`docs/session-model.tex`) already captures the full
+The formal session model (`docs/specs/session-model.tex`) already captures the full
 hierarchy — orgs, machines, clones, sessions, processes — and models
 cross-repo and cross-machine scenarios. The NATS implementation does not: KV
 keys are `{repo}.{user}.{tty}`, subjects are `biff.{repo}.inbox.{user}.{tty}`,
@@ -3241,7 +3248,7 @@ scheme changes. No org-wide scans.
 
 ### What Does Not Change
 
-- The formal session model (`docs/session-model.tex`) — already correct
+- The formal session model (`docs/specs/session-model.tex`) — already correct
 - The addressing syntax — `@user` and `@user:tty` unchanged
 - The NATS relay architecture (shared streams, DES-016) — already supports
   multi-repo on a single NATS deployment
@@ -3314,7 +3321,7 @@ O(all-sessions).
 
 ### Relationship to Session Model
 
-The Z specification in `docs/session-model.tex` models the state space:
+The Z specification in `docs/specs/session-model.tex` models the state space:
 what entities exist and what invariants hold. This design entry is the
 use-case complement: what coordination patterns real users need and what
 implementation changes they require. The spec is already ahead of the
@@ -4044,6 +4051,10 @@ guidance.
 
 ## DES-037: Zero-Config — Config Migration and Owner Derivation
 
+> **Superseded in part by DES-094 (2026-11-26).** The Trust Assessment section and its hardening roadmap (org NATS accounts, GitHub
+> token verification, end-to-end encryption) are replaced by signed events, NATS
+> auth callout admission and owner attestation. See `docs/design/trust-model.md`.
+
 **Date:** 2026-04-12
 **Status:** SETTLED — implemented and shipped; `.biff` removed entirely in v1.13.1 (see CHANGELOG.md); the demo-relay default is superseded by DES-090
 **Topic:** Move config to `.punt-labs/biff/`, YAML format, derive org
@@ -4406,7 +4417,7 @@ Kept as history.
 **Related:** DES-002 (session key format), DES-009 (identity),
 DES-030 (multi-agent coordination), DES-035 (TTY name reservation),
 DES-040 (agent-first identity),
-`docs/ethos-integration.md`, `docs/archive/dual-session.md`
+`docs/archive/ethos-integration.md`, `docs/archive/dual-session.md`
 
 **Note (biff-8fg3, 2026-05-10):** Decision 5 ("Roster read once at
 startup") is superseded by DES-040. The companion is no longer
@@ -4512,6 +4523,9 @@ See `docs/archive/dual-session.md` for the complete design including message
 routing, edge cases, implementation sequence, and file change list.
 
 ## DES-040: Agent-First Identity Resolution
+
+> **Authorship identity: see DES-094 (2026-11-26).** This ADR remains the authority for display
+> names. Keys and owner attestation decide authorship. See `docs/design/trust-model.md`.
 
 **Date:** 2026-05-10
 **Status:** SETTLED — amended by DES-064. The disk resolution of *agent* identity
@@ -4659,7 +4673,7 @@ six commits referenced by biff-8fg3 for the implementation.
 **Date:** 2026-07-04
 **Status:** SETTLED
 **Bead:** biff-tww
-**Spec:** ``docs/nats-relay.tex`` (fuzz-clean, ProB deadlock-free)
+**Spec:** ``docs/specs/nats-relay.tex`` (fuzz-clean, ProB deadlock-free)
 **Related:** DES-016 (streams), DES-019 (persistent connection),
 DES-021 (session capture), DES-029 (stale-handle invalidation),
 biff-wr3 (bounded connect-time provisioning)
@@ -4709,7 +4723,7 @@ biff-wr3 bounded *connect-time* provisioning (``_open_connection``
 
 ### What Changed in the Model
 
-The Z model in ``docs/nats-relay.tex`` had only three connection
+The Z model in ``docs/specs/nats-relay.tex`` had only three connection
 states — ``disconnected | connected | closed`` — with no way to
 represent "TCP up, ``is_closed`` false, requests timing out." Because
 the model lacked the state, no invariant could catch it. The model
@@ -4759,12 +4773,12 @@ deadlock
 
 That deadlock **is** biff-tww: TCP up, ``is_closed`` false, every
 request timing out, no recovery. With ``WedgeDetected`` present,
-``z-spec test docs/nats-relay.tex`` reports ``ok:true``, 6 states,
+``z-spec test docs/specs/nats-relay.tex`` reports ``ok:true``, 6 states,
 deadlock-free, all operations covered. The frozen pre-fix spec and its
 trace are retained as regression artifacts:
-``docs/nats-relay-passA-nowedge.tex``,
-``docs/nats-relay-passA-nowedge.report.json``, and
-``docs/nats-relay-wedge-counterexample.txt``.
+``docs/specs/nats-relay-passA-nowedge.tex``,
+``docs/specs/nats-relay-passA-nowedge.report.json``, and
+``docs/specs/nats-relay-wedge-counterexample.txt``.
 
 ### The Fix — Keepalive Tuning
 
@@ -4860,8 +4874,8 @@ the wedge. The regression test in ``tests/test_nats_reconnect.py``
 
 Connection-lifecycle PRs (anything touching ``_ensure_connected``,
 ``_open_connection``, the NATS callbacks, keepalive/reconnect tuning,
-or handle caching) are gated on ``z-spec check docs/nats-relay.tex``
-(fuzz OK) **and** ``z-spec test docs/nats-relay.tex`` (deadlock-free,
+or handle caching) are gated on ``z-spec check docs/specs/nats-relay.tex``
+(fuzz OK) **and** ``z-spec test docs/specs/nats-relay.tex`` (deadlock-free,
 liveness holds). The model is the authority the code must satisfy.
 
 ### Why the Model Makes This Fix Durable
@@ -4884,7 +4898,7 @@ regression test now guard against, together.
 **Date:** 2026-07-04
 **Status:** SETTLED
 **Bead:** biff-3hp
-**Spec:** ``docs/nats-relay.tex`` (``ForceReconnect`` transition)
+**Spec:** ``docs/specs/nats-relay.tex`` (``ForceReconnect`` transition)
 **Related:** DES-041 (keepalive tuning — the correctness backstop),
 DES-029 (handle invalidation), DES-019 (persistent connection),
 biff-6px (diagnostic logging — the consecutive-timeout counter)
@@ -4923,7 +4937,7 @@ Both are independent escapes from ``halfOpen``.
 
 ### Model
 
-``docs/nats-relay.tex`` gained a ``ForceReconnect: halfOpen ->
+``docs/specs/nats-relay.tex`` gained a ``ForceReconnect: halfOpen ->
 disconnected`` transition (clears all handles). The proactive recovery
 path is ``connected -> halfOpen -> disconnected -> connected`` (via
 ``ForceReconnect`` then the existing ``EnsureConnected`` — a fresh
@@ -4970,7 +4984,7 @@ user; broadcast belongs to ``/wall``
 **Bead:** biff-sqc
 **Related:** DES-018 (talk v2 status-line auto-read), DES-020 (talk
 tool-description mutation), DES-039/DES-040 (dual-session identity),
-``docs/talk.tex``
+``docs/specs/talk.tex``
 
 ### Context
 
@@ -5048,7 +5062,7 @@ not changed.
 
 ### Model
 
-``docs/talk.tex`` models the session-scoped protocol: ``Notification``
+``docs/specs/talk.tex`` models the session-scoped protocol: ``Notification``
 carries ``nto`` (target session key) and a session queues a
 notification only when ``nto = myKey``; ``pendingInvites : USER \pfun
 SESSIONKEY`` (supersede via functional override, consume via domain
@@ -5087,7 +5101,7 @@ cross-repo, no PII regression), TDD red→green across both surfaces,
 **Topic:** Bound the talk notification queue; conform code and model to
 drop-oldest
 **Bead:** biff-vr4
-**Related:** DES-043 (session-scoped talk), ``docs/talk.tex``
+**Related:** DES-043 (session-scoped talk), ``docs/specs/talk.tex``
 (``ReceiveOverflow``)
 
 ### Context
@@ -5152,8 +5166,8 @@ regression tests (red→green), ``make check`` (1550), hosted NATS E2E
 tool-description marker a proven function of underlying activity
 **Bead:** biff-9la
 **Related:** DES-020/021 (dynamic tool descriptions), DES-043
-(session-scoped talk), DES-044 (queue bound), ``docs/notification.tex``,
-``docs/talk.tex``
+(session-scoped talk), DES-044 (queue bound), ``docs/specs/notification.tex``,
+``docs/specs/talk.tex``
 
 ### Context
 
@@ -5197,7 +5211,7 @@ Two further defects surfaced by observation once receive worked:
    pull). The earlier "readability fails" conclusion was a mis-timed
    observation, corrected by direct in-session observation.
 
-3. **The marker is a proven function of activity.** `docs/notification.tex`
+3. **The marker is a proven function of activity.** `docs/specs/notification.tex`
    models both description channels with the biconditional
    `desc ≠ base ⟺ activity` (`MarkerConsistent`) and a `HintNamesSession`
    invariant (the accept hint always names a session). The defects are
@@ -5256,13 +5270,17 @@ directions before merge.
 
 ## DES-046: Talk Consent & DoS Boundary — Session-Key Guards on Every Talk Transition
 
+> **Superseded in part by DES-094 (2026-11-26).** The ephemeral session key is no longer the authenticity check. Talk travels as
+> signed NIP-17 events, and the signature decides who spoke. The consent and
+> bounded-footprint rules stand. See `docs/design/trust-model.md`.
+
 **Date:** 2026-07-15
 **Status:** SETTLED
 **Topic:** What a forged talk frame may and may not do; how the ephemeral,
 forgeable talk transport still upholds a consent boundary and a bounded footprint
 **Bead:** biff-9la (hardening cycles)
 **Related:** DES-043 (session-scoped talk), DES-044 (queue bound), DES-045,
-``docs/talk.tex`` (threat model), ``docs/notification.tex``
+``docs/specs/talk.tex`` (threat model), ``docs/specs/notification.tex``
 
 ### Context
 
@@ -5347,7 +5365,7 @@ mail-as-talk) were all found in review, not production.
 replacement — the destructive interaction between biff-3hp and biff-9la
 **Bead:** biff-9la (release-gate fix); interacts with DES-042
 **Related:** DES-041/042 (wedge detection + force-reconnect), DES-045 (always-on
-talk SUB), ``docs/nats-relay.tex`` (`talkSubGen`), biff-e9u (cross-repo follow-up)
+talk SUB), ``docs/specs/nats-relay.tex`` (`talkSubGen`), biff-e9u (cross-repo follow-up)
 
 ### Context — two features that shipped together and cancelled each other
 
@@ -5433,14 +5451,18 @@ residual, tracked as biff-e9u.
 
 ## DES-048: Talk Routes on the Session Identity — Repo and Org Are Visibility, Not Routing
 
+> **Amended by DES-094 (2026-11-26).** The note on future per-org NATS credentials is replaced by admission through a
+> NATS auth callout that maps NIP-42 and NIP-AA to per-key permissions. Routing on
+> the session identity stands. See `docs/design/trust-model.md`.
+
 **Date:** 2026-07-16
 **Status:** SETTLED
 **Topic:** What coordinate a talk frame is addressed by; why cross-repo (and
 cross-org) talk stranded, and why the fix is to *remove* a coordinate, not add one
 **Bead:** biff-e9u
 **Related:** DES-035 (globally-unique tty), DES-034 (cross-user/org visibility),
-DES-043/045/046 (talk state, consent boundary), ``docs/talk.tex``,
-``docs/session-model.tex``
+DES-043/045/046 (talk state, consent boundary), ``docs/specs/talk.tex``,
+``docs/specs/session-model.tex``
 
 ### Context
 
@@ -5491,7 +5513,7 @@ in the route. Both are **visibility/presence attributes**, not routing coordinat
 
 ### Why model-first mattered
 
-``docs/talk.tex`` gained the addressing layer both it and ``session-model.tex``
+``docs/specs/talk.tex`` gained the addressing layer both it and ``session-model.tex``
 had marked "not covered." The delivery invariant — a reply reaches the addressed
 identity for any *visible* peer regardless of repo **or** org — is model-checked
 (ProB), and **both** defective disciplines are reproduced as reachable
@@ -5526,7 +5548,7 @@ cases, and why the residual flush-window teardown is proven harmless rather than
 eliminated
 **Bead:** biff-xko
 **Related:** DES-041 (keepalive wedge liveness), DES-042 (proactive wedge detector /
-force-reconnect), DES-047 (`talkSubGen` generation guard), ``docs/nats-relay.tex``
+force-reconnect), DES-047 (`talkSubGen` generation guard), ``docs/specs/nats-relay.tex``
 
 ### Context
 
@@ -5551,9 +5573,9 @@ compare); `_force_reconnect` force-closes only when the client is still the wedg
 object AND `reconnectEpoch == gate_epoch`. A transparent reconnect that completed
 during the lock-wait advances the epoch and turns the teardown into a no-op; a
 genuinely-wedged client (epoch unchanged) is still torn down. The safety property
-`StaleForceTeardown` is model-checked in ``docs/nats-relay.tex`` and the pre-fix
+`StaleForceTeardown` is model-checked in ``docs/specs/nats-relay.tex`` and the pre-fix
 `is_connected`-only variant is preserved as a frozen ProB counterexample
-(``docs/nats-relay-xko-isconnected.tex``).
+(``docs/specs/nats-relay-xko-isconnected.tex``).
 
 ### The residual: nats-py's reconnect is not atomic
 
@@ -5568,7 +5590,7 @@ client; the deferred bump then lands on the reset epoch, producing `reconnectEpo
 model was atomic; reality is not. Per the recurring lesson (a recurring defect class
 means the model is missing a state), the spec was extended, not the code patched.
 
-``docs/nats-relay.tex`` now models the window explicitly: an `epochPending` ghost,
+``docs/specs/nats-relay.tex`` now models the window explicitly: an `epochPending` ghost,
 `ReconnectSocketUp` / `ReconnectEpochObserved` splitting the atomic reconnect into
 its two real steps, and `FlushWindowForceTeardown` for the teardown of an
 unobserved-but-healed client. The too-strong state invariant is reclassified as an
@@ -5655,7 +5677,7 @@ clobbering bug the PPID-walk bridge alone could not — the server still
 does not observe `session_id` directly, but it no longer needs to,
 since `CLAUDE_PID` disambiguates which hint file is its own.
 
-**Evidence.** `docs/session-model.tex` was extended (`ResumeSession`/`ForkSession`,
+**Evidence.** `docs/specs/session-model.tex` was extended (`ResumeSession`/`ForkSession`,
 injective `ttyalias`, identity-keyed send-time `Deliver`) and model-checked with
 ProB: the **LOST** and **MISROUTED** states are reachable under alias-routing and
 **unreachable** under identity-routing (`fuzz`-clean). Verified live on a real
@@ -6002,6 +6024,9 @@ Revised rules 2 and 6:
 ---
 
 ## DES-053: CLI Rejects a Bot's GitHub Login — Amendment to Agent-First Identity Resolution
+
+> **Authorship identity: see DES-094 (2026-11-26).** This ADR remains the authority for display
+> names. Keys and owner attestation decide authorship. See `docs/design/trust-model.md`.
 
 **Date:** 2026-08-08
 **Status:** SETTLED
@@ -6373,7 +6398,7 @@ and the `test_subagent_start_*` cases in
 `tests/test_hooks_registration.py`) come out with them — a test for
 absent code is dead too.
 
-The `StartSubagent` schema in `docs/claude-code-biff.tex` STAYS. It is
+The `StartSubagent` schema in `docs/specs/claude-code-biff.tex` STAYS. It is
 the formal model of what Claude Code does when a subagent boots — an
 abstract "a new agent identity enters `planSet` with no plan of its
 own" — and remains correct. That identity is created *lazily* the first
@@ -6813,6 +6838,16 @@ and `tests/test_commands/test_who.py::TestWho::test_all_dead_returns_no_sessions
 
 ---
 
+### Amendment (2026-11-25): the summary moves from /who to the log
+
+The footnote grew to one age per dead row: a team with a day of restarts saw
+"124 sessions stopped responding (last seen 38m, 57m, ...)" under every
+`/who`, longer than the table it followed. It told the reader nothing they
+could act on. `/who` (the MCP tool and `biff who`) now shows live sessions
+only, and logs the same summary line to biff.log at INFO through
+`dead_sessions_summary`. The output hook's footnote filter is removed with it.
+Detection (`dead_sessions`, `DEAD_REPORT_SECONDS`) is unchanged.
+
 ## DES-058: `CLAUDE_PID` Env Var Corrects DES-011's Rejected Alternative
 
 **Date:** 2026-08-22
@@ -6945,7 +6980,7 @@ which of possibly-several nearby files is its own without a live
 `session_id` to compare against. Superseded once `CLAUDE_PID` was
 confirmed to exist and deliver the needed information directly.
 
-**A full `docs/session-model.tex` extension before any code change**,
+**A full `docs/specs/session-model.tex` extension before any code change**,
 per this repo's standing policy that a twice-patched session-lifecycle
 mechanism needs its Z spec extended and model-checked first. Judged
 disproportionate here: this change only re-keys which PID selects an
@@ -6978,6 +7013,10 @@ expect it absent.
 ---
 
 ## DES-059: Self-Hosted Relay Docker Image
+
+> **Amended by DES-094 (2026-11-26).** The no-auth trust model and the provisioning notes on credentials are replaced by
+> signed events and per-key admission through a NATS auth callout. The image
+> design stands. See `docs/design/trust-model.md`.
 
 **Date:** 2026-08-22
 **Status:** SETTLED (design; not yet implemented — tracked as biff-syr)
@@ -7173,7 +7212,7 @@ redo it once they committed to self-hosting for real or the hosted tier.
 What ships: a documented, minimal Kubernetes manifest set — `Deployment`
 or single-replica `StatefulSet` (clustering is out of scope, see
 Rejected), `PersistentVolumeClaim`, `Service`, and an optional
-`prometheus-nats-exporter` sidecar — under `docs/self-hosted-relay.md`'s
+`prometheus-nats-exporter` sidecar — under `docs/guides/self-hosted-relay.md`'s
 enterprise section, referencing the same `ghcr.io/punt-labs/biff-relay`
 image the other two audiences use. Not a maintained Helm chart (see
 Rejected). These manifests are a starting point for a POV, not a
@@ -7229,7 +7268,7 @@ that evaluation at the upstream Helm chart instead.
 **Status:** Settled
 **Topic:** Headless invocations (CI, containers, systemd units) need a way
 to point biff at a private relay without a committed config file
-**Related:** docs/relay-env-overrides.md (full design, rejected
+**Related:** docs/design/relay-env-overrides.md (full design, rejected
 alternatives, and the round-by-round security review this decision went
 through), DES-041/PR #383 (the `tls_handshake_first` explicit-opt-in
 precedent this design inherits directly), DES-053 (the un-audited
@@ -7293,7 +7332,7 @@ pattern). Relay endpoints reaching a log line, warning, or exception
 message go through a shared `sanitize_relay_url` host-only sanitizer
 first — a NATS URL may embed `user:pass@`.
 
-See docs/relay-env-overrides.md for the full rejected-alternatives
+See docs/design/relay-env-overrides.md for the full rejected-alternatives
 comparison (CI-runtime `config.local.yaml` patching from a secret;
 paired `--relay-token`-style flags) and the two-round security review
 this went through before implementation.
@@ -7310,7 +7349,7 @@ notification is a no-op unless the description actually changes), DES-021 /
 PR #410 (session captured at `initialize`; the pre-session dropped-notify
 flush — the *startup-window* instance of this same class), DES-045
 (`MarkerConsistent`, the `desc ≠ base ⟺ activity` biconditional), and the Z
-models `docs/notification.tex` + `docs/notification-race.tex` that make this
+models `docs/specs/notification.tex` + `docs/specs/notification-race.tex` that make this
 decision machine-checkable
 
 ### Problem
@@ -7394,8 +7433,8 @@ changes), DES-030 (bare-user addressing is repo-local), DES-036/DES-038
 (`MarkerConsistent`), DES-047 (`talkSubGen` generation guard — the template the
 second SUB generalizes), DES-048 (identity routing is for targeted delivery),
 DES-061 (`_pending_notify` re-arm / one lock / bounded send — untouched),
-`docs/archive/design-nats-push.md` (the full design), `docs/nats-relay.tex`,
-`docs/notification.tex`
+`docs/archive/design-nats-push.md` (the full design), `docs/specs/nats-relay.tex`,
+`docs/specs/notification.tex`
 
 **Note (DES-075, PL-231):** the companion subscription variants described below
 are removed with the dual-session machinery; the `inboxNotifyCompanion`
@@ -7964,7 +8003,7 @@ variants it describes are removed; the wake-poke design is otherwise unchanged),
 DES-064 (harness-declared caller identity, which removed the roster subprocess
 this feature depended on). Ticket: PL-231. Supersedes/closes biff-qou (the
 ethos-side fix this would have waited on). Design doc:
-`docs/pl-231-companion-removal.md`.
+`docs/archive/pl-231-companion-removal.md`.
 
 **Context.** The companion feature registered a second "companion" session (the
 human) beside the agent inside one MCP server, deciding who the human was via
@@ -8030,6 +8069,9 @@ single-session lifecycle — exactly one session key across every biff state
 file, no companion artifact at startup or after SIGTERM.
 
 ## DES-076: The biff Identity Model — Sources, Precedence, and the Addressable-Display Rule
+
+> **Authorship identity: see DES-094 (2026-11-26).** This ADR remains the authority for display
+> names. Keys and owner attestation decide authorship. See `docs/design/trust-model.md`.
 
 **Date:** 2026-11-14
 **Status:** SETTLED
@@ -8158,7 +8200,7 @@ first user-facing slice of the CLI session-identity design.
 **Related:** DES-048/DES-050 (route on the session identity; repo and org are
 visibility, not routing coordinates — the principle this builds on), DES-064
 (harness-declared caller identity), DES-035 (tty-name reservation and recycling).
-Design doc: `docs/pl-245-246-cli-session-identity.md` §4 (the full named-session
+Design doc: `docs/archive/pl-245-246-cli-session-identity.md` §4 (the full named-session
 model this slice begins).
 
 **Context.** A `user:tty` address is a display alias resolved at send time. When
@@ -8202,13 +8244,13 @@ session** — needs new durable per-tty state that must itself expire, and must
 pick one successor when the user has several; the mailbox gives a defined outcome
 (whichever of the user's sessions reads first) with no new store.
 
-**Relationship to the formal model.** `docs/session-model.tex` models a stale
+**Relationship to the formal model.** `docs/specs/session-model.tex` models a stale
 alias as either stranding (`DeliverAliasLost`, `lostF` latches, under `rmAlias`)
 or, under identity routing, declining to send. The forward is a **third**
 outcome that file does not yet model. It is deliberately not bolted onto
 `session-model.tex`: the full CLI-session lifecycle (live/dormant/ended, the
 per-repo pointer, `new`/`use`/`end`, and this forward as a `SendStaleToMailbox`
-operation) is specified for a **new** `docs/cli-session.tex` with its own eight
+operation) is specified for a **new** `docs/specs/cli-session.tex` with its own eight
 invariants (design doc §5), to be formalized with `fuzz`/ProB before the
 named-session state-machine code lands. Until that spec exists, this entry is the
 record that the shipped forward diverges from `session-model.tex`'s stale-alias
@@ -8217,7 +8259,7 @@ outcomes by design, and the gap is tracked to `cli-session.tex`.
 **Scope.** This ships the stale-tty forward only. The named CLI session store,
 the `-s`/`BIFF_SESSION` attach, the `session new|ls|use|end` verbs, the per-repo
 current-session pointer, and the plan-gate keying all follow on the same design
-(`docs/pl-245-246-cli-session-identity.md` §3, §6), in later changes.
+(`docs/archive/pl-245-246-cli-session-identity.md` §3, §6), in later changes.
 
 **Consequences.** A send to a restarted teammate's old `user:tty` reaches them
 instead of bouncing; the sender is told it went to the mailbox, not the exact
@@ -8304,7 +8346,7 @@ stderr. Usage-store failure does not fail tool calls.
 `subscriptions/listen` for MCP 2026-07-28. The existing description-change
 gate publishes to it from both tool handlers and the background poller.
 Only handshake-era sessions participate in the notification and pending-retry
-behavior modeled in DES-061 and `docs/notification.tex`.
+behavior modeled in DES-061 and `docs/specs/notification.tex`.
 
 **Alternatives.** Standalone notifications have no channel in MCP 2026-07-28.
 Rejecting discovery cannot force a handshake on the same connection: the
@@ -8495,8 +8537,11 @@ existing started/completed records and uvicorn stderr routing.
 
 ## DES-087: Channels Are the Claude Code Plugin's Last Mile
 
-**Status.** Proposed, awaiting operator ratification. Full design, evidence,
-reviews and plan: `docs/design-channels.md`.
+**Status.** Accepted; shipped in biff 1.25.0 (2026-11-25). Full design, evidence,
+reviews and plan: `docs/design/design-channels.md`.
+
+> **Amended by DES-094 (2026-11-26).** Message bodies in channel events come only
+> with wave (c) of DES-094. Until then summary-only stands.
 
 **Context.** Biff itself (the relay, the `biff` CLI, `biff mcp`) already
 receives arrivals in real time: NATS pushes to the server and the CLI
@@ -8538,7 +8583,7 @@ arrival is held and ending when none is, never recurring. Each firing, per
 held kind, sends it, drops it because nothing is owed, releases it with its
 record unchanged because mesg is off or the client is not initialised, or
 times out (re-armed once; a second timeout drops that kind alone). A send that
-empties the held set cancels the timer (`docs/notification.tex`, Channel
+empties the held set cancels the timer (`docs/specs/notification.tex`, Channel
 Delivery). The poller's wall-countdown, invite-expiry and unread-backstop jobs
 and the 2-second sentinel reaper are removed. Operator ruling (2026-11-23): the
 server may keep exactly (a) connection liveness, being the NATS 5-second
@@ -8669,8 +8714,28 @@ the debt. A tool call cancelled in the middle of its in-request notification now
 leaves the debt owed (the flag is set before the send, as the standalone path
 already did). A failing poller tick also logs a WARNING (or an ERROR for a code
 bug) once per episode, besides its DEBUG traceback. A handshake session that
-cannot be read is logged. `docs/notification.tex` is unchanged by this step; its
+cannot be read is logged. `docs/specs/notification.tex` is unchanged by this step; its
 send-failure transitions describe the default.
+
+**Server side of the doctor's channel check (PL-1365).** A session's server
+subscribes to a core-NATS subject keyed on its `user:tty`
+(`<prefix>.channel.check.<user>:<tty>`; its third token keeps it out of the
+inbox stream) and rebinds it with the other always-on subscriptions. A request
+carries a fresh inbox name; anything else (not JSON, no reply, a reply that is
+not an inbox name) is dropped, so a forged request cannot aim the
+acknowledgement at another subject. The server accepts at most one request a
+minute, per session, on the emitter's injected clock; a refused request does
+not extend the window. An accepted request makes a token (`secrets.token_hex(16)`)
+and owes one event (`kind=channel_check`) that waits for the client to be
+initialised like any other, takes no rate-window slot and is not retried. The
+`channel_ack` tool spends the pending token once with `hmac.compare_digest`;
+a wrong or repeated token changes nothing and says so. Over NATS a match
+publishes `{session_key, token}` to the reply subject; on the local relay, one
+machine, it writes `channel_checked_at` to the per-session unread file, which
+every later rewrite of that file keeps. The model is `docs/specs/channel-check.tex`
+(fuzz-checked, ProB-exhausted at 1177 states with the once-a-minute bound as an
+invariant). The doctor's client side (send the request, wait 30 seconds,
+print) is separate: `NatsRelay.request_channel_check` is the call it makes.
 
 **Supersedes.** The "Future: Channels" sections of DES-036 and DES-038.
 **Amends.** DES-080, for the Claude Code plugin only; DES-061's rule that a
@@ -8682,7 +8747,9 @@ the poller's wall-countdown and invite-expiry jobs, removed. DES-063's
 ## DES-088: Package Structure — Layers, a Plugin Contract, and Room for biffd
 
 **Status.** Ratified by the operator, 2026-11-22. Full standard:
-`docs/package-structure.md`.
+`docs/design/package-structure.md`.
+
+> biffd's design is DES-095 and `docs/design/biffd.md`.
 
 **Decision.** `src/biff/` is organized into layered packages, bottom up:
 `kernel`, `wire`, `engine`, `render`, `commands`, `server`, `plugins`
@@ -8971,6 +9038,9 @@ the location it served.
 
 ## DES-092: A Named Agent Override Keeps Its Kind; Hosted Agents Name Their Owner
 
+> **Authorship identity: see DES-094 (2026-11-26).** This ADR remains the authority for display
+> names. Keys and owner attestation decide authorship. See `docs/design/trust-model.md`.
+
 **Date:** 2026-11-24
 **Status:** SETTLED
 **Topic:** How a hosted agent launched with `--user` shows `[A]` and a manager
@@ -9026,6 +9096,10 @@ same shape as the `claude` agent on Jim's machine.
 
 ## DES-093: No Blanket Trust Labels on Messages Until Signed Trust Lands
 
+> **Amended by DES-094 (2026-11-26).** The rule against trust labels stays in force until wave (c) of DES-094 ships. The
+> shared trust model named in the Outcome is DES-094, designed in
+> `docs/design/trust-model.md`.
+
 **Date:** 2026-11-24
 **Status:** SETTLED
 **Topic:** How tool output, tool descriptions and channel events present
@@ -9057,10 +9131,157 @@ paragraph says only that events arrive on their own and name the tool to call.
   wrong in both directions.
 
 **Outcome:** message trust is decided by the shared identity and trust model
-(ethos DES-086, signed messages and per-sender permissions), not by labels.
+(DES-094, signed messages and per-sender permissions), not by labels.
 REVIEW.md tells reviewers not to ask for these labels again.
 
-## DES-094: Offline Handoff Snapshot Profile and Pinned Runtime Bundle
+## DES-094: Biff Owns Message Trust: Nostr Keys, Owner Attestation and a Signed rwx Address Book
+
+**Date:** 2026-11-26
+**Status:** SETTLED (design; code ships in four waves)
+**Topic:** How biff proves who wrote a message and decides what that message
+may make the recipient's agent do
+**Design:** `docs/design/trust-model.md`
+**Supersedes:** the design in ethos PR #667. That pull request's document was
+numbered "DES-086" in ethos; biff's own DES-086 (stdio MCP completion) is an
+unrelated entry. This ADR cites the earlier design only as "ethos PR #667".
+
+### Problem
+
+No tool in the Punt Labs set can prove who sent a message to an agent. Biff
+takes the sender's name from a field anyone can type, and a relay credential
+holder can write as anyone. Beadle verifies signatures but accepts a key
+attached to the message. Ethos stores names, not proof. In a live test on
+2026-11-24 an agent refused to answer a teammate agent because every biff
+message was labeled untrusted (DES-093). Our own agents cannot work together
+until a message carries proof of its author.
+
+### Decision
+
+Biff owns the trust model and ethos stays unaware of it.
+
+- Each person and each agent is one Nostr key. A person's key signs their
+  messages, their agents' attestations and their address book.
+- An agent acts for its owner through a NIP-OA attestation. The receiver checks
+  an expiry against its own clock: 24 hours on developer machines, 7 days in
+  agent images, both configurable.
+- The owner key is never readable by an agent, from wave (a). Agent keys stay
+  log-only until enforcement. biffd holds keys and signs for clients.
+- Two checks run in code: signature and attestation validity, then the
+  recipient's relationship with the author or its owner.
+- A signed address book (`ext/trust`) grants each sender one level of an rwx
+  ladder, shared by biff, talk and beadle. A signed floor tag stops stranger
+  content from gaining trust.
+- Messages are signed Nostr events carried over NATS: NIP-29 channel events and
+  NIP-17 direct messages. Ordering lives in the events, not the server.
+- No trust labels, warnings or refusal text return to biff before wave (c).
+
+Rulings that shaped the design: team trust by relay membership, a
+passphrase-encrypted key file on headless Linux, and no verifiable forwarding of
+direct messages for now. One question stays open: the floor gap, where an own
+agent that read poisoned repository content messages a sibling.
+
+### Alternatives rejected
+
+- *The ethos PR #667 design.* It used a separate root key, custom event kinds and
+  ethos as the verifier of trust records, which needed an amendment to ethos's
+  PR/FAQ. Buzz supplies the keys, attestation and message format already, so
+  biff adopts them. The earlier design's floor, signed address book and review
+  findings carry over.
+- *Run buzz-relay as biff's relay.* Rejected: biff keeps NATS and speaks only
+  Buzz's protocol.
+- *An organization key held by an admin for team trust.* Rejected: relay
+  membership matches Buzz and needs no key custody.
+- *Map Nostr keys onto NATS nkeys.* Rejected: nkeys are ed25519 and Nostr keys
+  are secp256k1. A NATS auth callout verifies the Nostr challenge instead.
+- *Keep blanket labels until the model ships.* Rejected already in DES-093.
+
+### Consequences
+
+- Until enforcement ships, the floor tag, address book and attestation are
+  advisory; `docs/design/trust-model.md` says so in its first section.
+- DES-016, DES-037, DES-046, DES-048 and DES-059 carry notes that DES-094
+  replaces their trust and encryption provisions. DES-093's rule against labels
+  stays until wave (c). DES-087's summary-only rule stays until wave (c).
+- DES-009, DES-040, DES-053, DES-076 and DES-092 remain the authority for display
+  names; keys and attestation decide authorship.
+- Three live beadle bugs are tracked separately and fixed in wave (d).
+- The requirements R-A and R-P in `docs/requirements-biffd-multihost.md` are
+  covered by the traceability table in `docs/design/trust-model.md`.
+
+## DES-095: biffd Is the Per-User Daemon; Clients Are Thin
+
+**Date:** 2026-11-26
+**Status:** SETTLED
+**Topic:** Which process owns biff's relay connection, state and private keys,
+and how clients reach it. Full design: `docs/design/biffd.md`.
+
+**Problem.** Every `biff mcp` process opens its own relay connection and owns
+its own view of unread state, presence and talk. Signing messages
+(`docs/design/trust-model.md`) needs private keys held where an agent cannot read
+them, and the harnesses that accept pushed deliveries (Codex, opencode, pi,
+Devin) need one long-lived process that outlives any session. A per-session
+process can supply neither.
+
+**Decision.** `biffd` is a per-user daemon on the pattern of voxd, quarryd and
+luxd. It owns the relay connections, inbox and unread state, presence and
+plans, talk sessions, notification fan-out, session records, and the Nostr
+private keys. It signs on behalf of its clients; an agent gets a token, not a
+key. Signed events travel over the existing NATS relay. Every other biff
+process is a thin client with no relay connection and no private key: `biff
+mcp` (per-session stdio), the `biff` command, hooks and harness plugins.
+
+1. **Transport.** A WebSocket with JSON frames on `127.0.0.1:8424`, a bearer
+   token in `~/.punt-labs/biff/run/serve.token` (0600), and an unauthenticated
+   `/health`. One connection carries requests, replies and the arrival
+   subscription that replaces `DeliverySink` for out-of-process consumers.
+2. **Supervision.** A launchd LaunchAgent on macOS and a systemd user unit on
+   Linux, installed with the `punt-service` library; a detached process where
+   no service manager exists. Commands: `biff daemon install|start|stop|status`,
+   `biff install`, and daemon checks in `biff doctor`.
+3. **Absence.** A client starts the daemon and polls `/health` for 5 seconds,
+   then fails with an error that separates "not installed" from "installed but
+   down". It never hangs.
+4. **Sessions.** The session-record lifecycle of mcp-caller-identity § 4.2:
+   one record per session id, a dropped connection detaches without ending the
+   session.
+5. **Packages.** New `daemon` and `client` packages under DES-088; clients
+   import `client`, never `engine`, which `make check-layers` then enforces.
+6. **Migration.** The in-process `biff mcp` stays until the daemon path passes
+   every tier 1 to 4 test and a second client attaches without disturbing the
+   first; the in-process path is then deleted, with no compatibility alias.
+
+**Alternatives rejected.**
+
+- *MCP served inside the daemon over HTTP, as luxd does.* MCP caller identity
+  is stamped per session on that session's stdio connection; one shared HTTP
+  endpoint cannot tell sessions apart.
+- *System-level units, as voxd's Linux unit.* They need `sudo`; lux and quarry
+  use user units and punt-kit's filesystem standard keeps runtime state in the
+  user's home tree.
+- *`mcp-proxy` in front of the daemon.* It adds a process and a second
+  protocol; the per-session `biff mcp` client already is the proxy.
+- *REST without push, as quarryd.* The arrival subscription needs server
+  push; polling is what the daemon exists to remove.
+- *A Unix socket instead of a port.* It diverges from the three sibling
+  daemons and loses the port guard, health probe and doctor checks that
+  `punt-service` provides.
+- *Port 8422.* Quarry's wheel test and vox's tests bind it as a scratch port.
+
+**Consequences.**
+
+- `docs/specs/nats-relay.tex` and `docs/specs/session-model.tex` gain attached, detached
+  and daemon-absent states, model-checked with zero GAP before the daemon path
+  becomes the default.
+- Key custody and signing are enforced in the daemon; the loopback token
+  proves only "same operating-system user", so per-client tokens come from
+  `docs/design/trust-model.md`.
+- `docs/requirements-biffd-multihost.md` is retired. Its biffd ids are traced
+  in `docs/design/biffd.md`; the key and trust ids in `docs/design/trust-model.md`.
+- `docs/design/package-structure.md`'s "Room for biffd" points here.
+- Each harness adapter (Codex queue worker, opencode plugin, pi, Devin) becomes
+  a subscriber of one daemon.
+
+## DES-096: Offline Handoff Snapshot Profile and Pinned Runtime Bundle
 
 **Date:** 2026-11-25
 **Status:** PROPOSED
@@ -9090,6 +9311,7 @@ and `.github/workflows/handoff-runtime.yml` following the vox reference pattern.
 
 **Outcome:** local `unshare --net` read-only preflight of
 `uv sync --offline --locked --extra dev && make check` passes on a clean tree
-and fails with exit 2 on a broken tree, and ethos `ec5eb31` validates the
-sidecar. True ethos snapshot runner parity (including loopback-only networking)
-remains pending until the runnable DES-086 runner SHA lands.
+and fails with exit 2 on a broken tree, and ethos `a99c0dd` validates the
+sidecar through `scratch.seed`. True ethos snapshot runner parity (including
+`prehydrate` and loopback-only networking) remains pending until the runnable
+DES-086 `prehydrate` slice lands.

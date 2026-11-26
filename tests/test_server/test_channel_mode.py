@@ -47,8 +47,8 @@ from biff.server.channel import (
     ChannelUnavailableError,
     take_channel_mode,
 )
-from biff.server.channel_emitter import INSTRUCTIONS
 from biff.server.channel_handshake import ChannelHandshake
+from biff.server.channel_instructions import INSTRUCTIONS
 from biff.server.channel_server import ChannelServer, _HandshakeOnly
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions

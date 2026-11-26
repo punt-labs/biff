@@ -49,6 +49,7 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
+from biff.channel_check_wire import CheckAck, CheckWire, PendingCheck
 from biff.models import (
     Message,
     RelayAuth,
@@ -1269,6 +1270,37 @@ class NatsRelay:
         self._validate_tty(tty)
         return f"{self._stream_prefix}.talk.notify.{user}:{tty}"
 
+    def channel_check_subject(self, session_key: str) -> str:
+        """NATS core subject for channel check requests to *session_key*.
+
+        Like :meth:`talk_notify_subject` it is keyed on the globally unique
+        ``user:tty`` identity alone, and its third token (``check``) keeps it
+        out of the inbox stream's ``*.inbox.>`` filter.  Core NATS: a request to
+        a session nobody is listening for is dropped, and the doctor's wait
+        times out.
+        """
+        user, _, tty = session_key.partition(":")
+        self._validate_user(user)
+        self._validate_tty(tty)
+        return f"{self._stream_prefix}.channel.check.{user}:{tty}"
+
+    async def request_channel_check(self, session_key: str) -> PendingCheck:
+        """Ask the session *session_key* to prove its channel events arrive.
+
+        Returns the wait for its acknowledgement; the caller closes it.  This is
+        what ``biff doctor`` calls: it sends the request and waits up to 30
+        seconds with :meth:`PendingCheck.confirmed`.
+        """
+        wire = CheckWire(await self.get_nc())
+        return await wire.request(self.channel_check_subject(session_key), session_key)
+
+    async def publish_channel_check_ack(
+        self, reply: str, session_key: str, token: str
+    ) -> None:
+        """Tell the doctor listening on *reply* that *session_key* saw the check."""
+        wire = CheckWire(await self._live_nc_or_reconnect())
+        await wire.acknowledge(reply, CheckAck(session_key, token))
+
     def inbox_notify_subject(self, repo: str, user: str) -> str:
         """NATS core subject for a broadcast-message wake poke to *user* in *repo*.
 
@@ -1802,6 +1834,21 @@ class NatsRelay:
             return UserSession.model_validate_json(entry.value)
         except (KeyNotFoundError, BucketNotFoundError):
             return None
+
+    async def list_sessions_for_user(self, user: str) -> list[UserSession]:
+        """Return *user*'s sessions in this repo; a failed lookup raises.
+
+        :meth:`get_sessions_for_user` answers an empty list when the lookup
+        fails, which is right for a display that retries on its next tick and
+        wrong for a diagnostic that must tell "none running" from "could not
+        look".  A repo with no sessions yet is an empty answer, not a failure.
+        """
+        self._validate_user(user)
+        try:
+            sessions = await self._get_sessions_for_repo_inner(self._repo_name)
+        except NotFoundError:
+            return []
+        return [s for s in sessions if s.user == user]
 
     async def get_sessions_for_user(self, user: str) -> list[UserSession]:
         """Return all sessions for a given user."""

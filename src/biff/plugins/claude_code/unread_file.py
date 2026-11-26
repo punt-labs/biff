@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from biff.changed_file import ChangedFile
+from biff.check_stamp import CheckStamp
 from biff.models import UnreadSummary
 
 if TYPE_CHECKING:
@@ -57,7 +58,7 @@ def write_unread_file(
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
     """
-    data = {
+    data: dict[str, object] = {
         "user": user,
         "repo": repo_name,
         "count": min(summary.count, MAX_UNREAD_COUNT),
@@ -69,6 +70,7 @@ def write_unread_file(
         "plan": plan,
         "server_pid": os.getpid(),
     }
+    data.update(CheckStamp.carried(path))
     try:
         ChangedFile.write(path, json.dumps(data, indent=2) + "\n")
     except OSError:

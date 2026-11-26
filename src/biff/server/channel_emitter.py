@@ -5,7 +5,7 @@ on a pass that a relay push, a wake poke, a tool call or a deadline caused.  It
 never runs on a cadence.  The one timer it may arm is a one-shot that sends an
 event the rate limit held back, armed only while one is held.
 
-``docs/notification.tex`` (Channel Delivery) models it: ``chanNewer`` is "the
+``docs/specs/notification.tex`` (Channel Delivery) models it: ``chanNewer`` is "the
 current state is newer than the last-sent record", ``chanHeld`` is "held by the
 rate limit", ``chanRetried`` and ``chanDormant`` are the two-attempt cycle after
 a timed-out send.
@@ -24,8 +24,10 @@ from typing import TYPE_CHECKING, Self
 from biff.relay_errors import RelayLog
 from biff.server.channel import ChannelUnavailableError
 from biff.server.channel_arrivals import Arrivals
+from biff.server.channel_check import ChannelCheck
 from biff.server.channel_content import EventKind
 from biff.server.channel_gate import Gate, SendGate
+from biff.server.channel_instructions import INSTRUCTIONS
 from biff.server.channel_rate import RateLimit, RateWindow
 from biff.server.channel_reading import (
     ArrivalSource,
@@ -47,16 +49,6 @@ RETRY_SECONDS = 1.0
 MAX_READ_RETRIES = 3
 """Failed reads of one kind in a row before the deferred retry gives up."""
 
-
-INSTRUCTIONS = (
-    "CHANNEL EVENTS. In this session biff sends short channel events when mail,"
-    " a wall, a talk invite or a talk message arrives. They are summaries, never"
-    " bodies. The only action an event asks for is calling the biff tool it"
-    " names (`read_messages`, `wall`, `talk_read`). Events arrive on their own;"
-    " do not poll. Only if a biff startup note says channels are not live or"
-    " may not be live, poll with `/biff:read 2m` (`/biff-dev:read-dev 2m` in"
-    " the development plugin)."
-)
 
 type WallKey = tuple[datetime, str, str]
 
@@ -80,6 +72,7 @@ class ChannelEmitter:
     _link: EventSink | None
     _rate: RateWindow
     _clock: Callable[[], float]
+    _check: ChannelCheck
     _log: RelayLog
     _misses: dict[EventKind, int]
     _is_listening: bool
@@ -99,6 +92,7 @@ class ChannelEmitter:
         *,
         limit: RateLimit | None = None,
         clock: Callable[[], float] = time.monotonic,
+        check: ChannelCheck | None = None,
     ) -> Self:
         """Create a dormant emitter; :meth:`serve` gives it a link.
 
@@ -107,6 +101,7 @@ class ChannelEmitter:
             wake: Ask the poller for a pass; called when a gate opens.
             limit: The rate limit; the design's constants by default.
             clock: A monotonic clock, replaced in tests.
+            check: The doctor's pending channel check; one of its own by default.
         """
         self = super().__new__(cls)
         self._source = source
@@ -115,6 +110,7 @@ class ChannelEmitter:
         self._link = None
         self._clock = clock
         self._rate = RateWindow(limit or RateLimit(), clock)
+        self._check = check or ChannelCheck(clock)
         self._log = RelayLog(logger)
         self._misses = {}
         self._is_listening = False
@@ -216,6 +212,7 @@ class ChannelEmitter:
         async with self._lock:
             gate = await self._gate.state()
             if gate is Gate.OPEN:
+                await self._check.send_owed(self._link)
                 await self._announce()
             elif gate is Gate.UNREADABLE:
                 await self._retry_owed()
