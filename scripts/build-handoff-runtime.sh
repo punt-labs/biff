@@ -102,6 +102,16 @@ docstring_parser_fork_version=$("${isolated[@]}" "$work/venv/bin/python" -c 'fro
     --from "pydoclint==$pydoclint_version" \
     --with "docstring-parser-fork==$docstring_parser_fork_version" \
     pydoclint --version >&2
+# Drop ephemeral tool venvs created by `uv tool run`: their bin/python symlink
+# points to the build temp dir, which ethos's archive extractor rejects. The
+# wheel and index caches remain so offline `uv tool run` recreates the venv
+# inside the sandbox.
+rm -rf -- "$runtime/cache/uv/environments-v2"
+for entry in "$runtime"/cache/uv/archive-v0/*; do
+    if [[ -f $entry/pyvenv.cfg ]]; then
+        rm -rf -- "$entry"
+    fi
+done
 
 "${isolated[@]}" "npm_config_cache=$runtime/cache/npm" npm_config_ignore_scripts=true \
     npm_config_audit=false npm_config_fund=false npm_config_update_notifier=false \
@@ -115,6 +125,20 @@ rm -f -- "$runtime/cache/npm/_update-notifier-last-checked"
     "${isolated[@]}" npm --version
     "${isolated[@]}" shellcheck --version
 } > "$runtime/versions.txt"
+
+# Reject absolute symlinks before archiving; ethos's archive extractor refuses
+# them at snapshot time.
+"$python_tool" -c '
+import os, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+bad = [
+    f"{p.relative_to(root)} -> {os.readlink(p)}"
+    for p in root.rglob("*")
+    if p.is_symlink() and os.path.isabs(os.readlink(p))
+]
+if bad:
+    sys.exit("Runtime contains absolute symlinks:\n" + "\n".join(bad))
+' "$runtime"
 
 # Normalize archive headers; package-manager cache contents can change on a
 # fresh fetch. Pin the digest of the published bytes, not a local rebuild.
