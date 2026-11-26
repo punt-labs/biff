@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from biff.plugins.claude_code.channel_check_report import CheckTarget
 from biff.plugins.claude_code.doctor_checks import DoctorChecks
 from biff.plugins.claude_code.installer import ClaudeCodeInstaller
 
@@ -52,3 +53,10 @@ def test_doctor_reports_the_shell_environment(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("DISABLE_TELEMETRY", "1")
     messages = [c.message for c in ClaudeCodeInstaller().check()]
     assert any("DISABLE_TELEMETRY is set" in m for m in messages)
+
+
+def test_all_ends_with_the_channel_check_and_it_is_informational() -> None:
+    checks = DoctorChecks(_NOWHERE, {}, lambda: CheckTarget(None, "kai")).all()
+    assert checks[-1].name == "Channel"
+    assert "needs the NATS relay" in checks[-1].message
+    assert not any(c.required for c in checks)

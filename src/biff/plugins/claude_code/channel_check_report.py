@@ -73,6 +73,27 @@ class CheckTarget:
     relay: CheckRelay | None  # absent when the relay is not NATS
     user: str
 
+    @classmethod
+    def from_environment(cls) -> Self:
+        """Resolve the configured user, repo and relay the way the CLI does.
+
+        Without a repository or an identity, or with the local relay, there is
+        no relay to ask.  The import is deferred: ``nats`` is loaded only when
+        doctor reaches this check.
+        """
+        from biff.config import load_cli_config  # noqa: PLC0415
+        from biff.nats_relay import NatsRelay  # noqa: PLC0415
+        from biff.relay_select import RelaySelector  # noqa: PLC0415
+
+        try:
+            resolved = load_cli_config()
+        except SystemExit:
+            return cls(None, "")
+        relay = RelaySelector(resolved.config, resolved.data_dir).select(dormant=False)
+        return cls(
+            relay if isinstance(relay, NatsRelay) else None, resolved.config.user
+        )
+
 
 @final
 class ChannelCheckReport:
