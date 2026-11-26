@@ -1,0 +1,210 @@
+{
+  "specification": "docs/specs/session-model.tex",
+  "testDirectory": "tests/",
+  "timestamp": "2026-11-26T16:00:00Z",
+  "summary": {
+    "covered": 17,
+    "total": 26,
+    "percentage": 65
+  },
+  "byCategory": {
+    "invariant": {
+      "covered": 2,
+      "total": 4
+    },
+    "effect": {
+      "covered": 13,
+      "total": 17
+    },
+    "precondition": {
+      "covered": 2,
+      "total": 5
+    }
+  },
+  "constraints": [
+    {
+      "text": "subscribed: second(hello c) = runOf(first(hello c)) (a replaced run holds no subscription)",
+      "category": "invariant",
+      "source": "DaemonSideInv",
+      "coveredBy": "tests/test_daemon/test_resilience.py:169",
+      "confidence": "high"
+    },
+    {
+      "text": "forall c in subscribed: shown c <= durable(first(hello c))",
+      "category": "invariant",
+      "source": "DaemonSideInv",
+      "coveredBy": "tests/test_daemon/test_subscription.py:32",
+      "confidence": "medium"
+    },
+    {
+      "text": "RequestBeforeHello: close the connection (invariant 2)",
+      "category": "effect",
+      "source": "RequestBeforeHello",
+      "coveredBy": "tests/test_daemon/test_handshake.py:192",
+      "confidence": "high"
+    },
+    {
+      "text": "RequestBeforeHello: no session record, run, subscription or unread count changes",
+      "category": "effect",
+      "source": "RequestBeforeHello",
+      "coveredBy": "tests/test_daemon/test_handshake.py:198",
+      "confidence": "high"
+    },
+    {
+      "text": "Connect requires daemonUp = ztrue",
+      "category": "precondition",
+      "source": "Connect",
+      "coveredBy": "tests/test_daemon/test_client.py:356",
+      "confidence": "medium"
+    },
+    {
+      "text": "HelloCreate: first hello for a session id creates one record bound to the run",
+      "category": "effect",
+      "source": "HelloCreate",
+      "coveredBy": "tests/test_daemon/test_sessions.py:238",
+      "confidence": "medium"
+    },
+    {
+      "text": "HelloAttach: same session id and run attach to the existing record; no second record",
+      "category": "effect",
+      "source": "HelloAttach",
+      "coveredBy": "tests/test_daemon/test_sessions.py:31",
+      "confidence": "high"
+    },
+    {
+      "text": "HelloAttach: first client's subscription undisturbed",
+      "category": "effect",
+      "source": "HelloAttach",
+      "coveredBy": "tests/test_daemon/test_subscription.py:62",
+      "confidence": "high"
+    },
+    {
+      "text": "HelloNewRun: record kept, takes the new run; old run's subscription released",
+      "category": "effect",
+      "source": "HelloNewRun",
+      "coveredBy": "tests/test_daemon/test_subscription.py:75",
+      "confidence": "high"
+    },
+    {
+      "text": "HelloNewRun: a new run does not touch another session",
+      "category": "effect",
+      "source": "HelloNewRun",
+      "coveredBy": "tests/test_daemon/test_sessions.py:132",
+      "confidence": "high"
+    },
+    {
+      "text": "RequestReplacedRun: refused with a named error, nothing changes",
+      "category": "effect",
+      "source": "RequestReplacedRun",
+      "coveredBy": "tests/test_daemon/test_sessions.py:202",
+      "confidence": "high"
+    },
+    {
+      "text": "Subscribe: first frame equals the durable unread summary (invariant 4)",
+      "category": "effect",
+      "source": "Subscribe",
+      "coveredBy": "tests/test_daemon/test_subscription.py:21",
+      "confidence": "high"
+    },
+    {
+      "text": "Subscribe requires the connection to be of the current run",
+      "category": "precondition",
+      "source": "Subscribe",
+      "coveredBy": "tests/test_daemon/test_resilience.py:169",
+      "confidence": "high"
+    },
+    {
+      "text": "Deliver: one arrival is one event, never more than the durable count",
+      "category": "effect",
+      "source": "Deliver",
+      "coveredBy": "tests/test_daemon/test_subscription.py:52",
+      "confidence": "medium"
+    },
+    {
+      "text": "ReadUnread: read-once, durable unread becomes 0",
+      "category": "effect",
+      "source": "ReadUnread",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py:128",
+      "confidence": "medium"
+    },
+    {
+      "text": "Detach: record, run and unread count kept (invariant 3)",
+      "category": "effect",
+      "source": "Detach",
+      "coveredBy": "tests/test_daemon/test_sessions.py:89",
+      "confidence": "high"
+    },
+    {
+      "text": "Detach: a detached session keeps its presence row and can reattach",
+      "category": "effect",
+      "source": "Detach",
+      "coveredBy": "tests/test_daemon/test_sessions.py:107",
+      "confidence": "high"
+    }
+  ],
+  "uncovered": [
+    {
+      "text": "daemonUp = zfalse => opened = {} (a restart returns every record to dormant)",
+      "category": "invariant",
+      "source": "DaemonSideInv",
+      "suggestion": "Kill and restart the daemon; assert every record exists and none has a connection",
+      "testPattern": "assert all(r.connections == 0 for r in daemon.records)"
+    },
+    {
+      "text": "known subseteq sessions (a record exists only for a session that exists)",
+      "category": "invariant",
+      "source": "DaemonWorld",
+      "suggestion": "Assert the daemon holds no record for a session the structural layer lacks",
+      "testPattern": "assert set(daemon.records) <= set(sessions)"
+    },
+    {
+      "text": "DaemonExit: known', runOf' and durable' unchanged",
+      "category": "effect",
+      "source": "DaemonExit",
+      "suggestion": "Restart; assert records, runs and unread counts unchanged",
+      "testPattern": "assert state_after_restart == state_before_exit"
+    },
+    {
+      "text": "DaemonStart: restart then reattach, unread equals durable (none lost, none counted twice, invariant 4)",
+      "category": "effect",
+      "source": "DaemonStart",
+      "suggestion": "Send mail while the daemon is down; reattach and assert the first summary equals the durable count",
+      "testPattern": "assert first_summary == durable_count"
+    },
+    {
+      "text": "Arrive is enabled whether or not the daemon is running",
+      "category": "precondition",
+      "source": "Arrive",
+      "suggestion": "Write mail with no daemon running; assert it is delivered after restart",
+      "testPattern": "assert unread_after_restart == 1"
+    },
+    {
+      "text": "ReadUnread: every subscribed connection of that session sees the empty summary",
+      "category": "effect",
+      "source": "ReadUnread",
+      "suggestion": "Subscribe two connections of one session; read on one; assert both see zero",
+      "testPattern": "assert [c.summary for c in conns] == [0, 0]"
+    },
+    {
+      "text": "SessionEnd: only the SessionEnd hook of the current run removes the record; unread stays",
+      "category": "effect",
+      "source": "SessionEnd",
+      "suggestion": "Send SessionEnd from the current run; assert the record and its connections are gone and unread mail remains",
+      "testPattern": "assert session not in daemon.records and unread == before"
+    },
+    {
+      "text": "SessionEnd precondition: a connection of the current run exists",
+      "category": "precondition",
+      "source": "SessionEnd",
+      "suggestion": "SessionEnd from a replaced run is refused",
+      "testPattern": "assert session in daemon.records after stale-run end"
+    },
+    {
+      "text": "RetentionExpire: only a record with no connection expires",
+      "category": "precondition",
+      "source": "RetentionExpire",
+      "suggestion": "Age a dormant record past retention and a live one; assert only the dormant one is removed",
+      "testPattern": "assert dormant not in records and live in records"
+    }
+  ]
+}

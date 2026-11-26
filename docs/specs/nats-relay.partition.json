@@ -1,0 +1,623 @@
+{
+  "specification": "docs/specs/nats-relay.tex",
+  "timestamp": "2026-11-26T16:00:00Z",
+  "operations": [
+    {
+      "name": "ClientAttach",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CLIENT",
+          "constraints": [
+            "c notin attached"
+          ]
+        }
+      ],
+      "stateVars": [
+        "daemon",
+        "connState",
+        "attached",
+        "holdsHandle"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "A client attaches to a running daemon whose relay is not closed",
+          "condition": "daemon = daemonUp & connState /= closed & c notin attached"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "disconnected",
+            "attached": []
+          },
+          "notes": "attach to a disconnected relay causes no dial; outcome = attachOk",
+          "branch": 1,
+          "postState": {
+            "attached": [
+              "c1"
+            ],
+            "connState": "disconnected"
+          }
+        },
+        {
+          "id": 2,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "c": "c2"
+          },
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "connected",
+            "attached": [
+              "c1"
+            ]
+          },
+          "notes": "second client shares the one connection; generation and subscriptions unchanged",
+          "branch": 1,
+          "postState": {
+            "attached": [
+              "c1",
+              "c2"
+            ],
+            "connState": "connected"
+          }
+        },
+        {
+          "id": 3,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "halfOpen",
+            "attached": []
+          },
+          "notes": "attach is allowed in every non-closed transport state (reconnecting, halfOpen included)",
+          "branch": 1,
+          "postState": {
+            "attached": [
+              "c1"
+            ],
+            "connState": "halfOpen"
+          }
+        },
+        {
+          "id": 4,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemon": "daemonAbsent",
+            "connState": "disconnected",
+            "attached": []
+          },
+          "notes": "Precondition daemon = daemonUp fails; see ClientAttachRefused (notRunning)"
+        },
+        {
+          "id": 5,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "closed",
+            "attached": []
+          },
+          "notes": "Precondition connState /= closed fails; see ClientAttachRefused (relayClosed)"
+        },
+        {
+          "id": 6,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "connected",
+            "attached": [
+              "c1"
+            ]
+          },
+          "notes": "Precondition c notin attached fails: already attached"
+        }
+      ],
+      "summary": {
+        "total": 6,
+        "accepted": 3,
+        "rejected": 3,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "ClientAttachRefused",
+      "kind": "xi",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CLIENT",
+          "constraints": []
+        }
+      ],
+      "stateVars": [
+        "daemon",
+        "connState",
+        "attached"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Daemon absent: the client is told notRunning",
+          "condition": "daemon = daemonAbsent"
+        },
+        {
+          "id": 2,
+          "description": "Relay closed: the client is told relayClosed",
+          "condition": "daemon = daemonUp & connState = closed"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemon": "daemonAbsent",
+            "attached": []
+          },
+          "notes": "outcome = notRunning; nothing changes; the client never hangs",
+          "branch": 1,
+          "postState": {
+            "daemon": "daemonAbsent",
+            "attached": []
+          }
+        },
+        {
+          "id": 2,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "closed",
+            "attached": []
+          },
+          "notes": "outcome = relayClosed; shutting-down daemon",
+          "branch": 2,
+          "postState": {
+            "daemon": "daemonUp",
+            "connState": "closed",
+            "attached": []
+          }
+        },
+        {
+          "id": 3,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "connected",
+            "attached": []
+          },
+          "notes": "Neither refusal condition holds: attach is accepted, not refused"
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "accepted": 2,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "ClientDetach",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CLIENT",
+          "constraints": [
+            "c in attached"
+          ]
+        }
+      ],
+      "stateVars": [
+        "daemon",
+        "attached",
+        "holdsHandle",
+        "connState",
+        "generation",
+        "subGen"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "An attached client drops; relay, subscriptions and watcher untouched",
+          "condition": "c in attached"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "attached": [
+              "c1"
+            ],
+            "connState": "connected",
+            "generation": 1
+          },
+          "notes": "last client detaches; the relay stays connected and warm",
+          "branch": 1,
+          "postState": {
+            "attached": [],
+            "connState": "connected",
+            "generation": 1
+          }
+        },
+        {
+          "id": 2,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "attached": [
+              "c1",
+              "c2"
+            ],
+            "connState": "connected"
+          },
+          "notes": "one of two clients detaches; the other is undisturbed",
+          "branch": 1,
+          "postState": {
+            "attached": [
+              "c2"
+            ],
+            "connState": "connected"
+          }
+        },
+        {
+          "id": 3,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "attached": []
+          },
+          "notes": "Precondition c in attached fails"
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "accepted": 2,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "DaemonExit",
+      "kind": "delta",
+      "inputs": [],
+      "stateVars": [
+        "daemon",
+        "attached",
+        "connState",
+        "generation",
+        "subGen",
+        "reconnectEpoch",
+        "phase",
+        "restartCount",
+        "sessions"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "The process ends from any transport state; every counter and handle returns to its initial value; the KV sessions survive",
+          "condition": "daemon = daemonUp"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "connected",
+            "generation": 2,
+            "attached": [
+              "c1"
+            ]
+          },
+          "notes": "clean stop; all clients detached",
+          "branch": 1,
+          "postState": {
+            "daemon": "daemonAbsent",
+            "connState": "disconnected",
+            "generation": 0,
+            "attached": []
+          }
+        },
+        {
+          "id": 2,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "halfOpen",
+            "generation": 1
+          },
+          "notes": "wedged relay (biff-tww): exit is enabled in halfOpen, the escape is to restart the daemon",
+          "branch": 1,
+          "postState": {
+            "daemon": "daemonAbsent",
+            "connState": "disconnected",
+            "generation": 0
+          }
+        },
+        {
+          "id": 3,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "closed"
+          },
+          "notes": "exit enabled in closed",
+          "branch": 1,
+          "postState": {
+            "daemon": "daemonAbsent",
+            "connState": "disconnected"
+          }
+        },
+        {
+          "id": 4,
+          "class": "invariant-boundary",
+          "status": "accepted",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "connected",
+            "generation": 3,
+            "phase": "streaming",
+            "restartCount": 2
+          },
+          "notes": "maxGeneration and maxRestarts at the bound are reset; sessions (KV bucket) unchanged",
+          "branch": 1,
+          "postState": {
+            "daemon": "daemonAbsent",
+            "phase": "idle",
+            "restartCount": 0,
+            "generation": 0
+          }
+        },
+        {
+          "id": 5,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonAbsent"
+          },
+          "notes": "Precondition daemon = daemonUp fails"
+        }
+      ],
+      "summary": {
+        "total": 5,
+        "accepted": 4,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "DaemonStart",
+      "kind": "delta",
+      "inputs": [],
+      "stateVars": [
+        "daemon",
+        "attached",
+        "connState"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "The absent daemon starts with no relay connection; the first request dials",
+          "condition": "daemon = daemonAbsent"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonAbsent",
+            "connState": "disconnected",
+            "attached": []
+          },
+          "notes": "no dial at start",
+          "branch": 1,
+          "postState": {
+            "daemon": "daemonUp",
+            "connState": "disconnected",
+            "attached": []
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonUp"
+          },
+          "notes": "Precondition daemon = daemonAbsent fails"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "EnsureConnected",
+      "kind": "delta",
+      "inputs": [],
+      "stateVars": [
+        "daemon",
+        "connState",
+        "generation"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Lazy dial: only a running daemon dials",
+          "condition": "daemon = daemonUp & connState = disconnected"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonUp",
+            "connState": "disconnected",
+            "generation": 0
+          },
+          "notes": "first request dials; handles provisioned",
+          "branch": 1,
+          "postState": {
+            "connState": "connected",
+            "generation": 1
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonAbsent",
+            "connState": "disconnected",
+            "generation": 0
+          },
+          "notes": "Guard daemon = daemonUp (added for the daemon layer): an absent daemon never dials"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "Close",
+      "kind": "delta",
+      "inputs": [],
+      "stateVars": [
+        "daemon",
+        "attached",
+        "connState"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Relay close happens in daemon shutdown after the last client has gone",
+          "condition": "daemon = daemonUp & attached = {}"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonUp",
+            "attached": [],
+            "connState": "connected"
+          },
+          "notes": "shutdown with no attached client",
+          "branch": 1,
+          "postState": {
+            "connState": "closed"
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonUp",
+            "attached": [
+              "c1"
+            ],
+            "connState": "connected"
+          },
+          "notes": "Guard attached = {} fails: invariant attached /= {} => connState /= closed"
+        },
+        {
+          "id": 3,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {},
+          "preState": {
+            "daemon": "daemonAbsent",
+            "attached": [],
+            "connState": "disconnected"
+          },
+          "notes": "Guard daemon = daemonUp fails"
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "accepted": 1,
+        "rejected": 2,
+        "pruned": 0
+      }
+    }
+  ]
+}
