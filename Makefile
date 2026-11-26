@@ -127,10 +127,21 @@ type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/ tools/
 	uv run pyright
 
+# Keep this pin equal to the cli2 version bundled by the markdownlint-cli2-action
+# tag in .github/workflows/docs.yml.
+MARKDOWNLINT_CLI := markdownlint-cli2@0.24.1
+
 mdlint: ## Lint markdown files (matches .github/workflows/docs.yml)
-	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
+	npx --yes $(MARKDOWNLINT_CLI) "**/*.md" "#node_modules"
 
 check: lint type mdlint test check-oo check-coupling check-suppressions check-layers ## Run all quality gates
+
+.PHONY: handoff-runtime handoff-runtime-npm-cache
+handoff-runtime: ## Install the pinned offline runtime for Ethos handoff checks
+	./scripts/install-handoff-runtime.sh
+
+handoff-runtime-npm-cache:
+	npx --yes --package=$(MARKDOWNLINT_CLI) -- node --version
 
 check-oo: ## Check the OO must-improve ratchet
 	uv run oo-ratchet oo "$(SRC)" --check $(OO_BASE)

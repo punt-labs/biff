@@ -9280,3 +9280,40 @@ mcp` (per-session stdio), the `biff` command, hooks and harness plugins.
 - `docs/design/package-structure.md`'s "Room for biffd" points here.
 - Each harness adapter (Codex queue worker, opencode plugin, pi, Devin) becomes
   a subscriber of one daemon.
+
+## DES-096: Offline Handoff Snapshot Profile and Pinned Runtime Bundle
+
+**Date:** 2026-11-25
+**Status:** SETTLED
+**Topic:** Running `make check` inside ethos's isolated handoff snapshot
+
+**Context.** Ethos's DES-086 handoff verification runs the existing `full-gate`
+(`make check`) inside a read-only checkout snapshot with loopback-only
+networking and private scratch mounts. Biff's gate needs `uv`, Python 3.13,
+Node/npm (`markdownlint-cli2`), `shellcheck`, locked dev wheels, the
+`uv_build` PEP 517 backend for offline editable installs, `uv`'s tool cache
+for `tools/check_python_docs.py` (`pydoclint` + `docstring-parser-fork`), and
+writable scratch dirs for `.venv`, `.pytest_cache`, `.tmp`, and
+`tests/transcripts`.
+
+**Decision.** Add the nested sidecar `.punt-labs/ethos/checks/snapshots/biff.yaml`
+(leaving `.punt-labs/ethos/checks/biff.yaml` untouched so ethos v5.2.3 ignores
+the sidecar), pin `[build-system].requires` and a `handoff-runtime` dependency
+group to `uv_build==0.13.9`, pin `MARKDOWNLINT_CLI := markdownlint-cli2@0.24.1`,
+and add `scripts/build-handoff-runtime.sh`, `scripts/install-handoff-runtime.sh`,
+and `.github/workflows/handoff-runtime.yml` following the vox reference pattern.
+
+**Alternatives.**
+
+- *Add an inline `snapshot:` key to `.punt-labs/ethos/checks/biff.yaml`.*
+  Rejected: ethos v5.2.3 rejects unknown keys on `checks/*.yaml`.
+- *Filter or skip `mdlint` / `check-docstrings` in snapshot mode.* Rejected:
+  the handoff snapshot must run the unchanged `make check` gate and produce the
+  same verdict as live.
+
+**Outcome:** verified end-to-end through `ethos hook subagent-stop` built from
+`punt-labs/ethos` `main` (`0e5f807`, including `#707` and `#710` native
+`prehydrate`) with pinned `linux-amd64` runtime `77aef8b9...`: cold clean run
+passes in 208.81 s (cache miss + `prehydrate` + full `make check` launch),
+warm clean run hits cache in 1.04 s, and a syntax error in
+`src/biff/__init__.py` blocks with exit status 2 in 14.15 s.
