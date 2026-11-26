@@ -9063,7 +9063,7 @@ REVIEW.md tells reviewers not to ask for these labels again.
 ## DES-094: Offline Handoff Snapshot Profile and Pinned Runtime Bundle
 
 **Date:** 2026-11-25
-**Status:** SETTLED
+**Status:** PROPOSED
 **Topic:** Running `make check` inside ethos's isolated handoff snapshot
 
 **Context.** Ethos's DES-086 handoff verification runs the existing `full-gate`
@@ -9076,7 +9076,7 @@ for `tools/check_python_docs.py` (`pydoclint` + `docstring-parser-fork`).
 **Decision.** Add the nested sidecar `.punt-labs/ethos/checks/snapshots/biff.yaml`
 (leaving `.punt-labs/ethos/checks/biff.yaml` untouched so ethos v5.2.3 ignores
 the sidecar), pin `[build-system].requires` and a `handoff-runtime` dependency
-group to `uv_build==0.13.9`, pin `MARKDOWNLINT_CLI := markdownlint-cli2@0.24.2`,
+group to `uv_build==0.13.9`, pin `MARKDOWNLINT_CLI := markdownlint-cli2@0.24.1`,
 and add `scripts/build-handoff-runtime.sh`, `scripts/install-handoff-runtime.sh`,
 and `.github/workflows/handoff-runtime.yml` following the vox reference pattern.
 
@@ -9088,6 +9088,8 @@ and `.github/workflows/handoff-runtime.yml` following the vox reference pattern.
   the handoff snapshot must run the unchanged `make check` gate and produce the
   same verdict as live.
 
-**Outcome:** `uv sync --offline --locked --extra dev && make check` runs
-unchanged against a read-only checkout with loopback-only networking, passing on
-a clean tree and failing with exit 2 on a broken tree.
+**Outcome:** local `unshare --net` read-only preflight of
+`uv sync --offline --locked --extra dev && make check` passes on a clean tree
+and fails with exit 2 on a broken tree, and ethos `ec5eb31` validates the
+sidecar. True ethos snapshot runner parity (including loopback-only networking)
+remains pending until the runnable DES-086 runner SHA lands.

@@ -123,6 +123,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: runtime-*
@@ -134,8 +135,18 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           [[ "$TAG" =~ ^handoff-runtime-v[1-9][0-9]*$ ]] || { echo 'Invalid runtime tag' >&2; exit 2; }
+          sidecar="$GITHUB_WORKSPACE/.punt-labs/ethos/checks/snapshots/biff.yaml"
           cd runtime-assets
           sha256sum --check biff-handoff-linux-amd64.tar.gz.sha256 biff-handoff-darwin-arm64.tar.gz.sha256
+          for platform in linux-amd64 darwin-arm64; do
+            pinned_url=$(jq -r --arg p "$platform" '.checks["full-gate"].runtime.platforms[$p].url // empty' "$sidecar")
+            pinned_sha=$(jq -r --arg p "$platform" '.checks["full-gate"].runtime.platforms[$p].sha256 // empty' "$sidecar")
+            built_sha=$(awk '{print $1}' "biff-handoff-$platform.tar.gz.sha256")
+            if [[ -n $pinned_url && $pinned_url == *"/releases/download/$TAG/"* && $pinned_sha != "$built_sha" ]]; then
+              echo "Built $platform SHA-256 ($built_sha) differs from pinned $TAG SHA-256 ($pinned_sha) in $sidecar" >&2
+              exit 1
+            fi
+          done
           gh release create "$TAG" ./*.tar.gz ./*.sha256 --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --draft --prerelease --latest=false \
             --title "Biff handoff runtime $TAG" --notes-file - <<'NOTES'
