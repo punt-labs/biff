@@ -58,19 +58,23 @@ async def _session_key(doctor: NatsRelay, user: str) -> str:
 
 async def _request_until_heard(
     doctor: NatsRelay, server: _Server, key: str
-) -> tuple[PendingCheck, JSONRPCNotification]:
+) -> tuple[list[PendingCheck], JSONRPCNotification]:
     """Send the check until the server's subscription is up and answers.
 
     Presence is written before the request subscription exists, and core NATS
-    does not replay a request nobody heard, so an early one is lost; a refused
-    retry inside the minute is harmless because the first accepted one answers.
+    does not replay a request nobody heard, so an early one is lost.  Every
+    wait stays open: a slow event belongs to whichever request was accepted,
+    and its acknowledgement goes to that request's reply inbox.
     """
+    pendings: list[PendingCheck] = []
     for _ in range(20):
-        pending = await doctor.request_channel_check(key)
+        pendings.append(await doctor.request_channel_check(key))
         try:
-            return pending, await asyncio.to_thread(server.channel_event, 1.0)
+            return pendings, await asyncio.to_thread(server.channel_event, 1.0)
         except AssertionError:
-            await pending.close()
+            continue
+    for pending in pendings:
+        await pending.close()
     msg = "the server never answered a channel check"
     raise AssertionError(msg)
 
@@ -90,7 +94,7 @@ async def test_a_request_makes_one_channel_event_and_the_ack_passes_the_policy(
         )
         key = await _session_key(doctor, server.user)
 
-        pending, event = await _request_until_heard(doctor, server, key)
+        pendings, event = await _request_until_heard(doctor, server, key)
         try:
             assert event.params is not None
             assert event.params["meta"] == {"kind": "channel_check"}
@@ -113,9 +117,11 @@ async def test_a_request_makes_one_channel_event_and_the_ack_passes_the_policy(
                 },
             )
             assert _text(reply) == "biff channel live."
-            assert await pending.confirmed(10)
+            confirmed = await asyncio.gather(*(p.confirmed(10) for p in pendings))
+            assert sum(confirmed) == 1  # exactly the accepted request's wait
         finally:
-            await pending.close()
+            for pending in pendings:
+                await pending.close()
 
         # An unstamped call passes the policy too (the --user default); the
         # token is spent, so it changes nothing and says so.
