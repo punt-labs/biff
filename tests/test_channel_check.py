@@ -151,3 +151,42 @@ class TestTheEvent:
     def test_the_meta_kind_is_channel_check(self) -> None:
         assert ChannelEvent.channel_check("ab" * 16).meta == {"kind": "channel_check"}
         assert CheckKind.CHANNEL_CHECK.value == "channel_check"
+
+
+class _Link:
+    is_open = True
+
+    def __init__(self, *, fails: bool) -> None:
+        self.fails = fails
+        self.sent: list[str] = []
+
+    async def send(self, content: str, meta: object) -> None:
+        if self.fails:
+            raise TimeoutError
+        self.sent.append(content)
+
+
+class TestSendOwed:
+    async def test_a_failed_send_is_not_raised_and_not_retried(
+        self, check: ChannelCheck
+    ) -> None:
+        check.request(_REPLY)
+        await check.send_owed(_Link(fails=True))
+
+        link = _Link(fails=False)
+        await check.send_owed(link)
+        assert link.sent == []
+
+    async def test_nothing_owed_sends_nothing(self, check: ChannelCheck) -> None:
+        link = _Link(fails=False)
+        await check.send_owed(link)
+        assert link.sent == []
+
+    def test_reset_forgets_the_cooldown_and_the_token(
+        self, check: ChannelCheck
+    ) -> None:
+        token = check.request(_REPLY)
+        assert token is not None
+        check.reset()
+        assert check.acknowledge(token) is None
+        assert check.request(_REPLY) is not None

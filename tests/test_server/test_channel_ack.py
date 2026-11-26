@@ -60,18 +60,9 @@ async def _ack(state: ServerState, token: str) -> str:
 
 def _request(state: ServerState) -> str:
     """Make the emitter accept a check and return its token."""
-    state.emitter.serve(_Link())
-    state.emitter.channel_check_requested(_REPLY)
-    token = state.emitter.channel_check.take_unsent()
+    token = state.channel_check.request(_REPLY)
     assert token is not None
     return token
-
-
-class _Link:
-    is_open = True
-
-    async def send(self, content: str, meta: object) -> None:
-        return None
 
 
 class TestOnTheNatsRelay:

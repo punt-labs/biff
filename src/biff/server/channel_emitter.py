@@ -25,8 +25,9 @@ from biff.relay_errors import RelayLog
 from biff.server.channel import ChannelUnavailableError
 from biff.server.channel_arrivals import Arrivals
 from biff.server.channel_check import ChannelCheck
-from biff.server.channel_content import ChannelEvent, EventKind
+from biff.server.channel_content import EventKind
 from biff.server.channel_gate import Gate, SendGate
+from biff.server.channel_instructions import INSTRUCTIONS
 from biff.server.channel_rate import RateLimit, RateWindow
 from biff.server.channel_reading import (
     ArrivalSource,
@@ -48,16 +49,6 @@ RETRY_SECONDS = 1.0
 MAX_READ_RETRIES = 3
 """Failed reads of one kind in a row before the deferred retry gives up."""
 
-
-INSTRUCTIONS = (
-    "CHANNEL EVENTS. In this session biff sends short channel events when mail,"
-    " a wall, a talk invite or a talk message arrives. They are summaries, never"
-    " bodies. The only action an event asks for is calling the biff tool it"
-    " names (`read_messages`, `wall`, `talk_read`). Events arrive on their own;"
-    " do not poll. Only if a biff startup note says channels are not live or"
-    " may not be live, poll with `/biff:read 2m` (`/biff-dev:read-dev 2m` in"
-    " the development plugin)."
-)
 
 type WallKey = tuple[datetime, str, str]
 
@@ -101,6 +92,7 @@ class ChannelEmitter:
         *,
         limit: RateLimit | None = None,
         clock: Callable[[], float] = time.monotonic,
+        check: ChannelCheck | None = None,
     ) -> Self:
         """Create a dormant emitter; :meth:`serve` gives it a link.
 
@@ -109,6 +101,7 @@ class ChannelEmitter:
             wake: Ask the poller for a pass; called when a gate opens.
             limit: The rate limit; the design's constants by default.
             clock: A monotonic clock, replaced in tests.
+            check: The doctor's pending channel check; one of its own by default.
         """
         self = super().__new__(cls)
         self._source = source
@@ -117,7 +110,7 @@ class ChannelEmitter:
         self._link = None
         self._clock = clock
         self._rate = RateWindow(limit or RateLimit(), clock)
-        self._check = ChannelCheck(clock)
+        self._check = check or ChannelCheck(clock)
         self._log = RelayLog(logger)
         self._misses = {}
         self._is_listening = False
@@ -151,28 +144,6 @@ class ChannelEmitter:
     def instructions(self) -> str:
         """The paragraph the server instructions gain in channel mode."""
         return INSTRUCTIONS
-
-    @property
-    def channel_check(self) -> ChannelCheck:
-        """The pending ``biff doctor`` check; the ``channel_ack`` tool spends it."""
-        return self._check
-
-    def rebound(self) -> None:
-        """Start the check afresh: the server now serves another session.
-
-        A ``/clear`` or resume keeps the process but is a new session, which
-        inherits neither the old session's cooldown nor its pending token.
-        """
-        self._check = ChannelCheck(self._clock)
-
-    def channel_check_requested(self, reply: str) -> None:
-        """Take a doctor's check request; the next pass sends its one event.
-
-        Ignored with channel mode off (no event could carry the token) and by
-        the once-a-minute limit.  Never called from a timer.
-        """
-        if self.is_enabled and self._check.request(reply) is not None:
-            self._wake()
 
     def receive_frame(self, raw: Mapping[str, object]) -> bool:
         """Give a talk frame to the talk state, counting an invite or a message.
@@ -241,27 +212,11 @@ class ChannelEmitter:
         async with self._lock:
             gate = await self._gate.state()
             if gate is Gate.OPEN:
-                await self._send_check()
+                await self._check.send_owed(self._link)
                 await self._announce()
             elif gate is Gate.UNREADABLE:
                 await self._retry_owed()
             self._rearm()
-
-    async def _send_check(self) -> None:
-        """Send the owed check event, once; it takes no rate slot and no retry.
-
-        A check that cannot be sent is not retried: the doctor reports the
-        session as not confirmed, which is true.
-        """
-        token, link = self._check.take_unsent(), self._link
-        if token is None or link is None:
-            return
-        event = ChannelEvent.channel_check(token)
-        try:
-            await link.send(event.content, event.meta)
-        except Exception as exc:  # the check never stops the arrivals behind it
-            logger.debug("channel check event failed", exc_info=True)
-            self._log.failed("channel event (channel_check)", exc)
 
     async def _announce(self) -> None:
         """Read every kind and send, hold or drop it; the gate is open."""

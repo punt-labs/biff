@@ -110,6 +110,7 @@
   "biff.server.channel_emitter": "server",
   "biff.server.channel_gate": "server",
   "biff.server.channel_handshake": "server",
+  "biff.server.channel_instructions": "server",
   "biff.server.channel_rate": "server",
   "biff.server.channel_reading": "server",
   "biff.server.channel_server": "server",

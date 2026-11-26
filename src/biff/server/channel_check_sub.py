@@ -62,7 +62,8 @@ class ChannelCheckSub:
             nc = await relay.get_nc()
             generation = relay.connection_generation
             handle = await CheckWire(nc).listen(
-                relay.channel_check_subject(self._state.session_key), self._on_request
+                relay.channel_check_subject(self._state.session_key),
+                self.handle_request,
             )
         except (NatsError, OSError, TimeoutError):  # an outage: retried each tick
             self._latch.record_failure()
@@ -90,11 +91,14 @@ class ChannelCheckSub:
             with suppress(Exception, asyncio.CancelledError):
                 await asyncio.shield(handle.unsubscribe())
 
-    async def _on_request(self, msg: Msg) -> None:
+    async def handle_request(self, msg: Msg) -> None:
         """Hand a well-formed request to the emitter; drop anything else."""
         try:
             request = CheckRequest.from_payload(msg.data)
         except ValueError:
             logger.debug("channel check request dropped: malformed", exc_info=True)
             return
-        self._state.emitter.channel_check_requested(request.reply)
+        state = self._state
+        # With channel mode off no event could carry the token.
+        if state.emitter.is_enabled and state.channel_check.request(request.reply):
+            state.wake.wake()

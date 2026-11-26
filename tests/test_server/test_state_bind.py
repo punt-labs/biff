@@ -77,11 +77,11 @@ def test_rebinding_gives_the_new_session_a_fresh_channel_check(
     """A /clear is a new session: it inherits neither a cooldown nor a token."""
     state = _state(tmp_path)
     state.bind(SessionRouting("sess-1"))
-    check = state.emitter.channel_check
+    check = state.channel_check
     token = check.request("_INBOX.one")
     assert token is not None
 
     state.bind(SessionRouting("sess-2"))
 
-    assert state.emitter.channel_check.acknowledge(token) is None
-    assert state.emitter.channel_check.request("_INBOX.two") is not None
+    assert state.channel_check.acknowledge(token) is None
+    assert state.channel_check.request("_INBOX.two") is not None

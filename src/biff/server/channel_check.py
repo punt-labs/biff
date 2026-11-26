@@ -10,11 +10,19 @@ never changes what is delivered.
 from __future__ import annotations
 
 import hmac
+import logging
 import re
 import secrets
 import time
 from collections.abc import Callable
-from typing import Self
+from typing import TYPE_CHECKING, Self
+
+from biff.server.channel_content import ChannelEvent
+
+if TYPE_CHECKING:
+    from biff.server.channel_reading import EventSink
+
+logger = logging.getLogger(__name__)
 
 CHECK_SECONDS = 60.0
 """A session accepts at most one check request in this many seconds."""
@@ -44,11 +52,19 @@ class ChannelCheck:
         """Create a session's check state with nothing pending."""
         self = super().__new__(cls)
         self._clock = clock
+        self.reset()
+        return self
+
+    def reset(self) -> None:
+        """Forget the cooldown and the pending token: the server serves a new session.
+
+        A ``/clear`` or resume keeps the process but is a new session, which
+        inherits neither the old session's cooldown nor its pending token.
+        """
         self._last_accepted = None
         self._token = None
         self._reply = ""
         self._is_unsent = False
-        return self
 
     def request(self, reply: str) -> str | None:
         """Accept a request naming *reply*; return its fresh token, or ``None``.
@@ -77,6 +93,22 @@ class ChannelCheck:
             return None
         self._is_unsent = False
         return self._token
+
+    async def send_owed(self, link: EventSink) -> None:
+        """Send the owed check event over *link*, once; it takes no rate slot.
+
+        A check that cannot be sent is not retried: the doctor reports the
+        session as not confirmed, which is true.  It never stops the arrivals
+        the emitter announces after it.
+        """
+        token = self.take_unsent()
+        if token is None:
+            return
+        event = ChannelEvent.channel_check(token)
+        try:
+            await link.send(event.content, event.meta)
+        except Exception:
+            logger.warning("channel check event not sent", exc_info=True)
 
     def acknowledge(self, token: str) -> str | None:
         """Return the reply subject if *token* is the pending one, and spend it.

@@ -168,7 +168,7 @@ its invariant, and its liveness obligation for a second variable, this
 specification replaces $talkSubGen$ with $subGen$, a total function from a
 free type $SubKind$ --- introduced here with two constructors, $talk$ and
 $inboxNotify$, and since extended to a third, $kvWatch$, and a fourth,
-$wallNotify$ (see its own free-type declaration below) --- to the generation each is bound to.  The
+$wallNotify$, and a fifth, $channelCheck$ (see its own free-type declaration below) --- to the generation each is bound to.  The
 invariant $talkSubGen \leq generation$ becomes $\forall k : SubKind @
 subGen(k) \leq generation$, quantified once over the family rather than
 restated per kind, and the stranding property becomes an obligation
@@ -182,8 +182,8 @@ instead of one schema per kind.  This is a generalisation, not a
 restructuring: setting $SubKind$ to a singleton $\{ talk \}$ recovers
 exactly the third invariant's state space, and the family was
 deliberately built to outlive its original two members --- its later
-extensions to $kvWatch$ and $wallNotify$ are that prediction already
-exercised twice, not a hypothetical.  (A constructor, for the dual-session
+extensions to $kvWatch$, $wallNotify$ and $channelCheck$ are that prediction already
+exercised three times, not a hypothetical.  (A constructor, for the dual-session
 companion's inbox SUB, once existed; the companion was removed, PL-231,
 and the constructor with it.)
 
@@ -226,15 +226,16 @@ times out; the cached handles are stale and must not be used.
 $closed$ is permanent shutdown --- no reconnection is possible.
 
 \begin{zed}
-  SubKind ::= talk | inboxNotify | kvWatch | wallNotify
+  SubKind ::= talk | inboxNotify | kvWatch | wallNotify | channelCheck
 \end{zed}
 
 $SubKind$ indexes the family of always-on core-NATS subscriptions the
 relay holds open for the life of the process: $talk$, the talk-inbox SUB
 (biff-9la); $inboxNotify$, the broadcast inbox-notify SUB for the
 session's own user (biff-5ex); $kvWatch$, the sessions-KV watcher's
-consumer; and $wallNotify$, the broadcast wall wake poke (both below).
-All four are the same class of resource --- bound to
+consumer; $wallNotify$, the broadcast wall wake poke; and $channelCheck$,
+the session's channel check request SUB (both below).
+All five are the same class of resource --- bound to
 the particular client that created them, replayed by nats-py's in-place
 reconnect, and orphaned by a force-reconnect that discards the client
 wholesale --- so the model tracks one generation-binding per kind rather
@@ -286,6 +287,23 @@ the code meets: a wall change must reach every peer, not strand on a dead
 SUB.  No frozen counterexample variant is warranted: the obligation is
 the same formula as for $kvWatch$ and the existing negative controls
 already show it failing when $Subscribe$ is withheld from a kind.
+
+$channelCheck$ is the fifth kind: the request subject of the on-demand
+channel check (PL-1365, \texttt{docs/channel-check.tex}).  \texttt{biff doctor}
+publishes a request on a subject keyed on the session's \texttt{user:tty}
+(\texttt{channel\_check\_subject}); every session holds an always-on, ungated
+SUB on its own subject whose callback only hands a well-formed request to the
+channel emitter, which wakes the poller.  It is a core-NATS subscription like
+the other four --- bound to the client that created it, orphaned wholesale by
+$ForceReconnect$, replayed by an in-place reconnect.  The relay-side class
+\texttt{ChannelCheckSub} implements $Subscribe$ and $SubscribeRetry$ for this
+kind (\texttt{start} and \texttt{reconcile}, called from
+\texttt{\_AlwaysOnSubs}) and releases the SUB on every exit path alongside
+the others.  The liveness obligation of \S\ref{sec:modelcheck}, instantiated
+at $k = channelCheck$, is the property the code meets: a doctor's request must
+reach a session whose connection was replaced, not strand on a dead SUB.  A
+request published while no SUB of this kind is bound is dropped (core NATS keeps
+no history), and the doctor reports the session as not confirmed.
 
 \begin{zed}
   ReqOutcome ::= reqOk | reqTimeout
@@ -1671,7 +1689,7 @@ which is enabled in every connection state.
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
   generation' = 0 \\
-  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, kvWatch \mapsto 0, wallNotify \mapsto 0 \} \\
+  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, kvWatch \mapsto 0, wallNotify \mapsto 0, channelCheck \mapsto 0 \} \\
   reconnectEpoch' = 0 \\
   spuriousTeardown' = zfalse \\
   epochPending' = zfalse \\
@@ -1919,6 +1937,21 @@ verified by model checking with probcli (\texttt{z-spec test}):
 %% Measured on the four-kind model: 225,923 states / 2,245,335 transitions
 %% at DEFAULT_SETSIZE 1 (the three-kind model had 63,363 states / 591,031
 %% transitions; DEFAULT_SETSIZE 2 not re-measured for four kinds).
+%%
+%% Five-kind model (channelCheck added, PL-1365): the state space is
+%% 831,363 states / 8,920,352 transitions at DEFAULT_SETSIZE 1.  Run on that
+%% model, the formula above is TRUE for k = talk and k = inboxNotify (both
+%% the not-closed and, for talk, the connected form).  The remaining runs,
+%% k = channelCheck included, each took more than 25 minutes on a developer
+%% machine and were not completed; they were bounded instead:
+%%
+%%   "$PROBCLI" docs/nats-relay.tex $P -mc 2000000
+%%
+%% explores 2,000,000 states with no invariant violation and no deadlock and
+%% covers every operation, Subscribe and SubscribeRetry at kind? = channelCheck
+%% among them.  The channelCheck instance of the formula is the same schema as
+%% the four above: Subscribe is quantified over SubKind, so the code (the
+%% ChannelCheckSub class) meets it exactly as the other kinds' reconcilers do.
 %%
 %%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
 %%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 4 -p MAX_INITIALISATIONS 100 \

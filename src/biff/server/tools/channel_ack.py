@@ -65,7 +65,7 @@ class ChannelAck:
     async def acknowledge(self, token: str) -> str:
         """Return what the model is told; publish or record the match once."""
         state = self._state
-        reply = state.emitter.channel_check.acknowledge(token)
+        reply = state.channel_check.acknowledge(token)
         if reply is None:
             return NOT_ACCEPTED
         relay = state.relay
