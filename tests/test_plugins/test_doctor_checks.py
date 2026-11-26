@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from biff.plugins.claude_code.channel_check_report import CheckTarget
+from biff.plugins.claude_code.channel_check_target import CheckTarget
 from biff.plugins.claude_code.doctor_checks import DoctorChecks
 from biff.plugins.claude_code.installer import ClaudeCodeInstaller
 
@@ -51,12 +51,43 @@ def test_a_clean_environment_passes(value: str) -> None:
 
 def test_doctor_reports_the_shell_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISABLE_TELEMETRY", "1")
-    messages = [c.message for c in ClaudeCodeInstaller().check()]
+    messages = [c.message for c in ClaudeCodeInstaller().check(None)]
     assert any("DISABLE_TELEMETRY is set" in m for m in messages)
 
 
+def _no_relay(_override: str | None) -> CheckTarget:
+    return CheckTarget(None, ("kai",))
+
+
 def test_all_ends_with_the_channel_check_and_it_is_informational() -> None:
-    checks = DoctorChecks(_NOWHERE, {}, lambda: CheckTarget(None, "kai")).all()
+    checks = tuple(DoctorChecks(_NOWHERE, {}, None, _no_relay).all())
     assert checks[-1].name == "Channel"
     assert "needs the NATS relay" in checks[-1].message
     assert not any(c.required for c in checks)
+
+
+def test_the_channel_check_waits_until_the_other_lines_were_taken() -> None:
+    """``all`` is lazy: the caller prints the status line before the wait starts."""
+    waited: list[str] = []
+
+    def target(_override: str | None) -> CheckTarget:
+        waited.append("looked up")
+        return CheckTarget(None, ("kai",))
+
+    lines = iter(DoctorChecks(_NOWHERE, {}, None, target).all())
+    next(lines)  # the status line
+    next(lines)  # the Channels gate line
+    assert waited == []
+    next(lines)  # the channel check
+    assert waited == ["looked up"]
+
+
+def test_the_user_override_reaches_the_target() -> None:
+    seen: list[str | None] = []
+
+    def target(override: str | None) -> CheckTarget:
+        seen.append(override)
+        return CheckTarget(None, ())
+
+    tuple(DoctorChecks(_NOWHERE, {}, "zed", target).all())
+    assert seen == ["zed"]

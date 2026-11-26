@@ -23,7 +23,7 @@ _IMPORT = "@.punt-labs/biff/CLAUDE.md"
 
 def test_real_adapter_satisfies_installer() -> None:
     installer: Installer = ClaudeCodeInstaller()
-    assert installer.check()[0].name == "Status line"
+    assert next(iter(installer.check(None))).name == "Status line"
 
 
 def test_cli_registers_the_claude_code_installer() -> None:
@@ -96,7 +96,7 @@ class TestGuideImport:
 class TestStatuslineCheck:
     def _check(self, settings: Path) -> tuple[bool, bool, str]:
         with patch("biff.plugins.claude_code.installer.SETTINGS_PATH", settings):
-            result = ClaudeCodeInstaller().check()[0]
+            result = next(iter(ClaudeCodeInstaller().check(None)))
         return result.passed, result.required, result.message
 
     def test_configured(self, tmp_path: Path) -> None:

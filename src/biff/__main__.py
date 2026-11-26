@@ -1489,7 +1489,7 @@ def doctor() -> None:
     """Check biff installation health."""
     from biff.doctor import Diagnostics
 
-    code = Diagnostics(CliInvocation.plugin_registry()).run()
+    code = Diagnostics(CliInvocation.plugin_registry(), _user_override).run()
     if code != 0:
         raise typer.Exit(code=code)
 

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from biff.nats_relay import NatsRelay
-from biff.plugins.claude_code.channel_check_report import CheckTarget
+from biff.plugins.claude_code.channel_check_target import CheckTarget
 from biff.plugins.claude_code.doctor_checks import DoctorChecks
 from tests.test_subprocess.test_channel_check import _REPO, _session_key
 from tests.test_subprocess.test_channel_mode import _Server
@@ -46,14 +46,16 @@ def test_doctor_reports_channel_live_for_a_session_that_acknowledges(
         server.request("tools/call", {"name": "who", "arguments": {}})
         asyncio.run(_registered(nats_server, server.user))
 
-        def target() -> CheckTarget:
+        def target(_override: str | None) -> CheckTarget:
             relay = NatsRelay(url=nats_server, repo_name=_REPO)
-            return CheckTarget(relay, server.user)
+            return CheckTarget(relay, (server.user,))
 
         results: list[CheckResult] = []
         doctor = threading.Thread(
             target=lambda: results.extend(
-                DoctorChecks(tmp_path / "settings.json", {}, target).channel_check()
+                DoctorChecks(
+                    tmp_path / "settings.json", {}, None, target
+                ).channel_check()
             )
         )
         doctor.start()
@@ -86,11 +88,13 @@ def test_doctor_reports_not_confirmed_when_channels_are_off(
         server.request("tools/call", {"name": "who", "arguments": {}})
         asyncio.run(_registered(nats_server, server.user))
 
-        def target() -> CheckTarget:
+        def target(_override: str | None) -> CheckTarget:
             relay = NatsRelay(url=nats_server, repo_name=_REPO)
-            return CheckTarget(relay, server.user)
+            return CheckTarget(relay, (server.user,))
 
-        (line,) = DoctorChecks(tmp_path / "settings.json", {}, target).channel_check()
+        (line,) = DoctorChecks(
+            tmp_path / "settings.json", {}, None, target
+        ).channel_check()
 
         assert not line.passed
         assert not line.required  # doctor never fails on a channel

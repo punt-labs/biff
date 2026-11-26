@@ -1835,6 +1835,21 @@ class NatsRelay:
         except (KeyNotFoundError, BucketNotFoundError):
             return None
 
+    async def list_sessions_for_user(self, user: str) -> list[UserSession]:
+        """Return *user*'s sessions in this repo; a failed lookup raises.
+
+        :meth:`get_sessions_for_user` answers an empty list when the lookup
+        fails, which is right for a display that retries on its next tick and
+        wrong for a diagnostic that must tell "none running" from "could not
+        look".  A repo with no sessions yet is an empty answer, not a failure.
+        """
+        self._validate_user(user)
+        try:
+            sessions = await self._get_sessions_for_repo_inner(self._repo_name)
+        except NotFoundError:
+            return []
+        return [s for s in sessions if s.user == user]
+
     async def get_sessions_for_user(self, user: str) -> list[UserSession]:
         """Return all sessions for a given user."""
         self._validate_user(user)

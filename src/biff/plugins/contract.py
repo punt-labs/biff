@@ -86,8 +86,12 @@ class Installer(Protocol):
         """Remove that import.  Returns ``True`` when the file changed."""
         ...
 
-    def check(self) -> tuple[CheckResult, ...]:
-        """Run the tool's diagnostics for ``biff doctor``."""
+    def check(self, user_override: str | None) -> Iterable[CheckResult]:
+        """Run the tool's diagnostics for ``biff doctor``.
+
+        *user_override* is ``--user``.  Results are produced lazily, so a slow
+        one does not hold back the lines before it.
+        """
         ...
 
 

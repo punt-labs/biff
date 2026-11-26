@@ -20,6 +20,8 @@ from biff.plugins.contract import CheckResult
 from biff.relay_check import LocalRelayCheck
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from biff.models import RelayAuth
     from biff.plugins.contract import PluginRegistry
 
@@ -352,6 +354,7 @@ class Diagnostics:
     """Run every diagnostic and report them: biff's, then each registered tool's."""
 
     _plugins: PluginRegistry
+    _user_override: str | None = None  # ``--user``, for the tools' own checks
 
     def run(self) -> int:
         """Print all diagnostics.  Returns 0 if all required pass, 1 otherwise."""
@@ -360,9 +363,12 @@ class Diagnostics:
         print(f"punt-biff {version('punt-biff')}")
         print()
 
-        checks = self._checks()
-        for check in checks:
+        # Each line prints as it arrives, so a check that waits (a session that
+        # never answers the channel check) holds back nothing before it.
+        checks: list[CheckResult] = []
+        for check in self._checks():
             self._print(check)
+            checks.append(check)
 
         required_failures = [c for c in checks if c.required and not c.passed]
         if required_failures:
@@ -372,18 +378,20 @@ class Diagnostics:
         print("\nAll required checks passed.")
         return 0
 
-    def _checks(self) -> list[CheckResult]:
-        return [
-            _check_gh_cli(),
-            _check_plugin_installed(),
-            _check_user_commands(),
-            _check_relay(),
-            _check_biff_file(),
-            _check_enabled(),
-            _check_git_hooks(),
-            _check_ci_workflow(),
-            *(c for i in self._plugins.installers() for c in i.check()),
-        ]
+    def _checks(self) -> Iterator[CheckResult]:
+        for check in (
+            _check_gh_cli,
+            _check_plugin_installed,
+            _check_user_commands,
+            _check_relay,
+            _check_biff_file,
+            _check_enabled,
+            _check_git_hooks,
+            _check_ci_workflow,
+        ):
+            yield check()
+        for installer in self._plugins.installers():
+            yield from installer.check(self._user_override)
 
     @staticmethod
     def _print(check: CheckResult) -> None:
@@ -394,4 +402,4 @@ class Diagnostics:
             symbol = "\u2717"  # ✗
         else:
             symbol = "\u25cb"  # ○
-        print(f"  {symbol} {check.name}: {check.message}")
+        print(f"  {symbol} {check.name}: {check.message}", flush=True)
