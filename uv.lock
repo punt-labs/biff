@@ -1273,6 +1273,26 @@ wheels = [
 ]
 
 [[package]]
+name = "nostr-sdk"
+version = "0.45.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/55/4b3c0769c974580413f8f869cfa69d9c55820d190a3ecd337a76f537c9df/nostr_sdk-0.45.2-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:7a427e30379cb8930a903a4c776288404051b2fd38d7c62585e827a2c3b5353f", size = 3833696, upload-time = "2026-11-14T14:03:39.701Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/0d/4fd2efced0fe6e837e2be0e951df634550273cb03e66fb658c8923ce497f/nostr_sdk-0.45.2-cp39-abi3-macosx_11_0_x86_64.whl", hash = "sha256:0056846c0c4f8b5407524a174c0dcb4682a3b4ded71c5405195b9d27ee064003", size = 3899584, upload-time = "2026-11-14T14:03:41.131Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/1f/6ce35a6e9c0f1f6bda4e546037b4419e1e844c3b152a01ab96c58367ecfc/nostr_sdk-0.45.2-cp39-abi3-manylinux_2_17_aarch64.whl", hash = "sha256:b09fbfddefc4badb0943dbd8d6eef48557ee3a05cf70d93989b3b425b8f6e052", size = 4325741, upload-time = "2026-11-14T14:03:42.617Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/a5/b16a7df07bc685e6e22e73f2fbcd2e589b7838dea8bebae3b6ce9a0f8695/nostr_sdk-0.45.2-cp39-abi3-manylinux_2_17_armv7l.whl", hash = "sha256:76e4342f77d086adcc3755680898446ff8eb146ee1c64d91fcae935905ab0584", size = 3858158, upload-time = "2026-11-14T14:03:43.972Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/c2/315b3717f89c9b35323b91bb73ab1dd5209f11b1c151280bb3f2ff9cb764/nostr_sdk-0.45.2-cp39-abi3-manylinux_2_17_i686.whl", hash = "sha256:13379b08bd35effcbcdf3634d3c48f4cd74a445c3808c16c3c966e841444a77a", size = 4382363, upload-time = "2026-11-14T14:03:45.293Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/b7/4e4c12ab098d6aa9b5ae720a5beac430f10ce3fe8d84ff1f57948770d640/nostr_sdk-0.45.2-cp39-abi3-manylinux_2_17_x86_64.whl", hash = "sha256:09cb6fd2cf6425f5404513ab0bfae0ff4b7a556ba2790129940602c3e2ea85ef", size = 4418212, upload-time = "2026-11-14T14:03:46.743Z" },
+    { url = "https://files.pythonhosted.org/packages/10/c9/5036e561dd4f75cdc6bb82c090cd4d780753f3d5a7b15a94fc3146bdaed5/nostr_sdk-0.45.2-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:3a452a1dad407a2f4f64980e3a8d41c26e4349c7011711c881018b437364ec1b", size = 4335845, upload-time = "2026-11-14T14:03:47.883Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/e5/d3540305039218487a605952f76b659208086bc305159d290085661caf71/nostr_sdk-0.45.2-cp39-abi3-musllinux_1_2_armv7l.whl", hash = "sha256:ae121a51e302bbb9926a097f1b1b081440b80a388d72a92983e4dacfe368a3f7", size = 3858035, upload-time = "2026-11-14T14:03:49.023Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/cd/068ba5d21a888213ac2a045bcb514b3ef327ec5756d4cc24c57d4f5d4886/nostr_sdk-0.45.2-cp39-abi3-musllinux_1_2_i686.whl", hash = "sha256:efb419175265c001846f3d73468a8069657693136a6be515b2a65f6d24a5f769", size = 4203433, upload-time = "2026-11-14T14:03:50.319Z" },
+    { url = "https://files.pythonhosted.org/packages/82/7b/7c1972f316d921fa26df024f7e68cca4e80313ebc877b01bcb2d750c67f8/nostr_sdk-0.45.2-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:d33813a1a98c7f7a94c4cd8c68472d42128f86930d9eec30fd5a868a63c3e7e7", size = 4420319, upload-time = "2026-11-14T14:03:51.714Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/9b/256b51681084c431cfa83e92fbf9d1be1329d33a2f998954b1036f8b6ebd/nostr_sdk-0.45.2-cp39-abi3-win32.whl", hash = "sha256:4718bd609dabc534042cc61d66732978bb6ac5eade052b936c5a6ab68fcc5331", size = 3554559, upload-time = "2026-11-14T14:03:52.926Z" },
+    { url = "https://files.pythonhosted.org/packages/08/0d/18ab0f7a4026810b650e9c808fb3c2fa0e90bcb6dfb803d25b97144a1a69/nostr_sdk-0.45.2-cp39-abi3-win_amd64.whl", hash = "sha256:83ede8a8ae752c5ca8e3b46568698f5e5d0b349c234341fd1406d734eed8102f", size = 3866361, upload-time = "2026-11-14T14:03:54.254Z" },
+    { url = "https://files.pythonhosted.org/packages/79/7f/98c7a927cd1c913de27d5c3c33031c832dea0389aec4fa439ab5aa87cd5c/nostr_sdk-0.45.2-cp39-abi3-win_arm64.whl", hash = "sha256:15ac6b6d4bb75332d8e04b7aa17621cb3930eb8b5b20e22c8519b530ef56ff46", size = 3706385, upload-time = "2026-11-14T14:03:55.506Z" },
+]
+
+[[package]]
 name = "openapi-pydantic"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1406,6 +1426,7 @@ dependencies = [
     { name = "keyring" },
     { name = "mcp" },
     { name = "nats-py", extra = ["nkeys"] },
+    { name = "nostr-sdk" },
     { name = "psutil" },
     { name = "punt-observe" },
     { name = "pydantic" },
@@ -1455,6 +1476,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=2.3.0,<3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.1" },
     { name = "nats-py", extras = ["nkeys"], specifier = ">=2.13.1,<3" },
+    { name = "nostr-sdk", specifier = ">=0.45,<0.46" },
     { name = "psutil", specifier = ">=6.0,<8" },
     { name = "punt-observe", specifier = "==0.1.1" },
     { name = "pydantic", specifier = ">=2.0.0,<3" },

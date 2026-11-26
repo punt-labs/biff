@@ -32,6 +32,7 @@ dependencies = [
     "websockets>=16,<17",
     "keyring>=25,<26",
     "cryptography>=46,<51",
+    "nostr-sdk>=0.45,<0.46",
 ]
 
 [project.optional-dependencies]

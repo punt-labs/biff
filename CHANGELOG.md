@@ -68,7 +68,10 @@
   Private keys rest in the OS keyring, never in the repository or an ethos
   ext file. The owner key sits behind a keychain item that trusts no
   application (macOS) or a passphrase-encrypted file (Linux), and an agent
-  process cannot create it or sign with it. Every agent key read is logged.
+  process cannot create it or sign with it. The keychain write sends the
+  secret to `security -i` on stdin, never on a command line. Signing and key
+  derivation run in `nostr-sdk` (Rust secp256k1); only verification, which
+  takes public inputs, is pure Python. Every agent key read is logged.
   Public keys and attestations go in the identity's ext `nostr` namespace,
   or in `~/.punt-labs/biff/nostr.yaml` when ethos is absent.
 - `biff who` adds a KEY column with each user's short npub when one is

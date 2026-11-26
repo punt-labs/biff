@@ -95,25 +95,57 @@ def test_passphrase_vault_refuses_path_traversal(tmp_path: Path) -> None:
 
 
 class _Security:
-    """Records ``security`` invocations and serves them like the real tool."""
+    """Records ``security`` invocations and serves them like the real tool.
+
+    ``-i`` reads one command per stdin line, as the real tool does.
+    """
 
     def __init__(self) -> None:
-        self.calls: list[list[str]] = []
+        self.calls: list[tuple[list[str], str | None]] = []
         self.stored: str | None = None
 
-    def __call__(self, args: list[str]) -> str:
-        self.calls.append(args)
-        if args[0] == "add-generic-password":
-            self.stored = args[args.index("-w") + 1]
+    def __call__(self, args: list[str], stdin: str | None = None) -> str:
+        self.calls.append((args, stdin))
+        if args == ["-i"] and stdin is not None:
+            words = stdin.split()
+            self.stored = words[words.index("-w") + 1]
             return ""
         return f"{self.stored}\n"
+
+    @property
+    def argv(self) -> list[str]:
+        """Every argument ever passed to the subprocess."""
+        return [word for args, _ in self.calls for word in args]
+
+
+def test_mac_vault_secret_is_never_in_argv() -> None:
+    run = _Security()
+    MacKeychainVault(run).put("biff-owner", "jfreeman", SECRET)
+    assert SECRET not in " ".join(run.argv)
+
+
+def test_mac_vault_secret_travels_on_stdin() -> None:
+    run = _Security()
+    MacKeychainVault(run).put("biff-owner", "jfreeman", SECRET)
+    assert run.calls[0] == (["-i"], run.calls[0][1])
+    assert SECRET in (run.calls[0][1] or "")
 
 
 def test_mac_vault_item_trusts_no_application() -> None:
     run = _Security()
     MacKeychainVault(run).put("biff-owner", "jfreeman", SECRET)
-    args = run.calls[0]
-    assert args[args.index("-T") + 1] == ""
+    assert ' -T "" ' in (run.calls[0][1] or "")
+
+
+def test_mac_vault_stdin_is_one_command_line() -> None:
+    run = _Security()
+    MacKeychainVault(run).put("biff-owner", "jfreeman", SECRET)
+    assert (run.calls[0][1] or "").count("\n") == 1
+
+
+def test_mac_vault_refuses_a_secret_that_is_not_hex() -> None:
+    with pytest.raises(VaultError, match="hex"):
+        MacKeychainVault(_Security()).put("biff-owner", "jfreeman", 'x" -T "any')
 
 
 def test_mac_vault_reads_back_what_it_stored() -> None:
@@ -141,4 +173,10 @@ def test_passphrase_vault_has_never_prompts(tmp_path: Path) -> None:
 def test_mac_vault_has_does_not_ask_for_the_secret() -> None:
     run = _Security()
     MacKeychainVault(run).has("biff-owner", "jfreeman")
-    assert "-w" not in run.calls[0]
+    assert "-w" not in run.calls[0][0]
+
+
+def test_mac_vault_quotes_a_keychain_path_with_spaces_and_quotes() -> None:
+    run = _Security()
+    MacKeychainVault(run, Path('/tmp/a b/"x".keychain')).put("s", "a", SECRET)
+    assert (run.calls[0][1] or "").endswith(' "/tmp/a b/\\"x\\".keychain"\n')

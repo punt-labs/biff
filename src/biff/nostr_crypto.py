@@ -2,19 +2,22 @@
 
 ``NostrCrypto`` is the only place biff touches secp256k1 or bech32.  Every
 other module asks it to sign, verify, encode or decode, so the backend can be
-swapped for a native library without touching a caller.
+swapped without touching a caller.
 
-This backend is pure Python: no native wheel exists for every platform biff
-installs on, and the arithmetic is the BIP-340 reference algorithm.  It is not
-constant-time, which matters only to an attacker who can time biff's own
-process from the same machine.
+Anything that handles a secret key (deriving a public key, signing) is done
+by ``nostr-sdk``, whose Rust secp256k1 is constant-time.  Verification takes
+only public inputs, so it is the BIP-340 reference algorithm in pure Python:
+nostr-sdk exposes no raw Schnorr verify, and coincurve has no wheel for every
+platform biff installs on.
 """
 
 from __future__ import annotations
 
 import hashlib
 import secrets
-from typing import final
+from collections.abc import Callable
+from importlib import import_module
+from typing import Protocol, cast, final
 
 type _Point = tuple[int, int]
 
@@ -27,6 +30,30 @@ _G: _Point = (
 _CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 _BECH32_CONST = 1
 _CHECKSUM_LEN = 6
+
+
+class _NativePublicKey(Protocol):
+    def to_hex(self) -> str: ...
+
+
+class _NativeKeys(Protocol):
+    def public_key(self) -> _NativePublicKey: ...
+
+    def sign_schnorr(self, message: bytes) -> str: ...
+
+
+class _NativeSecretKey(Protocol):
+    def from_bytes(self, data: bytes) -> object: ...
+
+
+class _NativeSdk(Protocol):
+    """The part of ``nostr_sdk`` biff uses; the package ships no type stubs."""
+
+    Keys: Callable[[object], _NativeKeys]
+    SecretKey: _NativeSecretKey
+
+
+_SDK = cast("_NativeSdk", import_module("nostr_sdk"))
 
 
 @final
@@ -44,35 +71,14 @@ class NostrCrypto:
 
     def public_key(self, secret: bytes) -> bytes:
         """Return the 32-byte x-only public key of *secret*."""
-        point = self._base_mul(self._scalar(secret))
-        return point[0].to_bytes(32, "big")
+        return bytes.fromhex(self._keys(secret).public_key().to_hex())
 
-    def sign(self, secret: bytes, message: bytes, aux: bytes | None = None) -> bytes:
-        """Return the 64-byte BIP-340 signature of the 32-byte *message*.
-
-        *aux* is the 32 bytes of auxiliary randomness; fresh randomness by
-        default, fixed only to reproduce a published test vector.
-        """
+    def sign(self, secret: bytes, message: bytes) -> bytes:
+        """Return the 64-byte BIP-340 signature of the 32-byte *message*."""
         if len(message) != 32:
             msg = f"message must be 32 bytes, got {len(message)}"
             raise ValueError(msg)
-        aux = secrets.token_bytes(32) if aux is None else aux
-        d0 = self._scalar(secret)
-        point = self._base_mul(d0)
-        d = d0 if point[1] % 2 == 0 else _N - d0
-        px = point[0].to_bytes(32, "big")
-        mask = int.from_bytes(self._tagged("BIP0340/aux", aux), "big")
-        t = (d ^ mask).to_bytes(32, "big")
-        nonce = self._tagged("BIP0340/nonce", t + px + message)
-        k0 = int.from_bytes(nonce, "big") % _N
-        if k0 == 0:
-            msg = "derived a zero nonce; retry with other aux data"
-            raise ValueError(msg)
-        r_point = self._base_mul(k0)
-        k = k0 if r_point[1] % 2 == 0 else _N - k0
-        rx = r_point[0].to_bytes(32, "big")
-        e = self._challenge(rx, px, message)
-        return rx + ((k + e * d) % _N).to_bytes(32, "big")
+        return bytes.fromhex(self._keys(secret).sign_schnorr(message))
 
     def verify(self, public: bytes, message: bytes, signature: bytes) -> bool:
         """Return whether *signature* is a valid BIP-340 signature.
@@ -108,12 +114,12 @@ class NostrCrypto:
         return self._bech32_decode("nsec", text)
 
     @staticmethod
-    def _scalar(secret: bytes) -> int:
-        value = int.from_bytes(secret, "big")
-        if len(secret) != 32 or not 1 <= value < _N:
-            msg = "secret key must be 32 bytes and in [1, n-1]"
+    def _keys(secret: bytes) -> _NativeKeys:
+        """Return the native key pair for *secret*, rejecting a malformed one."""
+        if len(secret) != 32 or not 1 <= int.from_bytes(secret, "big") < _N:
+            msg = "secret key must be 32 bytes and a valid secp256k1 scalar"
             raise ValueError(msg)
-        return value
+        return _SDK.Keys(_SDK.SecretKey.from_bytes(secret))
 
     @staticmethod
     def _tagged(tag: str, data: bytes) -> bytes:
@@ -147,14 +153,6 @@ class NostrCrypto:
             lam = (b[1] - a[1]) * pow(b[0] - a[0], -1, _P) % _P
         x = (lam * lam - a[0] - b[0]) % _P
         return (x, (lam * (a[0] - x) - a[1]) % _P)
-
-    @classmethod
-    def _base_mul(cls, scalar: int) -> _Point:
-        point = cls._mul(_G, scalar)
-        if point is None:
-            msg = "scalar multiple of the generator is the point at infinity"
-            raise ValueError(msg)
-        return point
 
     @classmethod
     def _mul(cls, point: _Point, scalar: int) -> _Point | None:

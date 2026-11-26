@@ -36,9 +36,34 @@ def test_verify_accepts_bip340_vector() -> None:
     assert NostrCrypto().verify(_BIP340_PUBLIC, _BIP340_MESSAGE, _BIP340_SIG)
 
 
-def test_sign_with_vector_aux_reproduces_bip340_signature() -> None:
-    sig = NostrCrypto().sign(_BIP340_SECRET, _BIP340_MESSAGE, aux=bytes(32))
-    assert sig == _BIP340_SIG
+def test_signing_never_touches_the_pure_python_curve_arithmetic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Secret-key work belongs to the Rust library, never to Python integers."""
+
+    def forbidden(*_args: object) -> None:
+        msg = "pure-Python scalar multiplication used with a secret"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(NostrCrypto, "_mul", forbidden)
+    monkeypatch.setattr(NostrCrypto, "_add", forbidden)
+    crypto = NostrCrypto()
+    secret = crypto.generate_secret()
+    pubkey = crypto.public_key(secret)
+    assert len(crypto.sign(secret, bytes(32))) == 64
+    assert len(pubkey) == 32
+
+
+def test_signature_from_the_native_library_verifies_with_our_verifier() -> None:
+    crypto = NostrCrypto()
+    sig = crypto.sign(_BIP340_SECRET, _BIP340_MESSAGE)
+    assert crypto.verify(_BIP340_PUBLIC, _BIP340_MESSAGE, sig)
+
+
+@pytest.mark.parametrize("secret", [bytes(32), b"short", bytes([255]) * 32])
+def test_invalid_secret_is_a_value_error(secret: bytes) -> None:
+    with pytest.raises(ValueError, match="secret key"):
+        NostrCrypto().public_key(secret)
 
 
 def test_sign_then_verify_round_trips() -> None:
