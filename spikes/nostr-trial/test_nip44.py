@@ -180,12 +180,32 @@ def test_ref_rejects_bad_padding_with_valid_mac(bad_padding_payload: str) -> Non
 
 
 def test_nostr_sdk_rejects_bad_padding_with_valid_mac(bad_padding_payload: str) -> None:
-    with pytest.raises(NostrSdkError):
+    with pytest.raises(NostrSdkError, match=r"(?i)padding"):
         nip44_decrypt(
             SecretKey.parse(SEC2),
             PublicKey.parse(_x_only(SEC1).hex()),
             bad_padding_payload,
         )
+
+
+def test_nostr_sdk_mac_failure_does_not_mention_padding(
+    bad_padding_payload: str,
+) -> None:
+    """Control: the `padding` match above discriminates.
+
+    Corrupting the MAC of the same payload makes nostr-sdk fail before it
+    reads the padding, and that error does not mention padding.
+    """
+    raw = bytearray(base64.b64decode(bad_padding_payload))
+    raw[-1] ^= 0x01
+    tampered = base64.b64encode(bytes(raw)).decode()
+    with pytest.raises(NostrSdkError) as excinfo:
+        nip44_decrypt(
+            SecretKey.parse(SEC2),
+            PublicKey.parse(_x_only(SEC1).hex()),
+            tampered,
+        )
+    assert "padding" not in str(excinfo.value).lower()
 
 
 def test_bad_padding_is_the_only_thing_rejecting(

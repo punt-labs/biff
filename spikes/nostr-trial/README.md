@@ -99,14 +99,16 @@ invalid vectors; plus the condition-grammar cases in
    reverse. The cost is a native Rust library inside the wheel. The wheel is
    `abi3`, so it installs on Python 3.13 and 3.14 on macOS (arm64, x86_64),
    Linux (x86_64, aarch64) and Windows without a compiler.
-2. **BIP-340 backend: `coincurve`.** It passes every NIP-OA vector Buzz
-   publishes (53 test runs, listed under Results). Pin Python to 3.13 for
-   now: coincurve 21.0.0 ships no cp314 wheel, and on Python 3.14 `uv`
-   builds it from source, which failed in this spike. This spike sets
-   `requires-python = ">=3.13,<3.14"`; production code must cap
-   `requires-python` the same way until coincurve ships 3.14 wheels.
-   `nostr-sdk` cannot replace it: it has no raw Schnorr verify (see above),
-   which NIP-OA needs.
+2. **BIP-340 in this spike: `coincurve`.** It passes every NIP-OA vector
+   Buzz publishes (53 test runs, listed under Results). coincurve 21.0.0
+   ships no cp314 wheel, and on Python 3.14 `uv` builds it from source, which
+   failed here, so this spike alone sets `requires-python = ">=3.13,<3.14"`.
+   **Production does not use coincurve and keeps Python 3.14:** it signs with
+   nostr-sdk's `Keys.sign_schnorr` (constant-time, abi3 wheel on 3.13 and
+   3.14) and verifies with biff's own BIP-340 verifier. Verification takes
+   only public inputs, so it needs neither constant time nor a native backend.
+   nostr-sdk cannot do the verification itself: it has no raw Schnorr verify
+   (see above), which NIP-OA needs.
 3. **Rejected: `secp256k1` (`secp256k1-py`).** Its 0.14.0 wheels cover macOS
    arm64 and Linux x86_64 only; Linux aarch64 and Windows resolve to no wheel.
 4. **Rejected: `pynostr`, `python-nostr`, `nostr-tools`.** None has NIP-44 or
@@ -125,8 +127,8 @@ the start of the run (the limit for running tests was 12):
 
 ```text
 $ uv run --extra candidates pytest -v
-collected 246 items
-... 246 passed in 0.45s
+collected 249 items
+... 249 passed in 0.71s
 ```
 
 The table counts test runs (one pytest case per vector per test function),
@@ -135,12 +137,12 @@ valid (conversation key, message keys, padded length, encrypt/decrypt, long
 messages) and 12 + 8 + 4 invalid (decrypt, conversation key, plaintext
 length). `nip44_ref` runs all 128. nostr-sdk reuses 32 of them: the 10
 encrypt/decrypt vectors twice (decrypt, and interoperate) and the 12 invalid
-payloads once. That is 160 runs; 10 more are the padding tests.
+payloads once. That is 160 runs; 13 more are the padding tests.
 
 | File | Test runs | Result |
 |------|-----------|--------|
 | `test_nip_oa.py` | 53 | All pass: published valid vector, signed event, six invalid vectors, grammar and time-clause cases |
-| `test_nip44.py` | 170 | All pass: 128 vector runs on `nip44_ref`, 32 on nostr-sdk, 10 padding runs (a valid-MAC control, then three malformed blocks against nostr-sdk, `nip44_ref`, and a stubbed padding check) |
+| `test_nip44.py` | 173 | All pass: 128 vector runs on `nip44_ref`, 32 on nostr-sdk, 13 padding runs (a valid-MAC control, then three malformed blocks against nostr-sdk, whose error must name padding; the same blocks with a corrupted MAC, whose error must not; `nip44_ref`; and a stubbed padding check) |
 | `test_nip17.py` | 3 | All pass: nostr-sdk round trip; independent Python unwrap of an nostr-sdk wrap; nostr-sdk unwrap of a Python-built wrap |
 | `test_monstr.py` | 20 | All pass: the 10 encrypt/decrypt vectors, decrypt and round trip |
 
