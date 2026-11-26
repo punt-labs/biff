@@ -329,8 +329,10 @@ It is not the authority on order.
 ### 10.4 Concurrent writes
 
 An honest writer publishes with `Nats-Expected-Last-Subject-Sequence`, so a
-second write based on the same stale value is rejected at write time; that
-writer re-reads and retries. The relay enforces this only for writers that
+second write based on the same stale value is rejected at write time. The
+writer then re-reads. If the new value came from its own author, it retries;
+if another author changed the attribute, it does not overwrite, and sends the
+conflict to the owner's needs-you queue as a decision. The relay enforces this only for writers that
 send the header, and it is not covered by any signature. So readers do not
 rely on it: when two signed writes cite the same predecessor and both reach
 them, every reader resolves them the same way, and the higher (Lamport number,

@@ -116,9 +116,11 @@ today's single process.
 `subscribe` replaces the in-process `DeliverySink` for out-of-process
 consumers. On subscribe the daemon first sends the session's current unread
 summary, then one `event` per later arrival. There is no replay log: a client
-that reconnects after a daemon restart gets the current summary again. Mail and
-walls are durable, so a client that never polls loses none of them across a
-disconnect (R-D.5, R-OC.2). Talk frames are ephemeral: a frame that arrives while
+that reconnects after a daemon restart gets the current summary again. Mail is
+durable, so a client that never polls loses none of it across a disconnect
+(R-D.5, R-OC.2). A wall is a current value, one active post per repository:
+the client recovers the active wall, and a wall that a newer one replaced
+during the disconnect is not recovered. Talk frames are ephemeral: a frame that arrives while
 the daemon is down is not recovered, as with today's relay reconnect.
 
 ## Supervision
