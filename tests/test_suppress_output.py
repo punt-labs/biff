@@ -139,6 +139,19 @@ class TestWhoCount:
         output = _run_hook("mcp__plugin_biff_tty__who", table)
         assert _panel_summary(output) == "2 online"
 
+    def test_an_older_servers_wrapped_footnote_is_not_counted(self) -> None:
+        """A plugin-only update can pair this hook with a server that still
+        appends the dead-session footnote; its wrapped lines share the row
+        prefix and must not count as online."""
+        response = (
+            "▶  NAME  IDLE\n"
+            "   kai:tty01  0:03\n"
+            "   3 sessions stopped responding (last seen 3 hours, 1 day 2\n"
+            "   hours, 5 days)"
+        )
+        output = _run_hook("mcp__plugin_biff_tty__who", response)
+        assert _panel_summary(output) == "1 online"
+
     def test_no_sessions_is_passed_through(self) -> None:
         output = _run_hook("mcp__plugin_biff_tty__who", "No sessions.")
         assert _panel_summary(output) == "No sessions."

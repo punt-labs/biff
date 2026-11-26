@@ -63,7 +63,10 @@ if [[ "$TOOL_NAME" == "who" ]]; then
   if [[ "$RESULT" == "No sessions." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [^ ]')
+    # A biff server older than the plugin (a plugin-only update) may still
+    # append the dead-session footnote, which shares the row prefix and can
+    # wrap; cut it from its first line so it is never counted as online.
+    COUNT=$(printf '%s' "$RESULT" | sed -E '/^   [0-9]+ sessions? stopped responding/,$d' | grep -c '^   [^ ]')
     emit "${COUNT} online" "$RESULT"
   fi
   exit 0

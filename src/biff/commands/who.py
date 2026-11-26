@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import logging
-
 from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
-from biff.formatting import dead_sessions_summary, format_who
-from biff.presence_liveness import dead_sessions, live_sessions
+from biff.formatting import format_who, log_dead_sessions
+from biff.presence_liveness import live_sessions
 
 
 async def who(ctx: CliContext) -> CommandResult:
@@ -21,8 +19,7 @@ async def who(ctx: CliContext) -> CommandResult:
     """
     sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     live = live_sessions(sessions)
-    if summary := dead_sessions_summary(dead_sessions(sessions)):
-        logging.getLogger(__name__).info(summary)
+    log_dead_sessions(sessions)
     if not live:
         text = "No sessions."
         json_data: list[dict[str, object]] = []

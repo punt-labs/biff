@@ -336,6 +336,9 @@ same private file, `~/.punt-labs/biff/logs/biff.log`. The file records INFO
 and above and rotates at 5 MiB with five backups. Terminal diagnostics go to
 stderr (WARNING and above by default); MCP stdio stdout is for protocol
 messages only. Biff no longer writes a separate `hook-errors.log`.
+Sessions that stopped responding without deregistering are not shown by
+`/who`; it logs them there as one INFO line, `N sessions stopped responding
+(last seen ...)`.
 
 Local usage capture is on by default. It records supported CLI command
 names and MCP tool names, durations and protocol outcomes in a separate

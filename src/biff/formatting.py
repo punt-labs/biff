@@ -31,6 +31,7 @@ from biff._formatting import (
 from biff._stdlib import display_repo_name
 from biff.ethos_team import RoleEntry
 from biff.models import Message, SessionEvent, UserSession, WallPost
+from biff.presence_liveness import dead_sessions
 from biff.session_routing import ID_RE
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ __all__ = [
     "format_wall_status_line",
     "format_who",
     "last_component",
+    "log_dead_sessions",
     "pair_events",
     "parse_duration",
     "sanitize_wall_message",
@@ -412,6 +414,16 @@ def dead_sessions_summary(dead: list[UserSession]) -> str:
     ages = ", ".join(format_idle(s.last_active) for s in by_recency)
     noun = "session" if len(dead) == 1 else "sessions"
     return f"{len(dead)} {noun} stopped responding (last seen {ages})"
+
+
+def log_dead_sessions(sessions: list[UserSession]) -> None:
+    """Log, at INFO, the sessions among *sessions* that stopped responding.
+
+    The one place /who (MCP tool and CLI) reports dead rows; they are never
+    part of its output.
+    """
+    if summary := dead_sessions_summary(dead_sessions(sessions)):
+        logger.info(summary)
 
 
 # ---------------------------------------------------------------------------

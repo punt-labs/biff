@@ -8,11 +8,10 @@ sessions appears on multiple rows.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
-from biff.formatting import dead_sessions_summary, format_who
-from biff.presence_liveness import dead_sessions, live_sessions
+from biff.formatting import format_who, log_dead_sessions
+from biff.presence_liveness import live_sessions
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import update_current_session
@@ -50,8 +49,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await refresh_read_messages(mcp, state)
         sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
         live = live_sessions(sessions)
-        if summary := dead_sessions_summary(dead_sessions(sessions)):
-            logging.getLogger(__name__).info(summary)
+        log_dead_sessions(sessions)
         if not live:
             return "No sessions."
         # Sort by last_tool_at, matching the IDLE column format_who renders
