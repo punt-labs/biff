@@ -23,10 +23,10 @@ from biff.formatting import (
     format_finger_multi,
     format_read,
     format_who,
-    who_mgr,
 )
 from biff.identity import owner_name
 from biff.models import Message, UserSession
+from biff.who_columns import WhoColumns
 
 
 class TestFormatIdle:
@@ -452,46 +452,48 @@ class TestWhoMgrColumn:
         # Regression: a viewer-side git name was applied to every row.
         a = self._row(user="alpha", owner_git="alice")
         b = self._row(user="beta", owner_git="bob")
-        assert who_mgr(a) == "alice"
-        assert who_mgr(b) == "bob"
+        assert WhoColumns.manager(a) == "alice"
+        assert WhoColumns.manager(b) == "bob"
         out = format_who([a, b])
         assert "alice" in out
         assert "bob" in out
 
     def test_owner_git_equal_to_self_falls_to_os_user(self) -> None:
-        assert who_mgr(self._row("jim", owner_git="claude")) == "jim"
+        assert WhoColumns.manager(self._row("jim", owner_git="claude")) == "jim"
 
     def test_comparison_is_case_insensitive_and_stripped(self) -> None:
-        assert who_mgr(self._row("jim", owner_git=" CLAUDE ")) == "jim"
+        assert WhoColumns.manager(self._row("jim", owner_git=" CLAUDE ")) == "jim"
 
     def test_owner_git_equal_to_self_and_no_os_user_is_blank(self) -> None:
-        assert who_mgr(self._row("", owner_git="claude")) == ""
+        assert WhoColumns.manager(self._row("", owner_git="claude")) == ""
 
     def test_both_equal_to_self_is_blank(self) -> None:
-        assert who_mgr(self._row("claude", owner_git="claude")) == ""
+        assert WhoColumns.manager(self._row("claude", owner_git="claude")) == ""
 
     def test_owner_git_unset_uses_the_os_user_floor(self) -> None:
-        assert who_mgr(self._row("jim")) == "jim"
+        assert WhoColumns.manager(self._row("jim")) == "jim"
 
     def test_full_name_is_not_addressable_and_falls_through(self) -> None:
-        assert who_mgr(self._row("jim", owner_git="Jane Doe")) == "jim"
-        assert who_mgr(self._row("", owner_git="Jane Doe")) == ""
+        assert WhoColumns.manager(self._row("jim", owner_git="Jane Doe")) == "jim"
+        assert WhoColumns.manager(self._row("", owner_git="Jane Doe")) == ""
 
     def test_rejected_candidate_is_logged(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with caplog.at_level("DEBUG", logger="biff.formatting"):
-            assert who_mgr(self._row("", owner_git="Jane Doe")) == ""
+        with caplog.at_level("DEBUG", logger="biff.who_columns"):
+            assert WhoColumns.manager(self._row("", owner_git="Jane Doe")) == ""
         assert "MGR candidate is not an addressable identity" in caplog.text
         assert "Jane Doe" not in caplog.text
 
     def test_unaddressable_os_user_is_blank(self) -> None:
-        assert who_mgr(self._row("a b")) == ""
+        assert WhoColumns.manager(self._row("a b")) == ""
 
     def test_human_row_is_always_blank(self) -> None:
         human = self._row("jim", user="kai", kind="human", owner_git="jmf-pobox")
-        assert who_mgr(human) == ""
-        assert who_mgr(self._row("jim", kind="", owner_git="jmf-pobox")) == ""
+        assert WhoColumns.manager(human) == ""
+        assert (
+            WhoColumns.manager(self._row("jim", kind="", owner_git="jmf-pobox")) == ""
+        )
 
     def test_human_rows_keep_the_column_when_an_agent_has_one(self) -> None:
         lines = format_who(
@@ -536,7 +538,7 @@ class TestWhoMgrColumn:
     def test_row_from_before_owner_git_falls_to_launched_by(self) -> None:
         data = self._row("jim").model_dump(mode="json")
         del data["owner_git"]
-        assert who_mgr(UserSession.model_validate(data)) == "jim"
+        assert WhoColumns.manager(UserSession.model_validate(data)) == "jim"
 
     def test_overlong_value_is_clipped(self) -> None:
         out = format_who([self._row("r" * 128)])
@@ -544,7 +546,7 @@ class TestWhoMgrColumn:
         assert "MGR" in out
 
     def test_value_beyond_the_identity_bound_is_not_addressable(self) -> None:
-        assert who_mgr(self._row("r" * 129)) == ""
+        assert WhoColumns.manager(self._row("r" * 129)) == ""
 
     def test_hostile_value_is_never_addressable_and_never_rendered(self) -> None:
         out = format_who([self._row("a\x1b[31mb\nc")])
@@ -587,7 +589,7 @@ class TestGitUserName:
             launched_by="osjim",
             owner_git=owner_name(repo),
         )
-        assert who_mgr(row) == "jmf-pobox"
+        assert WhoColumns.manager(row) == "jmf-pobox"
 
     @pytest.mark.parametrize(
         ("written", "want"),

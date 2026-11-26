@@ -60,6 +60,19 @@
   Two repositories on one NATS server get two relays, each scoped to its own
   repository, so one repository's mail, presence and wall stay in its own
   namespace.
+- `biff key init`, `biff key agent`, `biff key attest` and `biff key show`:
+  each person and each agent gets one Nostr key (secp256k1, BIP-340 Schnorr).
+  The owner signs an agent's public key with a NIP-OA attestation that
+  expires (24 hours by default, 7 days with `--image`, or
+  `BIFF_ATTESTATION_HOURS`); a receiver checks the expiry on its own clock.
+  Private keys rest in the OS keyring, never in the repository or an ethos
+  ext file. The owner key sits behind a keychain item that trusts no
+  application (macOS) or a passphrase-encrypted file (Linux), and an agent
+  process cannot create it or sign with it. Every agent key read is logged.
+  Public keys and attestations go in the identity's ext `nostr` namespace,
+  or in `~/.punt-labs/biff/nostr.yaml` when ethos is absent.
+- `biff who` adds a KEY column with each user's short npub when one is
+  published.
 
 ### Changed
 

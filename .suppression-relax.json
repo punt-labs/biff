@@ -1,5 +1,17 @@
 [
   {
+    "file": "src/biff/key_vault.py",
+    "ceiling": 1,
+    "justify": "one subprocess call to /usr/bin/security with a fixed program path; arguments are validated names",
+    "added_at": "2026-11-26T18:11:54.668778Z"
+  },
+  {
+    "file": "src/biff/nostr_directory.py",
+    "ceiling": 1,
+    "justify": "one subprocess call to the ethos executable resolved with shutil.which; arguments are validated handle and key names",
+    "added_at": "2026-11-26T18:11:55.879423Z"
+  },
+  {
     "file": "src/biff/server/tools/messaging.py",
     "ceiling": 2,
     "justify": "read_messages stamps activity after the fetch; on NATS the fetch already consumed the mail, so a failed presence write must be logged, not raised, or the mail is lost. Broad catch at the MCP tool boundary (PY-EH-6).",

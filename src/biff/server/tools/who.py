@@ -1,9 +1,8 @@
 """Presence list tool — ``/who``.
 
-Lists all sessions, showing idle time like ``w(1)``.
-``+`` means accepting messages, ``-`` means messages off.
-Each row represents one TTY session; a user with multiple
-sessions appears on multiple rows.
+Lists all sessions, showing idle time like ``w(1)``.  ``+`` means accepting
+messages, ``-`` means messages off.  Each row represents one TTY session; a
+user with multiple sessions appears on multiple rows.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.formatting import format_who, log_dead_sessions
+from biff.nostr_directory import NostrDirectory
 from biff.presence_liveness import live_sessions
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
@@ -52,7 +52,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         log_dead_sessions(sessions)
         if not live:
             return "No sessions."
-        # Sort by last_tool_at, matching the IDLE column format_who renders
-        # (:func:`biff.formatting.format_who`) -- last_active is heartbeat
-        # recency, unrelated to the idle value shown.
-        return format_who(sorted(live, key=lambda s: s.last_tool_at, reverse=True))
+        # Sort by last_tool_at to match the IDLE column, not heartbeat recency.
+        keys = NostrDirectory.for_repo(state.repo_root).session_npubs(live)
+        return format_who(
+            sorted(live, key=lambda s: s.last_tool_at, reverse=True), keys
+        )

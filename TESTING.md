@@ -140,6 +140,7 @@ another. The Docker-image tier (biff-kmv) shipped alongside this doc update.
 | 3d (subset) | `stress` | Same as `nats_hosted` — scale stress tests specifically (`tests/test_hosted_nats/test_stress.py`) |
 | 4 | `sdk` | `ANTHROPIC_API_KEY` |
 | 5 | `claude_channels` | `tmux`, `nats-server` and a logged-in interactive `claude` |
+| Manual | `keychain` | macOS and a person at the screen: the tests use the real keychain and raise a dialog. Run by hand with `pytest -m keychain`; no default run selects them |
 
 `cli_multi_user` and `nats_local` both need a bare `nats-server` binary,
 but they're deliberately distinct tiers with distinct markers — 2b
