@@ -39,8 +39,9 @@ or a failed creation exits 1. It then looks for `claude` on `PATH`:
 
 `install.sh` at the repo root is the bootstrap: it installs the CLI with
 `uv tool install`, registers the `punt-labs` marketplace, installs the
-plugin, and runs `biff doctor`. `--no-plugin` (or `BIFF_NO_PLUGIN=1`) stops
-after the CLI.
+plugin, and runs `biff doctor`. `--no-plugin` (or `BIFF_NO_PLUGIN=1`) skips the
+plugin; the home tree is still created and doctor still runs, reporting the
+plugin as missing.
 
 **What the plugin carries.** The marketplace fetches only `plugin/` from
 `punt-labs/biff` through a `git-subdir` source (DES-055). That directory
@@ -59,7 +60,7 @@ files. The hook edits no settings file.
 **Per-repo config.** `.punt-labs/biff/config.yaml` (committed) and
 `.punt-labs/biff/config.local.yaml` (per user, gitignored) hold the team
 roster and relay settings (DES-037). With neither, biff runs zero-config and
-uses the local relay (DES-090). The committed marker
+uses the local relay unless `BIFF_RELAY_URL` names one (DES-090, DES-060). The committed marker
 `.punt-labs/biff/enabled` is the enablement signal (DES-052). There is no
 `.biff` file and no `biff init` command.
 
@@ -68,14 +69,15 @@ DES-094 (`docs/design/trust-model.md`). Installation stores no identity.
 
 **Doctor.** `biff doctor` (`Diagnostics` in `src/biff/doctor.py`) prints the
 package version, then one line per check, then exits 1 only if a required
-check failed. Checks run in this order:
+check failed. A malformed shared `config.yaml` stops doctor with that error
+before any check prints. Checks run in this order:
 
 | Check | Required | What it tests |
 |-------|----------|---------------|
 | gh CLI | No | `gh` is installed and authenticated |
 | Plugin | Yes | `biff@punt-labs` is in `~/.claude/plugins/installed_plugins.json` |
 | User commands | No | The top-level command files exist in `~/.claude/commands/` |
-| Relay | Yes | With no relay configured: the local relay directory is writable. With a NATS relay configured (the check is then named "NATS relay"): the server accepts a connection within 3 seconds |
+| Relay | Yes | With no relay configured: the local relay directory is writable. With a NATS relay configured (the check is then named "NATS relay"): the server accepts a connection (3-second connect timeout, one retry) |
 | Config | No | `.punt-labs/biff/config.yaml` exists, or zero-config applies |
 | Enabled | No | The committed marker exists |
 | Git hooks | No | This clone's biff hooks are deployed; skipped when biff is not enabled |
@@ -102,7 +104,7 @@ display pipeline is documented in DESIGN.md.
 | `<repo>/.punt-labs/biff/enabled`, `<repo>/.github/workflows/biff-notify.yml` | `biff enable` | Committed enablement artifacts (DES-052) |
 | `<repo>/.punt-labs/biff/CLAUDE.md`, `<repo>/CLAUDE.md` | `biff enable` | Agent guide and its `@`-import (INS-011) |
 | `<repo>/.claude/settings.json` | `biff enable` | Allow rules for biff's tools and commands |
-| `<clone>/.git/hooks/` | `biff enable` | Per-clone git hook dispatchers |
+| The clone's hooks directory, as `git rev-parse --git-path hooks` reports it (`.git/hooks/` by default) | `biff enable` | Per-clone git hook dispatchers |
 | `<main checkout>/.punt-labs/local/biff/relay/` | biff at runtime | Local relay state (DES-090, DES-091) |
 | `<repo>/.punt-labs/biff/config.yaml`, `config.local.yaml` | the user | Team roster, relay settings (DES-037) |
 
