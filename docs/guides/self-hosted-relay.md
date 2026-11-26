@@ -6,7 +6,7 @@ sessions on one machine see each other with no server. When sessions must see
 each other across machines, a NATS relay does that. Biff can use the shared
 demo relay (`tls://connect.ngs.global`, opt in with `relay: {type: demo}`), but
 that relay shares its namespace with every biff user. Repos are still isolated
-(see [DES-007](../DESIGN.md#des-007-nats-namespace-scoping)), but you're
+(see [DES-007](../../DESIGN.md#des-007-nats-namespace-scoping)), but you're
 sharing connection capacity with everyone else on it.
 
 `ghcr.io/punt-labs/biff-relay` is a Docker image that runs your own
@@ -14,14 +14,14 @@ sharing connection capacity with everyone else on it.
 dependency on Synadia Cloud. It does not create biff's streams — your biff
 client creates `biff-inbox`, `biff-sessions`, and `biff-wtmp` on first
 connection (see
-[DES-016](../DESIGN.md#des-016-shared-nats-streams--encryption-aware-design)).
+[DES-016](../../DESIGN.md#des-016-shared-nats-streams--encryption-aware-design)).
 The image's job is to run a correctly configured, durable `nats-server`.
 
 The Docker image, `docker-compose.yml`, and Kubernetes manifests
-referenced below live in [`docker/`](../docker/) in this repo.
+referenced below live in [`docker/`](../../docker) in this repo.
 
 **Does the image actually work?** Check
-[`tests/test_relay_image/`](../tests/test_relay_image/) rather than
+[`tests/test_relay_image/`](../../tests/test_relay_image) rather than
 manually running `docker build`/`docker run`/`wget` yourself — it builds
 the image fresh from this checkout's `docker/` directory and runs it as a
 real container, asserting presence, message write/read, JetStream
@@ -176,7 +176,7 @@ If you'd rather use a bare `docker run`, mount the same `nats.conf` at
 the same path -- `entrypoint.sh` detects it and layers it in itself, so
 don't pass your own `-c` flag: appending one here would replace
 `entrypoint.sh`'s own config selection outright, including the loopback
-monitor bind (see [DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image)).
+monitor bind (see [DES-059](../../DESIGN.md#des-059-self-hosted-relay-docker-image)).
 `entrypoint.sh` also refuses to start if the mounted `nats.conf` doesn't
 define `authorization`/`accounts`/`nkeys`, or still has the placeholder
 token below unedited — a file existing at that path isn't the same thing
@@ -228,7 +228,9 @@ its own.
 
 A team relay is reachable over a network, so the trust model changes from
 "trust everything on my laptop" to "trust everyone with the token." Set a
-token before pointing this relay at anything beyond localhost.
+token before pointing this relay at anything beyond localhost. Per-sender
+authenticity and admission by key are specified in
+[trust-model.md](../design/trust-model.md) (DES-094).
 
 `nats.conf`, mounted read-only at `/etc/nats/nats.conf` (referenced in the
 compose file above):
@@ -339,7 +341,7 @@ A single Docker image and `docker-compose.yml` aren't enough here. An org
 piloting biff "at scale" is usually testing on infrastructure that
 resembles what it would actually run, and for most orgs at this size
 that's Kubernetes. See
-[DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image)
+[DES-059](../../DESIGN.md#des-059-self-hosted-relay-docker-image)
 for the full reasoning. This section ships a second artifact — a minimal
 Kubernetes manifest set — on top of the same `ghcr.io/punt-labs/biff-relay`
 image the other two tiers use.
@@ -347,7 +349,7 @@ image the other two tiers use.
 ### Install and run
 
 Create the two Secrets the `Deployment` mounts, copying from
-[`nats.conf.enterprise.example`](../docker/nats.conf.enterprise.example)
+[`nats.conf.enterprise.example`](../../docker/nats.conf.enterprise.example)
 rather than hand-transcribing the block below, then apply the manifests
 (`Deployment`, `PersistentVolumeClaim`, `Service`, optional
 `prometheus-nats-exporter` sidecar) against your own cluster. `nats.conf`
@@ -413,7 +415,7 @@ this tier, unlike the team tier where a token is the minimum bar.
 `readinessProbe` and `livenessProbe` in the manifest hit the same
 `/healthz` endpoint the Docker `HEALTHCHECK` uses, but as `exec` probes,
 not `httpGet`. The monitoring port binds to `127.0.0.1` inside the
-container (see [DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image)),
+container (see [DES-059](../../DESIGN.md#des-059-self-hosted-relay-docker-image)),
 so a `httpGet` probe — which connects from the kubelet, outside the
 container's network namespace — can't reach it. `exec` runs the request
 inside that namespace instead:
@@ -470,10 +472,9 @@ Two paths from here:
 
 - **Move to the paid hosted tier**
   ([biff-bv5](https://github.com/punt-labs/biff/issues?q=biff-bv5)) —
-  managed relay, team admin controls, audit logs, end-to-end encryption,
-  billing. Per-repo credential provisioning via GitHub identity
-  ([biff-3pn](https://github.com/punt-labs/biff/issues?q=biff-3pn)) is
-  specific to this path. Self-hosted teams, including this POV tier,
+  managed relay, team admin controls, audit logs, billing. Per-key
+  admission and end-to-end encryption are specified in
+  [trust-model.md](../design/trust-model.md) (DES-094). Self-hosted teams, including this POV tier,
   always own their own NATS auth material, the same way you'd own your
   own Postgres or Redis credentials.
 - **Keep self-hosting in production** — adopt the upstream
@@ -481,7 +482,7 @@ Two paths from here:
   (clustering, mTLS between NATS nodes, operator-managed accounts)
   instead of this guide's minimal manifests. This project doesn't
   maintain a competing Helm chart; see
-  [DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image)'s
+  [DES-059](../../DESIGN.md#des-059-self-hosted-relay-docker-image)'s
   Rejected section for why.
 
 ---

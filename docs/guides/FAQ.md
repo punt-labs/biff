@@ -56,7 +56,7 @@ The local relay keeps messages in files under the repo's `.punt-labs/local/biff/
 
 ### Are messages encrypted?
 
-Today, messages are encrypted in transit via TLS between your client and the NATS server. End-to-end encryption (NaCl/libsodium) is on the roadmap --- once shipped, the relay will store only ciphertext it cannot read.
+Today, messages are encrypted in transit via TLS between your client and the NATS server. Signed messages, and direct messages and talk encrypted end to end, are specified in [docs/design/trust-model.md](../design/trust-model.md) (DES-094); they have not shipped.
 
 ### Does biff send data to Anthropic or any third party?
 
@@ -88,7 +88,7 @@ Yes. Each agent gets its own TTY session and shows up separately in `/who`. Use 
 
 ### What is biff NOT building?
 
-- **Channels or rooms.** Communication is directed: you message a person or broadcast to the team.
+- **Chat-app channels or rooms.** Communication is directed: you message a person or broadcast to the team. The Claude Code plugin's "channel events" are one-line arrival notices, not rooms ([design-channels.md](../design/design-channels.md)).
 - **Message history or search.** Messages are ephemeral. Biff is not a system of record.
 - **Video or voice.** Biff is text. Use dedicated tools for calls.
 - **Project management.** No tasks, no boards, no sprints. Use Linear or GitHub Issues.

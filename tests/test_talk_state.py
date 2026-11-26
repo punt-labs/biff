@@ -1,6 +1,6 @@
 """Tests for the shared talk state machine (biff.talk_state).
 
-Coverage for the Z specification docs/talk.tex: the bounded notification
+Coverage for the Z specification docs/specs/talk.tex: the bounded notification
 queue, session-scoped receive filters, phase-guarded drains, the accept
 handshake, the mutual-invite tie-break, and ephemeral publishing.  All
 tests are pure — no NATS, no network — except the publish tests, which

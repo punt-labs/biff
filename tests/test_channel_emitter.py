@@ -1,6 +1,6 @@
 """The channel emitter: detection, content, record, rate and the deferred send.
 
-Each test names the obligation of ``docs/notification.tex`` ("What the
+Each test names the obligation of ``docs/specs/notification.tex`` ("What the
 implementation owes") it proves, as ``O<n>``.  The relay is the real local
 relay; the client is a real ``ChannelLink`` over a write stream the test
 controls, because a fake link that raises would prove nothing about what the
@@ -1872,7 +1872,7 @@ class TestHeldMailAcrossARebind:
 
 
 class TestChannelCheck:
-    """``docs/channel-check.tex``: an accepted request sends exactly one event."""
+    """``docs/specs/channel-check.tex``: an accepted request sends exactly one event."""
 
     _REPLY = "_INBOX.doctor1"
 

@@ -28,6 +28,9 @@ When agent teams span repos, the org determines which agents can
 discover and message each other. Two teams on different NATS servers (or
 different credential scopes) can't coordinate — that's the org wall.
 
+Per-key admission to the relay and team membership are specified in
+DES-094 ([trust-model.md](trust-model.md)).
+
 **Gap:** No first-class org entity. The trust boundary is implicit in
 config files. If biff grows to support multiple orgs on a shared relay
 (multi-tenancy), this must become explicit.
@@ -172,8 +175,9 @@ invisible — no presence, no identity, no way to address them.
   reviewer found a problem." Currently impossible — you can only write
   to the human.
 - **Authorship**: When eric gets a message from kai's session, he needs
-  to know: was that kai, or kai's agent? Trust and response strategy
-  differ.
+  to know: was that kai, or kai's agent? Authorship is specified in
+  DES-094 ([trust-model.md](trust-model.md)): the agent signs, and an owner
+  attestation names kai.
 - **Lifecycle**: Subagents spawn and die. Agent team members join and
   leave. The system needs to track this for presence, for cleanup, and
   for coordination.

@@ -7,7 +7,8 @@ are described in the [README](../README.md) and recorded in the
 
 | Area | Planned work |
 |------|--------------|
-| **Security** | End-to-end encryption (NaCl/libsodium), GitHub identity and authentication, per-repo NATS credentials |
+| **Security** | Per-person and per-agent keys, signed messages, end-to-end encrypted DMs and talk, per-sender grants. Specified in [trust-model.md](design/trust-model.md) (DES-094), delivered in four waves |
+| **Daemon** | `biffd`, a per-user daemon that holds the relay connection and private keys. Specified in [biffd.md](design/biffd.md) (DES-095) |
 | **Real-time** | `/pair` for session sharing with explicit consent |
 | **Hosted relay** | Managed service with admin controls, audit logs and team isolation |
 

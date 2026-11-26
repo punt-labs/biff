@@ -84,7 +84,7 @@ on them.
 - **Install**: codex plugin bundling `[mcp_servers.biff]` + hooks (codex
   plugins carry both), or `biff install --codex` writing config +
   `~/.codex/hooks.json`.
-- **A teammate messages you**: biff's daemon runs `codex queue --thread
+- **A teammate messages you**: biff's daemon (design: `docs/design/biffd.md`) runs `codex queue --thread
   <session-name> --message "N unread from @x — call read_messages"` (or
   speaks `thread/queue/add` on the daemon socket). Delivered as a real,
   user-visible turn within ~10s even when idle — replaces both the nudge

@@ -29,7 +29,7 @@
 #
 # Pure shell + jq, no Python startup: this fires on every prompt submit and
 # every tool call, so it must stay well inside Claude Code's <100ms
-# UserPromptSubmit budget (docs/hook-lifecycle.md §5) — a Python CLI's
+# UserPromptSubmit budget (docs/design/hook-lifecycle.md §5) — a Python CLI's
 # interpreter+import cost alone (~0.3s, per that doc's measurements) would
 # blow the budget on its own.
 

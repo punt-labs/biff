@@ -4,9 +4,10 @@ Biff is how you message teammates and agents, see who is active, and
 coordinate work — within a repo and across repos. This guide is how an *agent*
 drives biff, not how to develop biff itself.
 
-Biff is **passive/pull**: nothing wakes you between turns. Incoming mail and
-talk invites surface by mutating tool descriptions — you notice them on your
-next activity, or when a poll fires.
+Biff delivers in one of two ways. In Claude Code with channels live, a short
+channel event arrives on its own when mail, a wall, a talk invite or a talk
+message comes in. Everywhere else, you poll, and biff signals what is waiting
+by changing tool descriptions.
 
 ## Sending and coordinating
 
@@ -20,12 +21,18 @@ next activity, or when a poll fires.
 - `/tty <name>` — name your session so teammates can address it.
 - `talk` — start a real-time, mutual conversation with a peer.
 
-## Receiving (passive/pull)
+## Receiving
 
-Biff holds incoming items on the server and signals them by changing tool
-descriptions: the `talk` tool gains a leading `[TALK] …`, and `read_messages`
-gains `(N unread)`. Nothing interrupts you between turns — you only see the
-change on your next tool activity.
+**Channel events (Claude Code, channels live).** An event is a one-line
+summary, never a message body. The only action it asks for is calling the biff
+tool it names: `read_messages`, `wall` or `talk_read`. Events arrive on their
+own; do not poll. If a biff startup note says channels are not live or may not
+be live, poll as below.
+
+**Polling (every other case).** Biff holds incoming items on the server and
+signals them by changing tool descriptions: the `talk` tool gains a leading
+`[TALK] …`, and `read_messages` gains `(N unread)`. You see the change on your
+next tool activity.
 
 - `/biff:read <interval>` — start polling on a cadence (e.g. `/biff:read 1m` to
   stay responsive). `/biff:read n` stops. `/biff:read status` shows config.

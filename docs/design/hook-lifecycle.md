@@ -5,7 +5,7 @@ and what that means for startup latency in Python plugins.
 
 **Date**: 2026-03-11
 **Source**: Base Z specification (`z-spec/examples/claude-code.tex`,
-329K states verified), biff Layer 2 (`docs/claude-code-biff.tex`),
+329K states verified), biff Layer 2 (`docs/specs/claude-code-biff.tex`),
 and measured behavior across four Punt Labs plugins.
 
 ---
@@ -337,7 +337,7 @@ but don't worry about cross-plugin coordination.
 
 - `z-spec/examples/claude-code.tex` — Base state machine (18 ops,
   329K states, all invariants verified)
-- `docs/claude-code-biff.tex` — Layer 2: biff workflow gates
+- `docs/specs/claude-code-biff.tex` — Layer 2: biff workflow gates
   (plan + bead + message awareness)
 - `z-spec/examples/claude-code-vox.tex` — Layer 2: Stop hook
   decision-block (no infinite loop)

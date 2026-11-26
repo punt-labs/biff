@@ -1,7 +1,7 @@
 """The production paths that reach the channel emitter, with a real emitter.
 
 Each test drives a real call site and asserts that the emitter acted, so deleting
-the call leaves a test red (``docs/notification.tex``, "What the implementation
+the call leaves a test red (``docs/specs/notification.tex``, "What the implementation
 owes").
 """
 

@@ -3,7 +3,7 @@
 > **SUPERSEDED (PL-231, DES-075).** This document describes the
 > dual-session companion feature, which has been removed. It is kept
 > for historical reference only. See DESIGN.md DES-075 and
-> `docs/pl-231-companion-removal.md`.
+> `docs/archive/pl-231-companion-removal.md`.
 
 Status: **implemented**, including a consolidated fix round (§6) that
 corrected two latency regressions a five-agent local-review sweep found
@@ -339,7 +339,7 @@ resolve structurally, not by inference from silence.
 
 ## 4. Reconciliation with the governing Z specs
 
-### `docs/notification.tex` — fits unchanged
+### `docs/specs/notification.tex` — fits unchanged
 
 The spec models the surfacing state machine (`MailArrive`,
 `TalkInviteArrive`, `PollTick`, the belt/suspenders notify split, the
@@ -361,7 +361,7 @@ falsified by adding a third "wake, defer the send" source. This is a
 its entry in the `NotifyGuarantee`/change-gate proofs), but it is additive,
 low-risk, and follows an established template exactly.
 
-### `docs/nats-relay.tex` — needs an extension before implementation
+### `docs/specs/nats-relay.tex` — needs an extension before implementation
 
 Two distinct additions are needed, both non-trivial because they touch the
 proven state space, not just prose:
@@ -478,7 +478,7 @@ callback shape, same gate, bound to `state.companion.user` — whenever
 `state.companion is not None`. `subscribe_inbox_notify` and
 `_reconcile_inbox_notify_sub` gained a `user` parameter so the *same*
 functions serve both bindings; no companion-specific code path was added.
-`docs/nats-relay.tex`'s `SubKind` free type gained a third constructor,
+`docs/specs/nats-relay.tex`'s `SubKind` free type gained a third constructor,
 `inboxNotifyCompanion`, to keep the two live SUBs' generation-tracking
 distinguishable in the model — every operation already quantified over
 `SubKind` needed no further change (see the spec's own commentary at the
@@ -595,7 +595,7 @@ mechanism to begin with — `additionalContext`, injected by a hook's return
 value, is. `plugin/hooks/unread-nudge.sh` reads the same per-session unread
 file as part 1 (a pure-shell reimplementation of `session_key.py`'s PID walk,
 no Python startup, to fit `UserPromptSubmit`'s <100ms budget —
-`docs/hook-lifecycle.md` §5) and, wired into `UserPromptSubmit` and
+`docs/design/hook-lifecycle.md` §5) and, wired into `UserPromptSubmit` and
 `PostToolUse`, injects "You have N unread biff messages — call
 `read_messages` now" directly into the model's context the moment the count
 rises. This replaces reliance on description markers as the model-side

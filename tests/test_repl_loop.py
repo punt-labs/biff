@@ -1,6 +1,6 @@
 """Tests for REPL loop control flow (biff.__main__._repl_loop).
 
-Coverage for the Z specification docs/repl.tex: prompt gate lifecycle,
+Coverage for the Z specification docs/specs/repl.tex: prompt gate lifecycle,
 mode transitions, dispatch outcomes, and notification sync.  Tests
 feed lines into the asyncio queue and verify prompt gate state and
 loop termination.  No NATS, no stdin thread.
@@ -773,7 +773,7 @@ class TestPromptOutputOrdering:
     command output printed by ``_repl_loop`` is not flushed first, the
     prompt overtakes the still-buffered output and collides with its first
     line.  Every gate release routes through ``_release_prompt`` which flushes
-    first; this guards the whole bug class.  See docs/repl.tex
+    first; this guards the whole bug class.  See docs/specs/repl.tex
     prompt-gate synchronization.
     """
 

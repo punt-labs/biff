@@ -2,7 +2,11 @@
 
 **Bead:** biff-n9jg
 **Date:** 2026-04-14
-**Status:** PROPOSED
+**Status:** SUPERSEDED. Identity resolution is specified by DES-040
+(agent-first identity) and DES-064 (process-tree inference retired) in
+[DESIGN.md](../../DESIGN.md). Keys, attestation and trust data kept in ethos
+extensions are specified in DES-094 ([trust-model.md](../design/trust-model.md)). This
+file records the original subprocess design.
 
 ## Summary
 

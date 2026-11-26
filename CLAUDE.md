@@ -167,7 +167,7 @@ Use semver: patch for fixes, minor for features, major for breaking changes.
 PRs must NOT bump version files. `punt release run` reads pyproject.toml
 as `current` and increments it — if an implementation PR pre-bumps
 the version, `punt release run` will bump PAST the intended version,
-creating a phantom release (COE: docs/coe-v1.11-release.md).
+creating a phantom release (COE: docs/coe/coe-v1.11-release.md).
 The version on main between releases stays at the last released
 version.
 
@@ -299,7 +299,7 @@ This creates one mission per stage, wired with `depends_on` edges. The worker pi
 | CLI minimalism / man-page text | `rop` | `mdm` |
 | NATS / relay protocol / wire-level | `rmh` (impl) or `bwk` (Go cross-review if relay code is touched) | `djb` (Bernstein) — wire safety |
 | Crypto / auth-token handling | `rmh` | `djb` |
-| Threat model — relay trust, multi-tenant orgs | `claude` (leader) | `bcs` (Schneier) |
+| Threat model — relay trust, multi-tenant orgs (DES-094) | `claude` (leader) | `bcs` (Schneier) |
 | Infra / CI / release scripts | `adb` (Lovelace) | `kth` (Hightower) |
 | UX of REPL output / table formatting | `rmh` | `edt` (Tufte) — info design |
 | Product / discovery (new biff capability) | `claude` (leader) | `mcg` (Cagan) or `tdt` (Torres) |
@@ -370,7 +370,7 @@ Failure to consult the design logs has already caused wasted work and rollbacks.
 
 ## Formal Methods — When to Use z-spec
 
-biff's protocols and state machines are modeled as Z specifications in `docs/*.tex` (`nats-relay`, `session-model`, `talk`, `notification`, `repl`, `claude-code-biff`), type-checked with `fuzz` and model-checked with ProB via the `z-spec` plugin. Formal specs catch entire *classes* of bugs, not the one input you happened to test. The design logs record *decisions*; the Z specs make the invariants *machine-checkable*. They are complementary — a DES entry that governs a state machine should point at its spec.
+biff's protocols and state machines are modeled as Z specifications in `docs/specs/*.tex` (`nats-relay`, `session-model`, `talk`, `notification`, `repl`, `claude-code-biff`), type-checked with `fuzz` and model-checked with ProB via the `z-spec` plugin. Formal specs catch entire *classes* of bugs, not the one input you happened to test. The design logs record *decisions*; the Z specs make the invariants *machine-checkable*. They are complementary — a DES entry that governs a state machine should point at its spec.
 
 **The recurring lesson.** The connection/handle lifecycle was patched at the code level six times (DES-016, DES-019, DES-021, DES-029, biff-wr3, biff-tww) because the model was too coarse — it modeled `connected` as a single healthy state with no `halfOpen`/wedged state, so ProB never got to say "this state is reachable and has no way out." biff-tww is a reachable deadlock the extended model now proves as a counterexample. When a defect class recurs, the model is missing a state — extend the spec, don't just patch the code.
 
@@ -383,11 +383,11 @@ biff's protocols and state machines are modeled as Z specifications in `docs/*.t
 ### Workflow
 
 ```text
-/z-spec:check   docs/<spec>.tex              # fuzz type-check — must be OK
-/z-spec:test    docs/<spec>.tex              # ProB model-check — invariants hold across the whole state space
-/z-spec:partition docs/<spec>.tex --code python  # TTF: the complete set of behavioral tests you owe
-/z-spec:audit   docs/<spec>.tex --test-dir=tests # which spec constraints have a test; which are GAPs
-/z-spec:contracts docs/<spec>.tex python         # optional runtime invariant assertions
+/z-spec:check   docs/specs/<spec>.tex              # fuzz type-check — must be OK
+/z-spec:test    docs/specs/<spec>.tex              # ProB model-check — invariants hold across the whole state space
+/z-spec:partition docs/specs/<spec>.tex --code python  # TTF: the complete set of behavioral tests you owe
+/z-spec:audit   docs/specs/<spec>.tex --test-dir=tests # which spec constraints have a test; which are GAPs
+/z-spec:contracts docs/specs/<spec>.tex python         # optional runtime invariant assertions
 ```
 
 ### CI gate
@@ -412,15 +412,15 @@ Biff is a CLI communication tool for software engineers, named after the Berkele
 
 ### Communication Model
 
-- **Pull, not push.** Remote prompting means inviting someone to steer *your* Claude, not pushing into theirs.
-- **Purposeful, not chatty.** Every command implies intent. No channels, no threads, no emoji reactions.
+- **Pull for bodies, push for notice.** Remote prompting means inviting someone to steer *your* Claude, not pushing into theirs. Where a plugin supports it, a one-line arrival summary is pushed (DES-087, `docs/design/design-channels.md`); the body is read by tool call until wave (c) of DES-094.
+- **Purposeful, not chatty.** Every command implies intent. No chat rooms, no threads, no emoji reactions. Claude Code channel events are arrival notices, not rooms.
 - **Team-scoped.** `/wall` broadcasts to your team, not the world.
 - **MCP-native.** Built for Claude Code sessions and MCP-compatible systems.
 
 ### Security Principles
 
 - **Human-in-the-loop.** Remote steering requires explicit consent from the session owner.
-- **Permissions are explicit.** Who can message you, who can request steering — all configurable.
+- **Permissions are explicit.** What each sender may make your agent do is a per-sender grant (DES-094, `docs/design/trust-model.md`); the per-user daemon that holds keys is `docs/design/biffd.md` (DES-095). Neither ships until its waves land.
 - **Audit trail.** Every message, every steering request is logged.
 - **Sandboxed by default.** Remote interactions are read-only unless explicitly escalated.
 

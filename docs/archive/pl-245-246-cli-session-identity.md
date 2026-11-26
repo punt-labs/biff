@@ -8,7 +8,7 @@ identity), DES-050 (route on a durable session id; `derive_routing_id`),
 DES-040 (agent identity from disk), DES-076 (the four identity sources and the
 addressable-display rule), DES-035 (tty name reservation);
 `punt-kit/standards/mcp-caller-identity.md` section 4.2 (get-or-create, live,
-dormant, ended, resume); `docs/session-model.tex` (the `ttyalias` injection,
+dormant, ended, resume); `docs/specs/session-model.tex` (the `ttyalias` injection,
 `ResumeSession`, `DeliverIdentity`/`DeliverAliasLost`/`DeliverAliasMis`);
 `src/biff/session_routing.py`, `src/biff/cli_session.py`,
 `src/biff/commands/write.py`, plus `resolve_tty_name`
@@ -340,8 +340,8 @@ to a live `tty5` never leaks into the mailbox.
 
 ## 5. The Z specification change
 
-Add a new `docs/cli-session.tex`, modeled on `docs/claude-code-biff.tex`, rather
-than extending `docs/session-model.tex`.
+Add a new `docs/specs/cli-session.tex`, modeled on `docs/specs/claude-code-biff.tex`, rather
+than extending `docs/specs/session-model.tex`.
 
 Reasons. `session-model.tex` is the structural model of orgs, repos, machines,
 clones, and engine sessions, with a routing layer and a `ROUTEMODE` scoping
@@ -430,7 +430,7 @@ gaps before the state-machine code lands.
 - `src/biff/commands/read.py`: unchanged in behavior; it already drains the
   user mailbox, which `end` and the stale-send rule rely on. A regression test
   pins that.
-- `docs/cli-session.tex`: the specification (section 5).
+- `docs/specs/cli-session.tex`: the specification (section 5).
 - Tests: `tests/test_commands/test_write.py`, a new
   `tests/test_cli_session_store.py`, `tests/test_cli_session.py`,
   `tests/test_commands/test_plan.py`, `tests/test_session_routing.py`,
@@ -449,7 +449,7 @@ commit of each carries its test, written first and failing on the unchanged code
    `forwarded` and a message in the user mailbox. Also covers the unknown-user
    error and the live-holder-wins case. Touches `write.py`, the shared
    resolver, and `messaging.py`.
-2. **Specification** (`docs/cli-session.tex`), in parallel with commit 1. Must
+2. **Specification** (`docs/specs/cli-session.tex`), in parallel with commit 1. Must
    be `fuzz`-clean and ProB-clean before commits 4 to 6.
 3. **Session record store** (`cli_session_store.py` and its tests): create,
    load, list, transition, expire, modes, id validation. Independent of the

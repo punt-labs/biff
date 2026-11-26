@@ -604,7 +604,7 @@ left to reclaim it.''  Two reachability goals are checked against it.
 \label{sec:crash-goal}
 
 \begin{verbatim}
-probcli docs/sentinel-reap.tex -model_check -noass -nodead \
+probcli docs/specs/sentinel-reap.tex -model_check -noass -nodead \
   -card SESSIONKEY 2 \
   -goal "own : rowPresent & not(own : sentinelPresent) & exited=ztrue"
 \end{verbatim}
@@ -629,7 +629,7 @@ witness and forces ProB to search for a route to $BadOrphan$ that goes
 through no crash at all:
 
 \begin{verbatim}
-probcli docs/sentinel-reap.tex -model_check -noass -nodead \
+probcli docs/specs/sentinel-reap.tex -model_check -noass -nodead \
   -card SESSIONKEY 2 \
   -goal "own : rowPresent & not(own : sentinelPresent) \
          & exited=ztrue & crashed=zfalse"
@@ -721,7 +721,7 @@ state predicate instead of a proxy that collides with the
 $exited$/$shutdownSignaled$ machinery:
 
 \begin{verbatim}
-probcli docs/sentinel-reap.tex -model_check -noass -nodead \
+probcli docs/specs/sentinel-reap.tex -model_check -noass -nodead \
   -card SESSIONKEY 2 \
   -goal "own : rowPresent & not(own : sentinelPresent) \
          & exited=ztrue & crashed=zfalse & resumed=ztrue"
@@ -776,7 +776,7 @@ $OwnReapForeignFails$, which all need a second $SESSIONKEY$ distinct
 from $own$:
 
 \begin{verbatim}
-probcli docs/sentinel-reap.tex -model_check -noass -nodead \
+probcli docs/specs/sentinel-reap.tex -model_check -noass -nodead \
   -card SESSIONKEY 2 -p MAX_OPERATIONS 20000 -p TIME_OUT 60000 -coverage
 \end{verbatim}
 

@@ -1,5 +1,5 @@
 {
-  "specification": "docs/claude-code-biff.tex",
+  "specification": "docs/specs/claude-code-biff.tex",
   "testDirectory": "",
   "timestamp": "2026-08-09T00:00:00+00:00",
   "summary": {

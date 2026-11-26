@@ -213,7 +213,7 @@ class TestResolveRelayConfig:
         """`biff doctor` must report the same relay env overrides send `wall` to.
 
         Regression coverage for the "second, independent relay-config
-        reader" failure class docs/relay-env-overrides.md Sec 1 flags --
+        reader" failure class docs/design/relay-env-overrides.md Sec 1 flags --
         `_resolve_relay_config` now delegates to
         `biff.config.resolve_relay_config`, the same chain
         `_load_base_config` uses.

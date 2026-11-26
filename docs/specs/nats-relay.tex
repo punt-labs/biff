@@ -289,7 +289,7 @@ the same formula as for $kvWatch$ and the existing negative controls
 already show it failing when $Subscribe$ is withheld from a kind.
 
 $channelCheck$ is the fifth kind: the request subject of the on-demand
-channel check (PL-1365, \texttt{docs/channel-check.tex}).  \texttt{biff doctor}
+channel check (PL-1365, \texttt{docs/specs/channel-check.tex}).  \texttt{biff doctor}
 publishes a request on a subject keyed on the session's \texttt{user:tty}
 (\texttt{channel\_check\_subject}); every session holds an always-on, ungated
 SUB on its own subject whose callback only hands a well-formed request to the
@@ -1945,7 +1945,7 @@ verified by model checking with probcli (\texttt{z-spec test}):
 %% k = channelCheck in the not-closed form: every one of the 831,363 states
 %% visited, no counterexample, about 4.5 minutes walltime on an idle machine
 %% (2026-11-25; an earlier attempt under load did not finish in 25 minutes).
-%% A bounded run, "$PROBCLI" docs/nats-relay.tex $P -mc 2000000, also covers
+%% A bounded run, "$PROBCLI" docs/specs/nats-relay.tex $P -mc 2000000, also covers
 %% every operation, Subscribe and SubscribeRetry at kind? = channelCheck among
 %% them, with no invariant violation and no deadlock.
 %%
@@ -1953,14 +1953,14 @@ verified by model checking with probcli (\texttt{z-spec test}):
 %%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 4 -p MAX_INITIALISATIONS 100 \
 %%      -p MAX_OPERATIONS 5000 -model_check"
 %%   for K in talk inboxNotify kvWatch wallNotify channelCheck; do
-%%     "$PROBCLI" docs/nats-relay.tex $P -ctlformula \
+%%     "$PROBCLI" docs/specs/nats-relay.tex $P -ctlformula \
 %%       "AG({connState/=closed & subGen($K)<generation} => EF {subGen($K)=generation})"
 %%   done
 %%
 %% The restriction to connState = connected (the four earlier kinds):
 %%
 %%   for K in talk inboxNotify kvWatch wallNotify; do
-%%     "$PROBCLI" docs/nats-relay.tex $P -ctlformula \
+%%     "$PROBCLI" docs/specs/nats-relay.tex $P -ctlformula \
 %%       "AG({connState=connected & subGen($K)<generation} => EF {subGen($K)=generation})"
 %%   done
 %%
@@ -1968,7 +1968,7 @@ verified by model checking with probcli (\texttt{z-spec test}):
 %%
 %%   (a) kvWatch, against the frozen variant that removes Subscribe and
 %%       SubscribeRetry for that kind alone (counterexample of length 24):
-%%       "$PROBCLI" docs/nats-relay-kvwatch-noreconcile.tex $P -ctlformula \
+%%       "$PROBCLI" docs/specs/nats-relay-kvwatch-noreconcile.tex $P -ctlformula \
 %%         "AG({connState/=closed & subGen(kvWatch)<generation} => EF {subGen(kvWatch)=generation})"
 %%
 %%   (b) talk, against a copy of this file whose Subscribe guard gains

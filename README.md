@@ -238,7 +238,7 @@ Invite sent to kai. When they accept, talk_read shows replies.
 
 Talk works like BSD `talk`: you send an invite, and the conversation starts when the other side accepts. Talk messages are not stored; they reach only a session that is connected at the time. Either side can end the conversation.
 
-Agent sessions in Claude Code receive talk invites and messages too: `/talk claude:tty3` reaches an agent. Biff does not interrupt an agent; the agent sees the invite on its next turn. Run `/read 1m` in the agent's session to have it check every minute, or `/read` to check now. See [Agent Workflow](docs/AGENT_WORKFLOW.md#real-time-agent-conversation) for details.
+Agent sessions in Claude Code receive talk invites and messages too: `/talk claude:tty3` reaches an agent. Biff does not interrupt an agent; the agent sees the invite on its next turn. Run `/read 1m` in the agent's session to have it check every minute, or `/read` to check now. See [Agent Workflow](docs/guides/AGENT_WORKFLOW.md#real-time-agent-conversation) for details.
 
 ### Go Do-Not-Disturb
 
@@ -414,7 +414,7 @@ The `peers:` key makes `/who`, `/write` and `/finger` reach sessions in other re
 
 Mail is kept per repo, and `read` drains the mailbox of the repo you run it in. So `/write user` (no tty) delivers to the repo where that user has a session: yours if they have one here, otherwise their most recently used repo among those visible. A user with no session in any visible repo gets it in your repo's mailbox.
 
-Put per-user relay credentials (a token, NKeys seed or credentials file path) in the gitignored `.punt-labs/biff/config.local.yaml`, never in the committed file. See [Installing](docs/INSTALLING.md) for the schema, [relay configuration](docs/INSTALLING.md#relay-configuration) to choose the demo relay, the Docker relay or your own NATS server, and [environment-variable relay overrides](docs/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd) for the five `BIFF_RELAY_*` variables used in CI and containers.
+Put per-user relay credentials (a token, NKeys seed or credentials file path) in the gitignored `.punt-labs/biff/config.local.yaml`, never in the committed file. See [Installing](docs/guides/INSTALLING.md) for the schema, [relay configuration](docs/guides/INSTALLING.md#relay-configuration) to choose the demo relay, the Docker relay or your own NATS server, and [environment-variable relay overrides](docs/guides/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd) for the five `BIFF_RELAY_*` variables used in CI and containers.
 
 What the two setup commands change:
 
@@ -427,7 +427,7 @@ What the two setup commands change:
 
   `biff disable` removes all of it.
 
-Run `biff doctor` to check the result. [Installing](docs/INSTALLING.md) has the full guide.
+Run `biff doctor` to check the result. [Installing](docs/guides/INSTALLING.md) has the full guide.
 
 ### Devin
 
@@ -485,8 +485,11 @@ Code plugin passes none, so its server still refuses an unstamped call.
 ## Channels (Claude Code)
 
 With channels, new mail, walls and talk reach a Claude Code session on their
-own, as short channel events, so nobody has to poll. Channels need a biff
-release newer than 1.24.2.
+own, as short channel events, so nobody has to poll. An event is a one-line
+summary, never a message body; it names the biff tool (`read_messages`,
+`wall` or `talk_read`) that reads the body. Where channels cannot be live,
+poll with `/biff:read 2m`. Channels need a biff release newer than 1.24.2.
+See [Channels design](docs/design/design-channels.md) (DES-087).
 
 **Team and Enterprise plans: an Owner sets it up once.**
 
@@ -588,25 +591,25 @@ Biff treats an agent's Claude Code session like any other session. An agent can 
 - **Across machines:** `/who` lists every session's plan, so an agent or a person can see what others are working on before starting a task.
 - **On one machine:** `/who` and `/finger` show each session's host and directory. Agents sharing a machine and directory can agree on who does what with `/write` and use separate git worktrees.
 
-See [Agent Workflow](docs/AGENT_WORKFLOW.md) for patterns and examples.
+See [Agent Workflow](docs/guides/AGENT_WORKFLOW.md) for patterns and examples.
 
 ## Vision
 
-Biff assumes the terminal is where you're already working, so that is where your team communication should be. There are no channels to monitor, no threads to catch up on, no emoji reactions to parse. Communication is pull-based: you decide when to engage.
+Biff assumes the terminal is where you're already working, so that is where your team communication should be. There are no chat rooms to monitor, no threads to catch up on, no emoji reactions to parse. Mail, wall and talk are the whole vocabulary. Where your harness supports it, a one-line channel event tells you something arrived, and you decide when to read it.
 
 ## Documentation
 
-[Installing](docs/INSTALLING.md) |
-[Agent Workflow](docs/AGENT_WORKFLOW.md) |
-[Claude Setup](docs/CLAUDE_SETUP.md) |
-[FAQ](docs/FAQ.md) |
-[Troubleshooting](docs/TROUBLESHOOTING.md) |
+[Installing](docs/guides/INSTALLING.md) |
+[Agent Workflow](docs/guides/AGENT_WORKFLOW.md) |
+[Claude Setup](docs/guides/CLAUDE_SETUP.md) |
+[FAQ](docs/guides/FAQ.md) |
+[Troubleshooting](docs/guides/TROUBLESHOOTING.md) |
 [Roadmap](docs/ROADMAP.md) |
 [Changelog](CHANGELOG.md)
 
 For contributors:
 [Contributing](CONTRIBUTING.md) |
-[Library API](docs/LIBRARY.md) |
+[Library API](docs/guides/LIBRARY.md) |
 [Design Log](DESIGN.md) |
 [Installer Design](DESIGN-INSTALLER.md) |
 [Testing Guide](TESTING.md)

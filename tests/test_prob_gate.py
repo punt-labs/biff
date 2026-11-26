@@ -250,7 +250,7 @@ def test_session_translation_failure_stops_before_proofs(tmp_path: Path) -> None
 
 
 def test_session_close_requires_cleanup_and_frames_routing() -> None:
-    spec = (Path(__file__).parents[1] / "docs/session-model.tex").read_text()
+    spec = (Path(__file__).parents[1] / "docs/specs/session-model.tex").read_text()
     close = spec.split(r"\begin{schema}{CloseSession}", 1)[1].split(r"\end{schema}", 1)[
         0
     ]

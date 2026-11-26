@@ -640,8 +640,8 @@ $rmDefect$.
 % ============================================================
 
 \begin{verbatim}
-fuzz -t docs/cli-session.tex
-probcli docs/cli-session.tex -model_check -strict \
+fuzz -t docs/specs/cli-session.tex
+probcli docs/specs/cli-session.tex -model_check -strict \
   -card SID 2 -card ALIAS 2 -card USER 1 -card REPO 1 -card MSG 1 \
   -p DEFAULT_SETSIZE 1 -p MAXINT 2 -p MAX_OPERATIONS 300000 -coverage
 \end{verbatim}
