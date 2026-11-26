@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   lint:
@@ -54,12 +55,22 @@ jobs:
         if: github.event_name == 'push'
         env:
           BEFORE_SHA: ${{ github.event.before }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           BASE_ARGS="--base-ref ${BEFORE_SHA} --require-base --tripwire"
+          # The merged PR's label is the review record of a layers widening. The
+          # PR job already allowed it, so the tripwire must not fail on the same
+          # change once it lands.
+          LAYERS_ARGS="${BASE_ARGS}"
+          labels="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '[.[].labels[].name] | join(",")')"
+          case ",${labels}," in
+            *,layers-policy-change,*) LAYERS_ARGS="${LAYERS_ARGS} --allow-config-change" ;;
+          esac
           make check-oo check-coupling check-suppressions check-layers \
             OO_BASE="${BASE_ARGS} --allow-no-improvement" \
             COUPLING_BASE="${BASE_ARGS}" SUPPRESSION_BASE="${BASE_ARGS}" \
-            LAYERS_BASE="${BASE_ARGS}"
+            LAYERS_BASE="${LAYERS_ARGS}"
 
       # Advisory only: retain the verdict or input error even after a gate
       # fails, without letting a reporting failure gate this job.
