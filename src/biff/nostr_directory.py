@@ -65,7 +65,9 @@ class EthosExt:
 
     def get(self, handle: str) -> dict[str, str]:
         """Return the fields of *handle*'s namespace; empty when it is unset."""
-        done = self._run(["ext", "get", handle, NAMESPACE, "--json"])
+        done = self._run(
+            self._ethos, self._cwd, ["ext", "get", handle, NAMESPACE, "--json"]
+        )
         if done.returncode != 0:
             if _NOT_SET_MARK in done.stderr:
                 return {}
@@ -86,20 +88,25 @@ class EthosExt:
 
     def set(self, handle: str, key: str, value: str) -> None:
         """Set one field through ``ethos ext set``."""
-        done = self._run(["ext", "set", handle, NAMESPACE, key, value])
+        done = self._run(
+            self._ethos, self._cwd, ["ext", "set", handle, NAMESPACE, key, value]
+        )
         if done.returncode != 0:
             reason = done.stderr.strip()
             msg = f"ethos ext set {handle} {NAMESPACE} {key} failed: {reason}"
             raise OSError(msg)
 
-    def _run(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+    @staticmethod
+    def _run(
+        ethos: str, cwd: Path | None, args: list[str]
+    ) -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
-                [self._ethos, *args],
+                [ethos, *args],
                 capture_output=True,
                 text=True,
                 check=False,
-                cwd=self._cwd,
+                cwd=cwd,
                 timeout=_ETHOS_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as exc:
@@ -136,16 +143,6 @@ class NostrDirectory:
         ext = EthosExt(ethos, repo_root) if ethos else None
         return cls(ext, Path.home() / ".punt-labs" / "biff" / "nostr.yaml")
 
-    async def session_npubs(self, sessions: Iterable[UserSession]) -> dict[str, str]:
-        """Return the npub of each session user that has one.
-
-        Runs off the event loop: it may start an ``ethos`` process per user.
-        A user whose lookup failed maps to :data:`LOOKUP_FAILED`; a user with
-        no key, or a name that is not a handle, is left out.
-        """
-        users = tuple(dict.fromkeys(s.user for s in sessions))
-        return await asyncio.to_thread(self._npubs, users)
-
     def publish(self, handle: str, fields: Mapping[str, str]) -> None:
         """Merge *fields* into *handle*'s ``nostr`` namespace.
 
@@ -174,22 +171,6 @@ class NostrDirectory:
     def npub(self, handle: str) -> str | None:
         """Return *handle*'s npub; ``None`` is a handle with no published key."""
         return self.fields(handle).get("npub")
-
-    def _npubs(self, users: tuple[str, ...]) -> dict[str, str]:
-        found: dict[str, str] = {}
-        for handle in users:
-            if not _HANDLE_RE.fullmatch(handle):
-                logger.debug("who user is not a valid handle; no key lookup")
-                continue
-            try:
-                npub = self.npub(handle)
-            except OSError as exc:
-                logger.warning("key lookup for %s failed: %s", handle, exc)
-                found[handle] = LOOKUP_FAILED
-                continue
-            if npub:
-                found[handle] = npub
-        return found
 
     @staticmethod
     def _publish_through(ext: ExtStore, handle: str, fields: Mapping[str, str]) -> None:
@@ -258,3 +239,53 @@ class NostrDirectory:
             yaml.safe_dump(dict(data), handle, sort_keys=True)
         Path(tmp).chmod(0o644)
         Path(tmp).replace(path)
+
+
+@final
+class SessionKeys:
+    """The published npub of each user a ``who`` table lists.
+
+    A user whose lookup failed maps to :data:`LOOKUP_FAILED`; a user with no
+    key, or a name that is not a handle, is left out, so a blank cell means
+    "nothing published" and ``?`` means "could not find out".
+    """
+
+    __slots__ = ("_directory",)
+
+    _directory: NostrDirectory
+
+    def __new__(cls, directory: NostrDirectory) -> Self:
+        """Look keys up in *directory*."""
+        self = super().__new__(cls)
+        self._directory = directory
+        return self
+
+    @classmethod
+    def for_repo(cls, repo_root: Path | None) -> Self:
+        """Return the keys of a session in *repo_root* on this machine."""
+        return cls(NostrDirectory.for_repo(repo_root))
+
+    async def lookup(self, sessions: Iterable[UserSession]) -> dict[str, str]:
+        """Return the npub of each session user that has one.
+
+        Runs off the event loop: it may start an ``ethos`` process per user.
+        """
+        users = tuple(dict.fromkeys(s.user for s in sessions))
+        return await asyncio.to_thread(self._collect, self._directory, users)
+
+    @staticmethod
+    def _collect(directory: NostrDirectory, users: tuple[str, ...]) -> dict[str, str]:
+        found: dict[str, str] = {}
+        for handle in users:
+            if not _HANDLE_RE.fullmatch(handle):
+                logger.debug("who user is not a valid handle; no key lookup")
+                continue
+            try:
+                npub = directory.npub(handle)
+            except OSError as exc:
+                logger.warning("key lookup for %s failed: %s", handle, exc)
+                found[handle] = LOOKUP_FAILED
+                continue
+            if npub:
+                found[handle] = npub
+        return found

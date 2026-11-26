@@ -10,12 +10,15 @@ from typer.testing import CliRunner
 
 import biff.__main__ as cli
 from biff import cli_key, key_store
-from biff.key_vault import PassphraseFileVault, SecretVault
+from biff.key_vault import SecretVault
+from biff.passphrase_vault import PassphraseFileVault
 
 runner = CliRunner()
 
 
 class _Memory:
+    label = "memory"
+
     def __init__(self) -> None:
         self.items: dict[tuple[str, str], str] = {}
 
@@ -31,14 +34,16 @@ class _Memory:
 
 @pytest.fixture(autouse=True)
 def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run in a throwaway HOME, as a person at a shell, with passphrase "pw"."""
+    """Run in a throwaway HOME, as a person at a shell, with a fixed passphrase."""
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     for marker in ("CLAUDECODE", "OPENCODE", "BIFF_ATTESTATION_HOURS"):
         monkeypatch.delenv(marker, raising=False)
     monkeypatch.setattr(key_store, "AGENT_IDENTITY_MOUNT", tmp_path / "no-mount")
-    owner = PassphraseFileVault(home / "owner-keys", lambda _p: "pw")
+    owner = PassphraseFileVault(
+        home / "owner-keys", lambda _p: "a long enough passphrase"
+    )
     agents: SecretVault = _Memory()
 
     def fake_vaults(_home: Path) -> tuple[SecretVault, SecretVault]:
@@ -59,10 +64,16 @@ def test_key_init_json_carries_the_npub() -> None:
     assert json.loads(result.output)["npub"].startswith("npub1")
 
 
-def test_key_init_twice_exits_nonzero() -> None:
+def test_key_init_twice_republishes_and_exits_zero() -> None:
     runner.invoke(cli.app, ["key", "init", "--owner", "jfreeman"])
     result = runner.invoke(cli.app, ["key", "init", "--owner", "jfreeman"])
-    assert result.exit_code == 1
+    assert result.exit_code == 0, result.output
+    assert "republished" in result.output
+
+
+def test_key_init_output_warns_against_always_allow() -> None:
+    result = runner.invoke(cli.app, ["key", "init", "--owner", "jfreeman"])
+    assert "never click Always Allow" in result.output
 
 
 def test_key_init_from_an_agent_shell_exits_nonzero(
@@ -81,5 +92,5 @@ def test_key_attest_then_show_reports_the_owner() -> None:
     )
     shown = runner.invoke(cli.app, ["key", "show", "claude"])
     assert attested.exit_code == 0, attested.output
-    assert "authorized by npub1" in shown.output
+    assert "authorized by @jfreeman" in shown.output
     assert "valid until" in shown.output

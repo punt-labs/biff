@@ -72,6 +72,15 @@
   secret to `security -i` on stdin, never on a command line. Signing and key
   derivation run in `nostr-sdk` (Rust secp256k1); only verification, which
   takes public inputs, is pure Python. Every agent key read is logged.
+  `biff key attest` refuses a released owner secret that is not the key
+  recorded at `biff key init`. On macOS the owner key's access list is read
+  before every use and an item that trusts an application (after "Always
+  Allow") is refused. The Linux passphrase is at least 12 characters,
+  confirmed twice, read only from `/dev/tty`, and sealed with scrypt at
+  N=2^17, with the parameters stored in the file. Publishing never overwrites
+  an unreadable file, and with ethos present a refusal is an error, never a
+  silent local copy. The `biff who` KEY column shows `?` for an invalid
+  npub or a failed lookup.
   Public keys and attestations go in the identity's ext `nostr` namespace,
   or in `~/.punt-labs/biff/nostr.yaml` when ethos is absent.
 - `biff who` adds a KEY column with each user's short npub when one is

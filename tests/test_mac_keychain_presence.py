@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from biff.key_vault import MacKeychainVault, run_security
+from biff.keychain_vault import MacKeychainVault, run_security
 
 pytestmark = pytest.mark.keychain
 

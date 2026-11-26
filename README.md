@@ -390,6 +390,23 @@ biff -s main write kai "hi"     # Run one command as session "main" (or set BIFF
 
 Without `-s`, a command runs as the first of: `BIFF_SESSION`; the Claude Code session it is run from (`CLAUDE_CODE_SESSION_ID`, as a client of that session, creating nothing); this repo's default (`biff session use`, or the last `session new`); a fresh session. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
 
+### Keys and agent attestation
+
+Each person and each agent has one Nostr key. You sign each agent's public key, and the signature expires: 24 hours by default, 7 days with `--image` for an agent image, or set `BIFF_ATTESTATION_HOURS`. A receiver checks the expiry on its own clock.
+
+```bash
+biff key init                          # Create your owner key; prints your npub
+biff key agent claude                  # Create an agent's key; publishes its npub
+biff key attest claude --hours 24      # Sign the agent's key as its owner (you must be present)
+biff key show claude                   # The agent's key and the state of its attestation
+```
+
+`biff who` shows a KEY column with each user's short npub when one is published.
+
+Private keys never enter the repository or an ethos ext file. Agent keys rest in the OS keyring. Your owner key rests in a macOS keychain item that trusts no application, or on Linux in a file sealed by a passphrase that biff reads only from `/dev/tty`. An agent process cannot create the owner key or sign with it.
+
+**When macOS asks to let `security` read the owner key, click Allow. Never click Always Allow.** Always Allow adds `/usr/bin/security` to the item's access list, and from then on any program you run, an agent included, reads the key with no prompt. biff checks the access list before every read and refuses an item that trusts an application; the fix is to delete the item, run `biff key init` again and re-attest your agents.
+
 ## Setup
 
 Biff needs a git repo and a GitHub identity. It reads your username and display name from `gh auth`.

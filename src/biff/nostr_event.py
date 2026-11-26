@@ -110,23 +110,33 @@ class NostrEvent:
         author's claim and cannot keep an attestation alive.  The proof never
         names the author; it is provenance, not authorship.
         """
+        parsed = self._parse_attestation()
+        if isinstance(parsed, OwnerProof):
+            return parsed
+        if not self.is_valid():
+            return OwnerProof(Provenance.BAD_EVENT_SIG)
+        if not parsed.signature_is_valid(self.pubkey):
+            return OwnerProof(Provenance.BAD_OWNER_SIG)
+        return self._judge_terms(parsed, now)
+
+    def _parse_attestation(self) -> OwnerAttestation | OwnerProof:
+        """Return the one well-formed ``auth`` tag, or the verdict that it is not."""
         auth_tags = [t for t in self.tags if t and t[0] == _AUTH_TAG]
         if not auth_tags:
             return OwnerProof(Provenance.ABSENT)
         if len(auth_tags) > 1:
             return OwnerProof(Provenance.MALFORMED)
         try:
-            attestation = OwnerAttestation.from_tag(auth_tags[0])
-            clauses = parse_conditions(attestation.conditions)
-            expiry = attestation.expires_at()
+            return OwnerAttestation.from_tag(auth_tags[0])
         except ValueError:
             return OwnerProof(Provenance.MALFORMED)
-        if not self.is_valid():
-            return OwnerProof(Provenance.BAD_EVENT_SIG)
-        if not attestation.signature_is_valid(self.pubkey):
-            return OwnerProof(Provenance.BAD_OWNER_SIG)
+
+    def _judge_terms(self, attestation: OwnerAttestation, now: int) -> OwnerProof:
+        """Check the event against the attestation's signed conditions."""
+        clauses = parse_conditions(attestation.conditions)
         if not all(c.satisfied_by(self.kind, self.created_at) for c in clauses):
             return OwnerProof(Provenance.CONDITIONS_UNMET)
+        expiry = attestation.expires_at()
         if expiry is None:
             return OwnerProof(Provenance.NO_EXPIRY)
         if now >= expiry:

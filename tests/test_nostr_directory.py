@@ -9,7 +9,7 @@ import yaml
 
 from biff import nostr_directory
 from biff.models import UserSession
-from biff.nostr_directory import LOOKUP_FAILED, EthosExt, NostrDirectory
+from biff.nostr_directory import LOOKUP_FAILED, EthosExt, NostrDirectory, SessionKeys
 
 
 class _FakeEthos:
@@ -184,7 +184,7 @@ def test_ethos_json_is_read(tmp_path: Path) -> None:
 async def test_session_npubs_marks_a_failed_lookup(tmp_path: Path) -> None:
     ethos = _script(tmp_path, "ethos", "echo boom >&2; exit 3")
     directory = NostrDirectory(EthosExt(ethos, tmp_path), tmp_path / "n.yaml")
-    found = await directory.session_npubs([UserSession(user="jim", tty="a")])
+    found = await SessionKeys(directory).lookup([UserSession(user="jim", tty="a")])
     assert found == {"jim": LOOKUP_FAILED}
 
 
@@ -194,17 +194,17 @@ async def test_session_npubs_survives_an_ethos_hang(
     monkeypatch.setattr(nostr_directory, "_ETHOS_TIMEOUT_SECONDS", 1)
     ethos = _script(tmp_path, "ethos", "exec sleep 30")
     directory = NostrDirectory(EthosExt(ethos, tmp_path), tmp_path / "n.yaml")
-    found = await directory.session_npubs([UserSession(user="jim", tty="a")])
+    found = await SessionKeys(directory).lookup([UserSession(user="jim", tty="a")])
     assert found == {"jim": LOOKUP_FAILED}
 
 
 async def test_session_npubs_leaves_an_unset_user_out(tmp_path: Path) -> None:
     ethos = _script(tmp_path, "ethos", _NOT_FOUND)
     directory = NostrDirectory(EthosExt(ethos, tmp_path), tmp_path / "n.yaml")
-    assert await directory.session_npubs([UserSession(user="jim", tty="a")]) == {}
+    assert await SessionKeys(directory).lookup([UserSession(user="jim", tty="a")]) == {}
 
 
 async def test_session_npubs_skips_a_user_that_is_not_a_handle(tmp_path: Path) -> None:
     directory = NostrDirectory(None, tmp_path / "n.yaml")
     sessions = [UserSession(user="Not A Handle!", tty="a")]
-    assert await directory.session_npubs(sessions) == {}
+    assert await SessionKeys(directory).lookup(sessions) == {}

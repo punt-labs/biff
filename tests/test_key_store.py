@@ -7,13 +7,25 @@ from pathlib import Path
 
 import pytest
 
-from biff.key_store import CallerKind, KeyStore, OwnerKeyDeniedError
-from biff.key_vault import PassphraseFileVault, VaultError
+from biff.key_store import (
+    CallerKind,
+    KeyExistsError,
+    KeyNotFoundError,
+    KeyStore,
+    OwnerKeyDeniedError,
+    OwnerKeyMismatchError,
+)
+from biff.key_vault import VaultError
 from biff.nostr_crypto import NostrCrypto
+from biff.passphrase_vault import PassphraseFileVault
+
+PASS = "correct horse battery"
 
 
 class _MemoryVault:
     """A vault that remembers every read, so a test can say none happened."""
+
+    label = "memory"
 
     def __init__(self) -> None:
         self.items: dict[tuple[str, str], str] = {}
@@ -64,10 +76,36 @@ def test_agent_key_read_is_logged_without_the_secret(
     store.agent_pubkey("claude")
     with caplog.at_level(logging.INFO, logger="biff.key_store"):
         secret = store.agent_secret("claude", purpose="sign message")
-    text = caplog.text
-    assert "claude" in text
-    assert "sign message" in text
-    assert secret.hex() not in text
+    assert "claude" in caplog.text
+    assert "sign message" in caplog.text
+    assert secret.hex() not in caplog.text
+
+
+def test_a_missing_agent_key_is_a_key_not_found_error() -> None:
+    with pytest.raises(KeyNotFoundError, match="claude"):
+        _store().agent_secret("claude", purpose="test")
+
+
+def test_key_not_found_is_a_lookup_error() -> None:
+    assert issubclass(KeyNotFoundError, LookupError)
+
+
+def test_a_corrupt_stored_secret_is_a_vault_error_naming_the_item() -> None:
+    agents = _MemoryVault()
+    agents.items["biff-agent", "claude"] = "not hex at all"
+    with pytest.raises(VaultError, match="biff-agent/claude"):
+        _store(agents=agents).agent_secret("claude", purpose="test")
+
+
+def test_a_stored_secret_of_the_wrong_length_is_a_vault_error() -> None:
+    agents = _MemoryVault()
+    agents.items["biff-agent", "claude"] = "ab" * 31
+    with pytest.raises(VaultError, match="biff-agent/claude"):
+        _store(agents=agents).agent_secret("claude", purpose="test")
+
+
+def test_the_store_names_the_vault_holding_agent_keys() -> None:
+    assert _store().agent_vault_label == "memory"
 
 
 def test_owner_key_is_created_for_a_human() -> None:
@@ -77,11 +115,25 @@ def test_owner_key_is_created_for_a_human() -> None:
     assert NostrCrypto().public_key(secret) == pubkey
 
 
-def test_owner_key_is_not_replaced_by_a_second_init() -> None:
+def test_the_owner_public_key_is_recorded_without_reading_the_secret() -> None:
+    owner = _MemoryVault()
+    store = _store(owner=owner)
+    pubkey = store.init_owner("jfreeman")
+    owner.reads.clear()
+    assert store.owner_pubkey("jfreeman") == pubkey
+    assert owner.reads == []
+
+
+def test_an_owner_key_that_exists_is_not_replaced_by_a_second_init() -> None:
     store = _store()
     store.init_owner("jfreeman")
-    with pytest.raises(ValueError, match="already"):
+    with pytest.raises(KeyExistsError, match="already"):
         store.init_owner("jfreeman")
+
+
+def test_no_recorded_owner_key_is_key_not_found() -> None:
+    with pytest.raises(KeyNotFoundError, match="jfreeman"):
+        _store().owner_pubkey("jfreeman")
 
 
 def test_agent_process_cannot_create_an_owner_key() -> None:
@@ -106,7 +158,7 @@ def test_owner_signing_prompts_for_the_passphrase_each_time(tmp_path: Path) -> N
 
     def ask(prompt: str) -> str:
         prompts.append(prompt)
-        return "pw"
+        return PASS
 
     store = KeyStore(
         PassphraseFileVault(tmp_path, ask), _MemoryVault(), CallerKind.HUMAN
@@ -119,16 +171,13 @@ def test_owner_signing_prompts_for_the_passphrase_each_time(tmp_path: Path) -> N
 
 
 def test_owner_signing_fails_without_the_right_passphrase(tmp_path: Path) -> None:
+    agents = _MemoryVault()
     right = KeyStore(
-        PassphraseFileVault(tmp_path, lambda _p: "right"),
-        _MemoryVault(),
-        CallerKind.HUMAN,
+        PassphraseFileVault(tmp_path, lambda _p: PASS), agents, CallerKind.HUMAN
     )
     right.init_owner("jfreeman")
     wrong = KeyStore(
-        PassphraseFileVault(tmp_path, lambda _p: "wrong"),
-        _MemoryVault(),
-        CallerKind.HUMAN,
+        PassphraseFileVault(tmp_path, lambda _p: PASS + "x"), agents, CallerKind.HUMAN
     )
     with pytest.raises(VaultError, match="passphrase"):
         wrong.attest("jfreeman", "claude", lifetime_seconds=60, now=0)
@@ -141,6 +190,20 @@ def test_attestation_names_the_agents_public_key_and_expires() -> None:
     attestation = store.attest("jfreeman", "claude", lifetime_seconds=3600, now=1000)
     assert attestation.is_live(agent, now=1000)
     assert attestation.expires_at() == 4600
+
+
+def test_attest_refuses_a_released_secret_that_is_not_the_recorded_key() -> None:
+    owner = _MemoryVault()
+    store = _store(owner=owner)
+    store.init_owner("jfreeman")
+    owner.items["biff-owner", "jfreeman"] = NostrCrypto().generate_secret().hex()
+    with pytest.raises(OwnerKeyMismatchError, match="jfreeman"):
+        store.attest("jfreeman", "claude", lifetime_seconds=60, now=0)
+
+
+def test_attest_without_an_owner_key_is_key_not_found() -> None:
+    with pytest.raises(KeyNotFoundError, match="jfreeman"):
+        _store().attest("jfreeman", "claude", lifetime_seconds=60, now=0)
 
 
 def test_agent_secret_is_not_the_owner_secret() -> None:

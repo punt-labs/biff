@@ -45,7 +45,7 @@ class WhoColumns:
         """Return the headers to hide and, per session, the cells that remain."""
         columns = {
             "MGR": [self._mgr_cell(s) for s in sessions],
-            "KEY": [self._key_cell(s) for s in sessions],
+            "KEY": [self._key_cell(self._keys.get(s.user, "")) for s in sessions],
         }
         hidden = {header for header, cells in columns.items() if not any(cells)}
         shown = [cells for header, cells in columns.items() if header not in hidden]
@@ -79,18 +79,19 @@ class WhoColumns:
                 return name
         return ""
 
-    def _mgr_cell(self, s: UserSession) -> str:
+    @staticmethod
+    def _mgr_cell(s: UserSession) -> str:
         """Render :meth:`manager` as a neutralised, clipped fixed-column cell."""
-        text = terminal_safe(self.manager(s))[:_MAX_LABEL_CHARS]
+        text = terminal_safe(WhoColumns.manager(s))[:_MAX_LABEL_CHARS]
         return clip_to_width(text, _MAX_LABEL_WIDTH)
 
-    def _key_cell(self, s: UserSession) -> str:
+    @staticmethod
+    def _key_cell(raw: str) -> str:
         """Clip the row's npub to its first ten and last five characters.
 
         A value that does not decode as an npub, and a failed lookup, show as
         ``?``: an invalid key is never displayed as if it were one.
         """
-        raw = self._keys.get(s.user, "")
         if not raw:
             return ""
         try:

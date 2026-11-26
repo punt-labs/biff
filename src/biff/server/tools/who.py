@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.formatting import format_who, log_dead_sessions
-from biff.nostr_directory import NostrDirectory
+from biff.nostr_directory import SessionKeys
 from biff.presence_liveness import live_sessions
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
@@ -53,7 +53,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not live:
             return "No sessions."
         # Sort by last_tool_at to match the IDLE column, not heartbeat recency.
-        keys = await NostrDirectory.for_repo(state.repo_root).session_npubs(live)
+        keys = await SessionKeys.for_repo(state.repo_root).lookup(live)
         return format_who(
             sorted(live, key=lambda s: s.last_tool_at, reverse=True), keys
         )

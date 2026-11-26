@@ -134,7 +134,7 @@ ignore = [
 "src/biff/cli_session.py" = ["T20"]
 "src/biff/installer.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/doctor.py" = ["T20", "FBT", "S603", "PLC0415"]
-"src/biff/key_vault.py" = ["S603"]
+"src/biff/keychain_vault.py" = ["S603"]
 "src/biff/nostr_directory.py" = ["S603"]
 "src/biff/plugins/claude_code/statusline.py" = ["S602", "T20"]
 "src/biff/server/tools/wall.py" = ["FBT"]
@@ -245,6 +245,8 @@ prefixes = [
     "invite_expiry",
     "key_store",
     "key_vault",
+    "keychain_vault",
+    "passphrase_vault",
     "key_wiring",
     "local_watch",
     "nats_connection",
