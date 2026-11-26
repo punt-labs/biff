@@ -106,6 +106,7 @@ Every frame is a JSON object with a protocol `version`.
 | `hello` | client to daemon, after the proof checks | `mac` = HMAC-SHA256(token, `biffd-client-v1` + `daemon_nonce` + `client_nonce`), as hex, in place of any token; client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id`, `main_agent_id` (empty when the harness states none), `cwd` (the directory the client runs in, which names the repository and so the relay target) and an optional `user` override. The daemon answers a valid hello with a `reply` whose `id` is 0 |
 | `request` | client to daemon | `id`, `method`, `params`. One `method` per command object in `commands/` |
 | `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message). A command's `result` is `{"data": <the command's JSON payload>, "error": <bool>}` |
+| `ack` | client to daemon | `id` of a request. Sent after the client received that request's reply, when the reply set `needs_ack` (a `read` that carries mail). The daemon marks the mail read only on this frame |
 | `subscribe` | client to daemon | `id`. Starts the arrival subscription for the connection's session. The daemon replies to `id` with `{"subscribed": true}`, or with `already_subscribed` or `session_replaced` |
 | `event` | daemon to client | One arrival summary, with a per-daemon `seq`. `kind` is `unread`, `mail`, `wall`, `degraded` (the relay stopped answering) or `recovered` |
 
@@ -166,6 +167,33 @@ A connection whose run a newer run replaced is closed with 1008 and the reason
 Results are `wire` data and never rendered text. The client runs `render`, so
 `biff who` prints the same table whether the command ran in the daemon or in
 today's single process.
+
+### Delivery of mail
+
+A reply that carries mail is not the end of its delivery. A socket write says
+the bytes left the daemon, not that the client read them: a client that timed
+out discards a late reply. So the daemon marks the mail read only on the
+client's `ack` for that request. A connection that ends before the `ack` leaves
+its mail unread, and the next `read` serves it again.
+
+A relay that consumes mail when it is fetched (NATS) has nothing left to mark,
+so the daemon holds fetched mail in the session's outbox until the `ack`. A
+relay that does not consume (the local relay) keeps unread mail itself, and its
+broadcast inbox is shared by every session of the user, so its outbox holds
+nothing: each `read` is built from what the relay says is unread now, and a
+message another session marked read is never served again. `more` counts the
+mail a batch leaves: held mail, plus what a consuming relay still holds behind
+its bounded fetch (NATS pulls at most 100 messages per inbox at a time). The
+reconnect summary counts held mail as unread.
+
+Two residuals remain, both at-least-once delivery rather than loss:
+
+- An abandoned read still consumes mail from a consuming relay. The client gave
+  up, so the mail is not delivered, but it has left the relay; it waits in the
+  outbox and the next `read` serves it.
+- Mail held in the outbox is lost if the daemon dies first. It had already left
+  the NATS stream, as mail a client fetched is lost if the client dies. The
+  outbox is memory, not a log.
 
 ### Subscription
 
@@ -254,9 +282,13 @@ shell. The daemon applies the session-record lifecycle of
 [mcp-caller-identity § 4.2](https://github.com/punt-labs/punt-kit/blob/main/standards/mcp-caller-identity.md)
 unchanged:
 
-- A session is keyed by `session_id` from the client's `hello`. A second client
-  for the same session id attaches to the existing record; the daemon never
-  holds two records for one id.
+- A session is keyed by `session_id` and the caller's role, from the client's
+  `hello`. A shell (`cli`) routes to different relay keys than an agent-side
+  client (`mcp`, `hook`, `plugin`), so a shell and an agent that hold one id
+  are two sessions with their own inboxes and presence rows: keyed by the id
+  alone, the second would be handed the first's inbox. A second client of the
+  same id and role attaches to the existing record; the daemon never holds two
+  records for one key, and refuses another user or relay under it.
 - A new `main_agent_id` for a known session is a new run: the daemon releases
   the previous run's subscription and pending deliveries, keeps durable state,
   and refuses calls from the replaced run with a named error.

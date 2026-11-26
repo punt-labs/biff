@@ -299,6 +299,7 @@ Setup and maintenance commands:
 | `biff enable` | Turn biff on for the current repo (see [Setup](#setup)) |
 | `biff disable` | Turn biff off for the current repo and remove what `enable` added |
 | `biff doctor` | Check the installation |
+| `biff daemon serve` | Run biffd, the per-user daemon, in the foreground (not yet used by other commands) |
 | `biff install-statusline` | Add biff to your Claude Code status line |
 | `biff uninstall-statusline` | Restore your original status line |
 | `biff uninstall` | Remove the plugin and this clone's biff git hooks |

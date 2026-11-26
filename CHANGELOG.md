@@ -4,6 +4,17 @@
 
 ### Added
 
+- A `read` reply that carries mail asks the client to confirm it (`ack` frame,
+  `needs_ack` on the reply); biffd marks the mail read only then. A client that
+  timed out, or a connection that dropped, no longer consumes mail it never
+  received. Two residuals, both at-least-once delivery: an abandoned read still
+  consumes mail from a consuming relay (NATS), which the next `read` serves
+  from the daemon's outbox, and mail held in that outbox is lost if the daemon
+  dies first.
+- biffd keeps a session record per session id and role, so a shell and an
+  agent that share a session id no longer share an inbox; a `read` of a shared
+  broadcast inbox no longer serves a message another session already read, and
+  its `more` counts mail a consuming relay still holds behind one pull.
 - `biff daemon serve` runs biffd in the foreground. It listens on
   `127.0.0.1:8424` (`--port` overrides; `--port 0` picks a free port), answers
   an unauthenticated `GET /health` with its version and uptime, keeps a bearer
