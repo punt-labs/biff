@@ -31,6 +31,8 @@ __all__ = ["Session", "SessionStatus", "SessionTable"]
 
 logger = logging.getLogger(__name__)
 
+_MAX_RETIRED_RUNS = 64
+
 
 @dataclass(frozen=True)
 class SessionStatus:
@@ -59,6 +61,7 @@ class Session:
         "_log",
         "_orgs",
         "_presence",
+        "_retired",
         "_run",
         "_session_id",
         "_target",
@@ -70,6 +73,7 @@ class Session:
     _presence: PresenceRow
     _orgs: OrgRepos
     _run: str
+    _retired: dict[str, None]
     _attachments: set[Attachment]
     _interval: float
     _beat: asyncio.Task[None] | None
@@ -94,6 +98,7 @@ class Session:
         self._presence = presence
         self._orgs = orgs
         self._run = run
+        self._retired = {}
         self._attachments = set()
         self._interval = heartbeat_interval
         self._beat = None
@@ -200,11 +205,23 @@ class Session:
         """Attach a connection claiming *run*, starting a new run if it differs.
 
         A new run releases the previous run's subscriptions, ends its
-        connections, and keeps every durable record.  A client that claims no
-        run neither replaces nor is replaced.
+        connections, retires its id, and keeps every durable record.  A retired
+        id is refused for good: a replaced run that obeys "reconnect" must start
+        a new run, not evict the current one.  A client that claims no run
+        neither replaces nor is replaced.
+
+        Raises:
+            RefusalError: *run* is the id of a run that was replaced.
         """
+        if run in self._retired:
+            msg = (
+                f"run {run} of session {self._session_id} was replaced by a newer "
+                "run and cannot come back; start a new run with a fresh run id"
+            )
+            raise RefusalError.of(ErrorCode.SESSION_REPLACED, msg)
         if run and run != self._run:
             if self._run:
+                self._retire(self._run)
                 for held in tuple(self._attachments):
                     if held.replaced_by(run):
                         held.replace()
@@ -216,6 +233,12 @@ class Session:
                 self._heartbeat(), f"heartbeat {self._session_id}"
             )
         return attachment
+
+    def _retire(self, run: str) -> None:
+        """Remember *run* as replaced; only the most recent ones are kept."""
+        self._retired[run] = None
+        while len(self._retired) > _MAX_RETIRED_RUNS:
+            del self._retired[next(iter(self._retired))]
 
     def detach(self, attachment: Attachment) -> None:
         """Forget *attachment*; stop heartbeating when no connection remains."""

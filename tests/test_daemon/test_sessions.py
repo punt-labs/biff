@@ -132,3 +132,32 @@ async def test_the_daemon_heartbeats_each_attached_session_once(
     later = await relay.get_session(key)
     assert later is not None
     assert later.last_active > first.last_active
+
+
+async def test_a_replaced_run_that_reconnects_is_refused_for_good(
+    harness: Harness,
+) -> None:
+    await harness.connect("s-kai", "kai", main_agent_id="run-1")
+    await harness.connect("s-kai", "kai", main_agent_id="run-2")
+    with pytest.raises(DaemonError) as caught:
+        await harness.connect("s-kai", "kai", main_agent_id="run-1")
+    assert caught.value.code is ErrorCode.SESSION_REPLACED
+
+
+async def test_a_refused_replaced_run_does_not_evict_the_current_run(
+    harness: Harness,
+) -> None:
+    await harness.connect("s-kai", "kai", main_agent_id="run-1")
+    current = await harness.connect("s-kai", "kai", main_agent_id="run-2")
+    with pytest.raises(DaemonError):
+        await harness.connect("s-kai", "kai", main_agent_id="run-1")
+    assert cast("dict[str, object]", await current.request("who"))["error"] is False
+    (session,) = harness.daemon.status().sessions
+    assert session.run == "run-2"
+
+
+async def test_the_refusal_names_the_run_and_the_way_forward(harness: Harness) -> None:
+    await harness.connect("s-kai", "kai", main_agent_id="run-1")
+    await harness.connect("s-kai", "kai", main_agent_id="run-2")
+    with pytest.raises(DaemonError, match=r"run-1.*new run"):
+        await harness.connect("s-kai", "kai", main_agent_id="run-1")
