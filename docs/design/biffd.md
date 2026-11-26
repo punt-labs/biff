@@ -115,7 +115,8 @@ today's single process.
 
 `subscribe` replaces the in-process `DeliverySink` for out-of-process
 consumers. On subscribe the daemon first sends the session's current unread
-summary, then one `event` per later arrival. There is no replay log: a client
+summary, then, when the repository has an active wall, one `wall` event for it,
+then one `event` per later arrival. There is no replay log: a client
 that reconnects after a daemon restart gets the current summary again. Mail is
 durable, so a client that never polls loses none of it across a disconnect
 (R-D.5, R-OC.2). A wall is a current value, one active post per repository:
