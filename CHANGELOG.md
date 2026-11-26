@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-11-25
+
 ### Added
 
 - `biff doctor` checks channels end to end with the NATS relay. It sends each of
