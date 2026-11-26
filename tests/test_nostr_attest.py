@@ -6,7 +6,7 @@ import pytest
 
 from biff.nostr_attest import OwnerAttestation, parse_conditions
 from biff.nostr_crypto import NostrCrypto
-from biff.nostr_event import NostrEvent
+from biff.nostr_event import NostrEvent, OwnerProof, Provenance
 
 # Test vectors from block/buzz docs/nips/NIP-OA.md at commit 298543f.
 OWNER_SECRET = bytes.fromhex("00" * 31 + "01")
@@ -50,12 +50,6 @@ def test_vector_signature_verifies() -> None:
     assert attestation.signature_is_valid(AGENT_PUBKEY)
 
 
-def test_vector_event_with_auth_tag_verifies() -> None:
-    assert _event().owner_attestation() == OwnerAttestation(
-        OWNER_PUBKEY, CONDITIONS, AUTH_SIG
-    )
-
-
 def test_vector_event_itself_is_valid() -> None:
     assert _event().is_valid()
 
@@ -87,6 +81,22 @@ def test_conditions_are_not_normalised_before_verifying() -> None:
     assert not attestation.signature_is_valid(AGENT_PUBKEY)
 
 
+NOW = 1713956500  # the receiver's clock: inside the vector's window
+
+
+def _proof(event: NostrEvent, now: int = NOW) -> OwnerProof:
+    return event.owner_proof(now=now)
+
+
+def test_vector_event_proves_its_owner() -> None:
+    assert _proof(_event()) == OwnerProof(Provenance.VALID, OWNER_PUBKEY)
+
+
+def test_an_event_with_no_auth_tag_has_absent_provenance() -> None:
+    event = NostrEvent.signed(AGENT_SECRET, created_at=1, kind=1, tags=(), content="")
+    assert _proof(event).status is Provenance.ABSENT
+
+
 @pytest.mark.parametrize(
     "tags",
     [
@@ -98,14 +108,31 @@ def test_conditions_are_not_normalised_before_verifying() -> None:
         ),
         pytest.param((("auth", OWNER_PUBKEY, "kind=01", AUTH_SIG),), id="leading-zero"),
         pytest.param(
-            (("auth", AGENT_PUBKEY, CONDITIONS, AUTH_SIG),), id="self-attestation"
+            (("auth", OWNER_PUBKEY.upper(), CONDITIONS, AUTH_SIG),), id="upper-pubkey"
+        ),
+        pytest.param(
+            (("auth", OWNER_PUBKEY, CONDITIONS, AUTH_SIG.upper()),), id="upper-sig"
+        ),
+        pytest.param(
+            (("auth", f" {OWNER_PUBKEY[1:]}", CONDITIONS, AUTH_SIG),), id="space"
+        ),
+        pytest.param(
+            (("auth", AGENT_PUBKEY.upper(), CONDITIONS, AUTH_SIG),), id="upper-self"
         ),
     ],
 )
-def test_invalid_vectors_prove_no_owner(
+def test_malformed_auth_tags_are_malformed(
     tags: tuple[tuple[str, ...], ...],
 ) -> None:
-    assert _event(tags).verified_owner() is None
+    assert _proof(_event(tags)).status is Provenance.MALFORMED
+
+
+def test_self_attestation_has_a_bad_owner_signature() -> None:
+    tags = (("auth", AGENT_PUBKEY, CONDITIONS, AUTH_SIG),)
+    event = NostrEvent.signed(
+        AGENT_SECRET, created_at=NOW, kind=1, tags=tags, content="x"
+    )
+    assert _proof(event).status is Provenance.BAD_OWNER_SIG
 
 
 def test_valid_tag_on_event_with_bad_signature_is_not_provenance() -> None:
@@ -120,16 +147,55 @@ def test_valid_tag_on_event_with_bad_signature_is_not_provenance() -> None:
         sig=event.sig,
     )
     assert not forged.is_valid()
-    assert forged.verified_owner() is None
+    assert _proof(forged) == OwnerProof(Provenance.BAD_EVENT_SIG, "")
 
 
-def test_valid_event_yields_verified_owner() -> None:
-    assert _event().verified_owner() == OWNER_PUBKEY
+def test_uppercase_event_signature_is_not_valid() -> None:
+    event = _event()
+    shouted = NostrEvent(
+        id=event.id,
+        pubkey=event.pubkey,
+        created_at=event.created_at,
+        kind=event.kind,
+        tags=event.tags,
+        content=event.content,
+        sig=event.sig.upper(),
+    )
+    assert not shouted.is_valid()
 
 
-def test_event_outside_conditions_yields_no_owner() -> None:
-    other_kind = (("auth", OWNER_PUBKEY, "kind=7", AUTH_SIG),)
-    assert _event(other_kind).verified_owner() is None
+def test_expiry_is_judged_on_the_receivers_clock_not_the_events() -> None:
+    # The event claims created_at 1713956400, inside the window; the receiver's
+    # clock says the window closed.
+    assert _proof(_event(), now=1713957000).status is Provenance.EXPIRED
+
+
+def _agent_event(conditions: str, kind: int = 1) -> NostrEvent:
+    owner_sig = OwnerAttestation.sign(OWNER_SECRET, AGENT_PUBKEY, conditions)
+    return NostrEvent.signed(
+        AGENT_SECRET,
+        created_at=NOW,
+        kind=kind,
+        tags=(owner_sig.tag(),),
+        content="x",
+    )
+
+
+def test_conditions_the_event_does_not_meet_are_unmet() -> None:
+    event = _agent_event("kind=7&created_at<1713957000")
+    assert _proof(event).status is Provenance.CONDITIONS_UNMET
+
+
+@pytest.mark.parametrize("conditions", ["", "kind=1", "created_at>5"])
+def test_an_attestation_without_an_expiry_never_proves_an_owner(
+    conditions: str,
+) -> None:
+    assert _proof(_agent_event(conditions)).status is Provenance.NO_EXPIRY
+
+
+def test_a_signed_expiring_attestation_is_valid() -> None:
+    event = _agent_event("created_at<1713957000")
+    assert _proof(event) == OwnerProof(Provenance.VALID, OWNER_PUBKEY)
 
 
 @pytest.mark.parametrize(
@@ -180,3 +246,18 @@ def test_minted_attestation_expires_after_the_requested_lifetime() -> None:
         OWNER_SECRET, AGENT_PUBKEY, now=1_000_000, lifetime_seconds=86_400
     )
     assert attestation.expires_at() == 1_086_400
+
+
+def test_is_live_is_false_not_an_exception_on_malformed_conditions() -> None:
+    attestation = OwnerAttestation(OWNER_PUBKEY, "kind=01", AUTH_SIG)
+    assert not attestation.is_live(AGENT_PUBKEY, now=NOW)
+
+
+def test_signature_check_requires_a_canonical_lowercase_agent_key() -> None:
+    attestation = OwnerAttestation(OWNER_PUBKEY, CONDITIONS, AUTH_SIG)
+    assert not attestation.signature_is_valid(AGENT_PUBKEY.upper())
+
+
+def test_uppercase_owner_that_is_the_agent_cannot_attest_itself() -> None:
+    attestation = OwnerAttestation(AGENT_PUBKEY.upper(), CONDITIONS, AUTH_SIG)
+    assert not attestation.signature_is_valid(AGENT_PUBKEY)

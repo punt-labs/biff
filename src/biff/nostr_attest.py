@@ -24,6 +24,8 @@ _MAX_KIND = 65535
 _MAX_TIMESTAMP = 4294967295
 _DOMAIN = "nostr:agent-auth:"
 _TAG_LEN = 4
+_PUBKEY_RE = re.compile(r"[0-9a-f]{64}")
+_SIG_RE = re.compile(r"[0-9a-f]{128}")
 
 
 @final
@@ -105,6 +107,9 @@ class OwnerAttestation:
             msg = f"an auth tag has exactly four elements, got {len(tag)}"
             raise ValueError(msg)
         parse_conditions(tag[2])
+        if not _PUBKEY_RE.fullmatch(tag[1]) or not _SIG_RE.fullmatch(tag[3]):
+            msg = "an auth tag holds a 64-digit hex key and a 128-digit hex signature"
+            raise ValueError(msg)
         return cls(tag[1], tag[2], tag[3])
 
     def tag(self) -> tuple[str, str, str, str]:
@@ -117,18 +122,27 @@ class OwnerAttestation:
         return hashlib.sha256(preimage.encode()).digest()
 
     def signature_is_valid(self, agent_pubkey: str) -> bool:
-        """Return whether the owner's signature covers *agent_pubkey* and terms."""
-        if self.owner_pubkey == agent_pubkey:
+        """Return whether the owner's signature covers *agent_pubkey* and terms.
+
+        Both keys and the signature must be canonical lowercase hex, so two
+        spellings of one key cannot be told apart by a string compare.
+        """
+        if (
+            not _PUBKEY_RE.fullmatch(agent_pubkey)
+            or not _PUBKEY_RE.fullmatch(self.owner_pubkey)
+            or not _SIG_RE.fullmatch(self.signature)
+            or self.owner_pubkey == agent_pubkey
+        ):
             return False
         try:
             parse_conditions(self.conditions)
-            owner = bytes.fromhex(self.owner_pubkey)
-            sig = bytes.fromhex(self.signature)
         except ValueError:
             return False
-        if self.owner_pubkey != self.owner_pubkey.lower():
-            return False
-        return NostrCrypto().verify(owner, self.signed_digest(agent_pubkey), sig)
+        return NostrCrypto().verify(
+            bytes.fromhex(self.owner_pubkey),
+            self.signed_digest(agent_pubkey),
+            bytes.fromhex(self.signature),
+        )
 
     def expires_at(self) -> int | None:
         """Return the earliest ``created_at<`` bound, or ``None`` when unbounded."""
@@ -144,8 +158,12 @@ class OwnerAttestation:
 
         *now* is the receiver's own clock.  An attestation with no expiry is
         never live: biff mints none, so one that lacks it was made elsewhere.
+        Malformed conditions are not live, never an exception.
         """
-        expiry = self.expires_at()
+        try:
+            expiry = self.expires_at()
+        except ValueError:
+            return False
         return (
             expiry is not None
             and now < expiry
