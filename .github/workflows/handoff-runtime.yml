@@ -107,6 +107,24 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 npm_config_update_notifier=false \
             npm_config_cache="$scratch/npm-cache" npm_config_offline=true \
             bash -e -c 'uv sync --offline --locked --extra dev && make check-docstrings mdlint && uv run pyright --version && shellcheck --version'
+      - name: Verify pinned Linux runtime satisfies lockfile offline
+        if: github.event_name == 'pull_request' && matrix.platform == 'linux-amd64'
+        run: |
+          archive=$(make handoff-runtime | tail -n 1)
+          scratch=$(mktemp -d)
+          trap 'rm -rf "$scratch"' EXIT
+          mkdir "$scratch/runtime" "$scratch/home" "$scratch/tmp"
+          tar -xzf "$archive" -C "$scratch/runtime"
+          runtime="$scratch/runtime"
+          cp -R "$runtime/cache/uv" "$scratch/uv-cache"
+          sudo unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups -- \
+            env -i HOME="$scratch/home" TMPDIR="$scratch/tmp" \
+            PATH="$runtime/bin:$runtime/node/bin:/usr/bin:/bin" \
+            UV_PYTHON="$runtime/python/bin/python3" \
+            UV_OFFLINE=1 UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy \
+            UV_CACHE_DIR="$scratch/uv-cache" UV_PROJECT_ENVIRONMENT="$scratch/venv" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            uv sync --offline --locked --extra dev
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: runtime-${{ matrix.platform }}
