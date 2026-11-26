@@ -9177,8 +9177,10 @@ Biff owns the trust model and ethos stays unaware of it.
 
 Rulings that shaped the design: team trust by relay membership, a
 passphrase-encrypted key file on headless Linux, and no verifiable forwarding of
-direct messages for now. One question stays open: the floor gap, where an own
-agent that read poisoned repository content messages a sibling.
+direct messages for now. Two questions stay open: the floor gap (Q4), where
+an own agent that read poisoned repository content messages a sibling; and
+the wave (b) rollout (Q5), where a coordinated cutover versus a dual-format
+transition is undecided.
 
 ### Alternatives rejected
 
