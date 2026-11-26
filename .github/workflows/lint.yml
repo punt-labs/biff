@@ -60,15 +60,16 @@ jobs:
           BASE_ARGS="--base-ref ${BEFORE_SHA} --require-base --tripwire"
           # The merged PR's label is the review record of a layers widening. The
           # PR job already allowed it, so the tripwire must not fail on the same
-          # change once it lands. Only the PR whose merge commit is this push
-          # counts: a label on any other PR that happens to contain the commit
-          # must not loosen the gate.
+          # change once it lands. tools/layers_allowance.py decides, and only the
+          # PR whose merge commit is this push counts. If the PR data cannot be
+          # read, the layers check stays strict; the other ratchets still run.
           LAYERS_ARGS="${BASE_ARGS}"
-          labels="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-            --jq '[.[] | select(.merged_at != null and .merge_commit_sha == env.GITHUB_SHA) | .labels[].name] | join(",")')"
-          case ",${labels}," in
-            *,layers-policy-change,*) LAYERS_ARGS="${LAYERS_ARGS} --allow-config-change" ;;
-          esac
+          if pulls="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls")" \
+            && allow="$(printf '%s' "${pulls}" | uv run python tools/layers_allowance.py "${GITHUB_SHA}")"; then
+            LAYERS_ARGS="${LAYERS_ARGS} ${allow}"
+          else
+            echo "::warning::could not read the merged PR's labels; the layers tripwire stays strict"
+          fi
           make check-oo check-coupling check-suppressions check-layers \
             OO_BASE="${BASE_ARGS} --allow-no-improvement" \
             COUPLING_BASE="${BASE_ARGS}" SUPPRESSION_BASE="${BASE_ARGS}" \
