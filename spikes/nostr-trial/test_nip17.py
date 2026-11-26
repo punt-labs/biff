@@ -18,7 +18,6 @@ from coincurve import PrivateKey
 from nostr_sdk import (
     Event,
     Keys,
-    NostrSigner,
     PublicKey,
     UnwrappedGift,
     nip17_make_private_msg,
@@ -46,9 +45,7 @@ def _compact(value: dict) -> str:
 
 def test_sdk_round_trip() -> None:
     sender, recipient = Keys.generate(), Keys.generate()
-    wrap = nip17_make_private_msg(
-        NostrSigner.keys(sender), recipient.public_key(), "hello from biff"
-    )
+    wrap = nip17_make_private_msg(sender, recipient.public_key(), "hello from biff")
 
     wrap_json = json.loads(wrap.as_json())
     assert wrap_json["kind"] == GIFT_WRAP_KIND
@@ -56,7 +53,7 @@ def test_sdk_round_trip() -> None:
     assert wrap_json["pubkey"] != sender.public_key().to_hex()  # ephemeral author
     assert wrap.verify()
 
-    gift = UnwrappedGift.from_gift_wrap(NostrSigner.keys(recipient), wrap)
+    gift = UnwrappedGift.from_gift_wrap(recipient, wrap)
     assert gift.sender().to_hex() == sender.public_key().to_hex()
     assert gift.rumor().content() == "hello from biff"
     assert json.loads(gift.rumor().as_json())["kind"] == PRIVATE_MESSAGE_KIND
@@ -65,9 +62,7 @@ def test_sdk_round_trip() -> None:
 def test_independent_python_unwrap_of_sdk_wrap() -> None:
     sender, recipient = Keys.generate(), Keys.generate()
     recipient_secret = bytes.fromhex(recipient.secret_key().to_hex())
-    wrap = nip17_make_private_msg(
-        NostrSigner.keys(sender), recipient.public_key(), "héllo 🍕"
-    )
+    wrap = nip17_make_private_msg(sender, recipient.public_key(), "héllo 🍕")
     wrap_json = json.loads(wrap.as_json())
     nip_oa.verify_event(wrap_json)
 
@@ -134,7 +129,7 @@ def test_sdk_unwraps_python_built_wrap() -> None:
 
     event = Event.from_json(_compact(wrap))
     assert event.verify()
-    gift = UnwrappedGift.from_gift_wrap(NostrSigner.keys(recipient), event)
+    gift = UnwrappedGift.from_gift_wrap(recipient, event)
     assert gift.sender().to_hex() == sender.public_key().to_hex()
     assert gift.rumor().content() == "built in Python"
     assert PublicKey.parse(recipient_pub) == recipient.public_key()

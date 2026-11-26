@@ -34,7 +34,7 @@ def message_keys(key: bytes, nonce: bytes) -> tuple[bytes, bytes, bytes]:
         raise Nip44Error("conversation key and nonce must be 32 bytes")
     okm = b""
     block = b""
-    for counter in range(1, 3):
+    for counter in range(1, 4):
         block = hmac.new(key, block + nonce + bytes([counter]), hashlib.sha256).digest()
         okm += block
     return okm[:32], okm[32:44], okm[44:76]
