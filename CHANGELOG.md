@@ -4,6 +4,12 @@
 
 ### Added
 
+- `biff doctor` checks channels end to end with the NATS relay. It sends each of
+  your running biff sessions in the repo a channel check, waits up to 30 seconds
+  for all of them concurrently, and prints one informational line per session,
+  `channel live` or `channel not confirmed` (the latter points at the Channels
+  lines above). With no running session, or with the local relay, it prints one
+  line saying so. A channel that is not confirmed never fails doctor.
 - A session's biff server answers a channel check request. The request arrives
   over the relay (NATS) with a one-time reply subject; the server accepts at
   most one a minute, sends one channel event carrying a fresh 128-bit token, and

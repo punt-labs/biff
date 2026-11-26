@@ -909,6 +909,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/plugins/claude_code/channel_check_report.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.17,
+    "max_complexity": 5.0,
+    "avg_complexity": 1.92,
+    "module_size": 113.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/plugins/claude_code/channel_gates.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -979,8 +992,8 @@
     "encapsulation_ratio": 1.0,
     "avg_params": 1.0,
     "max_complexity": 5.0,
-    "avg_complexity": 2.6,
-    "module_size": 49.0,
+    "avg_complexity": 2.33,
+    "module_size": 63.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
