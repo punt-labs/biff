@@ -12,6 +12,14 @@ __all__ = ["Acknowledgements"]
 
 logger = logging.getLogger(__name__)
 
+_MAX_PENDING = 256
+"""The most unconfirmed replies one connection holds before the oldest is dropped.
+
+A client that abandons reads without acking would otherwise accumulate their held
+snapshots until it disconnects.  A dropped reply's mail stays unread (or held in
+the outbox), served again by a later read: delivery is at least once.
+"""
+
 
 @final
 class Acknowledgements:
@@ -39,7 +47,18 @@ class Acknowledgements:
         return len(self._pending)
 
     def expect(self, request_id: int, acknowledge: Acknowledge) -> None:
-        """Run *acknowledge* when the client confirms the reply to *request_id*."""
+        """Run *acknowledge* when the client confirms the reply to *request_id*.
+
+        Once the connection holds :data:`_MAX_PENDING` unconfirmed replies, the
+        oldest is dropped so an abandoning client cannot grow this without bound;
+        its mail stays unread, to be served again.
+        """
+        while len(self._pending) >= _MAX_PENDING and request_id not in self._pending:
+            oldest = next(iter(self._pending))
+            del self._pending[oldest]
+            logger.warning(
+                "dropped unconfirmed reply %d; its mail stays unread", oldest
+            )
         self._pending[request_id] = acknowledge
 
     def forget(self, request_id: int) -> None:

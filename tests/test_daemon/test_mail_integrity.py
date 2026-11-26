@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from biff.models import Message
+    from biff.models import Message, UnreadSummary
     from tests.test_daemon.conftest import Harness
 
 _PULL_CAP = 100
@@ -156,3 +156,21 @@ async def test_a_reply_the_client_gave_up_on_does_not_consume_the_mail(
     await asyncio.sleep(0.4)  # the late reply was written and discarded
     monkeypatch.setattr(relay_type, "delay", 0.0)
     assert _bodies(await kai.request("read")) == ["do not lose me"]
+
+
+class SummaryFailsRelay(ConsumingRelay):
+    """A consuming relay whose backlog summary fails after a good fetch."""
+
+    async def get_unread_summary(self, session_key: str) -> UnreadSummary:
+        msg = "backlog summary unavailable"
+        raise OSError(msg)
+
+
+async def test_a_backlog_summary_failure_still_delivers_the_fetched_batch(
+    harness: Harness,
+) -> None:
+    harness.factory.relay_type = SummaryFailsRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="deliver me")
+    assert _bodies(await kai.request("read")) == ["deliver me"]

@@ -15,6 +15,7 @@ from biff.commands.inbox import Inbox
 from biff.daemon.refusal import RefusalError
 from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
+from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -211,7 +212,13 @@ class Methods:
             to_jsonable_python([m.model_dump(mode="json") for m in batch])
         )
         result: dict[str, JsonValue] = {"data": data, "error": False}
-        left = len(pending) - len(batch) + await inbox.unfetched()
+        # The backlog summary is a hint for ``more``; a relay that fails to report
+        # it must not sink a batch that was already fetched and is deliverable.
+        left = len(pending) - len(batch)
+        try:
+            left += await inbox.unfetched()
+        except RELAY_ERRORS as exc:
+            logger.warning("read backlog summary unavailable: %s", exc)
         if left > 0:
             result["more"] = left
         if not batch:
