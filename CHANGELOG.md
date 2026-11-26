@@ -4,6 +4,11 @@
 
 ### Changed
 
+- `docs/specs/nats-relay.tex` and `docs/specs/session-model.tex` model the
+  per-user daemon (DES-095): client attached, detached and daemon absent; the
+  daemon owns the one relay handle; per-session attachment, run replacement and
+  restart-to-dormant.
+
 - `/who` no longer prints the "N sessions stopped responding (last seen ...)"
   footnote under the table. Sessions that died without deregistering are
   logged to biff.log at INFO instead.
