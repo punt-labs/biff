@@ -129,7 +129,7 @@ type: ## Type check with mypy and pyright
 
 # Keep this pin equal to the cli2 version bundled by the markdownlint-cli2-action
 # tag in .github/workflows/docs.yml.
-MARKDOWNLINT_CLI := markdownlint-cli2@0.24.2
+MARKDOWNLINT_CLI := markdownlint-cli2@0.24.1
 
 mdlint: ## Lint markdown files (matches .github/workflows/docs.yml)
 	npx --yes $(MARKDOWNLINT_CLI) "**/*.md" "#node_modules"

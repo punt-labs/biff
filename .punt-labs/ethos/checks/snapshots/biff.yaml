@@ -10,7 +10,7 @@
         "platforms": {
           "linux-amd64": {
             "bundle": "biff-handoff-linux-amd64.tar.gz",
-            "sha256": "c365226b2bb2290fe5b8372a12cf96a6a244c6fb6aaa49f970a22fa1b338f4db",
+            "sha256": "711a9756a7bfb7b6256ed1f34422f81d5252aede5dce127e2fb1d87f47b7c183",
             "url": "https://github.com/punt-labs/biff/releases/download/handoff-runtime-v1/biff-handoff-linux-amd64.tar.gz",
             "path": [
               "{runtime}/bin",
