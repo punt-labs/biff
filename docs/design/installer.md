@@ -40,8 +40,9 @@ or a failed creation exits 1. It then looks for `claude` on `PATH`:
 `install.sh` at the repo root is the bootstrap: it installs the CLI with
 `uv tool install`, registers the `punt-labs` marketplace, installs the
 plugin, and runs `biff doctor`. `--no-plugin` (or `BIFF_NO_PLUGIN=1`) skips the
-plugin; the home tree is still created and doctor still runs, reporting the
-plugin as missing.
+plugin; the home tree is still created and doctor still runs. Doctor reports
+the plugin as installed or missing, whichever it finds; `--no-plugin` never
+removes an installed one.
 
 **What the plugin carries.** The marketplace fetches only `plugin/` from
 `punt-labs/biff` through a `git-subdir` source (DES-055). That directory
