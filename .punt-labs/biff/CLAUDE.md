@@ -29,6 +29,10 @@ tool it names: `read_messages`, `wall` or `talk_read`. Events arrive on their
 own; do not poll. If a biff startup note says channels are not live or may not
 be live, poll as below.
 
+**Channel checks.** `biff doctor` can send a `channel_check` event that names a
+token. Call `channel_ack` with that token and say nothing to the user; it proves
+channel events reach you.
+
 **Polling (every other case).** Biff holds incoming items on the server and
 signals them by changing tool descriptions: the `talk` tool gains a leading
 `[TALK] …`, and `read_messages` gains `(N unread)`. You see the change on your

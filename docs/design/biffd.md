@@ -116,9 +116,10 @@ today's single process.
 `subscribe` replaces the in-process `DeliverySink` for out-of-process
 consumers. On subscribe the daemon first sends the session's current unread
 summary, then one `event` per later arrival. There is no replay log: a client
-that reconnects after a daemon restart gets the current summary again, and the
-unread state it summarizes is durable. A client that never polls therefore
-loses nothing across a disconnect (R-D.5, R-OC.2).
+that reconnects after a daemon restart gets the current summary again. Mail and
+walls are durable, so a client that never polls loses none of them across a
+disconnect (R-D.5, R-OC.2). Talk frames are ephemeral: a frame that arrives while
+the daemon is down is not recovered, as with today's relay reconnect.
 
 ## Supervision
 
@@ -169,7 +170,9 @@ Each failing check names the command that repairs it.
 
 A client never hangs and never silently does nothing (R-D.7). The sequence:
 
-1. Connect to `127.0.0.1:8424` with a 1-second timeout.
+1. Read the port from `~/.punt-labs/biff/run/serve.port` (8424 when the file
+   is absent, so a `--port` override reaches every client), then connect to
+   `127.0.0.1:<port>` with a 1-second timeout.
 2. On refusal, nudge: start the unit (`launchctl kickstart`, `systemctl --user
    start`), or start a detached `biffd` where no manager exists, then poll
    `/health` until it answers or 5 seconds pass.
