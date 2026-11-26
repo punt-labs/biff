@@ -158,7 +158,16 @@ class TestChannelModeIsPluginDefinition:
 
         assert (tty["command"], tty["args"]) == ("biff", ["mcp"])
 
-    def test_dev_name_is_kept(self) -> None:
-        manifest = _PLUGIN / ".claude-plugin" / "plugin.json"
+    def test_the_name_matches_the_build(self) -> None:
+        """``biff-dev`` with its ``-dev`` commands on main; ``biff`` without them.
 
-        assert json.loads(manifest.read_text(encoding="utf-8"))["name"] == "biff-dev"
+        scripts/release-plugin.sh renames the plugin and strips the ``-dev``
+        commands together on the release commit, and restore-dev-plugin.sh
+        undoes both, so a ``biff`` name with dev commands (or ``biff-dev``
+        without them) is a broken build either way.
+        """
+        manifest = _PLUGIN / ".claude-plugin" / "plugin.json"
+        name = json.loads(manifest.read_text(encoding="utf-8"))["name"]
+        has_dev_commands = any((_PLUGIN / "commands").glob("*-dev.md"))
+
+        assert (name, has_dev_commands) in {("biff-dev", True), ("biff", False)}
