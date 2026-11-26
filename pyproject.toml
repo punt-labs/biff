@@ -30,6 +30,8 @@ dependencies = [
     "watchdog>=7,<8",
     # The biffd listener and its client (docs/design/biffd.md).
     "websockets>=16,<17",
+    "keyring>=25,<26",
+    "cryptography>=46,<51",
 ]
 
 [project.optional-dependencies]
@@ -212,6 +214,9 @@ prefixes = [
     "log_hint",
     "logging_config",
     "markers",
+    "nostr_attest",
+    "nostr_crypto",
+    "nostr_event",
     "prob_gate",
     "run_dir",
     "session_id",
