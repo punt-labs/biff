@@ -10,6 +10,13 @@
   token in `~/.punt-labs/biff/run/serve.token` (mode 0600, created once) and
   records its port in `serve.port`, which a clean shutdown removes. Nothing
   uses the daemon yet; `biff mcp`, the CLI and the hooks still run in-process.
+- biffd speaks JSON frames (`hello`, `request`, `reply`, `subscribe`, `event`,
+  each with a protocol `version`) over that WebSocket and serves `who`,
+  `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty` and
+  `status`. It holds one relay connection per relay target however many
+  sessions share it, binds each connection to the one session its hello named,
+  and closes any connection whose first frame is not a valid hello with the
+  right token. `biff.client` is the matching client; it imports no relay.
 
 ### Changed
 

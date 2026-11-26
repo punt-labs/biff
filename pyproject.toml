@@ -221,7 +221,7 @@ prefixes = [
 imports = []
 
 [tool.oo-ratchet.layers.wire]
-prefixes = ["check_stamp", "models", "session_routing", "talk_types", "unread"]
+prefixes = ["check_stamp", "frames", "models", "session_routing", "talk_types", "unread"]
 imports = ["kernel"]
 
 [tool.oo-ratchet.layers.engine]

@@ -1,6 +1,8 @@
 # biffd: the Per-User Daemon
 
-Status: proposed design (DES-095). No code ships with this document.
+Status: proposed design (DES-095). Migration step 1 is built: `biff daemon
+serve`, the frames and the session records below. Nothing routes through the
+daemon yet.
 
 `biffd` is one long-running process per operating-system user. It owns every
 connection and every piece of state that biff's clients would otherwise
@@ -96,9 +98,9 @@ Every frame is a JSON object with a protocol `version`.
 
 | Frame | Direction | Content |
 |-------|-----------|---------|
-| `hello` | client to daemon, first frame | Token, client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id` and `main_agent_id` |
+| `hello` | client to daemon, first frame | Token, client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id`, `main_agent_id` (empty when the harness states none), `cwd` (the directory the client runs in, which names the repository and so the relay target) and an optional `user` override. The daemon answers a valid hello with a `reply` whose `id` is 0 |
 | `request` | client to daemon | `id`, `method`, `params`. One `method` per command object in `commands/` |
-| `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message) |
+| `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message). A command's `result` is `{"data": <the command's JSON payload>, "error": <bool>}` |
 | `subscribe` | client to daemon | Starts the arrival subscription for the connection's session |
 | `event` | daemon to client | One arrival summary, with a per-daemon `seq` |
 

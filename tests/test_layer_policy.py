@@ -7,6 +7,7 @@ violations without touching any code, so both are asserted here.
 
 from __future__ import annotations
 
+import ast
 import json
 import tomllib
 from pathlib import Path
@@ -192,3 +193,29 @@ def test_prefixes_are_exact_module_names() -> None:
 @pytest.mark.parametrize("module", ["biff.plugins.contract", "biff.plugins"])
 def test_plugin_contract_modules_are_in_the_contract_layer(module: str) -> None:
     assert DeclaredLayers(_layer_table()).layer(module) == "plugins"
+
+
+def _biff_imports(path: Path) -> set[str]:
+    """Every absolute ``biff.*`` module a source file imports."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+            found.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+    return {name for name in found if name.split(".")[0] == "biff"}
+
+
+def test_no_client_module_reaches_the_engine_or_a_relay() -> None:
+    """A client holds no relay connection: it imports kernel and wire only."""
+    declared = DeclaredLayers(_layer_table())
+    files = sorted((SRC / "biff" / "client").rglob("*.py"))
+    assert files
+    reached = {
+        f"{path.name} -> {name}"
+        for path in files
+        for name in _biff_imports(path)
+        if str(declared.layer(name)) not in {"client", "kernel", "wire"}
+    }
+    assert reached == set()
