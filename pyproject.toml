@@ -214,7 +214,7 @@ prefixes = [
 imports = []
 
 [tool.oo-ratchet.layers.wire]
-prefixes = ["models", "session_routing", "talk_types", "unread"]
+prefixes = ["check_stamp", "models", "session_routing", "talk_types", "unread"]
 imports = ["kernel"]
 
 [tool.oo-ratchet.layers.engine]
@@ -233,6 +233,8 @@ prefixes = [
     "nats_relay",
     "relay_errors",
     "changed_file",
+    "channel_check_wire",
+    "check_stamp_file",
     "relay",
     "relay_config",
     "relay_select",

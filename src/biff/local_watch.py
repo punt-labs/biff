@@ -126,6 +126,7 @@ class LocalWatch:
         "_canary_kqueue",
         "_closed",
         "_data_dir",
+        "_dir_fd",
         "_identity",
         "_kqueue",
         "_lock",
@@ -139,6 +140,7 @@ class LocalWatch:
     _on_change: Callable[[], None]
     _loop: asyncio.AbstractEventLoop
     _identity: tuple[int, int]
+    _dir_fd: int | None
     _observer: BaseObserver | None
     _kqueue: DirectoryKqueue | None
     _canary_kqueue: DirectoryKqueue | None
@@ -155,6 +157,7 @@ class LocalWatch:
         self._on_change = on_change
         self._loop = asyncio.get_running_loop()
         self._identity = (-1, -1)
+        self._dir_fd = None
         self._observer = None
         self._kqueue = None
         self._canary_kqueue = None
@@ -185,6 +188,9 @@ class LocalWatch:
                 self._data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                 info = self._data_dir.stat()
                 self._identity = (info.st_dev, info.st_ino)
+                # Held open so the kernel cannot free this inode and hand it to
+                # a recreated directory, which would match ``_identity``.
+                self._dir_fd = os.open(self._data_dir, os.O_RDONLY)
                 canary_dir = self._canary_dir = self._private_canary_dir()
                 observer = Observer()
                 for path, loop, notify in (
@@ -312,6 +318,9 @@ class LocalWatch:
             self._stuck_kqueue = kqueue
         if canary_kqueue is not None:
             canary_kqueue.stop()
+        fd, self._dir_fd = self._dir_fd, None
+        if fd is not None:
+            os.close(fd)
         canary_dir, self._canary_dir = self._canary_dir, None
         if canary_dir is not None:
             shutil.rmtree(canary_dir, ignore_errors=True)

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from biff.server.tools import (
     biff_relay,
     biff_toggle,
+    channel_ack,
     finger,
     last,
     mesg,
@@ -39,3 +40,8 @@ def register_all_tools(mcp: FastMCP[ServerState], state: ServerState) -> None:
     talk.register(mcp, state)
     last.register(mcp, state)
     poll_config.register(mcp, state)
+
+
+def register_channel_tools(mcp: FastMCP[ServerState], state: ServerState) -> None:
+    """Register the tools only a channel-mode server offers."""
+    channel_ack.register(mcp, state)

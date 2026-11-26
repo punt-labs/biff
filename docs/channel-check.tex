@@ -1,0 +1,214 @@
+%
+% channel-check.tex
+%
+% Z Specification for the channel check: the request biff doctor sends to a
+% session, the one channel event it makes, and the acknowledgement the model
+% returns through the channel_ack tool (design-channels.md section 5, DES-087).
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+
+\begin{document}
+
+\title{Biff Channel Check: A Z Specification}
+\author{Request, Token, Event and Acknowledgement}
+\date{November 2026}
+\maketitle
+
+\section{Introduction}
+
+\texttt{biff doctor} proves, one session at a time, that channel events reach a
+model.  The session's server accepts a request that names a one-time reply
+subject, makes a fresh token, sends one channel event carrying it, and accepts
+the token back once through \texttt{channel\_ack}.  The server accepts at most one
+request a minute.  The check only reports: no operation below touches what is
+delivered, and the specification has no variable for delivery.
+
+\section{Basic Types}
+
+A \emph{token} is the 128-bit hex string of one check.  A \emph{subject} is a
+NATS subject.  The reply subject of a request is a fresh inbox name; a subject
+that is not an inbox is \emph{foreign}.
+
+\begin{zed}
+  [TOKEN, SUBJECT]
+\end{zed}
+
+\begin{zed}
+  Report ::= live | notAccepted
+\end{zed}
+
+\begin{axdef}
+  checkSeconds : \nat_1 \\
+  tickSeconds : \nat_1 \\
+  maxClock : \nat \\
+  inboxes : \power SUBJECT
+\where
+  checkSeconds = 60 \\
+  tickSeconds = 30 \\
+  maxClock = 120
+\end{axdef}
+
+The clock moves in steps of \emph{tickSeconds}, half a window, and stops at
+\emph{maxClock}: the bound that lets ProB exhaust the state space.
+
+\section{State}
+
+Time is a natural number of seconds.  At most one token is pending: a new
+accepted request retires the older one.  A token that was acknowledged is
+\emph{spent} and never matches again.  The times of accepted requests are
+recorded to state the once-a-minute bound as an invariant.
+
+\begin{schema}{CheckState}
+  clock : \nat \\
+  acceptedAt : \power \nat \\
+  pending : \power TOKEN \\
+  unsent : \power TOKEN \\
+  sent : \power TOKEN \\
+  spent : \power TOKEN \\
+  replyOf : TOKEN \pfun SUBJECT
+\where
+  clock \leq maxClock \\
+  \# pending \leq 1 \\
+  unsent \subseteq pending \\
+  pending \cap spent = \emptyset \\
+  unsent \cap sent = \emptyset \\
+  pending \subseteq \dom replyOf \\
+  \ran replyOf \subseteq inboxes \\
+  \forall a, b : acceptedAt | a \neq b @ a + checkSeconds \leq b \lor b +
+    checkSeconds \leq a
+\end{schema}
+
+\begin{schema}{Init}
+  CheckState~'
+\where
+  clock' = 0 \\
+  acceptedAt' = \emptyset \\
+  pending' = \emptyset \\
+  unsent' = \emptyset \\
+  sent' = \emptyset \\
+  spent' = \emptyset \\
+  replyOf' = \emptyset
+\end{schema}
+
+\section{Operations}
+
+\subsection{Time}
+
+\begin{schema}{Tick}
+  \Delta CheckState
+\where
+  clock < maxClock \\
+  clock' = clock + tickSeconds \\
+  acceptedAt' = acceptedAt \\
+  pending' = pending \\
+  unsent' = unsent \\
+  sent' = sent \\
+  spent' = spent \\
+  replyOf' = replyOf
+\end{schema}
+
+A session that is asked nothing is not stuck: it stays as it is.
+
+\begin{schema}{Idle}
+  \Xi CheckState
+\end{schema}
+
+\subsection{Request}
+
+A request is accepted when its reply is an inbox and no request was accepted in
+the last \emph{checkSeconds}.  Its token is fresh: never pending, sent or spent
+before.  It retires the older pending token.
+
+\begin{schema}{Request}
+  \Delta CheckState \\
+  reply? : SUBJECT \\
+  token? : TOKEN
+\where
+  reply? \in inboxes \\
+  \forall a : acceptedAt @ a + checkSeconds \leq clock \\
+  token? \notin pending \cup sent \cup spent \cup \dom replyOf \\
+  clock' = clock \\
+  acceptedAt' = acceptedAt \cup \{ clock \} \\
+  pending' = \{ token? \} \\
+  unsent' = \{ token? \} \\
+  sent' = sent \\
+  spent' = spent \\
+  replyOf' = \{ token? \mapsto reply? \}
+\end{schema}
+
+A request that names a foreign subject, or arrives inside the window, changes
+nothing and does not extend the window.
+
+\begin{schema}{RejectRequest}
+  \Xi CheckState \\
+  reply? : SUBJECT
+\where
+  reply? \notin inboxes \lor
+    (\exists a : acceptedAt @ clock < a + checkSeconds)
+\end{schema}
+
+\subsection{The one event}
+
+\begin{schema}{SendEvent}
+  \Delta CheckState \\
+  token? : TOKEN
+\where
+  token? \in unsent \\
+  clock' = clock \\
+  acceptedAt' = acceptedAt \\
+  pending' = pending \\
+  unsent' = unsent \setminus \{ token? \} \\
+  sent' = sent \cup \{ token? \} \\
+  spent' = spent \\
+  replyOf' = replyOf
+\end{schema}
+
+\subsection{Acknowledgement}
+
+\begin{schema}{Acknowledge}
+  \Delta CheckState \\
+  token? : TOKEN \\
+  reply! : SUBJECT \\
+  report! : Report
+\where
+  token? \in pending \\
+  reply! = replyOf~token? \\
+  report! = live \\
+  clock' = clock \\
+  acceptedAt' = acceptedAt \\
+  pending' = pending \setminus \{ token? \} \\
+  unsent' = unsent \\
+  sent' = sent \\
+  spent' = spent \cup \{ token? \} \\
+  replyOf' = replyOf
+\end{schema}
+
+A wrong or repeated token changes nothing and says so.
+
+\begin{schema}{RejectAck}
+  \Xi CheckState \\
+  token? : TOKEN \\
+  report! : Report
+\where
+  token? \notin pending \\
+  report! = notAccepted
+\end{schema}
+
+\section{What the implementation owes}
+
+\begin{description}
+\item[C1] \texttt{ChannelCheck.request} is \emph{Request} or
+  \emph{RejectRequest}; the clock is injected, so a test moves time without
+  sleeping.
+\item[C2] \texttt{ChannelEmitter} sends the event of \emph{SendEvent} once per
+  accepted request, and only with the client initialised.
+\item[C3] \texttt{ChannelCheck.acknowledge} is \emph{Acknowledge} or
+  \emph{RejectAck}, comparing in constant time.
+\item[C4] Nothing here writes to, or reads from, the arrival records or the
+  rate window: the check never changes delivery.
+\end{description}
+
+\end{document}

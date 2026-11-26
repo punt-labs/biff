@@ -43,7 +43,7 @@ from biff.server.poller_supervisor import (
 )
 from biff.server.relay_lifecycle import RelayLifecycle
 from biff.server.state import ServerState
-from biff.server.tools import _descriptions, register_all_tools
+from biff.server.tools import _descriptions, register_all_tools, register_channel_tools
 from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
@@ -1244,4 +1244,5 @@ def create_server(
     mcp.configure_transport(state.tool_events, _SessionCaptureMiddleware(), policy)
     mcp.attach_emitter(state.emitter)
     register_all_tools(mcp, state)
+    mcp.attach_channel_tools(lambda: register_channel_tools(mcp, state))
     return mcp

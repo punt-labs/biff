@@ -14,6 +14,7 @@ from mcp.server.subscriptions import InMemorySubscriptionBus as NotificationBus
 
 from biff.models import BiffConfig
 from biff.relay import Relay
+from biff.server.channel_check import ChannelCheck
 from biff.server.channel_emitter import ChannelEmitter
 from biff.server.display_queue import DisplayQueue
 from biff.server.wake import WakeSignal
@@ -73,6 +74,8 @@ class ServerState:
     # calls for the shared connection's wedge-detection budget.
     org_repos_refreshed_at: float | None = None
     talk: TalkState = field(init=False)
+    # The doctor's pending channel check: one token, one request a minute.
+    channel_check: ChannelCheck = field(default_factory=ChannelCheck)
     # Sends channel events; dormant until channel mode gives it a link (DES-087).
     emitter: ChannelEmitter = field(init=False)
     # The session this server is bound to, set once by ``bind`` on the first
@@ -102,7 +105,11 @@ class ServerState:
                 session_key=self.session_key,
             ),
         )
-        object.__setattr__(self, "emitter", ChannelEmitter(self, self.wake.wake))
+        object.__setattr__(
+            self,
+            "emitter",
+            ChannelEmitter(self, self.wake.wake, check=self.channel_check),
+        )
 
     @property
     def session_key(self) -> str:
@@ -131,6 +138,7 @@ class ServerState:
             object.__setattr__(
                 self, "unread_path", routing.unread_path(self.unread_dir)
             )
+        self.channel_check.reset()
         self.talk.rebind(
             tty=routing.routing_id, session_key=routing.session_key(self.config.user)
         )

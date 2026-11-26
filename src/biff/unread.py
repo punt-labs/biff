@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from biff.check_stamp import CheckStamp
+
 
 def as_str_dict(val: object) -> dict[str, object]:
     """Narrow an opaque value to ``dict[str, object]``.
@@ -42,6 +44,7 @@ class SessionUnread:
     biff_enabled: bool = True
     display_items: tuple[DisplayItemView, ...] = ()
     plan: str = ""
+    channel_checked_at: float | None = None  # absent until a check is acknowledged
 
 
 def parse_display_items(val: object) -> list[DisplayItemView]:
@@ -83,6 +86,7 @@ def read_session_unread(path: Path) -> SessionUnread | None:
             biff_enabled=bool(data.get("biff_enabled", True)),
             display_items=tuple(items),
             plan=str(data.get("plan", "")),
+            channel_checked_at=CheckStamp.value_in(data),
         )
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return None

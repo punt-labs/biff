@@ -22,7 +22,7 @@ from biff.server.mcp_protocol import NotificationServer
 from biff.usage import McpUsageMiddleware
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from fastmcp import Context
     from mcp.shared.dispatcher import DispatchContext
@@ -50,6 +50,11 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
         return ChannelLink()
 
     _emitter: ClientGate | None = None
+    _channel_tools: Callable[[], None] | None = None
+
+    def attach_channel_tools(self, register: Callable[[], None]) -> None:
+        """Name what registers the tools that only a channel-mode server offers."""
+        self._channel_tools = register
 
     def attach_emitter(self, emitter: ClientGate) -> None:
         """Name the emitter that sends events over this server's channel link."""
@@ -89,6 +94,8 @@ class ChannelServer[LifespanT](NotificationServer[LifespanT]):
         """
         server = self._mcp_server
         link = self.channel_link
+        if self._channel_tools is not None:
+            self._channel_tools()
         # First: the SDK answers ``initialize`` from these options, and the
         # server's instructions are read when they are built.
         ChannelHandshake.open(server, link, self._emitter)
