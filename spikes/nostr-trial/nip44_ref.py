@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import math
 import struct
 
 from coincurve import PrivateKey, PublicKey
@@ -43,8 +42,9 @@ def message_keys(key: bytes, nonce: bytes) -> tuple[bytes, bytes, bytes]:
 def padded_length(unpadded: int) -> int:
     if unpadded <= 32:
         return 32
-    chunk = 32 if unpadded <= 256 else 2 ** (math.floor(math.log2(unpadded - 1)) - 3)
-    return chunk * (math.floor((unpadded - 1) / chunk) + 1)
+    next_power = 1 << (unpadded - 1).bit_length()
+    chunk = 32 if next_power <= 256 else next_power // 8
+    return chunk * ((unpadded - 1) // chunk + 1)
 
 
 def _pad(plaintext: str) -> bytes:
