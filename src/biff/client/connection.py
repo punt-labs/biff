@@ -13,7 +13,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from biff.client.environment import ClientEnvironment
-from biff.frame_base import PROTOCOL_VERSION
+from biff.frame_base import MAX_FRAME_BYTES, PROTOCOL_VERSION
 from biff.frame_client import ClientType, Hello, Request, Subscribe
 from biff.frame_proof import Challenge, Handshake, Proof
 from biff.frame_reply import ErrorCode, Reply
@@ -218,6 +218,7 @@ class DaemonClient:
             return await connect(
                 f"ws://{_LOOPBACK}:{port}/",
                 open_timeout=_OPEN_TIMEOUT_SECONDS,
+                max_size=MAX_FRAME_BYTES,
                 proxy=None,
             )
         except InvalidHandshake as exc:

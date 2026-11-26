@@ -54,9 +54,10 @@ class Inbox:
 
     async def mark_read(self, delivered: Sequence[Message]) -> None:
         """Mark *delivered*, and only those messages, read."""
-        ids = {m.id for m in delivered}
-        tty_ids = [m.id for m in self._tty if m.id in ids]
-        user_ids = [m.id for m in self._user if m.id in ids]
+        # A message addressed ``user:tty`` is in a session inbox, a bare ``user``
+        # in the broadcast inbox; the address says so even for mail fetched earlier.
+        tty_ids = [m.id for m in delivered if ":" in m.to_user]
+        user_ids = [m.id for m in delivered if ":" not in m.to_user]
         if tty_ids:
             await self._ctx.relay.mark_read(self._ctx.session_key, tty_ids)
         if user_ids:

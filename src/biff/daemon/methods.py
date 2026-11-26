@@ -13,6 +13,7 @@ from pydantic_core import to_jsonable_python
 from biff import commands
 from biff.commands.read import Inbox
 from biff.daemon.refusal import RefusalError
+from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
 
 if TYPE_CHECKING:
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
     from biff.cli_context import CliContext
     from biff.commands import CommandResult
+    from biff.daemon.sessions import Session
     from biff.models import Message
 
 __all__ = ["READ_BUDGET_BYTES", "Acknowledge", "Methods", "Outcome", "Params"]
@@ -31,8 +33,17 @@ _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 type Handler = Callable[[CliContext, Params], Awaitable[CommandResult]]
 type Acknowledge = Callable[[], Awaitable[None]]
 
-READ_BUDGET_BYTES = 512 * 1024
-"""The most mail one ``read`` reply carries; a frame may not exceed 1 MiB."""
+READ_BUDGET_BYTES = MAX_FRAME_BYTES // 2
+"""The most mail one ``read`` reply carries, in bytes of JSON.
+
+Half the frame limit leaves room for the reply's envelope and for the length
+of text the JSON escapes add, so a batch can never be refused by the client.
+"""
+
+_ENVELOPE_BYTES = 512
+"""What a reply adds around its messages: ids, keys, the ``more`` count."""
+
+_CLIPPED = "[clipped]"
 
 
 @dataclass(frozen=True)
@@ -160,7 +171,7 @@ class Methods:
         return ("read", *self._table)
 
     async def call(
-        self, ctx: CliContext, method: str, raw: dict[str, JsonValue]
+        self, session: Session, method: str, raw: dict[str, JsonValue]
     ) -> Outcome:
         """Run *method* for the session *ctx* and return its wire result.
 
@@ -171,8 +182,9 @@ class Methods:
         Raises:
             RefusalError: The method is unknown or its params are invalid.
         """
+        ctx = session.context
         if method == "read":
-            return await self._read(ctx, Params(method, raw))
+            return await self._read(session, Params(method, raw))
         handler = self._table.get(method)
         if handler is None:
             msg = f"unknown method {method!r}; served: {', '.join(self.names)}"
@@ -181,29 +193,57 @@ class Methods:
         data = _JSON.validate_python(to_jsonable_python(result.json_data))
         return Outcome({"data": data, "error": result.error})
 
-    async def _read(self, ctx: CliContext, p: Params) -> Outcome:
-        """Return the next batch of unread mail, to be marked read once delivered.
+    async def _read(self, session: Session, p: Params) -> Outcome:
+        """Return the next batch of unread mail, acknowledged once delivered.
 
-        The batch is as much of the inbox as fits the read budget, and always at
-        least one message, so a message larger than the budget still gets out.
-        ``more`` counts what the batch leaves unread.
+        Fetched mail is held in the session's outbox, because some relays consume
+        mail at fetch: what a lost reply or a truncated batch leaves behind is
+        served by the next ``read``.  The batch is as much as fits the read
+        budget in bytes; a message larger than the budget alone is clipped, never
+        sent whole.  ``more`` counts what the batch leaves.
         """
         p.done()
-        inbox = await Inbox.unread(ctx)
-        batch: list[Message] = []
-        size = 0
-        for message in inbox.messages:
-            size += len(message.model_dump_json())
-            if batch and size > self._read_budget:
-                break
-            batch.append(message)
+        inbox = await Inbox.unread(session.context)
+        pending = session.outbox.merge(inbox.messages)
+        batch = self._batch(pending)
         data = _JSON.validate_python(
             to_jsonable_python([m.model_dump(mode="json") for m in batch])
         )
         result: dict[str, JsonValue] = {"data": data, "error": False}
-        if (left := len(inbox.messages) - len(batch)) > 0:
+        if (left := len(pending) - len(batch)) > 0:
             result["more"] = left
-        return Outcome(result, partial(inbox.mark_read, batch) if batch else None)
+        if not batch:
+            return Outcome(result)
+        return Outcome(result, partial(self._delivered, session, inbox, batch))
+
+    def _batch(self, pending: list[Message]) -> list[Message]:
+        """Take messages from the front of *pending* while they fit the budget."""
+        batch: list[Message] = []
+        used = _ENVELOPE_BYTES
+        for message in pending:
+            size = len(message.model_dump_json().encode()) + 1  # the comma
+            if not batch and used + size > self._read_budget:
+                message = self._clip(message, self._read_budget - used)
+                size = len(message.model_dump_json().encode()) + 1
+            elif used + size > self._read_budget:
+                break
+            batch.append(message)
+            used += size
+        return batch
+
+    @staticmethod
+    def _clip(message: Message, room: int) -> Message:
+        """Shorten *message*'s body until the message fits *room* bytes of JSON."""
+        bare = len(message.model_copy(update={"body": "x"}).model_dump_json().encode())
+        keep = max(1, room - bare - len(_CLIPPED.encode()))
+        body = message.body.encode()[:keep].decode(errors="ignore") or "x"
+        return message.model_copy(update={"body": body + _CLIPPED})
+
+    @staticmethod
+    async def _delivered(session: Session, inbox: Inbox, batch: list[Message]) -> None:
+        """Forget the batch and mark it read, once the reply that carried it left."""
+        session.outbox.delivered(batch)
+        await inbox.mark_read(batch)
 
     @staticmethod
     async def _who(ctx: CliContext, p: Params) -> CommandResult:

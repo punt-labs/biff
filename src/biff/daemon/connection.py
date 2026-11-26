@@ -14,7 +14,7 @@ from biff.daemon.refusal import HandshakeRefusedError, RefusalError
 from biff.daemon.resolver import ResolveError
 from biff.daemon.subscription import Subscription
 from biff.daemon.tasks import Supervised
-from biff.frame_base import PROTOCOL_VERSION
+from biff.frame_base import MAX_FRAME_BYTES, PROTOCOL_VERSION
 from biff.frame_client import Hello, Request, Subscribe
 from biff.frame_proof import Challenge, Handshake, Proof
 from biff.frame_reply import ErrorCode, Reply, ReplyError
@@ -253,6 +253,16 @@ class ConnectionHandler:
         so acknowledgement waits for the write.
         """
         reply, acknowledge = await self._answer(attachment, request)
+        if (size := len(Frames.encode(reply).encode())) > MAX_FRAME_BYTES:
+            msg = (
+                f"{request.method} reply of {size} bytes exceeds the "
+                f"{MAX_FRAME_BYTES}-byte frame limit; nothing was marked read"
+            )
+            logger.error("%s", msg)
+            reply, acknowledge = (
+                self._failure(request.id, ErrorCode.INTERNAL, msg),
+                None,
+            )
         if not await self._send(ws, reply) or acknowledge is None:
             return
         try:
@@ -276,7 +286,7 @@ class ConnectionHandler:
         try:
             async with asyncio.timeout(core.request_timeout):
                 outcome = await core.methods.call(
-                    attachment.session.context, method, request.params
+                    attachment.session, method, request.params
                 )
         except RefusalError as exc:
             return Reply(id=request.id, error=exc.reply_error), None

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Self, final
 from biff.cli_context import CliContext
 from biff.daemon.attachment import Attachment
 from biff.daemon.orgs import OrgRepos
+from biff.daemon.outbox import Outbox
 from biff.daemon.presence import PresenceRow
 from biff.daemon.refusal import RefusalError
 from biff.daemon.tasks import Supervised
@@ -60,6 +61,7 @@ class Session:
         "_interval",
         "_log",
         "_orgs",
+        "_outbox",
         "_presence",
         "_retired",
         "_run",
@@ -72,6 +74,7 @@ class Session:
     _context: CliContext
     _presence: PresenceRow
     _orgs: OrgRepos
+    _outbox: Outbox
     _run: str
     _retired: dict[str, None]
     _attachments: set[Attachment]
@@ -97,6 +100,7 @@ class Session:
         self._context = context
         self._presence = presence
         self._orgs = orgs
+        self._outbox = Outbox()
         self._run = run
         self._retired = {}
         self._attachments = set()
@@ -162,6 +166,11 @@ class Session:
     def run(self) -> str:
         """The main agent id of the session's current run."""
         return self._run
+
+    @property
+    def outbox(self) -> Outbox:
+        """Mail fetched for this session and not yet delivered."""
+        return self._outbox
 
     @property
     def is_dormant(self) -> bool:

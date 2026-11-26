@@ -20,6 +20,7 @@ from biff.daemon.methods import READ_BUDGET_BYTES, Methods
 from biff.daemon.relays import RelayPool
 from biff.daemon.resolver import DiskResolver
 from biff.daemon.sessions import SessionTable
+from biff.frame_base import MAX_FRAME_BYTES
 
 if TYPE_CHECKING:
     from websockets.http11 import Request, Response
@@ -34,7 +35,6 @@ __all__ = ["BiffDaemon", "DaemonStatus"]
 logger = logging.getLogger(__name__)
 
 _LOOPBACK = "127.0.0.1"
-_MAX_FRAME_BYTES = 1_048_576
 HEARTBEAT_SECONDS = 60.0
 POLL_SECONDS = 1.0
 ATTACH_SECONDS = 10.0
@@ -123,7 +123,7 @@ class BiffDaemon:
             process_request=self._process_request,
             # A browser always sends Origin; no page may reach the daemon.
             origins=[None],
-            max_size=_MAX_FRAME_BYTES,
+            max_size=MAX_FRAME_BYTES,
         )
         self._port = self._server.sockets[0].getsockname()[1]
         self._started = time.monotonic()
