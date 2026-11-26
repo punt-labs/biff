@@ -53,7 +53,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not live:
             return "No sessions."
         # Sort by last_tool_at to match the IDLE column, not heartbeat recency.
-        keys = NostrDirectory.for_repo(state.repo_root).session_npubs(live)
+        keys = await NostrDirectory.for_repo(state.repo_root).session_npubs(live)
         return format_who(
             sorted(live, key=lambda s: s.last_tool_at, reverse=True), keys
         )

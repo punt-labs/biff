@@ -8,6 +8,7 @@ from typing import Self, final
 
 from biff._formatting import clip_to_width, terminal_safe
 from biff.models import UserSession
+from biff.nostr_crypto import NostrCrypto
 from biff.session_routing import ID_RE
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,6 @@ logger = logging.getLogger(__name__)
 # the width clip.
 _MAX_LABEL_WIDTH = 40
 _MAX_LABEL_CHARS = _MAX_LABEL_WIDTH * 4
-_SHORT_NPUB_LEN = 16
 
 
 @final
@@ -85,8 +85,16 @@ class WhoColumns:
         return clip_to_width(text, _MAX_LABEL_WIDTH)
 
     def _key_cell(self, s: UserSession) -> str:
-        """Clip the row's npub to its first ten and last five characters."""
-        text = terminal_safe(self._keys.get(s.user, ""))
-        if len(text) <= _SHORT_NPUB_LEN:
-            return text
-        return f"{text[:10]}…{text[-5:]}"
+        """Clip the row's npub to its first ten and last five characters.
+
+        A value that does not decode as an npub, and a failed lookup, show as
+        ``?``: an invalid key is never displayed as if it were one.
+        """
+        raw = self._keys.get(s.user, "")
+        if not raw:
+            return ""
+        try:
+            NostrCrypto().decode_npub(raw)
+        except ValueError:
+            return "?"
+        return f"{raw[:10]}…{raw[-5:]}"

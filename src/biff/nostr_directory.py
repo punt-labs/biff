@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -20,15 +21,21 @@ from biff.models import UserSession
 logger = logging.getLogger(__name__)
 
 NAMESPACE = "nostr"
+LOOKUP_FAILED = "?"
 _HANDLE_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _ETHOS_TIMEOUT_SECONDS = 15
+_NOT_SET_MARK = f'namespace "{NAMESPACE}" not found'
 
 
 class ExtStore(Protocol):
     """Somewhere an identity's ``nostr`` ext namespace lives."""
 
     def get(self, handle: str) -> dict[str, str]:
-        """Return the namespace's fields; empty when it has none."""
+        """Return the namespace's fields; empty only when it is truly unset.
+
+        Raises ``OSError`` for any other failure, so "no key" never means
+        "could not ask".
+        """
         ...
 
     def set(self, handle: str, key: str, value: str) -> None:
@@ -60,14 +67,21 @@ class EthosExt:
         """Return the fields of *handle*'s namespace; empty when it is unset."""
         done = self._run(["ext", "get", handle, NAMESPACE, "--json"])
         if done.returncode != 0:
-            return {}
+            if _NOT_SET_MARK in done.stderr:
+                return {}
+            msg = (
+                f"ethos ext get {handle} {NAMESPACE} failed "
+                f"(exit {done.returncode}): {done.stderr.strip()}"
+            )
+            raise OSError(msg)
         try:
             raw: object = json.loads(done.stdout)
-        except json.JSONDecodeError:
-            logger.warning("ethos ext get returned unreadable output for %s", handle)
-            return {}
+        except json.JSONDecodeError as exc:
+            msg = f"ethos ext get {handle} {NAMESPACE} returned unreadable output"
+            raise OSError(msg) from exc
         if not isinstance(raw, dict):
-            return {}
+            msg = f"ethos ext get {handle} {NAMESPACE} did not return an object"
+            raise OSError(msg)
         return {str(k): str(v) for k, v in cast("dict[str, object]", raw).items()}
 
     def set(self, handle: str, key: str, value: str) -> None:
@@ -79,24 +93,28 @@ class EthosExt:
             raise OSError(msg)
 
     def _run(self, args: list[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [self._ethos, *args],
-            capture_output=True,
-            text=True,
-            check=False,
-            cwd=self._cwd,
-            timeout=_ETHOS_TIMEOUT_SECONDS,
-        )
+        try:
+            return subprocess.run(
+                [self._ethos, *args],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=self._cwd,
+                timeout=_ETHOS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            msg = f"ethos {' '.join(args[:2])} timed out after {exc.timeout:g}s"
+            raise OSError(msg) from exc
 
 
 @final
 class NostrDirectory:
     """Reads and writes the ``nostr`` namespace of an identity's ext.
 
-    With ethos present, the namespace is ethos's own ext store.  Without it,
-    or for a handle ethos refuses, the same namespace lives in one local YAML
-    file mapping each handle to its namespaces.  Only public values go here:
-    ext values can reach model context.
+    With ethos present, the namespace is ethos's own ext store and nothing is
+    written anywhere else.  Without ethos, the same namespace lives in one
+    local YAML file mapping each handle to its namespaces.  Only public values
+    go here: ext values can reach model context.
     """
 
     __slots__ = ("_ext", "_local")
@@ -105,7 +123,7 @@ class NostrDirectory:
     _local: Path
 
     def __new__(cls, ext: ExtStore | None, local_file: Path) -> Self:
-        """Use *ext* when given; keep the fallback in *local_file*."""
+        """Use *ext* when given; otherwise keep the namespace in *local_file*."""
         self = super().__new__(cls)
         self._ext = ext
         self._local = local_file
@@ -118,36 +136,37 @@ class NostrDirectory:
         ext = EthosExt(ethos, repo_root) if ethos else None
         return cls(ext, Path.home() / ".punt-labs" / "biff" / "nostr.yaml")
 
-    def session_npubs(self, sessions: Iterable[UserSession]) -> dict[str, str]:
-        """Return the npub of each session user that has one."""
-        found: dict[str, str] = {}
-        for handle in dict.fromkeys(s.user for s in sessions):
-            try:
-                npub = self.npub(handle)
-            except ValueError:
-                continue  # a session user that is not a valid handle has no key
-            if npub:
-                found[handle] = npub
-        return found
+    async def session_npubs(self, sessions: Iterable[UserSession]) -> dict[str, str]:
+        """Return the npub of each session user that has one.
+
+        Runs off the event loop: it may start an ``ethos`` process per user.
+        A user whose lookup failed maps to :data:`LOOKUP_FAILED`; a user with
+        no key, or a name that is not a handle, is left out.
+        """
+        users = tuple(dict.fromkeys(s.user for s in sessions))
+        return await asyncio.to_thread(self._npubs, users)
 
     def publish(self, handle: str, fields: Mapping[str, str]) -> None:
-        """Merge *fields* into *handle*'s ``nostr`` namespace."""
+        """Merge *fields* into *handle*'s ``nostr`` namespace.
+
+        Raises ``OSError`` when the namespace was not written.  With ethos
+        present a refusal is final: the local file is not a second home.
+        """
         self._check_handle(handle)
         if self._ext is not None:
-            try:
-                for key, value in fields.items():
-                    self._ext.set(handle, key, value)
-            except OSError as exc:
-                logger.warning("%s; keeping the key in %s", exc, self._local)
-            else:
-                return
-        book = self._read_mapping(self._local)
+            self._publish_through(self._ext, handle, fields)
+            return
+        book = self._read_mapping(self._local, strict=True)
         merged = {**self._local_fields(book, handle), **fields}
         book[handle] = {NAMESPACE: merged}
         self._write(self._local, book)
 
     def fields(self, handle: str) -> dict[str, str]:
-        """Return *handle*'s published fields; empty when it has none."""
+        """Return *handle*'s published fields; empty when it has none.
+
+        Raises ``OSError`` when ethos cannot be asked.  An unreadable local
+        file degrades to no fields, with a warning that names it.
+        """
         self._check_handle(handle)
         local = self._local_fields(self._read_mapping(self._local), handle)
         return {**local, **(self._ext.get(handle) if self._ext else {})}
@@ -155,6 +174,34 @@ class NostrDirectory:
     def npub(self, handle: str) -> str | None:
         """Return *handle*'s npub; ``None`` is a handle with no published key."""
         return self.fields(handle).get("npub")
+
+    def _npubs(self, users: tuple[str, ...]) -> dict[str, str]:
+        found: dict[str, str] = {}
+        for handle in users:
+            if not _HANDLE_RE.fullmatch(handle):
+                logger.debug("who user is not a valid handle; no key lookup")
+                continue
+            try:
+                npub = self.npub(handle)
+            except OSError as exc:
+                logger.warning("key lookup for %s failed: %s", handle, exc)
+                found[handle] = LOOKUP_FAILED
+                continue
+            if npub:
+                found[handle] = npub
+        return found
+
+    @staticmethod
+    def _publish_through(ext: ExtStore, handle: str, fields: Mapping[str, str]) -> None:
+        written: list[str] = []
+        for key, value in fields.items():
+            try:
+                ext.set(handle, key, value)
+            except OSError as exc:
+                partial = f"; already written: {', '.join(written)}" if written else ""
+                msg = f"published nowhere: {exc}{partial}"
+                raise OSError(msg) from exc
+            written.append(key)
 
     @staticmethod
     def _check_handle(handle: str) -> None:
@@ -173,16 +220,34 @@ class NostrDirectory:
         return {str(k): str(v) for k, v in cast("dict[str, object]", namespace).items()}
 
     @staticmethod
-    def _read_mapping(path: Path) -> dict[str, object]:
-        """Return the YAML mapping at *path*; empty when absent or malformed."""
+    def _read_mapping(path: Path, *, strict: bool = False) -> dict[str, object]:
+        """Return the YAML mapping at *path*; empty when the file is absent.
+
+        An unreadable file or one that is not a mapping is a warning and an
+        empty result, or with *strict* an ``OSError``: a writer must never
+        replace what it could not read.
+        """
         try:
             raw: object = yaml.safe_load(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
         except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
-            logger.warning("Cannot read %s: %s", path, exc)
+            return NostrDirectory._unreadable(path, str(exc), strict=strict)
+        if raw is None:
             return {}
-        return cast("dict[str, object]", raw) if isinstance(raw, dict) else {}
+        if not isinstance(raw, dict):
+            return NostrDirectory._unreadable(
+                path, "it is not a mapping", strict=strict
+            )
+        return cast("dict[str, object]", raw)
+
+    @staticmethod
+    def _unreadable(path: Path, why: str, *, strict: bool) -> dict[str, object]:
+        if strict:
+            msg = f"cannot update {path}: {why}; fix or move the file and retry"
+            raise OSError(msg)
+        logger.warning("Cannot read %s: %s", path, why)
+        return {}
 
     @staticmethod
     def _write(path: Path, data: Mapping[str, object]) -> None:

@@ -27,7 +27,7 @@ async def who(ctx: CliContext) -> CommandResult:
     else:
         # Sort by last_tool_at to match the IDLE column, not heartbeat recency.
         sorted_sessions = sorted(live, key=lambda s: s.last_tool_at, reverse=True)
-        keys = NostrDirectory.for_repo(ctx.repo_root).session_npubs(live)
+        keys = await NostrDirectory.for_repo(ctx.repo_root).session_npubs(live)
         text = format_who(sorted_sessions, keys)
         json_data = [s.model_dump(mode="json") for s in sorted_sessions]
     return CommandResult(text=text, json_data=json_data)
