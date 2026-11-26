@@ -2,6 +2,65 @@
 
 ## [Unreleased]
 
+### Added
+
+- A `read` reply that carries mail asks the client to confirm it (`ack` frame,
+  `needs_ack` on the reply); biffd marks the mail read only then. A client that
+  timed out, or a connection that dropped, no longer consumes mail it never
+  received. Two residuals, both at-least-once delivery: an abandoned read still
+  consumes mail from a consuming relay (NATS), which the next `read` serves
+  from the daemon's outbox, and mail held in that outbox is lost if the daemon
+  dies first.
+- biffd keeps a session record per session id and role, so a shell and an
+  agent that share a session id no longer share an inbox; a `read` of a shared
+  broadcast inbox no longer serves a message another session already read, and
+  its `more` counts mail a consuming relay still holds behind one pull.
+- `biff daemon serve` runs biffd in the foreground. It listens on
+  `127.0.0.1:8424` (`--port` overrides; `--port 0` picks a free port), answers
+  an unauthenticated `GET /health` with its version and uptime, keeps a bearer
+  token in `~/.punt-labs/biff/run/serve.token` (mode 0600, created once) and
+  records its port in `serve.port`, which a clean shutdown removes. Nothing
+  uses the daemon yet; `biff mcp`, the CLI and the hooks still run in-process.
+- biffd speaks JSON frames (`hello`, `request`, `reply`, `subscribe`, `event`,
+  each with a protocol `version`) over that WebSocket and serves `who`,
+  `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty` and
+  `status`. It holds one relay connection per relay target however many
+  sessions share it, binds each connection to the one session its hello named,
+  and closes any connection that does not open with a valid challenge and a
+  hello carrying the right MAC. `biff.client` is the matching client; it imports no relay.
+- The biffd token never crosses the wire. Client and daemon prove they hold it
+  with a mutual challenge-response over two fresh 128-bit nonces: the client
+  sends a nonce, the daemon answers with its own nonce and an HMAC of both
+  under the token, and only then does the client send a hello whose HMAC (a
+  different label, the nonces in the other order) replaces the token. A hello
+  MAC works on one connection only, so a process that merely bound the port, or
+  one that records a hello, gets nothing it can reuse. A relay that sits on a
+  live connection can still read it; closing that needs a Unix socket or TLS.
+  The client also refuses a run directory that is not 0700, or a token file
+  that is not 0600 or not owned by the current user, and prints the `chmod`
+  that repairs it.
+- biffd no longer hangs or dies silently. A relay outage is retried: the
+  subscription tells its client `degraded` once and `recovered` once and logs
+  one line per outage. A bug in a request becomes an `internal` reply that
+  names the method and the log. Requests run concurrently and time out; the
+  client's `connect`, `request`, `subscribe` and `next_event` raise
+  `DaemonUnreachableError`, `RequestTimeoutError` or `ConnectionLostError`
+  (with the close code and reason) instead of waiting forever. `subscribe`
+  is answered, a second one is refused, and a run replaced by a newer run is
+  closed. `biff daemon serve` prints one actionable line when its port is
+  taken or its run directory is not private.
+- The biffd token file must hold a 43-character token; an empty or short file
+  is refused instead of becoming an empty MAC key. The token and port files
+  are written atomically.
+- biffd drops `BIFF_USER`, `BIFF_OWNER` and `BIFF_RELAY_*` from its own
+  environment at start and says so; a client carries its `BIFF_USER` and is
+  refused, by name, if it sets a `BIFF_RELAY_*` variable biffd cannot carry
+  yet. A session's hook and its MCP server resolve the same user.
+- The daemon keeps one relay per relay server, credentials and repository.
+  Two repositories on one NATS server get two relays, each scoped to its own
+  repository, so one repository's mail, presence and wall stay in its own
+  namespace.
+
 ### Changed
 
 - `docs/specs/nats-relay.tex` and `docs/specs/session-model.tex` model the

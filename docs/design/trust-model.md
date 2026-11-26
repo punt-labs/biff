@@ -434,6 +434,9 @@ alongside wave (a) against fixtures.
 | (c) Grants, floor, graded delivery | biff | A message from your own agent arrives as an instruction | A Z specification of classification and delivery passes with zero audit gaps; then an own-agent message is acted on, a stranger's identical message is not, and an agent that read stranger mail sends at `---` |
 | (d) beadle | beadle | `check_trust` shows "verified, team acme" | Tests that fail on today's code: attached-key mail is not verified, and a stored `0x` matches nothing |
 
+The operator ruled on 2026-11-25 that wave (b) is a breaking change and
+ships as biff 2.0.0. The rollout approach remains open (Q5).
+
 Wave (d) ships in two steps. Its signature-checking fixes follow wave (a).
 Its move to the shared address book follows wave (c), using
 `biff grant --import-beadle` so per-mailbox grants and denies carry over.
@@ -471,7 +474,23 @@ by reading the code; no test has run against them yet.
 - A compromised operating system or harness.
 - Signatures prove who wrote a message, never that obeying it is safe.
 
-## 19. Questions
+## 19. Rulings and questions
+
+### Rulings
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| R1 | Use Nostr events for biff messages? | Yes. Use Buzz's standard NIP-29 and NIP-17 kinds, not custom ones. |
+| R2 | How long does an agent's attestation last? | The configurable defaults are 24 hours on developer machines and 7 days in agent images. |
+| R3 | Who may read the owner key and the agent's own key? | The owner key is never readable by an agent, from wave (a). The target is that an agent cannot read its own key either. Until enforcement, every access to the agent's own key is instrumented and logged. Enforcement waits until everything else is ready (section 4.1). |
+| R4 | Carry message bodies inside Claude Code channel events (biff R-CC.2)? | Yes, from wave (c). Wake-line-then-pull goes away once every harness plugin supports push. |
+| R5 | Merge biff's and beadle's levels? | Yes. One ordered `rwx` ladder for biff messages, talk and beadle mail. |
+| R6 | Amend ethos's PR/FAQ, which lists authentication and authorization as Won't Do? | No. Ethos stays unaware of the use case: it provides ext (DES-008) but neither manages nor verifies trust records. The PR/FAQ stands. |
+| R7 | What does the floor cover, and does it need tool hooks? | Biff messages and beadle mail only. Biff and beadle compute it on every host; no tool hooks are needed. |
+| R8 | Run buzz-relay as biff's relay, or only speak its protocol? | Only speak its protocol. Transport stays NATS; NIP-42 and NIP-AA admission map to the NATS auth callout (section 11.1). |
+| R9 | Who writes the `ext/trust` address book? | Biff owns and writes it with `biff grant`; the owner key signs it, and beadle reads it. The 64-key ext cap allows about 60 contacts. |
+
+### Questions
 
 | # | Question | Answer |
 | --- | --- | --- |
@@ -479,6 +498,7 @@ by reading the code; no test has run against them yet.
 | Q2 | Where does the key live with no keyring? | Ruled 2026-11-26: a passphrase-encrypted file, prompted on use |
 | Q3 | Should forwarded DMs be verifiable? | Ruled 2026-11-26: not for now. Verifiable forwarding needs the inner message signed, a departure from NIP-17 |
 | Q4 | How is the floor gap closed? | Open. Recommendation: own-agent messages default to `rw-` until the sender's session floor is clean; a harness hook is the later upgrade |
+| Q5 | How does wave (b) roll out: a coordinated cutover (every machine, Devin snapshot and the relay move together) or a dual-format transition? | Open. Not yet decided. |
 
 ## 20. Requirements traceability
 

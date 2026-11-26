@@ -1343,6 +1343,7 @@ dependencies = [
     { name = "typer" },
     { name = "watchdog" },
     { name = "wcwidth" },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -1397,6 +1398,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "watchdog", specifier = ">=7,<8" },
     { name = "wcwidth", specifier = ">=0.8.2,<1" },
+    { name = "websockets", specifier = ">=16,<17" },
 ]
 provides-extras = ["dev"]
 

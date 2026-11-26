@@ -257,6 +257,11 @@ def _git(cwd: Path, *args: str) -> None:
         **os.environ,
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_SYSTEM": os.devnull,
+        # Drop env-injected config too: a signing host (an agent session with
+        # provenance, or a developer) injects commit.gpgsign=true through these
+        # channels, and these throwaway repos have no signing key.
+        "GIT_CONFIG_PARAMETERS": "",
+        "GIT_CONFIG_COUNT": "0",
         "GIT_AUTHOR_NAME": "t",
         "GIT_AUTHOR_EMAIL": "t@example.com",
         "GIT_COMMITTER_NAME": "t",

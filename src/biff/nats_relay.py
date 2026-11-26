@@ -427,6 +427,8 @@ class NatsRelay:
     idempotent.
     """
 
+    consumes_on_fetch = True  # fetch acks every frame and the work queue deletes it
+
     def __init__(
         self,
         url: str = "nats://localhost:4222",
@@ -1749,8 +1751,7 @@ class NatsRelay:
         tty_subject = self._subject_for_key(session_key)
         user_subject = self._user_subject(user)
 
-        tty_count = 0
-        user_count = 0
+        tty_count = user_count = 0
         try:
             tty_info = await self._tracked(
                 "stream_info",
