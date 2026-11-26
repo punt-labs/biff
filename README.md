@@ -604,14 +604,14 @@ Biff assumes the terminal is where you're already working, so that is where your
 [Claude Setup](docs/guides/CLAUDE_SETUP.md) |
 [FAQ](docs/guides/FAQ.md) |
 [Troubleshooting](docs/guides/TROUBLESHOOTING.md) |
-[Roadmap](docs/ROADMAP.md) |
 [Changelog](CHANGELOG.md)
 
 For contributors:
 [Contributing](CONTRIBUTING.md) |
 [Library API](docs/guides/LIBRARY.md) |
 [Design Log](DESIGN.md) |
-[Installer Design](DESIGN-INSTALLER.md) |
+[Installer Design](docs/design/installer.md) |
+[Documentation Index](docs/README.md) |
 [Testing Guide](TESTING.md)
 
 ## License

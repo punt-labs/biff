@@ -314,7 +314,7 @@ After merging a PR that introduces new patterns, design decisions, or hard-won d
 
 ### 1. Document in DESIGN.md
 
-Log the decision in the appropriate design log (`DESIGN.md` or `DESIGN-INSTALLER.md`). Include: what changed, why, what was rejected, and what evidence drove the decision.
+Log the decision in the appropriate design log (`DESIGN.md` or `docs/design/installer.md`). Include: what changed, why, what was rejected, and what evidence drove the decision.
 
 ### 2. Propagate to punt-kit
 
@@ -333,7 +333,7 @@ If the discovery is interesting to external developers (plugin authors, MCP serv
 
 ### 4. Update prfaq.tex and README
 
-If the feature was on the roadmap, remove it from `docs/ROADMAP.md`, document it in `README.md` (which describes shipped features only), and update `prfaq.tex`. Recompile the PDF. Planned work never appears in the README.
+When a planned feature ships, document it in `README.md` (which describes shipped features only), and update `prfaq.tex`. Recompile the PDF. Planned work never appears in the README.
 
 ### Checklist
 
@@ -356,13 +356,13 @@ Two design logs exist. Both follow the same rules: consult before changing, do n
 | Log | Scope | Covers |
 |-----|-------|--------|
 | `DESIGN.md` | Runtime system | Display pipeline, session keys, transport, push notifications, relay protocol, config format |
-| `DESIGN-INSTALLER.md` | Installation system | Two-phase install, marketplace plugin delivery, MCP registration via plugin manifest, status line stash-and-wrap, doctor checks, identity resolution, per-repo config, uninstall |
+| `docs/design/installer.md` | Installation system | Two-phase install, marketplace plugin delivery, MCP registration via plugin manifest, status line stash-and-wrap, doctor checks, identity resolution, per-repo config, uninstall |
 
 **The display pipeline is fragile.** The PostToolUse hooks, skill command prompts, status line, and push notification system have non-obvious interactions and represent 12-16 hours of iteration. The split between `updatedMCPToolOutput` (panel summary) and `additionalContext` (model-emitted full output) exists because multi-line MCP output gets truncated behind a "Control-O for more" prompt. Changes that look simple can break the display pipeline in ways that are difficult to debug and easy to repeat.
 
 **Before proposing or making ANY design change:**
 
-1. Read `DESIGN.md` and `DESIGN-INSTALLER.md` for prior decisions on the same topic.
+1. Read `DESIGN.md` and `docs/design/installer.md` for prior decisions on the same topic.
 2. Do not revisit a settled decision without new evidence.
 3. Log the decision, alternatives considered, and outcome in the appropriate log before implementing.
 

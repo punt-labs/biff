@@ -4417,7 +4417,7 @@ Kept as history.
 **Related:** DES-002 (session key format), DES-009 (identity),
 DES-030 (multi-agent coordination), DES-035 (TTY name reservation),
 DES-040 (agent-first identity),
-`docs/archive/ethos-integration.md`, `docs/archive/dual-session.md`
+`docs/archive/ethos-integration.md` (removed 2026-11-26; in git history), `docs/archive/dual-session.md` (removed 2026-11-26; in git history)
 
 **Note (biff-8fg3, 2026-05-10):** Decision 5 ("Roster read once at
 startup") is superseded by DES-040. The companion is no longer
@@ -4519,7 +4519,7 @@ that does not preclude the process tree.
 
 ### Full Spec
 
-See `docs/archive/dual-session.md` for the complete design including message
+See `docs/archive/dual-session.md` (removed 2026-11-26; in git history) for the complete design including message
 routing, edge cases, implementation sequence, and file change list.
 
 ## DES-040: Agent-First Identity Resolution
@@ -4540,8 +4540,8 @@ builds on it.
 **Bead:** biff-8fg3
 **Related:** DES-009 (identity — GitHub login), DES-039 (dual-session
 registration), DES-053 (bot-GitHub-login rejection),
-`docs/archive/spec-agent-first-identity.md`,
-`docs/archive/agent-first-identity.md`
+`docs/archive/spec-agent-first-identity.md` (removed 2026-11-26; in git history),
+`docs/archive/agent-first-identity.md` (removed 2026-11-26; in git history)
 
 ### Context
 
@@ -4662,8 +4662,8 @@ correct and adds at most 60s of latency to companion registration.
 
 ### Full Spec
 
-See ``docs/archive/spec-agent-first-identity.md`` for the formal spec,
-``docs/archive/agent-first-identity.md`` for the change plan, and the
+See ``docs/archive/spec-agent-first-identity.md`` (removed 2026-11-26; in git history) for the formal spec,
+``docs/archive/agent-first-identity.md`` (removed 2026-11-26; in git history) for the change plan, and the
 six commits referenced by biff-8fg3 for the implementation.
 
 ---
@@ -7433,7 +7433,7 @@ changes), DES-030 (bare-user addressing is repo-local), DES-036/DES-038
 (`MarkerConsistent`), DES-047 (`talkSubGen` generation guard — the template the
 second SUB generalizes), DES-048 (identity routing is for targeted delivery),
 DES-061 (`_pending_notify` re-arm / one lock / bounded send — untouched),
-`docs/archive/design-nats-push.md` (the full design), `docs/specs/nats-relay.tex`,
+`docs/archive/design-nats-push.md` (removed 2026-11-26; in git history) (the full design), `docs/specs/nats-relay.tex`,
 `docs/specs/notification.tex`
 
 **Note (DES-075, PL-231):** the companion subscription variants described below
@@ -8003,7 +8003,7 @@ variants it describes are removed; the wake-poke design is otherwise unchanged),
 DES-064 (harness-declared caller identity, which removed the roster subprocess
 this feature depended on). Ticket: PL-231. Supersedes/closes biff-qou (the
 ethos-side fix this would have waited on). Design doc:
-`docs/archive/pl-231-companion-removal.md`.
+`docs/archive/pl-231-companion-removal.md` (removed 2026-11-26; in git history).
 
 **Context.** The companion feature registered a second "companion" session (the
 human) beside the agent inside one MCP server, deciding who the human was via
@@ -8200,7 +8200,7 @@ first user-facing slice of the CLI session-identity design.
 **Related:** DES-048/DES-050 (route on the session identity; repo and org are
 visibility, not routing coordinates — the principle this builds on), DES-064
 (harness-declared caller identity), DES-035 (tty-name reservation and recycling).
-Design doc: `docs/archive/pl-245-246-cli-session-identity.md` §4 (the full named-session
+Design doc: `docs/archive/pl-245-246-cli-session-identity.md` (removed 2026-11-26; in git history) §4 (the full named-session
 model this slice begins).
 
 **Context.** A `user:tty` address is a display alias resolved at send time. When
@@ -8259,7 +8259,7 @@ outcomes by design, and the gap is tracked to `cli-session.tex`.
 **Scope.** This ships the stale-tty forward only. The named CLI session store,
 the `-s`/`BIFF_SESSION` attach, the `session new|ls|use|end` verbs, the per-repo
 current-session pointer, and the plan-gate keying all follow on the same design
-(`docs/archive/pl-245-246-cli-session-identity.md` §3, §6), in later changes.
+(`docs/archive/pl-245-246-cli-session-identity.md` (removed 2026-11-26; in git history) §3, §6), in later changes.
 
 **Consequences.** A send to a restarted teammate's old `user:tty` reaches them
 instead of bouncing; the sender is told it went to the mailbox, not the exact
