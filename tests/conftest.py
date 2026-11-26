@@ -121,6 +121,7 @@ def _clear_claude_session_env(  # pyright: ignore[reportUnusedFunction]
 # not change what the default suite tests; BIFF_TEST_* (opt-in hosted tiers)
 # and BIFF_RELAY_IMAGE (release image under test) are test inputs, kept.
 _AMBIENT_BIFF_SETTINGS = (
+    "BIFF_ATTESTATION_HOURS",
     "BIFF_CHANNEL_MODE",
     "BIFF_OWNER",
     "BIFF_USER",

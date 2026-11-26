@@ -17,21 +17,8 @@ _SECURITY_TIMEOUT_SECONDS = 300
 _RELEASING_RIGHTS = ("decrypt", "export_clear")
 
 
-def run_security(
-    args: list[str],
-    stdin: str | None = None,
-    timeout: float | None = _SECURITY_TIMEOUT_SECONDS,
-) -> str:
-    """Run macOS ``security`` with *args*, feeding it *stdin*; return its output."""
-    done = subprocess.run(
-        ["/usr/bin/security", *args],
-        input=stdin,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=timeout,
-    )
-    return done.stdout
+class ItemNotFoundError(VaultError):
+    """The keychain holds no item of the name asked for."""
 
 
 @final
@@ -58,7 +45,7 @@ class MacKeychainVault:
 
     def __new__(
         cls,
-        run: Callable[[list[str], str | None], str] = run_security,
+        run: Callable[[list[str], str | None], str] | None = None,
         keychain: Path | None = None,
     ) -> MacKeychainVault:
         """Use *run* to invoke ``security``, in *keychain* when given.
@@ -68,7 +55,7 @@ class MacKeychainVault:
         the manual presence test.
         """
         self = super().__new__(cls)
-        self._run = run
+        self._run = run or MacKeychainVault.run_security
         self._keychain = (str(keychain),) if keychain else ()
         return self
 
@@ -128,16 +115,9 @@ class MacKeychainVault:
             + "\n"
         )
         output = self._call(["-i"], where=where, stdin=line)
-        refusal = next(
-            (
-                ln.strip()
-                for ln in output.splitlines()
-                if ln.strip().startswith("security:")
-            ),
-            "",
-        )
-        if refusal:
-            msg = f"keychain write of {where} was refused: {refusal}"
+        refused = [ln.strip() for ln in output.splitlines() if "security:" in ln]
+        if refused:
+            msg = f"keychain write of {where} was refused: {refused[0]}"
             raise VaultError(msg)
         attributes = self._attributes(service, account, where)
         if attributes is None or f'"icmt"<blob>="{comment}"' not in attributes:
@@ -157,11 +137,16 @@ class MacKeychainVault:
         return '"' + word.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
     def _call(self, args: list[str], stdin: str | None = None, where: str = "") -> str:
-        """Run ``security``, turning every failure into a ``VaultError``."""
+        """Run ``security``, turning every failure into a ``VaultError``.
+
+        An item that is not in the keychain is the ``ItemNotFoundError`` subclass.
+        """
         try:
             return self._run(args, stdin)
         except subprocess.CalledProcessError as exc:
             msg = f"keychain access for {where} failed (exit {exc.returncode})"
+            if exc.returncode == _KEYCHAIN_NOT_FOUND:
+                raise ItemNotFoundError(msg) from exc
             raise VaultError(msg) from exc
         except (subprocess.TimeoutExpired, OSError) as exc:
             msg = f"keychain access for {where} failed: {exc}"
@@ -171,15 +156,9 @@ class MacKeychainVault:
         """Return the item's attribute text, or ``None`` when it does not exist."""
         args = ["find-generic-password", "-s", service, "-a", account, *self._keychain]
         try:
-            return self._run(args, None)
-        except subprocess.CalledProcessError as exc:
-            if exc.returncode == _KEYCHAIN_NOT_FOUND:
-                return None
-            msg = f"keychain lookup of {where} failed (exit {exc.returncode})"
-            raise VaultError(msg) from exc
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            msg = f"keychain lookup of {where} failed: {exc}"
-            raise VaultError(msg) from exc
+            return self._call(args, None, where)
+        except ItemNotFoundError:
+            return None
 
     def _require_closed_access_list(
         self, service: str, account: str, where: str
@@ -219,12 +198,32 @@ class MacKeychainVault:
             return [
                 entry
                 for entry in entries
-                if any(right in _authorizations(entry) for right in _RELEASING_RIGHTS)
+                if any(
+                    right in MacKeychainVault._authorizations(entry)
+                    for right in _RELEASING_RIGHTS
+                )
             ]
         return []
 
+    @staticmethod
+    def _authorizations(entry: str) -> str:
+        """Return the rights an access entry grants, as one string."""
+        match = re.search(r"authorizations \(\d+\): (.*)", entry)
+        return match[1] if match else ""
 
-def _authorizations(entry: str) -> str:
-    """Return the rights an access entry grants, as one string."""
-    match = re.search(r"authorizations \(\d+\): (.*)", entry)
-    return match[1] if match else ""
+    @staticmethod
+    def run_security(
+        args: list[str],
+        stdin: str | None = None,
+        timeout: float | None = _SECURITY_TIMEOUT_SECONDS,
+    ) -> str:
+        """Run macOS ``security`` with *args*, feeding it *stdin*; return its output."""
+        done = subprocess.run(
+            ["/usr/bin/security", *args],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
+        )
+        return done.stdout
