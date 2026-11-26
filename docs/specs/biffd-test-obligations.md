@@ -17,9 +17,11 @@ The audit is scoped to the daemon layer and to the `Connection` and `Watcher`
 lifecycle of `nats-relay.tex`, and to the daemon side of `session-model.tex`.
 The `SessionStore` operations (`UpdateSession`, `DeleteSession`, `SetWall`,
 `ClearWall`) and the structural and routing layers of `session-model.tex` are
-outside it. The audit matches constraints to tests by keyword and assertion
-pattern, so a `medium` entry names a test that exercises the behaviour, not one
-written from the schema's predicate.
+outside it.
+
+Provenance: the four `*.partition.json` and `*.audit.json` files were authored
+by reading test files and names, and the tests were not run to confirm each
+match.
 
 ## Gate status
 
@@ -81,6 +83,11 @@ Run with `probcli -model_check -strict -p DEFAULT_SETSIZE 1 -p MAXINT 4`
 | `session-model.tex`, `-card RUN 2 -card CONN 2` | 15,098 states, 162,519 transitions, all visited, 0 invariant violations; every daemon operation covered |
 | `nats-relay.tex`, `-card CLIENT 1`, full counters (`maxGeneration 3`, `maxEpoch 2`, `maxRestarts 2`) | 1,610,778 states, 20,314,058 transitions, all visited, 0 invariant violations, all 30 operations covered (`-mc 2000000`, about 8 minutes, 7.4 GB) |
 | `nats-relay.tex`, `-card CLIENT 1`, `maxGeneration 2`, `maxEpoch 1`, `maxRestarts 1` | 177,118 states, 1,959,126 transitions, all visited, 0 invariant violations; CTL `AG(attached /= {} => EF(attached /= {} & connState = connected & every subGen(k) = generation))` TRUE |
+
+The 87,482-state `session-model.tex` figure quoted earlier was not reproduced;
+these runs use one alias (ALIAS=1). The CTL run for invariant 5 did not finish
+on the full counters; the reduced-counter result is TRUE and was not checked
+for vacuity.
 
 The predicates of `Connection`, `SessionStore`, `Watcher`, `DaemonLayer` and
 `DaemonSide` live in separate `...Inv` schemas: an operation written with a
