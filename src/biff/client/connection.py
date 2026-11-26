@@ -12,7 +12,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
 from biff.frame_client import ClientType, Hello, Request, Subscribe
-from biff.frame_proof import Challenge, Proof
+from biff.frame_proof import Challenge, Handshake, Proof
 from biff.frame_reply import ErrorCode, Reply
 from biff.frames import Event, FrameError, Frames
 
@@ -60,7 +60,7 @@ class DaemonError(Exception):
 
 
 class UnprovenDaemonError(ConnectionError):
-    """The listener did not prove it holds the biffd token; nothing secret was sent."""
+    """The listener did not prove it holds the biffd token; no credential was sent."""
 
 
 class ConnectionLostError(ConnectionError):
@@ -101,9 +101,9 @@ class DaemonClient:
         """Open a connection, check the daemon's proof of the token, say hello.
 
         *port* defaults to the one the running daemon recorded, or 8424.  The
-        token goes out only after the listener answers a fresh random challenge
-        with the HMAC of it under the token, so a process that merely bound the
-        port never sees it.
+        token never crosses the wire.  The hello carries a MAC bound to both
+        handshake nonces, sent only after the listener proves it holds the token,
+        so a process that merely bound the port gets nothing it can reuse.
 
         Raises:
             FileNotFoundError: No daemon has created a token.
@@ -116,9 +116,9 @@ class DaemonClient:
         token = run_dir.read_token()
         bound = run_dir.read_port() if port is None else port
         ws = await connect(f"ws://{_LOOPBACK}:{bound}/")
-        await cls._require_proof(ws, token, bound, proof_timeout)
+        mac = await cls._handshake(ws, token, bound, proof_timeout)
         hello = Hello(
-            token=token,
+            mac=mac,
             client=identity.client,
             session_id=identity.session_id,
             main_agent_id=identity.main_agent_id,
@@ -142,14 +142,18 @@ class DaemonClient:
         return cls(ws)
 
     @staticmethod
-    async def _require_proof(
+    async def _handshake(
         ws: ClientConnection, token: str, port: int, timeout: float
-    ) -> None:
-        """Close *ws* and raise unless its peer proves it holds *token*."""
+    ) -> str:
+        """Verify the daemon's proof of *token*; return the MAC for the hello.
+
+        Closes *ws* and raises unless the peer proves it holds *token*.  Only a
+        MAC bound to this connection's two nonces leaves the process.
+        """
         challenge = Challenge.fresh()
         failure = (
-            f"the listener on {_LOOPBACK}:{port} did not prove it is biffd; the "
-            "token was not sent. Run: biff daemon status, and check what owns the port"
+            f"the listener on {_LOOPBACK}:{port} did not prove it is biffd; no "
+            "credential was sent. Run: biff daemon status, and check what owns the port"
         )
         try:
             await ws.send(Frames.encode(challenge))
@@ -158,9 +162,10 @@ class DaemonClient:
         except (TimeoutError, ConnectionClosed, FrameError, UnicodeDecodeError) as exc:
             await ws.close()
             raise UnprovenDaemonError(failure) from exc
-        if not isinstance(proof, Proof) or not proof.answers(challenge, token):
+        if not isinstance(proof, Proof) or not proof.valid_for(challenge, token):
             await ws.close()
             raise UnprovenDaemonError(failure)
+        return Handshake.client_mac(token, proof.daemon_nonce, challenge.client_nonce)
 
     @property
     def pending_events(self) -> int:

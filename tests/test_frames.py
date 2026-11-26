@@ -8,7 +8,7 @@ import pytest
 
 from biff.frame_base import PROTOCOL_VERSION
 from biff.frame_client import Hello, Request, Subscribe
-from biff.frame_proof import Challenge
+from biff.frame_proof import Challenge, Handshake, Proof
 from biff.frame_reply import ErrorCode, Reply, ReplyError
 from biff.frames import Event, FrameError, Frames
 
@@ -17,7 +17,7 @@ def _hello(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
         "type": "hello",
         "version": PROTOCOL_VERSION,
-        "token": "t",
+        "mac": "ab" * 32,
         "client": "cli",
         "session_id": "s1",
         "main_agent_id": "m1",
@@ -28,7 +28,7 @@ def _hello(**overrides: object) -> dict[str, object]:
 
 def test_hello_round_trips() -> None:
     hello = Hello(
-        token="t", client="mcp", session_id="s1", main_agent_id="m1", cwd="/repo"
+        mac="ab" * 32, client="mcp", session_id="s1", main_agent_id="m1", cwd="/repo"
     )
     assert Frames.decode(Frames.encode(hello)) == hello
 
@@ -99,24 +99,35 @@ def test_a_bad_session_id_is_refused_at_the_boundary() -> None:
 def test_challenge_and_proof_round_trip() -> None:
     challenge = Challenge.fresh()
     assert Frames.decode(Frames.encode(challenge)) == challenge
-    proof = challenge.answer("token")
+    proof = Proof(daemon_nonce=Handshake.fresh_nonce(), mac="cd" * 32)
     assert Frames.decode(Frames.encode(proof)) == proof
 
 
-def test_a_proof_answers_only_its_own_challenge_and_token() -> None:
+def test_a_proof_is_valid_only_for_its_own_challenge_and_token() -> None:
     challenge = Challenge.fresh()
-    proof = challenge.answer("token")
-    assert proof.answers(challenge, "token")
-    assert not proof.answers(challenge, "other-token")
-    assert not proof.answers(Challenge.fresh(), "token")
+    nonce = Handshake.fresh_nonce()
+    proof = Proof(
+        daemon_nonce=nonce,
+        mac=Handshake.daemon_mac("token", challenge.client_nonce, nonce),
+    )
+    assert proof.valid_for(challenge, "token")
+    assert not proof.valid_for(challenge, "other-token")
+    assert not proof.valid_for(Challenge.fresh(), "token")
 
 
-def test_fresh_challenges_differ() -> None:
-    assert Challenge.fresh().nonce != Challenge.fresh().nonce
+def test_fresh_nonces_are_128_bits_and_differ() -> None:
+    one, two = Handshake.fresh_nonce(), Handshake.fresh_nonce()
+    assert (len(one), one != two) == (32, True)
 
 
 @pytest.mark.parametrize("nonce", ["zz" * 16, "ab"])
 def test_a_non_hex_or_short_nonce_is_refused(nonce: str) -> None:
-    raw = {"type": "challenge", "version": 1, "nonce": nonce}
-    with pytest.raises(FrameError, match="nonce"):
+    raw = {"type": "challenge", "version": 1, "client_nonce": nonce}
+    with pytest.raises(FrameError, match="client_nonce"):
+        Frames.decode(json.dumps(raw))
+
+
+def test_a_hello_has_no_token_field() -> None:
+    raw = _hello(token="t")
+    with pytest.raises(FrameError, match="token"):
         Frames.decode(json.dumps(raw))

@@ -101,27 +101,53 @@ Every frame is a JSON object with a protocol `version`.
 
 | Frame | Direction | Content |
 |-------|-----------|---------|
-| `challenge` | client to daemon, first frame | A random 128-bit `nonce`. Nothing secret |
-| `proof` | daemon to client | HMAC-SHA256 of the nonce, keyed by the token, as hex |
-| `hello` | client to daemon, after the proof checks | Token, client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id`, `main_agent_id` (empty when the harness states none), `cwd` (the directory the client runs in, which names the repository and so the relay target) and an optional `user` override. The daemon answers a valid hello with a `reply` whose `id` is 0 |
+| `challenge` | client to daemon, first frame | `client_nonce`: 128 random bits, fresh per connection. Nothing secret |
+| `proof` | daemon to client | `daemon_nonce` (128 random bits, fresh per connection, used once) and `mac` = HMAC-SHA256(token, `biffd-daemon-v1` + `client_nonce` + `daemon_nonce`), as hex |
+| `hello` | client to daemon, after the proof checks | `mac` = HMAC-SHA256(token, `biffd-client-v1` + `daemon_nonce` + `client_nonce`), as hex, in place of any token; client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id`, `main_agent_id` (empty when the harness states none), `cwd` (the directory the client runs in, which names the repository and so the relay target) and an optional `user` override. The daemon answers a valid hello with a `reply` whose `id` is 0 |
 | `request` | client to daemon | `id`, `method`, `params`. One `method` per command object in `commands/` |
 | `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message). A command's `result` is `{"data": <the command's JSON payload>, "error": <bool>}` |
 | `subscribe` | client to daemon | Starts the arrival subscription for the connection's session |
 | `event` | daemon to client | One arrival summary, with a per-daemon `seq` |
 
-**The daemon proves itself first.** The client's port is a guess (8424 when
-no port file exists), and any local process can bind a port biffd is not using,
-so the client must not hand the token to whatever answers. The client sends a
-`challenge`; the daemon answers with the `proof`; the client compares it with
-`hmac.compare_digest` against the HMAC it computes from its own token file, and
-sends `hello` only on a match. A missing, late or wrong proof ends the attempt
-with an error that names the port and says the token was not sent. The client
-also reads the token only from a run directory at mode 0700 and a token file at
-mode 0600, both owned by the current user, and refuses otherwise with the
-`chmod` that repairs it.
+**The token never crosses the wire.** The client's port is a guess (8424
+when no port file exists), and any local process can bind a port biffd is not
+using, or reach the real daemon on loopback. So neither side hands the other
+the token or answers for it without proof of its own:
+
+1. The client sends `challenge{client_nonce}`.
+2. The daemon sends `proof{daemon_nonce, mac}`, where the MAC covers the label
+   `biffd-daemon-v1`, then both nonces, under the token. The daemon makes
+   `daemon_nonce` for this connection and keeps it nowhere else.
+3. The client checks the MAC with `hmac.compare_digest` against the one it
+   computes from its own token file. A missing, late or wrong proof ends the
+   attempt with an error naming the port and saying no credential was sent.
+4. The client sends `hello{mac, ...}` with a MAC over the label
+   `biffd-client-v1`, then `daemon_nonce` and `client_nonce`.
+5. The daemon checks it with `hmac.compare_digest`. A wrong MAC closes the
+   connection (1008) and changes no state.
+
+The labels differ and the nonces are in opposite orders, so neither side's MAC
+can be reflected back as the other's. A MAC binds both nonces, so it is good on
+one connection and is refused on any other: an impostor that records a hello
+cannot replay it, and an impostor that cannot compute the daemon's MAC never
+receives a hello at all. The daemon's answer to a challenge is not a signing
+oracle for a client MAC, because the two MACs use different labels and the
+daemon never signs the client label.
+
+**Residual.** An attacker that holds the port can still sit in the middle of a
+live, correctly proven connection by relaying both directions: it forwards the
+challenge to the real daemon and the proof and hello back and forth. It learns
+no token and no credential that works on another connection, but while it
+relays it can read and alter that connection's frames. Closing that needs a
+channel the attacker cannot sit on, a Unix socket with peer-uid checks or TLS.
+That is a separate design decision for DES-095, not made here.
+
+The client also reads the token only from a run directory at mode 0700 and a
+token file at mode 0600, both owned by the current user, and refuses otherwise
+with the `chmod` that repairs it.
 
 A frame other than a `challenge` first, a `hello` before the proof, a second
-`hello`, a request before a valid `hello`, or a wrong token closes the
+`hello`, a request before a valid `hello`, or a wrong MAC closes the
 connection and changes no state. A `hello` whose `version` the daemon does
 not support gets an error naming both versions and the command that fixes the
 mismatch (`biff daemon restart`, or upgrade the client).

@@ -18,16 +18,21 @@ type ClientType = Literal["mcp", "cli", "hook", "plugin"]
 type _SessionId = Annotated[
     str, StringConstraints(pattern=rf"^[A-Za-z0-9_-]{{1,{MAX_ID_LENGTH}}}$")
 ]
+type _Mac = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 type _AgentId = Annotated[
     str, StringConstraints(pattern=rf"^[A-Za-z0-9_-]{{0,{MAX_ID_LENGTH}}}$")
 ]
 
 
 class Hello(FrameBase):
-    """First frame of a connection: the token and the caller's identity."""
+    """Sent after the daemon's proof: a MAC that proves the token, and the caller.
+
+    The MAC binds both handshake nonces, so it is good for this connection only;
+    the token itself is never sent.
+    """
 
     type: Literal["hello"] = "hello"
-    token: str
+    mac: _Mac
     client: ClientType
     session_id: _SessionId
     # Empty when the harness states no main agent (a shell outside a harness).

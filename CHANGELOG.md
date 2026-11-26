@@ -15,14 +15,19 @@
   `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty` and
   `status`. It holds one relay connection per relay target however many
   sessions share it, binds each connection to the one session its hello named,
-  and closes any connection whose first frame is not a valid hello with the
-  right token. `biff.client` is the matching client; it imports no relay.
-- A client sends the biffd token only to a daemon that proved it holds it:
-  the client sends a random challenge, the daemon answers with the HMAC of it
-  under the token, and only then does the client send its hello. A process
-  that merely bound the port never sees the token. The client also refuses a
-  run directory that is not 0700, or a token file that is not 0600, or not
-  owned by the current user, and prints the `chmod` that repairs it.
+  and closes any connection that does not open with a valid challenge and a
+  hello carrying the right MAC. `biff.client` is the matching client; it imports no relay.
+- The biffd token never crosses the wire. Client and daemon prove they hold it
+  with a mutual challenge-response over two fresh 128-bit nonces: the client
+  sends a nonce, the daemon answers with its own nonce and an HMAC of both
+  under the token, and only then does the client send a hello whose HMAC (a
+  different label, the nonces in the other order) replaces the token. A hello
+  MAC works on one connection only, so a process that merely bound the port, or
+  one that records a hello, gets nothing it can reuse. A relay that sits on a
+  live connection can still read it; closing that needs a Unix socket or TLS.
+  The client also refuses a run directory that is not 0700, or a token file
+  that is not 0600 or not owned by the current user, and prints the `chmod`
+  that repairs it.
 - The daemon keeps one relay per relay server, credentials and repository.
   Two repositories on one NATS server get two relays, each scoped to its own
   repository, so one repository's mail, presence and wall stay in its own

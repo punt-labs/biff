@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
@@ -15,7 +14,7 @@ from biff.daemon.resolver import ResolveError
 from biff.daemon.subscription import Subscription
 from biff.frame_base import PROTOCOL_VERSION
 from biff.frame_client import Hello, Request, Subscribe
-from biff.frame_proof import Challenge, Proof
+from biff.frame_proof import Challenge, Handshake, Proof
 from biff.frame_reply import ErrorCode, Reply, ReplyError
 from biff.frames import Event, FrameError, Frames
 from biff.relay_errors import RELAY_ERRORS
@@ -90,17 +89,23 @@ class ConnectionHandler:
         """Prove the token, read the hello; return the attachment.
 
         Returns ``None`` after closing *ws* when the first frame is not a
-        challenge or the next is not a hello holding the token.  The proof comes
-        first so a client can refuse an impostor before it sends the token.
+        challenge or the next is not a hello whose MAC binds this connection's
+        two nonces under the token.  The daemon nonce is made here and lives
+        only in this call, so a MAC is good for one connection and one attempt.
         """
         challenge = await self._expect(ws, Challenge, "expected a challenge")
         if challenge is None:
             return None
-        await self._send(ws, challenge.answer(self._token))
+        daemon_nonce = Handshake.fresh_nonce()
+        mac = Handshake.daemon_mac(self._token, challenge.client_nonce, daemon_nonce)
+        await self._send(ws, Proof(daemon_nonce=daemon_nonce, mac=mac))
         frame = await self._expect(ws, Hello, "expected a hello")
         if frame is None:
             return None
-        if not hmac.compare_digest(frame.token.encode(), self._token.encode()):
+        expected = Handshake.client_mac(
+            self._token, daemon_nonce, challenge.client_nonce
+        )
+        if not Handshake.matches(frame.mac, expected):
             await ws.close(_POLICY_VIOLATION, "unauthorized")
             return None
         try:
