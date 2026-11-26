@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from biff.client.connection import ConnectionLostError, DaemonError
 from biff.frame_reply import ErrorCode
+from biff.models import SessionEvent
 from biff.relay import LocalRelay
 from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from tests.test_daemon.conftest import Harness
 
 
@@ -161,3 +165,83 @@ async def test_the_refusal_names_the_run_and_the_way_forward(harness: Harness) -
     await harness.connect("s-kai", "kai", main_agent_id="run-2")
     with pytest.raises(DaemonError, match=r"run-1.*new run"):
         await harness.connect("s-kai", "kai", main_agent_id="run-1")
+
+
+class HistoryRelay(LocalRelay):
+    """A local relay that keeps session history, as the NATS relay does."""
+
+    def __init__(self, data_dir: Path) -> None:
+        super().__init__(data_dir)
+        self.events: list[SessionEvent] = []
+
+    async def append_wtmp(self, event: SessionEvent) -> None:
+        self.events.append(event)
+
+    async def get_wtmp(
+        self, *, user: str | None = None, count: int = 25
+    ) -> list[SessionEvent]:
+        return [e for e in self.events if user in (None, e.user)][-count:]
+
+
+@pytest.fixture
+def history(harness: Harness) -> list[HistoryRelay]:
+    made: list[HistoryRelay] = []
+
+    def build(directory: Path) -> HistoryRelay:
+        relay = HistoryRelay(directory)
+        made.append(relay)
+        return relay
+
+    harness.factory.relay_type = build
+    return made
+
+
+async def test_a_session_the_daemon_creates_records_a_login(
+    harness: Harness, history: list[HistoryRelay]
+) -> None:
+    await harness.connect("s-kai", "kai")
+    key = SessionRouting("s-kai", role=CLI_ROLE).session_key("kai")
+    assert [(e.event, e.session_key) for e in history[0].events] == [("login", key)]
+
+
+async def test_last_lists_a_session_the_daemon_created(
+    harness: Harness, history: list[HistoryRelay]
+) -> None:
+    kai = await harness.connect("s-kai", "kai")
+    result = cast("dict[str, object]", await kai.request("last"))
+    assert "kai" in json.dumps(result["data"])
+    assert [e.event for e in history[0].events] == ["login"]
+
+
+async def test_reattaching_does_not_record_a_second_login(
+    harness: Harness, history: list[HistoryRelay]
+) -> None:
+    first = await harness.connect("s-kai", "kai")
+    await first.close()
+    await asyncio.sleep(0.05)
+    await harness.connect("s-kai", "kai")
+    assert len(history[0].events) == 1
+
+
+async def test_a_recreated_row_records_a_new_login(
+    harness: Harness, history: list[HistoryRelay]
+) -> None:
+    first = await harness.connect("s-kai", "kai")
+    await first.close()
+    await asyncio.sleep(0.05)
+    key = SessionRouting("s-kai", role=CLI_ROLE).session_key("kai")
+    await history[0].delete_session(key)
+    await harness.connect("s-kai", "kai")
+    assert len(history[0].events) == 2
+
+
+async def test_a_failing_history_write_does_not_fail_the_hello(
+    harness: Harness, history: list[HistoryRelay], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(self: HistoryRelay, event: SessionEvent) -> None:
+        msg = "history store down"
+        raise OSError(msg)
+
+    monkeypatch.setattr(HistoryRelay, "append_wtmp", broken)
+    kai = await harness.connect("s-kai", "kai")
+    assert cast("dict[str, object]", await kai.request("who"))["error"] is False

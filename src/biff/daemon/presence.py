@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Self, final
 
-from biff.models import UserSession
+from biff.models import SessionEvent, UserSession
+from biff.relay_errors import RELAY_ERRORS
 from biff.tty import claim_tty_name, get_hostname
 
 if TYPE_CHECKING:
@@ -13,6 +15,8 @@ if TYPE_CHECKING:
     from biff.session_routing import SessionRouting
 
 __all__ = ["PresenceRow"]
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -71,4 +75,23 @@ class PresenceRow:
             repo=config.repo_name,
         )
         await self._relay.update_session(row)
+        await self._login(row)
         return row
+
+    async def _login(self, row: UserSession) -> None:
+        """Record the session's login for ``last``; history must not fail a hello."""
+        try:
+            await self._relay.append_wtmp(
+                SessionEvent(
+                    session_key=self.key,
+                    event="login",
+                    user=row.user,
+                    tty=row.tty,
+                    tty_name=row.tty_name,
+                    hostname=row.hostname,
+                    pwd=row.pwd,
+                    repo=row.repo,
+                )
+            )
+        except RELAY_ERRORS:
+            logger.warning("could not record a login for %s", self.key, exc_info=True)
