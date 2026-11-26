@@ -18,7 +18,7 @@ from biff.client.connection import DaemonError
 from biff.daemon import connection as connection_module
 from biff.daemon.connection import ConnectionHandler
 from biff.frame_reply import ErrorCode
-from biff.models import Message
+from biff.models import Message, UnreadSummary
 from biff.relay import LocalRelay
 
 if TYPE_CHECKING:
@@ -38,6 +38,14 @@ class ConsumingRelay(LocalRelay):
 
     def __init__(self, data_dir: Path) -> None:
         super().__init__(data_dir)
+
+    consumes_on_fetch = True
+
+    async def get_unread_summary(self, session_key: str) -> UnreadSummary:
+        """Count without consuming: the NATS relay counts from stream info."""
+        tty = await LocalRelay.fetch(self, session_key)
+        user = await LocalRelay.fetch_user_inbox(self, session_key.split(":")[0])
+        return UnreadSummary(count=len(tty) + len(user))
 
     async def fetch(self, session_key: str) -> list[Message]:
         unread = await super().fetch(session_key)

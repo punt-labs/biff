@@ -41,3 +41,5 @@ class Reply(FrameBase):
     id: int = Field(ge=0)
     result: JsonValue = None
     error: ReplyError | None = None
+    # The reply carries mail that stays unread until the client sends an ack.
+    needs_ack: bool = False

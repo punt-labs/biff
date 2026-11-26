@@ -1,4 +1,4 @@
-"""Where biffd writes its log, and the hint that names it."""
+"""Where biff writes its log, and the hint that names it."""
 
 from __future__ import annotations
 

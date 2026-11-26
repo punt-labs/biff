@@ -122,6 +122,11 @@ async def test_results_are_wire_data_never_rendered_text(harness: Harness) -> No
 async def test_repos_on_one_relay_server_get_one_relay_each_and_stay_apart(
     harness: Harness,
 ) -> None:
+    """Pool keying only: one relay per repo, none shared across repos.
+
+    The fake relays here are directories. That a real NATS server keeps two
+    repos' subjects apart is proved in ``tests/test_nats_e2e/test_daemon.py``.
+    """
     kai = await harness.connect("s-kai", "kai", cwd="/work/nats-a")
     eric = await harness.connect("s-eric", "eric", cwd="/work/nats-b")
     assert harness.factory.repos == ["nats-a", "nats-b"]

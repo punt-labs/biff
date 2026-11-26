@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -24,6 +25,7 @@ from biff.frame_client import Hello
 from biff.frame_proof import Challenge, Handshake, Proof
 from biff.frame_reply import ErrorCode, Reply
 from biff.frames import Frames
+from biff.log_hint import LOG_HINT
 from biff.run_dir import RunDir
 
 if TYPE_CHECKING:
@@ -419,3 +421,71 @@ async def test_subscribe_on_a_closed_connection_is_a_lost_connection(
 ) -> None:
     with pytest.raises(ConnectionLostError):
         await asyncio.wait_for(hung_up.subscribe(), _WAIT)
+
+
+async def _prove_then_wait(
+    token: str, ws: ServerConnection, closed: asyncio.Event
+) -> None:
+    """Complete the handshake, then record when the client closes the socket."""
+    challenge = Frames.decode(str(await ws.recv()))
+    assert isinstance(challenge, Challenge)
+    nonce = Handshake.fresh_nonce()
+    mac = Handshake.daemon_mac(token, challenge.client_nonce, nonce)
+    await ws.send(Frames.encode(Proof(daemon_nonce=nonce, mac=mac)))
+    await ws.wait_closed()
+    closed.set()
+
+
+async def test_cancelling_connect_while_it_awaits_the_hello_reply_closes_the_socket(
+    run_dir: RunDir,
+) -> None:
+    hello_seen, closed = asyncio.Event(), asyncio.Event()
+
+    async def silent(ws: ServerConnection) -> None:
+        hello_seen.set()
+        await asyncio.wait_for(ws.wait_closed(), _WAIT)
+        closed.set()
+
+    daemon = ScriptedDaemon(run_dir.ensure_token(), silent, reply_to_hello=False)
+    async with serve(daemon.handle, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        attempt = asyncio.create_task(
+            DaemonClient.connect(
+                run_dir=run_dir, identity=_identity(), port=port, proof_timeout=30.0
+            )
+        )
+        await asyncio.wait_for(hello_seen.wait(), _WAIT)
+        attempt.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await attempt
+        await asyncio.wait_for(closed.wait(), _WAIT)
+
+
+async def test_an_identity_the_hello_rejects_closes_the_socket_it_opened(
+    run_dir: RunDir,
+) -> None:
+    closed = asyncio.Event()
+    token = run_dir.ensure_token()
+
+    async def handle(ws: ServerConnection) -> None:
+        await _prove_then_wait(token, ws, closed)
+
+    bad = ClientIdentity(client="cli", session_id="not a valid id!", cwd="/work/repo")
+    async with serve(handle, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        with pytest.raises(ValueError, match="session_id"):
+            await DaemonClient.connect(
+                run_dir=run_dir, identity=bad, port=port, proof_timeout=0.5
+            )
+        await asyncio.wait_for(closed.wait(), _WAIT)
+
+
+async def test_a_request_timeout_names_the_log_the_daemon_writes(
+    run_dir: RunDir,
+) -> None:
+    async def silent(ws: ServerConnection) -> None:
+        await ws.wait_closed()
+
+    async for client in _client_of(run_dir, silent, request_timeout=0.1):
+        with pytest.raises(RequestTimeoutError, match=re.escape(LOG_HINT)):
+            await client.request("who")

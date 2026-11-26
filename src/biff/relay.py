@@ -87,6 +87,12 @@ class Relay(Protocol):
       One per session.
     """
 
+    # Whether fetching mail removes it from the relay.  A consuming relay (NATS
+    # acks on fetch and a work queue deletes on ack) leaves fetched mail nowhere
+    # but the caller's hands, so a caller that may fail to deliver it must hold
+    # it.  A relay that does not consume returns the same mail until marked read.
+    consumes_on_fetch: bool
+
     # -- Messages (TTY inbox) --
 
     async def deliver(
@@ -244,6 +250,8 @@ class DormantRelay:
     errors — the server runs but does nothing on the network.
     """
 
+    consumes_on_fetch = False  # there is no mail to fetch
+
     async def deliver(
         self,
         message: Message,
@@ -372,6 +380,8 @@ class LocalRelay:
     atomicity.
     """
 
+    consumes_on_fetch = False  # mail stays in its inbox file until mark_read
+
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
         # Session keys for which heartbeat() has already logged a missing-
@@ -390,14 +400,10 @@ class LocalRelay:
         Every read-modify-write of a mailbox or the sessions file runs under it,
         so another process cannot replace the file with an older snapshot.
         """
-        self._ensure_dir(self._data_dir)
+        RelayLocation.ensure(self._data_dir)
         lock = (self._data_dir / ".lock").open("a")
         fcntl.flock(lock, fcntl.LOCK_EX)
         return lock
-
-    @staticmethod
-    def _ensure_dir(data_dir: Path) -> None:
-        RelayLocation.ensure(data_dir)
 
     @staticmethod
     def _validate_user(user: str) -> str:
@@ -475,9 +481,8 @@ class LocalRelay:
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:
         """Count unread messages across TTY and user inboxes."""
         user = session_key.split(":")[0]
-        tty_count = len(await self.fetch(session_key))
-        user_count = len(await self.fetch_user_inbox(user))
-        return UnreadSummary(count=tty_count + user_count)
+        unread = [*await self.fetch(session_key), *await self.fetch_user_inbox(user)]
+        return UnreadSummary(count=len(unread))
 
     async def inbox_high_water(self, session_key: str) -> int:
         """Count the message lines ever delivered to the session's two inboxes.
@@ -666,7 +671,7 @@ class LocalRelay:
         read-modify-write on the shared sessions file.
         """
         self._validate_session_key(session_key)
-        self._ensure_dir(self._data_dir)
+        RelayLocation.ensure(self._data_dir)
         safe = session_key.replace(":", "-")
         sentinel = self._data_dir / f"remove-{safe}"
         sentinel.write_text(session_key)
@@ -735,16 +740,14 @@ class LocalRelay:
         if wall is None:
             path.unlink(missing_ok=True)
         else:
-            self._ensure_dir(self._data_dir)
+            RelayLocation.ensure(self._data_dir)
             atomic_write(path, wall.model_dump_json() + "\n")
             path.chmod(0o600)
 
     async def get_wall(self, *, repo: str | None = None) -> WallPost | None:  # noqa: ARG002
         """Read the active wall, returning ``None`` if absent or expired."""
         path = self._data_dir / "wall.json"
-        if not path.exists():
-            return None
-        try:
+        try:  # a missing file is an OSError too
             wall = WallPost.model_validate_json(path.read_text())
         except (ValidationError, ValueError, OSError):
             return None
@@ -762,7 +765,7 @@ class LocalRelay:
 
     async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool:
         """Reserve a TTY name atomically via O_CREAT|O_EXCL lockfile."""
-        self._ensure_dir(self._data_dir)
+        RelayLocation.ensure(self._data_dir)
         path = self._tty_lock_path(user, name)
         try:
             with path.open("x") as fd:
@@ -846,7 +849,7 @@ class LocalRelay:
         error = validate_reclaimable_name(name)
         if error is not None:
             raise ValueError(error)
-        self._ensure_dir(self._data_dir)
+        RelayLocation.ensure(self._data_dir)
         hint = self._sid_hint_path(user, session_id)
         hint.write_text(name)
         hint.chmod(0o600)
@@ -894,7 +897,7 @@ class LocalRelay:
     def _write_sessions(self, sessions: dict[str, UserSession]) -> None:
         """Atomically rewrite the sessions file."""
         data = {k: v.model_dump(mode="json") for k, v in sessions.items()}
-        self._ensure_dir(self._data_dir)
+        RelayLocation.ensure(self._data_dir)
         path = self._data_dir / "sessions.json"
         atomic_write(path, json.dumps(data, indent=2) + "\n")
         path.chmod(0o600)

@@ -17,12 +17,13 @@ from pydantic import (
     ValidationError,
 )
 
+from biff.frame_ack import Ack
 from biff.frame_base import FrameBase
 from biff.frame_client import Hello, Request, Subscribe
 from biff.frame_proof import Challenge, Proof
 from biff.frame_reply import Reply
 
-__all__ = ["Event", "EventKind", "Frame", "FrameError", "Frames"]
+__all__ = ["AnyFrame", "Event", "EventKind", "Frame", "FrameError", "Frames"]
 
 type EventKind = Literal["unread", "mail", "wall", "degraded", "recovered"]
 
@@ -40,14 +41,13 @@ class Event(FrameBase):
     data: JsonValue = None
 
 
-type Frame = Annotated[
-    Challenge | Proof | Hello | Request | Reply | Subscribe | Event,
-    Field(discriminator="type"),
-]
+type AnyFrame = Challenge | Proof | Hello | Request | Reply | Subscribe | Ack | Event
+
+type Frame = Annotated[AnyFrame, Field(discriminator="type")]
 
 _ADAPTER: TypeAdapter[Frame] = TypeAdapter(Frame)
 _TYPES = frozenset(
-    {"challenge", "proof", "hello", "request", "reply", "subscribe", "event"}
+    {"challenge", "proof", "hello", "request", "reply", "subscribe", "ack", "event"}
 )
 
 
@@ -56,9 +56,7 @@ class Frames:
     """Encodes and decodes frames."""
 
     @staticmethod
-    def encode(
-        frame: Challenge | Proof | Hello | Request | Reply | Subscribe | Event,
-    ) -> str:
+    def encode(frame: AnyFrame) -> str:
         """Return *frame* as a JSON object."""
         return frame.model_dump_json(exclude_none=False)
 
@@ -83,9 +81,7 @@ class Frames:
         )
 
     @staticmethod
-    def decode(
-        text: str,
-    ) -> Challenge | Proof | Hello | Request | Reply | Subscribe | Event:
+    def decode(text: str) -> AnyFrame:
         """Return the frame *text* holds.
 
         Raises:

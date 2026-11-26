@@ -10,16 +10,18 @@ from typing import TYPE_CHECKING, Final, Self, final
 
 from websockets.exceptions import ConnectionClosed
 
-from biff.daemon.logs import LOG_HINT
+from biff.daemon.acks import Acknowledgements
 from biff.daemon.refusal import HandshakeRefusedError, RefusalError
 from biff.daemon.resolver import ResolveError
 from biff.daemon.subscription import Subscription
 from biff.daemon.tasks import Supervised
+from biff.frame_ack import Ack
 from biff.frame_base import MAX_FRAME_BYTES, PROTOCOL_VERSION
 from biff.frame_client import Hello, Request, Subscribe
 from biff.frame_proof import Challenge, Handshake, Proof
 from biff.frame_reply import ErrorCode, Reply, ReplyError
 from biff.frames import Event, FrameError, Frames
+from biff.log_hint import LOG_HINT
 from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
@@ -220,6 +222,7 @@ class ConnectionHandler:
         A reply carries its request's id, so replies may leave in any order.
         """
         running: set[asyncio.Task[None]] = set()
+        acks = Acknowledgements()
         try:
             async for raw in ws:
                 try:
@@ -230,10 +233,15 @@ class ConnectionHandler:
                     return
                 if isinstance(frame, Request):
                     task = Supervised.spawn(
-                        self._reply(ws, attachment, frame), f"request {frame.method}"
+                        self._reply(ws, attachment, frame, acks),
+                        f"request {frame.method}",
                     )
                     running.add(task)
                     task.add_done_callback(running.discard)
+                elif isinstance(frame, Ack):
+                    # In order with the requests: a read sent after the ack must
+                    # not fetch mail the ack is about to mark read.
+                    await self._confirm(acks, frame)
                 elif isinstance(frame, Subscribe):
                     await self._send(ws, self._subscribe(ws, attachment, frame))
                 else:
@@ -243,14 +251,32 @@ class ConnectionHandler:
         finally:
             for task in running:
                 task.cancel()
+            if acks:
+                logger.info(
+                    "connection ended with %d replies unconfirmed; their mail "
+                    "stays unread",
+                    len(acks),
+                )
+
+    async def _confirm(self, acks: Acknowledgements, ack: Ack) -> None:
+        """Run what the client's receipt of reply *ack* releases; log a failure."""
+        try:
+            async with asyncio.timeout(self._core.request_timeout):
+                await acks.confirm(ack.id)
+        except Exception:
+            logger.exception("acknowledging request %d failed", ack.id)
 
     async def _reply(
-        self, ws: ServerConnection, attachment: Attachment, request: Request
+        self,
+        ws: ServerConnection,
+        attachment: Attachment,
+        request: Request,
+        acks: Acknowledgements,
     ) -> None:
-        """Answer *request*, then run what the answer left to acknowledge.
+        """Answer *request*; what the answer carries is acknowledged on the ack.
 
-        Mail marked read before the reply was sent would be lost with the reply,
-        so acknowledgement waits for the write.
+        Mail marked read once the reply was written would be lost with a reply
+        the client gave up on, so acknowledgement waits for the client's ack.
         """
         reply, acknowledge = await self._answer(attachment, request)
         if (size := len(Frames.encode(reply).encode())) > MAX_FRAME_BYTES:
@@ -263,12 +289,10 @@ class ConnectionHandler:
                 self._failure(request.id, ErrorCode.INTERNAL, msg),
                 None,
             )
-        if not await self._send(ws, reply) or acknowledge is None:
-            return
-        try:
-            await acknowledge()
-        except Exception:
-            logger.exception("acknowledging %s failed", request.method)
+        if acknowledge is not None:
+            acks.expect(request.id, acknowledge)  # before the send: the ack races it
+        if not await self._send(ws, reply):
+            acks.forget(request.id)
 
     async def _answer(
         self, attachment: Attachment, request: Request
@@ -301,7 +325,12 @@ class ConnectionHandler:
             logger.exception("%s failed in biffd", method)
             msg = f"{method} failed in biffd: {exc}; {LOG_HINT}"
             return self._failure(request.id, ErrorCode.INTERNAL, msg), None
-        return Reply(id=request.id, result=outcome.result), outcome.acknowledge
+        reply = Reply(
+            id=request.id,
+            result=outcome.result,
+            needs_ack=outcome.acknowledge is not None,
+        )
+        return reply, outcome.acknowledge
 
     @staticmethod
     def _failure(request_id: int, code: ErrorCode, message: str) -> Reply:
@@ -325,7 +354,7 @@ class ConnectionHandler:
             Supervised.spawn(self._close(ws, _INTERNAL_ERROR, reason), "close")
 
         subscription = Subscription(
-            attachment.session.context, send, core.seq, core.poll_interval
+            attachment.session, send, core.seq, core.poll_interval
         )
         task = Supervised.spawn(subscription.run(), "subscription", died)
         if not attachment.hold_subscription(task):

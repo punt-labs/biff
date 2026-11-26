@@ -209,6 +209,7 @@ prefixes = [
     "chunking",
     "data",
     "failure_log",
+    "log_hint",
     "logging_config",
     "markers",
     "prob_gate",
@@ -221,7 +222,7 @@ prefixes = [
 imports = []
 
 [tool.oo-ratchet.layers.wire]
-prefixes = ["check_stamp", "frame_base", "frame_client", "frame_proof", "frame_reply", "frames", "models", "session_routing", "talk_types", "unread"]
+prefixes = ["check_stamp", "frame_ack", "frame_base", "frame_client", "frame_proof", "frame_reply", "frames", "models", "session_routing", "talk_types", "unread"]
 imports = ["kernel"]
 
 [tool.oo-ratchet.layers.engine]

@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from biff.cli_app import CliApp
 from biff.daemon.environment import DaemonEnvironment
-from biff.daemon.logs import LOG_HINT, LOG_PATH
+from biff.log_hint import LOG_HINT, LOG_PATH
 
 runner = CliRunner()
 app = CliApp.build()

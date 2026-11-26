@@ -13,11 +13,13 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from biff.client.environment import ClientEnvironment
+from biff.frame_ack import Ack
 from biff.frame_base import MAX_FRAME_BYTES, PROTOCOL_VERSION
 from biff.frame_client import ClientType, Hello, Request, Subscribe
 from biff.frame_proof import Challenge, Handshake, Proof
 from biff.frame_reply import ErrorCode, Reply
-from biff.frames import Event, FrameError, Frames
+from biff.frames import AnyFrame, Event, FrameError, Frames
+from biff.log_hint import LOG_HINT
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,6 +58,21 @@ class ClientIdentity:
     cwd: str
     main_agent_id: str = ""
     user: str = ""
+
+    def hello(self, mac: str) -> Hello:
+        """Return the hello that carries *mac* and these caller facts.
+
+        Raises:
+            ValueError: A caller fact is not one a hello accepts.
+        """
+        return Hello(
+            mac=mac,
+            client=self.client,
+            session_id=self.session_id,
+            main_agent_id=self.main_agent_id,
+            cwd=self.cwd,
+            user=ClientEnvironment.user(self.user, os.environ),
+        )
 
 
 # Not frozen: raising sets ``__traceback__``, which a frozen dataclass rejects.
@@ -158,45 +175,41 @@ class DaemonClient:
         token = run_dir.read_token()
         bound = cls._port(run_dir, port)
         ws = await cls._open(bound)
-        mac = await cls._handshake(ws, token, bound, proof_timeout)
-        hello = Hello(
-            mac=mac,
-            client=identity.client,
-            session_id=identity.session_id,
-            main_agent_id=identity.main_agent_id,
-            cwd=identity.cwd,
-            user=ClientEnvironment.user(identity.user, os.environ),
-        )
+        try:
+            mac = await cls._handshake(ws, token, bound, proof_timeout)
+            hello = identity.hello(mac)
+            await cls._say_hello(ws, hello, bound, proof_timeout)
+        except BaseException:
+            # Any exit, a cancellation included, that does not hand the socket to
+            # a client closes it: the daemon may already have attached the session.
+            await ws.close()
+            raise
+        return cls(ws, request_timeout)
+
+    @classmethod
+    async def _say_hello(
+        cls, ws: ClientConnection, hello: Hello, port: int, timeout: float
+    ) -> None:
+        """Send *hello* and read the daemon's reply to it; the caller closes *ws*."""
         try:
             await ws.send(Frames.encode(hello))
-            frame = cls._decode(
-                await asyncio.wait_for(ws.recv(), timeout=proof_timeout)
-            )
+            frame = cls._decode(await asyncio.wait_for(ws.recv(), timeout=timeout))
         except TimeoutError as exc:
-            await ws.close()
             msg = (
-                f"biffd did not answer the hello within {proof_timeout:g}s; check "
-                f"it with: curl -s http://{_LOOPBACK}:{bound}/health"
+                f"biffd did not answer the hello within {timeout:g}s; check "
+                f"it with: curl -s http://{_LOOPBACK}:{port}/health"
             )
             raise ConnectionLostError(msg) from exc
         except ConnectionClosed as exc:
-            await ws.close()
             raise ConnectionLostError(cls._why(exc)) from exc
         except (FrameError, UnicodeDecodeError) as exc:
-            await ws.close()
             msg = "biffd sent an unreadable reply to the hello"
             raise ConnectionLostError(msg) from exc
-        except DaemonError:
-            await ws.close()
-            raise
         if not isinstance(frame, Reply):
-            await ws.close()
             msg = f"biffd answered hello with a {frame.type} frame"
             raise ConnectionLostError(msg)
         if frame.error is not None:
-            await ws.close()
             raise DaemonError(frame.error.code, frame.error.message)
-        return cls(ws, request_timeout)
 
     @staticmethod
     def _port(run_dir: RunDir, port: int | None) -> int:
@@ -235,9 +248,7 @@ class DaemonClient:
             raise DaemonUnreachableError(msg) from exc
 
     @staticmethod
-    def _decode(
-        raw: str | bytes,
-    ) -> Challenge | Proof | Hello | Request | Reply | Subscribe | Event:
+    def _decode(raw: str | bytes) -> AnyFrame:
         """Decode a frame from the daemon, naming a protocol version mismatch.
 
         Raises:
@@ -265,9 +276,8 @@ class DaemonClient:
 
     @staticmethod
     def _closed_text(code: int | None, reason: str | None) -> str:
-        return (
-            f"biffd closed the connection (code {code}: {reason or 'no reason given'})"
-        )
+        why = reason or "no reason given"
+        return f"biffd closed the connection (code {code}: {why})"
 
     @staticmethod
     async def _handshake(
@@ -275,8 +285,8 @@ class DaemonClient:
     ) -> str:
         """Verify the daemon's proof of *token*; return the MAC for the hello.
 
-        Closes *ws* and raises unless the peer proves it holds *token*.  Only a
-        MAC bound to this connection's two nonces leaves the process.
+        Raises unless the peer proves it holds *token*; the caller closes *ws*.
+        Only a MAC bound to this connection's two nonces leaves the process.
         """
         challenge = Challenge.fresh()
         failure = (
@@ -290,16 +300,10 @@ class DaemonClient:
                 await asyncio.wait_for(ws.recv(), timeout=timeout)
             )
         except (TimeoutError, ConnectionClosed, FrameError, UnicodeDecodeError) as exc:
-            await ws.close()
             raise UnprovenDaemonError(failure) from exc
-        except DaemonError:
-            await ws.close()
-            raise
         if isinstance(proof, Reply) and proof.error is not None:
-            await ws.close()
             raise DaemonError(proof.error.code, proof.error.message)
         if not isinstance(proof, Proof) or not proof.valid_for(challenge, token):
-            await ws.close()
             raise UnprovenDaemonError(failure)
         return Handshake.client_mac(token, proof.daemon_nonce, challenge.client_nonce)
 
@@ -321,6 +325,8 @@ class DaemonClient:
         )
         if reply.error is not None:
             raise DaemonError(reply.error.code, reply.error.message)
+        if reply.needs_ack:
+            await self._confirm(reply.id)
         return reply.result
 
     async def subscribe(self) -> None:
@@ -353,6 +359,13 @@ class DaemonClient:
         await self._ws.close()
         await asyncio.gather(self._reader, return_exceptions=True)
 
+    async def _confirm(self, request_id: int) -> None:
+        """Tell the daemon the reply arrived; a lost ack costs a duplicate, not mail."""
+        try:
+            await self._ws.send(Frames.encode(Ack(id=request_id)))
+        except ConnectionClosed:
+            logger.warning("reply %d not confirmed; the daemon resends", request_id)
+
     async def _roundtrip(
         self, build: Callable[[int], Request | Subscribe], what: str
     ) -> Reply:
@@ -373,7 +386,7 @@ class DaemonClient:
         except TimeoutError:
             msg = (
                 f"{what} got no reply from biffd within {self._request_timeout:g}s; "
-                "it may be stuck on a slow relay (see ~/.punt-labs/biff/logs/biff.log)"
+                f"it may be stuck on a slow relay ({LOG_HINT})"
             )
             raise RequestTimeoutError(msg) from None
         finally:

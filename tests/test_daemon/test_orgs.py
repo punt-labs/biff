@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
+    from biff.models import UserSession
     from tests.test_daemon.conftest import Harness
 
 
@@ -23,6 +24,11 @@ class Discovering(LocalRelay):
         self.repos: frozenset[str] = frozenset({"alpha"})
         self.calls = 0
         self.fail = False
+        self.searched: list[frozenset[str]] = []
+
+    async def get_sessions_for_repos(self, repos: frozenset[str]) -> list[UserSession]:
+        self.searched.append(repos)
+        return await super().get_sessions_for_repos(repos)
 
     async def discover_repos_for_orgs(self, orgs: Sequence[str]) -> frozenset[str]:
         self.calls += 1
@@ -47,7 +53,7 @@ async def test_a_refresh_inside_the_interval_does_not_ask_again(
     await orgs.refresh()
     relay.repos = frozenset({"alpha", "beta"})
     assert await orgs.refresh() is False
-    assert (relay.calls, orgs.current) == (1, {"alpha"})
+    assert (relay.calls, orgs.current) == (1, frozenset({"alpha"}))
 
 
 async def test_a_refresh_after_the_interval_picks_up_a_new_repo(
@@ -104,7 +110,7 @@ async def test_a_live_session_sees_a_repo_that_appears_after_it_registered(
 
     harness.factory.relay_type = build
     await harness.connect("s-kai", "kai", cwd="/work/org-repo")
-    session = harness.daemon._core.sessions._sessions["s-kai"]
+    (session,) = harness.daemon._core.sessions._sessions.values()
     assert session.context.org_repos == {"alpha"}
     relays[0].repos = frozenset({"alpha", "newcomer"})
     for _ in range(50):
@@ -112,3 +118,26 @@ async def test_a_live_session_sees_a_repo_that_appears_after_it_registered(
             break
         await asyncio.sleep(0.05)
     assert "newcomer" in session.context.visible_repos
+
+
+async def test_a_write_after_rediscovery_searches_the_refreshed_scope(
+    harness: Harness,
+) -> None:
+    relays: list[Discovering] = []
+
+    def build(directory: Path) -> Discovering:
+        relay = Discovering(directory)
+        relays.append(relay)
+        return relay
+
+    harness.factory.relay_type = build
+    kai = await harness.connect("s-kai", "kai", cwd="/work/org-repo")
+    await kai.request("write", to="eric", message="before")
+    assert "newcomer" not in relays[0].searched[-1]
+    relays[0].repos = frozenset({"alpha", "newcomer"})
+    for _ in range(50):
+        await asyncio.sleep(0.05)
+        await kai.request("write", to="eric", message="after")
+        if "newcomer" in relays[0].searched[-1]:
+            break
+    assert "newcomer" in relays[0].searched[-1]

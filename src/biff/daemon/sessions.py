@@ -15,10 +15,10 @@ from biff.daemon.orgs import OrgRepos
 from biff.daemon.outbox import Outbox
 from biff.daemon.presence import PresenceRow
 from biff.daemon.refusal import RefusalError
+from biff.daemon.session_key import SessionKey
 from biff.daemon.tasks import Supervised
 from biff.frame_reply import ErrorCode
 from biff.relay_errors import RELAY_ERRORS, RelayLog
-from biff.session_id import CLAUDE_CODE_ROLE, CLI_ROLE
 from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
@@ -100,7 +100,7 @@ class Session:
         self._context = context
         self._presence = presence
         self._orgs = orgs
-        self._outbox = Outbox()
+        self._outbox = Outbox(retains=context.relay.consumes_on_fetch)
         self._run = run
         self._retired = {}
         self._attachments = set()
@@ -126,8 +126,7 @@ class Session:
         created.
         """
         config = resolved.config
-        role = CLI_ROLE if hello.client == "cli" else CLAUDE_CODE_ROLE
-        routing = SessionRouting(hello.session_id, role=role)
+        routing = SessionRouting(hello.session_id, role=SessionKey.of(hello).role)
         presence = PresenceRow(relay, config, routing, hello.cwd)
         row = await presence.ensure()
         orgs = OrgRepos(relay, config.orgs, org_refresh_interval)
@@ -273,15 +272,15 @@ class Session:
 
 @final
 class SessionTable:
-    """Every session the daemon holds, get-or-create by session id."""
+    """Every session the daemon holds, get-or-create by session id and role."""
 
     __slots__ = ("_interval", "_locks", "_org_interval", "_sessions", "_users")
 
     _interval: float
     _org_interval: float
-    _sessions: dict[str, Session]
-    _locks: defaultdict[str, asyncio.Lock]
-    _users: Counter[str]
+    _sessions: dict[SessionKey, Session]
+    _locks: defaultdict[SessionKey, asyncio.Lock]
+    _users: Counter[SessionKey]
 
     def __new__(cls, *, heartbeat_interval: float, org_refresh_interval: float) -> Self:
         """Create an empty table whose sessions run their timers at these intervals."""
@@ -303,16 +302,18 @@ class SessionTable:
     ) -> Attachment:
         """Attach the connection *hello* describes to its session.
 
-        A second client for the same session id attaches to the existing
-        record; the table never holds two records for one id, and an attach
-        never changes another session's record.  A relay is acquired only for a
+        A second client of the same session id and role attaches to the existing
+        record; the table never holds two records for one key, and an attach
+        never changes another session's record.  A shell and an agent that share
+        a session id are two sessions.  A relay is acquired only for a
         session that is new, so a refused hello opens no connection.
 
         Raises:
             RefusalError: The session id belongs to another user or relay.
         """
-        async with self._guard(hello.session_id):
-            session = self._sessions.get(hello.session_id)
+        key = SessionKey.of(hello)
+        async with self._guard(key):
+            session = self._sessions.get(key)
             if session is None:
                 session = await Session.register(
                     hello,
@@ -321,7 +322,7 @@ class SessionTable:
                     heartbeat_interval=self._interval,
                     org_refresh_interval=self._org_interval,
                 )
-                self._sessions[hello.session_id] = session
+                self._sessions[key] = session
             else:
                 session.check_same(resolved)
                 if session.is_dormant:
@@ -329,15 +330,15 @@ class SessionTable:
             return session.attach(hello.main_agent_id)
 
     @asynccontextmanager
-    async def _guard(self, session_id: str) -> AsyncGenerator[None]:
-        """Serialize work on one session id, dropping its lock once it is idle."""
-        self._users[session_id] += 1
+    async def _guard(self, key: SessionKey) -> AsyncGenerator[None]:
+        """Serialize work on one session key, dropping its lock once it is idle."""
+        self._users[key] += 1
         try:
-            async with self._locks[session_id]:
+            async with self._locks[key]:
                 yield
         finally:
-            self._users[session_id] -= 1
-            if self._users[session_id] == 0:
-                del self._users[session_id]
-                if session_id not in self._sessions:
-                    del self._locks[session_id]
+            self._users[key] -= 1
+            if self._users[key] == 0:
+                del self._users[key]
+                if key not in self._sessions:
+                    del self._locks[key]

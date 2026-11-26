@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
 
     from biff.cli_context import CliContext
+    from biff.daemon.sessions import Session
     from biff.frames import EventKind
     from biff.models import WallPost
 
@@ -32,7 +33,10 @@ class Subscription:
     On start it sends the session's current unread summary and, when the
     repository has an active wall, the wall.  Then it sends one event per later
     arrival.  An event carries counts and the wall, never a message body.
-    There is no replay log: a client that reconnects starts from the summary.
+    There is no replay log: a client that reconnects starts from the summary,
+    which counts the mail the daemon holds for the session as well as the
+    relay's: a consuming relay no longer lists mail the daemon fetched and could
+    not deliver, and the client must be told it waits.
 
     A relay outage is not fatal: the subscription retries, tells the client once
     that it is ``degraded`` and once that it ``recovered``, and writes one log
@@ -40,9 +44,9 @@ class Subscription:
     error is a bug and ends the task, which the connection reports.
     """
 
-    __slots__ = ("_ctx", "_degraded", "_interval", "_log", "_send", "_seq")
+    __slots__ = ("_degraded", "_interval", "_log", "_send", "_seq", "_session")
 
-    _ctx: CliContext
+    _session: Session
     _send: Callable[[Event], Awaitable[None]]
     _seq: Iterator[int]
     _interval: float
@@ -51,24 +55,29 @@ class Subscription:
 
     def __new__(
         cls,
-        ctx: CliContext,
+        session: Session,
         send: Callable[[Event], Awaitable[None]],
         seq: Iterator[int],
         interval: float,
     ) -> Self:
-        """Create a subscription for *ctx* that writes events with *send*.
+        """Create a subscription for *session* that writes events with *send*.
 
         *seq* is the daemon-wide counter that orders events; *interval* is how
         often the relay is checked for arrivals.
         """
         self = super().__new__(cls)
-        self._ctx = ctx
+        self._session = session
         self._send = send
         self._seq = seq
         self._interval = interval
         self._log = RelayLog(logger)
         self._degraded = False
         return self
+
+    @property
+    def _ctx(self) -> CliContext:
+        """The session's current context: its org scope can change while it runs."""
+        return self._session.context
 
     async def run(self) -> None:
         """Send the current summary, then each arrival, until cancelled."""
@@ -127,9 +136,10 @@ class Subscription:
             await self._emit("recovered", {})
 
     async def _unread(self) -> int:
-        """Return the unread count over the session's and the user's inboxes."""
-        summary = await self._ctx.relay.get_unread_summary(self._ctx.session_key)
-        return summary.count
+        """Return the unread count: the relay's, plus the mail the daemon holds."""
+        ctx = self._ctx
+        summary = await ctx.relay.get_unread_summary(ctx.session_key)
+        return summary.count + len(self._session.outbox)
 
     async def _emit(self, kind: EventKind, data: JsonValue) -> None:
         await self._send(Event(seq=next(self._seq), kind=kind, data=data))

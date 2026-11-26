@@ -31,7 +31,7 @@ def _attached(harness: Harness, session_id: str) -> int:
 async def test_a_second_client_for_one_session_id_shares_the_record(
     harness: Harness,
 ) -> None:
-    await harness.connect("s-kai", "kai")
+    await harness.connect("s-kai", "kai", client="mcp")
     await harness.connect("s-kai", "kai", client="hook")
     assert (len(harness.daemon.status().sessions), _attached(harness, "s-kai")) == (
         1,
@@ -39,8 +39,47 @@ async def test_a_second_client_for_one_session_id_shares_the_record(
     )
 
 
+async def test_two_shell_clients_of_one_session_id_share_the_record(
+    harness: Harness,
+) -> None:
+    await harness.connect("s-kai", "kai", client="cli")
+    await harness.connect("s-kai", "kai", client="cli")
+    assert (len(harness.daemon.status().sessions), _attached(harness, "s-kai")) == (
+        1,
+        2,
+    )
+
+
+async def test_a_shell_and_an_agent_of_one_session_id_get_their_own_records(
+    harness: Harness,
+) -> None:
+    """A shell must never read, or answer from, the inbox of the agent's session."""
+    agent = await harness.connect("s-kai", "kai", client="mcp")
+    shell = await harness.connect("s-kai", "kai", client="cli")
+    keys = {
+        cast("dict[str, dict[str, str]]", await who.request("status"))["data"][
+            "session_key"
+        ]
+        for who in (agent, shell)
+    }
+    assert (len(keys), len(harness.daemon.status().sessions)) == (2, 2)
+
+
+async def test_a_shell_cannot_read_mail_sent_to_the_agent_of_its_session_id(
+    harness: Harness,
+) -> None:
+    agent = await harness.connect("s-kai", "kai", client="mcp")
+    shell = await harness.connect("s-kai", "kai", client="cli")
+    eric = await harness.connect("s-eric", "eric")
+    status = cast("dict[str, dict[str, str]]", await agent.request("status"))
+    target = status["data"]["tty_name"]
+    await eric.request("write", to=f"kai:{target}", message="for the agent")
+    shell_rows = cast("dict[str, list[object]]", await shell.request("read"))["data"]
+    assert shell_rows == []
+
+
 async def test_two_clients_of_one_session_see_one_plan(harness: Harness) -> None:
-    first = await harness.connect("s-kai", "kai")
+    first = await harness.connect("s-kai", "kai", client="mcp")
     second = await harness.connect("s-kai", "kai", client="hook")
     await first.request("plan", message="one session")
     data = cast("dict[str, object]", await second.request("status"))["data"]

@@ -11,7 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from biff import commands
-from biff.commands.read import Inbox
+from biff.commands.inbox import Inbox
 from biff.daemon.refusal import RefusalError
 from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
@@ -200,7 +200,8 @@ class Methods:
         mail at fetch: what a lost reply or a truncated batch leaves behind is
         served by the next ``read``.  The batch is as much as fits the read
         budget in bytes; a message larger than the budget alone is clipped, never
-        sent whole.  ``more`` counts what the batch leaves.
+        sent whole.  ``more`` counts what the batch leaves: held mail and mail
+        still on the relay behind a bounded fetch.
         """
         p.done()
         inbox = await Inbox.unread(session.context)
@@ -210,7 +211,8 @@ class Methods:
             to_jsonable_python([m.model_dump(mode="json") for m in batch])
         )
         result: dict[str, JsonValue] = {"data": data, "error": False}
-        if (left := len(pending) - len(batch)) > 0:
+        left = len(pending) - len(batch) + await inbox.unfetched()
+        if left > 0:
             result["more"] = left
         if not batch:
             return Outcome(result)
