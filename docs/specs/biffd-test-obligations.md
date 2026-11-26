@@ -46,6 +46,34 @@ client protocol, not a model of it.
 | `test_close_only_with_no_attached_client` | `Close` guard | Relay close happens only in shutdown after the last client detaches |
 | `test_attached_client_reaches_delivery` | invariant 5 | From any state with an attached client, subscriptions are rebound and arrivals are delivered (reuses the existing subscription-liveness tests, with a client attached) |
 
+## Verification record
+
+Run with `probcli -model_check -strict -p DEFAULT_SETSIZE 1 -p MAXINT 4`.
+
+| Spec and scope | Result |
+|----------------|--------|
+| `session-model.tex`, gate scope (1 session, 1 run, 1 connection) | 2,342 states, all visited, 0 invariant violations, no deadlock |
+| `session-model.tex`, 1 session, 2 runs, 2 connections, 2 aliases | See the final report for the count; every daemon operation is covered |
+| `nats-relay.tex`, `-card CLIENT 1`, `maxGeneration 2`, `maxEpoch 1`, `maxRestarts 1` | 177,118 states, 1,959,126 transitions, all visited, 0 invariant violations, no deadlock, every operation covered; CTL `AG(attached /= {} => EF(attached /= {} & connState = connected & every subGen(k) = generation))` TRUE |
+
+The relay run uses reduced counters because the full counters (3, 2, 2) exceed
+1.7 million states and did not finish within the time box. The predicates of
+`Connection`, `SessionStore`, `Watcher`, `DaemonLayer` and `DaemonSide` live in
+separate `...Inv` schemas: an operation written with a delta on a schema that
+carries predicates gets them as guards, so ProB never reports a break.
+
+Negative controls (temporary mutant operations, run, then discarded):
+
+- `holdsHandle`: an operation `c? in attached, holdsHandle' = holdsHandle \/ {c?}`.
+  ProB: `COUNTER EXAMPLE FOUND`, trace `INITIALISATION, EnsureConnected,
+  ClientAttach(CLIENT1), MutClientOpensHandle(CLIENT1)`, `Invariant 9 is false:
+  holdsHandle = {}`.
+- Handle validity: with the existing `ResetInfrastructure` guard removed, ProB
+  finds `EnsureConnected, ResetInfrastructure` against `connState = connected
+  => kvProvisioned = ztrue & streamsProvisioned = ztrue & namesProvisioned =
+  ztrue`. This is a real finding (see `nats-relay.tex`, Reset Infrastructure):
+  the code's `reset_infrastructure` reaches that state.
+
 ## Spec scope note
 
 `session-model.tex` is model-checked at one session, two runs, two connections,

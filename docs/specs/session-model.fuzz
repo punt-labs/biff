@@ -1,0 +1,4136 @@
+(GIVEN 72
+  (LIST
+    (NAME "NAME" "")
+    (NAME "HOST" "")
+    (NAME "SESSION" "")
+    (NAME "PROCESS" "")))
+
+(DATA 97
+  (NAME "KIND" "")
+  (LIST
+    (ARM 97
+      (NAME "human" "")
+      (NOTHING 97))
+    (ARM 97
+      (NAME "agent" "")
+      (NOTHING 97))))
+
+(GIVEN 112
+  (LIST
+    (NAME "ALIAS" "")))
+
+(DATA 124
+  (NAME "ZBOOL" "")
+  (LIST
+    (ARM 124
+      (NAME "ztrue" "")
+      (NOTHING 124))
+    (ARM 124
+      (NAME "zfalse" "")
+      (NOTHING 124))))
+
+(DATA 128
+  (NAME "ROUTEMODE" "")
+  (LIST
+    (ARM 128
+      (NAME "rmIdentity" "")
+      (NOTHING 128))
+    (ARM 128
+      (NAME "rmAlias" "")
+      (NOTHING 128))))
+
+(EQEQ 145
+  (LHS 145
+    (NAME "RID" "")
+    ())
+  (REF 145 (NAME "SESSION" "") ()))
+
+(EQEQ 149
+  (LHS 149
+    (NAME "derive" "")
+    ())
+  (LAMBDA 149
+    (BODY 149
+      (LIST
+        (DECL 149
+          (LIST
+            (NAME "s" ""))
+          (REF 149 (NAME "SESSION" "") ())))
+      ())
+    (REF 149 (NAME "s" "") ())))
+
+(SDEF 178
+  (SHEAD 178
+    "BiffWorld"
+    ())
+  (BODY 180
+    (LIST
+      (DECL 180
+        (LIST
+          (NAME "orgs" ""))
+        (POWER 180
+          (REF 180 (NAME "NAME" "") ())))
+      (DECL 181
+        (LIST
+          (NAME "repos" ""))
+        (INGEN 181
+          (NAME "\rel" "")
+          (REF 181 (NAME "NAME" "") ())
+          (REF 181 (NAME "NAME" "") ())))
+      (DECL 182
+        (LIST
+          (NAME "members" ""))
+        (INGEN 182
+          (NAME "\rel" "")
+          (REF 182 (NAME "NAME" "") ())
+          (REF 182 (NAME "NAME" "") ())))
+      (DECL 184
+        (LIST
+          (NAME "machines" ""))
+        (POWER 184
+          (REF 184 (NAME "HOST" "") ())))
+      (DECL 185
+        (LIST
+          (NAME "clones" ""))
+        (INGEN 185
+          (NAME "\rel" "")
+          (REF 185 (NAME "HOST" "") ())
+          (CROSS 185
+            (LIST
+              (REF 185 (NAME "NAME" "") ())
+              (REF 185 (NAME "NAME" "") ())))))
+      (DECL 187
+        (LIST
+          (NAME "sessions" ""))
+        (POWER 187
+          (REF 187 (NAME "SESSION" "") ())))
+      (DECL 188
+        (LIST
+          (NAME "smach" ""))
+        (INGEN 188
+          (NAME "\pfun" "")
+          (REF 188 (NAME "SESSION" "") ())
+          (REF 188 (NAME "HOST" "") ())))
+      (DECL 189
+        (LIST
+          (NAME "srepo" ""))
+        (INGEN 189
+          (NAME "\pfun" "")
+          (REF 189 (NAME "SESSION" "") ())
+          (CROSS 189
+            (LIST
+              (REF 189 (NAME "NAME" "") ())
+              (REF 189 (NAME "NAME" "") ())))))
+      (DECL 190
+        (LIST
+          (NAME "sbranch" ""))
+        (INGEN 190
+          (NAME "\pfun" "")
+          (REF 190 (NAME "SESSION" "") ())
+          (REF 190 (NAME "NAME" "") ())))
+      (DECL 191
+        (LIST
+          (NAME "soper" ""))
+        (INGEN 191
+          (NAME "\pfun" "")
+          (REF 191 (NAME "SESSION" "") ())
+          (REF 191 (NAME "NAME" "") ())))
+      (DECL 193
+        (LIST
+          (NAME "processes" ""))
+        (POWER 193
+          (REF 193 (NAME "PROCESS" "") ())))
+      (DECL 194
+        (LIST
+          (NAME "psess" ""))
+        (INGEN 194
+          (NAME "\pfun" "")
+          (REF 194 (NAME "PROCESS" "") ())
+          (REF 194 (NAME "SESSION" "") ())))
+      (DECL 195
+        (LIST
+          (NAME "pkind" ""))
+        (INGEN 195
+          (NAME "\pfun" "")
+          (REF 195 (NAME "PROCESS" "") ())
+          (REF 195 (NAME "KIND" "") ())))
+      (DECL 196
+        (LIST
+          (NAME "pname" ""))
+        (INGEN 196
+          (NAME "\pfun" "")
+          (REF 196 (NAME "PROCESS" "") ())
+          (REF 196 (NAME "NAME" "") ())))
+      (DECL 197
+        (LIST
+          (NAME "ppar" ""))
+        (INGEN 197
+          (NAME "\pfun" "")
+          (REF 197 (NAME "PROCESS" "") ())
+          (REF 197 (NAME "PROCESS" "") ()))))
+    (LIST
+      (INREL 202
+        (NAME "\subseteq" "")
+        (APPLY 202
+          (REF 202 (NAME "\dom" "") ())
+          (REF 202 (NAME "repos" "") ()))
+        (REF 202 (NAME "orgs" "") ()))
+      (INREL 203
+        (NAME "\subseteq" "")
+        (APPLY 203
+          (REF 203 (NAME "\dom" "") ())
+          (REF 203 (NAME "members" "") ()))
+        (REF 203 (NAME "orgs" "") ()))
+      (INREL 207
+        (NAME "\subseteq" "")
+        (APPLY 207
+          (REF 207 (NAME "\dom" "") ())
+          (REF 207 (NAME "clones" "") ()))
+        (REF 207 (NAME "machines" "") ()))
+      (INREL 208
+        (NAME "\subseteq" "")
+        (APPLY 208
+          (REF 208 (NAME "\ran" "") ())
+          (REF 208 (NAME "clones" "") ()))
+        (REF 208 (NAME "repos" "") ()))
+      (EQUAL 212
+        (APPLY 212
+          (REF 212 (NAME "\dom" "") ())
+          (REF 212 (NAME "smach" "") ()))
+        (REF 212 (NAME "sessions" "") ()))
+      (EQUAL 213
+        (APPLY 213
+          (REF 213 (NAME "\dom" "") ())
+          (REF 213 (NAME "srepo" "") ()))
+        (REF 213 (NAME "sessions" "") ()))
+      (EQUAL 214
+        (APPLY 214
+          (REF 214 (NAME "\dom" "") ())
+          (REF 214 (NAME "sbranch" "") ()))
+        (REF 214 (NAME "sessions" "") ()))
+      (INREL 215
+        (NAME "\subseteq" "")
+        (APPLY 215
+          (REF 215 (NAME "\dom" "") ())
+          (REF 215 (NAME "soper" "") ()))
+        (REF 215 (NAME "sessions" "") ()))
+      (INREL 219
+        (NAME "\subseteq" "")
+        (APPLY 219
+          (REF 219 (NAME "\ran" "") ())
+          (REF 219 (NAME "smach" "") ()))
+        (REF 219 (NAME "machines" "") ()))
+      (FORALL 220
+        (BODY 220
+          (LIST
+            (DECL 220
+              (LIST
+                (NAME "s" ""))
+              (REF 220 (NAME "sessions" "") ())))
+          ())
+        (MEMBER 220
+          (TUPLE 220
+            (LIST
+              (APPLY 220
+                (REF 220 (NAME "smach" "") ())
+                (REF 220 (NAME "s" "") ()))
+              (APPLY 220
+                (REF 220 (NAME "srepo" "") ())
+                (REF 220 (NAME "s" "") ()))))
+          (REF 220 (NAME "clones" "") ())))
+      (FORALL 224
+        (BODY 224
+          (LIST
+            (DECL 224
+              (LIST
+                (NAME "s" ""))
+              (APPLY 224
+                (REF 224 (NAME "\dom" "") ())
+                (REF 224 (NAME "soper" "") ()))))
+          ())
+        (MEMBER 225
+          (TUPLE 225
+            (LIST
+              (APPLY 225
+                (REF 225 (NAME "first" "") ())
+                (APPLY 225
+                  (REF 225 (NAME "srepo" "") ())
+                  (REF 225 (NAME "s" "") ())))
+              (APPLY 225
+                (REF 225 (NAME "soper" "") ())
+                (REF 225 (NAME "s" "") ()))))
+          (REF 225 (NAME "members" "") ())))
+      (EQUAL 229
+        (APPLY 229
+          (REF 229 (NAME "\dom" "") ())
+          (REF 229 (NAME "psess" "") ()))
+        (REF 229 (NAME "processes" "") ()))
+      (EQUAL 230
+        (APPLY 230
+          (REF 230 (NAME "\dom" "") ())
+          (REF 230 (NAME "pkind" "") ()))
+        (REF 230 (NAME "processes" "") ()))
+      (EQUAL 231
+        (APPLY 231
+          (REF 231 (NAME "\dom" "") ())
+          (REF 231 (NAME "pname" "") ()))
+        (REF 231 (NAME "processes" "") ()))
+      (INREL 232
+        (NAME "\subseteq" "")
+        (APPLY 232
+          (REF 232 (NAME "\dom" "") ())
+          (REF 232 (NAME "ppar" "") ()))
+        (REF 232 (NAME "processes" "") ()))
+      (INREL 236
+        (NAME "\subseteq" "")
+        (APPLY 236
+          (REF 236 (NAME "\ran" "") ())
+          (REF 236 (NAME "psess" "") ()))
+        (REF 236 (NAME "sessions" "") ()))
+      (INREL 237
+        (NAME "\subseteq" "")
+        (APPLY 237
+          (REF 237 (NAME "\ran" "") ())
+          (REF 237 (NAME "ppar" "") ()))
+        (REF 237 (NAME "processes" "") ()))
+      (FORALL 241
+        (BODY 241
+          (LIST
+            (DECL 241
+              (LIST
+                (NAME "p" ""))
+              (APPLY 241
+                (REF 241 (NAME "\dom" "") ())
+                (REF 241 (NAME "ppar" "") ()))))
+          ())
+        (EQUAL 242
+          (APPLY 242
+            (REF 242 (NAME "psess" "") ())
+            (APPLY 242
+              (REF 242 (NAME "ppar" "") ())
+              (REF 242 (NAME "p" "") ())))
+          (APPLY 242
+            (REF 242 (NAME "psess" "") ())
+            (REF 242 (NAME "p" "") ()))))
+      (FORALL 246
+        (BODY 246
+          (LIST
+            (DECL 246
+              (LIST
+                (NAME "p" ""))
+              (REF 246 (NAME "processes" "") ())))
+          ())
+        (INREL 246
+          (NAME "\notin" "")
+          (TUPLE 246
+            (LIST
+              (REF 246 (NAME "p" "") ())
+              (REF 246 (NAME "p" "") ())))
+          (POSTOP 246
+            (NAME "\plus" "")
+            (REF 246 (NAME "ppar" "") ())))))))
+
+(SDEF 263
+  (SHEAD 263
+    "RouteWorld"
+    ())
+  (BODY 264
+    (LIST
+      (SDECL 264
+        (SREF 264 "BiffWorld" "" () ()))
+      (DECL 265
+        (LIST
+          (NAME "entries" ""))
+        (POWER 265
+          (REF 265 (NAME "SESSION" "") ())))
+      (DECL 266
+        (LIST
+          (NAME "ttyalias" ""))
+        (INGEN 266
+          (NAME "\pinj" "")
+          (REF 266 (NAME "SESSION" "") ())
+          (REF 266 (NAME "ALIAS" "") ())))
+      (DECL 267
+        (LIST
+          (NAME "savedalias" ""))
+        (INGEN 267
+          (NAME "\pfun" "")
+          (REF 267 (NAME "SESSION" "") ())
+          (REF 267 (NAME "ALIAS" "") ())))
+      (DECL 268
+        (LIST
+          (NAME "abind" ""))
+        (INGEN 268
+          (NAME "\pfun" "")
+          (REF 268 (NAME "ALIAS" "") ())
+          (REF 268 (NAME "SESSION" "") ())))
+      (DECL 269
+        (LIST
+          (NAME "routeMode" ""))
+        (REF 269 (NAME "ROUTEMODE" "") ()))
+      (DECL 270
+        (LIST
+          (NAME "lostF" ""))
+        (REF 270 (NAME "ZBOOL" "") ()))
+      (DECL 271
+        (LIST
+          (NAME "misF" ""))
+        (REF 271 (NAME "ZBOOL" "") ())))
+    (LIST
+      (INREL 276
+        (NAME "\subseteq" "")
+        (REF 276 (NAME "entries" "") ())
+        (REF 276 (NAME "sessions" "") ()))
+      (EQUAL 282
+        (APPLY 282
+          (REF 282 (NAME "\dom" "") ())
+          (REF 282 (NAME "ttyalias" "") ()))
+        (REF 282 (NAME "entries" "") ()))
+      (IMPLIES 287
+        (EQUAL 287
+          (REF 287 (NAME "routeMode" "") ())
+          (REF 287 (NAME "rmIdentity" "") ()))
+        (EQUAL 287
+          (REF 287 (NAME "lostF" "") ())
+          (REF 287 (NAME "zfalse" "") ())))
+      (IMPLIES 288
+        (EQUAL 288
+          (REF 288 (NAME "routeMode" "") ())
+          (REF 288 (NAME "rmIdentity" "") ()))
+        (EQUAL 288
+          (REF 288 (NAME "misF" "") ())
+          (REF 288 (NAME "zfalse" "") ()))))))
+
+(GIVEN 338
+  (LIST
+    (NAME "RUN" "")
+    (NAME "CONN" "")))
+
+(AXDEF 347
+  (BODY 348
+    (LIST
+      (DECL 348
+        (LIST
+          (NAME "maxUnread" ""))
+        (REF 348 (NAME "\nat" "") ())))
+    (LIST
+      (EQUAL 350
+        (REF 350 (NAME "maxUnread" "") ())
+        (NUMBER 350 "1")))))
+
+(SDEF 357
+  (SHEAD 357
+    "DaemonSide"
+    ())
+  (BODY 358
+    (LIST
+      (DECL 358
+        (LIST
+          (NAME "daemonUp" ""))
+        (REF 358 (NAME "ZBOOL" "") ()))
+      (DECL 359
+        (LIST
+          (NAME "known" ""))
+        (POWER 359
+          (REF 359 (NAME "SESSION" "") ())))
+      (DECL 360
+        (LIST
+          (NAME "runOf" ""))
+        (INGEN 360
+          (NAME "\pfun" "")
+          (REF 360 (NAME "SESSION" "") ())
+          (REF 360 (NAME "RUN" "") ())))
+      (DECL 361
+        (LIST
+          (NAME "opened" ""))
+        (POWER 361
+          (REF 361 (NAME "CONN" "") ())))
+      (DECL 362
+        (LIST
+          (NAME "hello" ""))
+        (INGEN 362
+          (NAME "\pfun" "")
+          (REF 362 (NAME "CONN" "") ())
+          (CROSS 362
+            (LIST
+              (REF 362 (NAME "SESSION" "") ())
+              (REF 362 (NAME "RUN" "") ())))))
+      (DECL 363
+        (LIST
+          (NAME "subscribed" ""))
+        (POWER 363
+          (REF 363 (NAME "CONN" "") ())))
+      (DECL 364
+        (LIST
+          (NAME "shown" ""))
+        (INGEN 364
+          (NAME "\pfun" "")
+          (REF 364 (NAME "CONN" "") ())
+          (INOP 364
+            (NAME "\upto" "")
+            (NUMBER 364 "0")
+            (REF 364 (NAME "maxUnread" "") ()))))
+      (DECL 365
+        (LIST
+          (NAME "durable" ""))
+        (INGEN 365
+          (NAME "\fun" "")
+          (REF 365 (NAME "SESSION" "") ())
+          (INOP 365
+            (NAME "\upto" "")
+            (NUMBER 365 "0")
+            (REF 365 (NAME "maxUnread" "") ())))))
+    ()))
+
+(SDEF 368
+  (SHEAD 368
+    "DaemonSideInv"
+    ())
+  (BODY 369
+    (LIST
+      (SDECL 369
+        (SREF 369 "DaemonSide" "" () ())))
+    (LIST
+      (EQUAL 371
+        (APPLY 371
+          (REF 371 (NAME "\dom" "") ())
+          (REF 371 (NAME "runOf" "") ()))
+        (REF 371 (NAME "known" "") ()))
+      (INREL 372
+        (NAME "\subseteq" "")
+        (APPLY 372
+          (REF 372 (NAME "\dom" "") ())
+          (REF 372 (NAME "hello" "") ()))
+        (REF 372 (NAME "opened" "") ()))
+      (FORALL 373
+        (BODY 373
+          (LIST
+            (DECL 373
+              (LIST
+                (NAME "c" ""))
+              (APPLY 373
+                (REF 373 (NAME "\dom" "") ())
+                (REF 373 (NAME "hello" "") ()))))
+          ())
+        (MEMBER 373
+          (APPLY 373
+            (REF 373 (NAME "first" "") ())
+            (APPLY 373
+              (REF 373 (NAME "hello" "") ())
+              (REF 373 (NAME "c" "") ())))
+          (REF 373 (NAME "known" "") ())))
+      (INREL 374
+        (NAME "\subseteq" "")
+        (REF 374 (NAME "subscribed" "") ())
+        (APPLY 374
+          (REF 374 (NAME "\dom" "") ())
+          (REF 374 (NAME "hello" "") ())))
+      (FORALL 375
+        (BODY 375
+          (LIST
+            (DECL 375
+              (LIST
+                (NAME "c" ""))
+              (REF 375 (NAME "subscribed" "") ())))
+          ())
+        (EQUAL 375
+          (APPLY 375
+            (REF 375 (NAME "second" "") ())
+            (APPLY 375
+              (REF 375 (NAME "hello" "") ())
+              (REF 375 (NAME "c" "") ())))
+          (APPLY 375
+            (REF 375 (NAME "runOf" "") ())
+            (APPLY 375
+              (REF 375 (NAME "first" "") ())
+              (APPLY 375
+                (REF 375 (NAME "hello" "") ())
+                (REF 375 (NAME "c" "") ()))))))
+      (EQUAL 376
+        (APPLY 376
+          (REF 376 (NAME "\dom" "") ())
+          (REF 376 (NAME "shown" "") ()))
+        (REF 376 (NAME "subscribed" "") ()))
+      (FORALL 377
+        (BODY 377
+          (LIST
+            (DECL 377
+              (LIST
+                (NAME "c" ""))
+              (REF 377 (NAME "subscribed" "") ())))
+          ())
+        (INREL 377
+          (NAME "\leq" "")
+          (APPLY 377
+            (REF 377 (NAME "shown" "") ())
+            (REF 377 (NAME "c" "") ()))
+          (APPLY 377
+            (REF 377 (NAME "durable" "") ())
+            (APPLY 377
+              (REF 377 (NAME "first" "") ())
+              (APPLY 377
+                (REF 377 (NAME "hello" "") ())
+                (REF 377 (NAME "c" "") ()))))))
+      (IMPLIES 378
+        (EQUAL 378
+          (REF 378 (NAME "daemonUp" "") ())
+          (REF 378 (NAME "zfalse" "") ()))
+        (EQUAL 378
+          (REF 378 (NAME "opened" "") ())
+          (REF 378 (NAME "\emptyset" "") ()))))))
+
+(SDEF 418
+  (SHEAD 418
+    "DaemonWorld"
+    ())
+  (BODY 419
+    (LIST
+      (SDECL 419
+        (SREF 419 "RouteWorld" "" () ()))
+      (SDECL 420
+        (SREF 420 "DaemonSideInv" "" () ())))
+    (LIST
+      (INREL 422
+        (NAME "\subseteq" "")
+        (REF 422 (NAME "known" "") ())
+        (REF 422 (NAME "sessions" "") ())))))
+
+(SDEF 431
+  (SHEAD 431
+    "Invariant"
+    ())
+  (BODY 432
+    (LIST
+      (SDECL 432
+        (SREF 432 "DaemonWorld" "" () ())))
+    ()))
+
+(SDEF 442
+  (SHEAD 442
+    "Init"
+    ())
+  (BODY 443
+    (LIST
+      (SDECL 443
+        (SREF 443 "DaemonWorld" "'" () ())))
+    (LIST
+      (EQUAL 445
+        (REF 445 (NAME "orgs" "'") ())
+        (REF 445 (NAME "\emptyset" "") ()))
+      (EQUAL 446
+        (REF 446 (NAME "repos" "'") ())
+        (REF 446 (NAME "\emptyset" "") ()))
+      (EQUAL 447
+        (REF 447 (NAME "members" "'") ())
+        (REF 447 (NAME "\emptyset" "") ()))
+      (EQUAL 448
+        (REF 448 (NAME "machines" "'") ())
+        (REF 448 (NAME "\emptyset" "") ()))
+      (EQUAL 449
+        (REF 449 (NAME "clones" "'") ())
+        (REF 449 (NAME "\emptyset" "") ()))
+      (EQUAL 450
+        (REF 450 (NAME "sessions" "'") ())
+        (REF 450 (NAME "\emptyset" "") ()))
+      (EQUAL 451
+        (REF 451 (NAME "smach" "'") ())
+        (REF 451 (NAME "\emptyset" "") ()))
+      (EQUAL 452
+        (REF 452 (NAME "srepo" "'") ())
+        (REF 452 (NAME "\emptyset" "") ()))
+      (EQUAL 453
+        (REF 453 (NAME "sbranch" "'") ())
+        (REF 453 (NAME "\emptyset" "") ()))
+      (EQUAL 454
+        (REF 454 (NAME "soper" "'") ())
+        (REF 454 (NAME "\emptyset" "") ()))
+      (EQUAL 455
+        (REF 455 (NAME "processes" "'") ())
+        (REF 455 (NAME "\emptyset" "") ()))
+      (EQUAL 456
+        (REF 456 (NAME "psess" "'") ())
+        (REF 456 (NAME "\emptyset" "") ()))
+      (EQUAL 457
+        (REF 457 (NAME "pkind" "'") ())
+        (REF 457 (NAME "\emptyset" "") ()))
+      (EQUAL 458
+        (REF 458 (NAME "pname" "'") ())
+        (REF 458 (NAME "\emptyset" "") ()))
+      (EQUAL 459
+        (REF 459 (NAME "ppar" "'") ())
+        (REF 459 (NAME "\emptyset" "") ()))
+      (EQUAL 464
+        (REF 464 (NAME "entries" "'") ())
+        (REF 464 (NAME "\emptyset" "") ()))
+      (EQUAL 465
+        (REF 465 (NAME "ttyalias" "'") ())
+        (REF 465 (NAME "\emptyset" "") ()))
+      (EQUAL 466
+        (REF 466 (NAME "savedalias" "'") ())
+        (REF 466 (NAME "\emptyset" "") ()))
+      (EQUAL 467
+        (REF 467 (NAME "abind" "'") ())
+        (REF 467 (NAME "\emptyset" "") ()))
+      (EQUAL 468
+        (REF 468 (NAME "lostF" "'") ())
+        (REF 468 (NAME "zfalse" "") ()))
+      (EQUAL 469
+        (REF 469 (NAME "misF" "'") ())
+        (REF 469 (NAME "zfalse" "") ()))
+      (EQUAL 473
+        (REF 473 (NAME "daemonUp" "'") ())
+        (REF 473 (NAME "ztrue" "") ()))
+      (EQUAL 474
+        (REF 474 (NAME "known" "'") ())
+        (REF 474 (NAME "\emptyset" "") ()))
+      (EQUAL 475
+        (REF 475 (NAME "runOf" "'") ())
+        (REF 475 (NAME "\emptyset" "") ()))
+      (EQUAL 476
+        (REF 476 (NAME "opened" "'") ())
+        (REF 476 (NAME "\emptyset" "") ()))
+      (EQUAL 477
+        (REF 477 (NAME "hello" "'") ())
+        (REF 477 (NAME "\emptyset" "") ()))
+      (EQUAL 478
+        (REF 478 (NAME "subscribed" "'") ())
+        (REF 478 (NAME "\emptyset" "") ()))
+      (EQUAL 479
+        (REF 479 (NAME "shown" "'") ())
+        (REF 479 (NAME "\emptyset" "") ()))
+      (EQUAL 480
+        (REF 480 (NAME "durable" "'") ())
+        (LAMBDA 480
+          (BODY 480
+            (LIST
+              (DECL 480
+                (LIST
+                  (NAME "s" ""))
+                (REF 480 (NAME "SESSION" "") ())))
+            ())
+          (NUMBER 480 "0"))))))
+
+(SDEF 0
+  (SHEAD 0
+    "\Delta BiffWorld"
+    ())
+  (BODY 0
+    (LIST
+      (SDECL 0
+        (SREF 0 "BiffWorld" "" () ()))
+      (SDECL 0
+        (SREF 0 "BiffWorld" "'" () ())))
+    ()))
+
+(SDEF 501
+  (SHEAD 501
+    "AddOrg"
+    ())
+  (BODY 502
+    (LIST
+      (SDECL 502
+        (SREF 502 "\Delta BiffWorld" "" () ()))
+      (DECL 503
+        (LIST
+          (NAME "org" "?"))
+        (REF 503 (NAME "NAME" "") ())))
+    (LIST
+      (INREL 505
+        (NAME "\notin" "")
+        (REF 505 (NAME "org" "?") ())
+        (REF 505 (NAME "orgs" "") ()))
+      (EQUAL 507
+        (REF 507 (NAME "orgs" "'") ())
+        (INOP 507
+          (NAME "\cup" "")
+          (REF 507 (NAME "orgs" "") ())
+          (EXT 507
+            (LIST
+              (REF 507 (NAME "org" "?") ())))))
+      (EQUAL 511
+        (REF 511 (NAME "repos" "'") ())
+        (REF 511 (NAME "repos" "") ()))
+      (EQUAL 512
+        (REF 512 (NAME "members" "'") ())
+        (REF 512 (NAME "members" "") ()))
+      (EQUAL 513
+        (REF 513 (NAME "machines" "'") ())
+        (REF 513 (NAME "machines" "") ()))
+      (EQUAL 514
+        (REF 514 (NAME "clones" "'") ())
+        (REF 514 (NAME "clones" "") ()))
+      (EQUAL 515
+        (REF 515 (NAME "sessions" "'") ())
+        (REF 515 (NAME "sessions" "") ()))
+      (EQUAL 516
+        (REF 516 (NAME "smach" "'") ())
+        (REF 516 (NAME "smach" "") ()))
+      (EQUAL 517
+        (REF 517 (NAME "srepo" "'") ())
+        (REF 517 (NAME "srepo" "") ()))
+      (EQUAL 518
+        (REF 518 (NAME "sbranch" "'") ())
+        (REF 518 (NAME "sbranch" "") ()))
+      (EQUAL 519
+        (REF 519 (NAME "soper" "'") ())
+        (REF 519 (NAME "soper" "") ()))
+      (EQUAL 520
+        (REF 520 (NAME "processes" "'") ())
+        (REF 520 (NAME "processes" "") ()))
+      (EQUAL 521
+        (REF 521 (NAME "psess" "'") ())
+        (REF 521 (NAME "psess" "") ()))
+      (EQUAL 522
+        (REF 522 (NAME "pkind" "'") ())
+        (REF 522 (NAME "pkind" "") ()))
+      (EQUAL 523
+        (REF 523 (NAME "pname" "'") ())
+        (REF 523 (NAME "pname" "") ()))
+      (EQUAL 524
+        (REF 524 (NAME "ppar" "'") ())
+        (REF 524 (NAME "ppar" "") ())))))
+
+(SDEF 533
+  (SHEAD 533
+    "RemoveOrg"
+    ())
+  (BODY 534
+    (LIST
+      (SDECL 534
+        (SREF 534 "\Delta BiffWorld" "" () ()))
+      (DECL 535
+        (LIST
+          (NAME "org" "?"))
+        (REF 535 (NAME "NAME" "") ())))
+    (LIST
+      (MEMBER 537
+        (REF 537 (NAME "org" "?") ())
+        (REF 537 (NAME "orgs" "") ()))
+      (EQUAL 538
+        (INOP 538
+          (NAME "\dres" "")
+          (EXT 538
+            (LIST
+              (REF 538 (NAME "org" "?") ())))
+          (REF 538 (NAME "repos" "") ()))
+        (REF 538 (NAME "\emptyset" "") ()))
+      (EQUAL 539
+        (INOP 539
+          (NAME "\dres" "")
+          (EXT 539
+            (LIST
+              (REF 539 (NAME "org" "?") ())))
+          (REF 539 (NAME "members" "") ()))
+        (REF 539 (NAME "\emptyset" "") ()))
+      (EQUAL 541
+        (REF 541 (NAME "orgs" "'") ())
+        (INOP 541
+          (NAME "\setminus" "")
+          (REF 541 (NAME "orgs" "") ())
+          (EXT 541
+            (LIST
+              (REF 541 (NAME "org" "?") ())))))
+      (EQUAL 543
+        (REF 543 (NAME "repos" "'") ())
+        (REF 543 (NAME "repos" "") ()))
+      (EQUAL 544
+        (REF 544 (NAME "members" "'") ())
+        (REF 544 (NAME "members" "") ()))
+      (EQUAL 545
+        (REF 545 (NAME "machines" "'") ())
+        (REF 545 (NAME "machines" "") ()))
+      (EQUAL 546
+        (REF 546 (NAME "clones" "'") ())
+        (REF 546 (NAME "clones" "") ()))
+      (EQUAL 547
+        (REF 547 (NAME "sessions" "'") ())
+        (REF 547 (NAME "sessions" "") ()))
+      (EQUAL 548
+        (REF 548 (NAME "smach" "'") ())
+        (REF 548 (NAME "smach" "") ()))
+      (EQUAL 549
+        (REF 549 (NAME "srepo" "'") ())
+        (REF 549 (NAME "srepo" "") ()))
+      (EQUAL 550
+        (REF 550 (NAME "sbranch" "'") ())
+        (REF 550 (NAME "sbranch" "") ()))
+      (EQUAL 551
+        (REF 551 (NAME "soper" "'") ())
+        (REF 551 (NAME "soper" "") ()))
+      (EQUAL 552
+        (REF 552 (NAME "processes" "'") ())
+        (REF 552 (NAME "processes" "") ()))
+      (EQUAL 553
+        (REF 553 (NAME "psess" "'") ())
+        (REF 553 (NAME "psess" "") ()))
+      (EQUAL 554
+        (REF 554 (NAME "pkind" "'") ())
+        (REF 554 (NAME "pkind" "") ()))
+      (EQUAL 555
+        (REF 555 (NAME "pname" "'") ())
+        (REF 555 (NAME "pname" "") ()))
+      (EQUAL 556
+        (REF 556 (NAME "ppar" "'") ())
+        (REF 556 (NAME "ppar" "") ())))))
+
+(SDEF 569
+  (SHEAD 569
+    "AddRepo"
+    ())
+  (BODY 570
+    (LIST
+      (SDECL 570
+        (SREF 570 "\Delta BiffWorld" "" () ()))
+      (DECL 571
+        (LIST
+          (NAME "org" "?"))
+        (REF 571 (NAME "NAME" "") ()))
+      (DECL 572
+        (LIST
+          (NAME "repo" "?"))
+        (REF 572 (NAME "NAME" "") ())))
+    (LIST
+      (MEMBER 574
+        (REF 574 (NAME "org" "?") ())
+        (REF 574 (NAME "orgs" "") ()))
+      (INREL 575
+        (NAME "\notin" "")
+        (TUPLE 575
+          (LIST
+            (REF 575 (NAME "org" "?") ())
+            (REF 575 (NAME "repo" "?") ())))
+        (REF 575 (NAME "repos" "") ()))
+      (EQUAL 577
+        (REF 577 (NAME "repos" "'") ())
+        (INOP 577
+          (NAME "\cup" "")
+          (REF 577 (NAME "repos" "") ())
+          (EXT 577
+            (LIST
+              (TUPLE 577
+                (LIST
+                  (REF 577 (NAME "org" "?") ())
+                  (REF 577 (NAME "repo" "?") ())))))))
+      (EQUAL 579
+        (REF 579 (NAME "orgs" "'") ())
+        (REF 579 (NAME "orgs" "") ()))
+      (EQUAL 580
+        (REF 580 (NAME "members" "'") ())
+        (REF 580 (NAME "members" "") ()))
+      (EQUAL 581
+        (REF 581 (NAME "machines" "'") ())
+        (REF 581 (NAME "machines" "") ()))
+      (EQUAL 582
+        (REF 582 (NAME "clones" "'") ())
+        (REF 582 (NAME "clones" "") ()))
+      (EQUAL 583
+        (REF 583 (NAME "sessions" "'") ())
+        (REF 583 (NAME "sessions" "") ()))
+      (EQUAL 584
+        (REF 584 (NAME "smach" "'") ())
+        (REF 584 (NAME "smach" "") ()))
+      (EQUAL 585
+        (REF 585 (NAME "srepo" "'") ())
+        (REF 585 (NAME "srepo" "") ()))
+      (EQUAL 586
+        (REF 586 (NAME "sbranch" "'") ())
+        (REF 586 (NAME "sbranch" "") ()))
+      (EQUAL 587
+        (REF 587 (NAME "soper" "'") ())
+        (REF 587 (NAME "soper" "") ()))
+      (EQUAL 588
+        (REF 588 (NAME "processes" "'") ())
+        (REF 588 (NAME "processes" "") ()))
+      (EQUAL 589
+        (REF 589 (NAME "psess" "'") ())
+        (REF 589 (NAME "psess" "") ()))
+      (EQUAL 590
+        (REF 590 (NAME "pkind" "'") ())
+        (REF 590 (NAME "pkind" "") ()))
+      (EQUAL 591
+        (REF 591 (NAME "pname" "'") ())
+        (REF 591 (NAME "pname" "") ()))
+      (EQUAL 592
+        (REF 592 (NAME "ppar" "'") ())
+        (REF 592 (NAME "ppar" "") ())))))
+
+(SDEF 602
+  (SHEAD 602
+    "RemoveRepo"
+    ())
+  (BODY 603
+    (LIST
+      (SDECL 603
+        (SREF 603 "\Delta BiffWorld" "" () ()))
+      (DECL 604
+        (LIST
+          (NAME "org" "?"))
+        (REF 604 (NAME "NAME" "") ()))
+      (DECL 605
+        (LIST
+          (NAME "repo" "?"))
+        (REF 605 (NAME "NAME" "") ())))
+    (LIST
+      (MEMBER 607
+        (TUPLE 607
+          (LIST
+            (REF 607 (NAME "org" "?") ())
+            (REF 607 (NAME "repo" "?") ())))
+        (REF 607 (NAME "repos" "") ()))
+      (INREL 608
+        (NAME "\notin" "")
+        (TUPLE 608
+          (LIST
+            (REF 608 (NAME "org" "?") ())
+            (REF 608 (NAME "repo" "?") ())))
+        (APPLY 608
+          (REF 608 (NAME "\ran" "") ())
+          (REF 608 (NAME "clones" "") ())))
+      (EQUAL 610
+        (REF 610 (NAME "repos" "'") ())
+        (INOP 610
+          (NAME "\setminus" "")
+          (REF 610 (NAME "repos" "") ())
+          (EXT 610
+            (LIST
+              (TUPLE 610
+                (LIST
+                  (REF 610 (NAME "org" "?") ())
+                  (REF 610 (NAME "repo" "?") ())))))))
+      (EQUAL 612
+        (REF 612 (NAME "orgs" "'") ())
+        (REF 612 (NAME "orgs" "") ()))
+      (EQUAL 613
+        (REF 613 (NAME "members" "'") ())
+        (REF 613 (NAME "members" "") ()))
+      (EQUAL 614
+        (REF 614 (NAME "machines" "'") ())
+        (REF 614 (NAME "machines" "") ()))
+      (EQUAL 615
+        (REF 615 (NAME "clones" "'") ())
+        (REF 615 (NAME "clones" "") ()))
+      (EQUAL 616
+        (REF 616 (NAME "sessions" "'") ())
+        (REF 616 (NAME "sessions" "") ()))
+      (EQUAL 617
+        (REF 617 (NAME "smach" "'") ())
+        (REF 617 (NAME "smach" "") ()))
+      (EQUAL 618
+        (REF 618 (NAME "srepo" "'") ())
+        (REF 618 (NAME "srepo" "") ()))
+      (EQUAL 619
+        (REF 619 (NAME "sbranch" "'") ())
+        (REF 619 (NAME "sbranch" "") ()))
+      (EQUAL 620
+        (REF 620 (NAME "soper" "'") ())
+        (REF 620 (NAME "soper" "") ()))
+      (EQUAL 621
+        (REF 621 (NAME "processes" "'") ())
+        (REF 621 (NAME "processes" "") ()))
+      (EQUAL 622
+        (REF 622 (NAME "psess" "'") ())
+        (REF 622 (NAME "psess" "") ()))
+      (EQUAL 623
+        (REF 623 (NAME "pkind" "'") ())
+        (REF 623 (NAME "pkind" "") ()))
+      (EQUAL 624
+        (REF 624 (NAME "pname" "'") ())
+        (REF 624 (NAME "pname" "") ()))
+      (EQUAL 625
+        (REF 625 (NAME "ppar" "'") ())
+        (REF 625 (NAME "ppar" "") ())))))
+
+(SDEF 638
+  (SHEAD 638
+    "AddMachine"
+    ())
+  (BODY 639
+    (LIST
+      (SDECL 639
+        (SREF 639 "\Delta BiffWorld" "" () ()))
+      (DECL 640
+        (LIST
+          (NAME "m" "?"))
+        (REF 640 (NAME "HOST" "") ())))
+    (LIST
+      (INREL 642
+        (NAME "\notin" "")
+        (REF 642 (NAME "m" "?") ())
+        (REF 642 (NAME "machines" "") ()))
+      (EQUAL 644
+        (REF 644 (NAME "machines" "'") ())
+        (INOP 644
+          (NAME "\cup" "")
+          (REF 644 (NAME "machines" "") ())
+          (EXT 644
+            (LIST
+              (REF 644 (NAME "m" "?") ())))))
+      (EQUAL 646
+        (REF 646 (NAME "orgs" "'") ())
+        (REF 646 (NAME "orgs" "") ()))
+      (EQUAL 647
+        (REF 647 (NAME "repos" "'") ())
+        (REF 647 (NAME "repos" "") ()))
+      (EQUAL 648
+        (REF 648 (NAME "members" "'") ())
+        (REF 648 (NAME "members" "") ()))
+      (EQUAL 649
+        (REF 649 (NAME "clones" "'") ())
+        (REF 649 (NAME "clones" "") ()))
+      (EQUAL 650
+        (REF 650 (NAME "sessions" "'") ())
+        (REF 650 (NAME "sessions" "") ()))
+      (EQUAL 651
+        (REF 651 (NAME "smach" "'") ())
+        (REF 651 (NAME "smach" "") ()))
+      (EQUAL 652
+        (REF 652 (NAME "srepo" "'") ())
+        (REF 652 (NAME "srepo" "") ()))
+      (EQUAL 653
+        (REF 653 (NAME "sbranch" "'") ())
+        (REF 653 (NAME "sbranch" "") ()))
+      (EQUAL 654
+        (REF 654 (NAME "soper" "'") ())
+        (REF 654 (NAME "soper" "") ()))
+      (EQUAL 655
+        (REF 655 (NAME "processes" "'") ())
+        (REF 655 (NAME "processes" "") ()))
+      (EQUAL 656
+        (REF 656 (NAME "psess" "'") ())
+        (REF 656 (NAME "psess" "") ()))
+      (EQUAL 657
+        (REF 657 (NAME "pkind" "'") ())
+        (REF 657 (NAME "pkind" "") ()))
+      (EQUAL 658
+        (REF 658 (NAME "pname" "'") ())
+        (REF 658 (NAME "pname" "") ()))
+      (EQUAL 659
+        (REF 659 (NAME "ppar" "'") ())
+        (REF 659 (NAME "ppar" "") ())))))
+
+(SDEF 668
+  (SHEAD 668
+    "RemoveMachine"
+    ())
+  (BODY 669
+    (LIST
+      (SDECL 669
+        (SREF 669 "\Delta BiffWorld" "" () ()))
+      (DECL 670
+        (LIST
+          (NAME "m" "?"))
+        (REF 670 (NAME "HOST" "") ())))
+    (LIST
+      (MEMBER 672
+        (REF 672 (NAME "m" "?") ())
+        (REF 672 (NAME "machines" "") ()))
+      (EQUAL 673
+        (INOP 673
+          (NAME "\dres" "")
+          (EXT 673
+            (LIST
+              (REF 673 (NAME "m" "?") ())))
+          (REF 673 (NAME "clones" "") ()))
+        (REF 673 (NAME "\emptyset" "") ()))
+      (EQUAL 675
+        (REF 675 (NAME "machines" "'") ())
+        (INOP 675
+          (NAME "\setminus" "")
+          (REF 675 (NAME "machines" "") ())
+          (EXT 675
+            (LIST
+              (REF 675 (NAME "m" "?") ())))))
+      (EQUAL 677
+        (REF 677 (NAME "orgs" "'") ())
+        (REF 677 (NAME "orgs" "") ()))
+      (EQUAL 678
+        (REF 678 (NAME "repos" "'") ())
+        (REF 678 (NAME "repos" "") ()))
+      (EQUAL 679
+        (REF 679 (NAME "members" "'") ())
+        (REF 679 (NAME "members" "") ()))
+      (EQUAL 680
+        (REF 680 (NAME "clones" "'") ())
+        (REF 680 (NAME "clones" "") ()))
+      (EQUAL 681
+        (REF 681 (NAME "sessions" "'") ())
+        (REF 681 (NAME "sessions" "") ()))
+      (EQUAL 682
+        (REF 682 (NAME "smach" "'") ())
+        (REF 682 (NAME "smach" "") ()))
+      (EQUAL 683
+        (REF 683 (NAME "srepo" "'") ())
+        (REF 683 (NAME "srepo" "") ()))
+      (EQUAL 684
+        (REF 684 (NAME "sbranch" "'") ())
+        (REF 684 (NAME "sbranch" "") ()))
+      (EQUAL 685
+        (REF 685 (NAME "soper" "'") ())
+        (REF 685 (NAME "soper" "") ()))
+      (EQUAL 686
+        (REF 686 (NAME "processes" "'") ())
+        (REF 686 (NAME "processes" "") ()))
+      (EQUAL 687
+        (REF 687 (NAME "psess" "'") ())
+        (REF 687 (NAME "psess" "") ()))
+      (EQUAL 688
+        (REF 688 (NAME "pkind" "'") ())
+        (REF 688 (NAME "pkind" "") ()))
+      (EQUAL 689
+        (REF 689 (NAME "pname" "'") ())
+        (REF 689 (NAME "pname" "") ()))
+      (EQUAL 690
+        (REF 690 (NAME "ppar" "'") ())
+        (REF 690 (NAME "ppar" "") ())))))
+
+(SDEF 706
+  (SHEAD 706
+    "AddClone"
+    ())
+  (BODY 707
+    (LIST
+      (SDECL 707
+        (SREF 707 "\Delta BiffWorld" "" () ()))
+      (DECL 708
+        (LIST
+          (NAME "m" "?"))
+        (REF 708 (NAME "HOST" "") ()))
+      (DECL 709
+        (LIST
+          (NAME "org" "?"))
+        (REF 709 (NAME "NAME" "") ()))
+      (DECL 710
+        (LIST
+          (NAME "repo" "?"))
+        (REF 710 (NAME "NAME" "") ())))
+    (LIST
+      (MEMBER 712
+        (REF 712 (NAME "m" "?") ())
+        (REF 712 (NAME "machines" "") ()))
+      (MEMBER 713
+        (TUPLE 713
+          (LIST
+            (REF 713 (NAME "org" "?") ())
+            (REF 713 (NAME "repo" "?") ())))
+        (REF 713 (NAME "repos" "") ()))
+      (INREL 714
+        (NAME "\notin" "")
+        (TUPLE 714
+          (LIST
+            (REF 714 (NAME "m" "?") ())
+            (TUPLE 714
+              (LIST
+                (REF 714 (NAME "org" "?") ())
+                (REF 714 (NAME "repo" "?") ())))))
+        (REF 714 (NAME "clones" "") ()))
+      (EQUAL 716
+        (REF 716 (NAME "clones" "'") ())
+        (INOP 716
+          (NAME "\cup" "")
+          (REF 716 (NAME "clones" "") ())
+          (EXT 716
+            (LIST
+              (TUPLE 716
+                (LIST
+                  (REF 716 (NAME "m" "?") ())
+                  (TUPLE 716
+                    (LIST
+                      (REF 716 (NAME "org" "?") ())
+                      (REF 716 (NAME "repo" "?") ())))))))))
+      (EQUAL 718
+        (REF 718 (NAME "orgs" "'") ())
+        (REF 718 (NAME "orgs" "") ()))
+      (EQUAL 719
+        (REF 719 (NAME "repos" "'") ())
+        (REF 719 (NAME "repos" "") ()))
+      (EQUAL 720
+        (REF 720 (NAME "members" "'") ())
+        (REF 720 (NAME "members" "") ()))
+      (EQUAL 721
+        (REF 721 (NAME "machines" "'") ())
+        (REF 721 (NAME "machines" "") ()))
+      (EQUAL 722
+        (REF 722 (NAME "sessions" "'") ())
+        (REF 722 (NAME "sessions" "") ()))
+      (EQUAL 723
+        (REF 723 (NAME "smach" "'") ())
+        (REF 723 (NAME "smach" "") ()))
+      (EQUAL 724
+        (REF 724 (NAME "srepo" "'") ())
+        (REF 724 (NAME "srepo" "") ()))
+      (EQUAL 725
+        (REF 725 (NAME "sbranch" "'") ())
+        (REF 725 (NAME "sbranch" "") ()))
+      (EQUAL 726
+        (REF 726 (NAME "soper" "'") ())
+        (REF 726 (NAME "soper" "") ()))
+      (EQUAL 727
+        (REF 727 (NAME "processes" "'") ())
+        (REF 727 (NAME "processes" "") ()))
+      (EQUAL 728
+        (REF 728 (NAME "psess" "'") ())
+        (REF 728 (NAME "psess" "") ()))
+      (EQUAL 729
+        (REF 729 (NAME "pkind" "'") ())
+        (REF 729 (NAME "pkind" "") ()))
+      (EQUAL 730
+        (REF 730 (NAME "pname" "'") ())
+        (REF 730 (NAME "pname" "") ()))
+      (EQUAL 731
+        (REF 731 (NAME "ppar" "'") ())
+        (REF 731 (NAME "ppar" "") ())))))
+
+(SDEF 741
+  (SHEAD 741
+    "RemoveClone"
+    ())
+  (BODY 742
+    (LIST
+      (SDECL 742
+        (SREF 742 "\Delta BiffWorld" "" () ()))
+      (DECL 743
+        (LIST
+          (NAME "m" "?"))
+        (REF 743 (NAME "HOST" "") ()))
+      (DECL 744
+        (LIST
+          (NAME "org" "?"))
+        (REF 744 (NAME "NAME" "") ()))
+      (DECL 745
+        (LIST
+          (NAME "repo" "?"))
+        (REF 745 (NAME "NAME" "") ())))
+    (LIST
+      (MEMBER 747
+        (TUPLE 747
+          (LIST
+            (REF 747 (NAME "m" "?") ())
+            (TUPLE 747
+              (LIST
+                (REF 747 (NAME "org" "?") ())
+                (REF 747 (NAME "repo" "?") ())))))
+        (REF 747 (NAME "clones" "") ()))
+      (NOT 748
+        (EXISTS 748
+          (BODY 748
+            (LIST
+              (DECL 748
+                (LIST
+                  (NAME "s" ""))
+                (REF 748 (NAME "sessions" "") ())))
+            ())
+          (AND 749
+            (EQUAL 749
+              (APPLY 749
+                (REF 749 (NAME "smach" "") ())
+                (REF 749 (NAME "s" "") ()))
+              (REF 749 (NAME "m" "?") ()))
+            (EQUAL 749
+              (APPLY 749
+                (REF 749 (NAME "srepo" "") ())
+                (REF 749 (NAME "s" "") ()))
+              (TUPLE 749
+                (LIST
+                  (REF 749 (NAME "org" "?") ())
+                  (REF 749 (NAME "repo" "?") ())))))))
+      (EQUAL 751
+        (REF 751 (NAME "clones" "'") ())
+        (INOP 751
+          (NAME "\setminus" "")
+          (REF 751 (NAME "clones" "") ())
+          (EXT 751
+            (LIST
+              (TUPLE 751
+                (LIST
+                  (REF 751 (NAME "m" "?") ())
+                  (TUPLE 751
+                    (LIST
+                      (REF 751 (NAME "org" "?") ())
+                      (REF 751 (NAME "repo" "?") ())))))))))
+      (EQUAL 753
+        (REF 753 (NAME "orgs" "'") ())
+        (REF 753 (NAME "orgs" "") ()))
+      (EQUAL 754
+        (REF 754 (NAME "repos" "'") ())
+        (REF 754 (NAME "repos" "") ()))
+      (EQUAL 755
+        (REF 755 (NAME "members" "'") ())
+        (REF 755 (NAME "members" "") ()))
+      (EQUAL 756
+        (REF 756 (NAME "machines" "'") ())
+        (REF 756 (NAME "machines" "") ()))
+      (EQUAL 757
+        (REF 757 (NAME "sessions" "'") ())
+        (REF 757 (NAME "sessions" "") ()))
+      (EQUAL 758
+        (REF 758 (NAME "smach" "'") ())
+        (REF 758 (NAME "smach" "") ()))
+      (EQUAL 759
+        (REF 759 (NAME "srepo" "'") ())
+        (REF 759 (NAME "srepo" "") ()))
+      (EQUAL 760
+        (REF 760 (NAME "sbranch" "'") ())
+        (REF 760 (NAME "sbranch" "") ()))
+      (EQUAL 761
+        (REF 761 (NAME "soper" "'") ())
+        (REF 761 (NAME "soper" "") ()))
+      (EQUAL 762
+        (REF 762 (NAME "processes" "'") ())
+        (REF 762 (NAME "processes" "") ()))
+      (EQUAL 763
+        (REF 763 (NAME "psess" "'") ())
+        (REF 763 (NAME "psess" "") ()))
+      (EQUAL 764
+        (REF 764 (NAME "pkind" "'") ())
+        (REF 764 (NAME "pkind" "") ()))
+      (EQUAL 765
+        (REF 765 (NAME "pname" "'") ())
+        (REF 765 (NAME "pname" "") ()))
+      (EQUAL 766
+        (REF 766 (NAME "ppar" "'") ())
+        (REF 766 (NAME "ppar" "") ())))))
+
+(SDEF 782
+  (SHEAD 782
+    "AddMember"
+    ())
+  (BODY 783
+    (LIST
+      (SDECL 783
+        (SREF 783 "\Delta BiffWorld" "" () ()))
+      (DECL 784
+        (LIST
+          (NAME "org" "?"))
+        (REF 784 (NAME "NAME" "") ()))
+      (DECL 785
+        (LIST
+          (NAME "user" "?"))
+        (REF 785 (NAME "NAME" "") ())))
+    (LIST
+      (MEMBER 787
+        (REF 787 (NAME "org" "?") ())
+        (REF 787 (NAME "orgs" "") ()))
+      (INREL 788
+        (NAME "\notin" "")
+        (TUPLE 788
+          (LIST
+            (REF 788 (NAME "org" "?") ())
+            (REF 788 (NAME "user" "?") ())))
+        (REF 788 (NAME "members" "") ()))
+      (EQUAL 790
+        (REF 790 (NAME "members" "'") ())
+        (INOP 790
+          (NAME "\cup" "")
+          (REF 790 (NAME "members" "") ())
+          (EXT 790
+            (LIST
+              (TUPLE 790
+                (LIST
+                  (REF 790 (NAME "org" "?") ())
+                  (REF 790 (NAME "user" "?") ())))))))
+      (EQUAL 792
+        (REF 792 (NAME "orgs" "'") ())
+        (REF 792 (NAME "orgs" "") ()))
+      (EQUAL 793
+        (REF 793 (NAME "repos" "'") ())
+        (REF 793 (NAME "repos" "") ()))
+      (EQUAL 794
+        (REF 794 (NAME "machines" "'") ())
+        (REF 794 (NAME "machines" "") ()))
+      (EQUAL 795
+        (REF 795 (NAME "clones" "'") ())
+        (REF 795 (NAME "clones" "") ()))
+      (EQUAL 796
+        (REF 796 (NAME "sessions" "'") ())
+        (REF 796 (NAME "sessions" "") ()))
+      (EQUAL 797
+        (REF 797 (NAME "smach" "'") ())
+        (REF 797 (NAME "smach" "") ()))
+      (EQUAL 798
+        (REF 798 (NAME "srepo" "'") ())
+        (REF 798 (NAME "srepo" "") ()))
+      (EQUAL 799
+        (REF 799 (NAME "sbranch" "'") ())
+        (REF 799 (NAME "sbranch" "") ()))
+      (EQUAL 800
+        (REF 800 (NAME "soper" "'") ())
+        (REF 800 (NAME "soper" "") ()))
+      (EQUAL 801
+        (REF 801 (NAME "processes" "'") ())
+        (REF 801 (NAME "processes" "") ()))
+      (EQUAL 802
+        (REF 802 (NAME "psess" "'") ())
+        (REF 802 (NAME "psess" "") ()))
+      (EQUAL 803
+        (REF 803 (NAME "pkind" "'") ())
+        (REF 803 (NAME "pkind" "") ()))
+      (EQUAL 804
+        (REF 804 (NAME "pname" "'") ())
+        (REF 804 (NAME "pname" "") ()))
+      (EQUAL 805
+        (REF 805 (NAME "ppar" "'") ())
+        (REF 805 (NAME "ppar" "") ())))))
+
+(SDEF 815
+  (SHEAD 815
+    "RemoveMember"
+    ())
+  (BODY 816
+    (LIST
+      (SDECL 816
+        (SREF 816 "\Delta BiffWorld" "" () ()))
+      (DECL 817
+        (LIST
+          (NAME "org" "?"))
+        (REF 817 (NAME "NAME" "") ()))
+      (DECL 818
+        (LIST
+          (NAME "user" "?"))
+        (REF 818 (NAME "NAME" "") ())))
+    (LIST
+      (MEMBER 820
+        (TUPLE 820
+          (LIST
+            (REF 820 (NAME "org" "?") ())
+            (REF 820 (NAME "user" "?") ())))
+        (REF 820 (NAME "members" "") ()))
+      (NOT 821
+        (EXISTS 821
+          (BODY 821
+            (LIST
+              (DECL 821
+                (LIST
+                  (NAME "s" ""))
+                (APPLY 821
+                  (REF 821 (NAME "\dom" "") ())
+                  (REF 821 (NAME "soper" "") ()))))
+            ())
+          (AND 822
+            (EQUAL 822
+              (APPLY 822
+                (REF 822 (NAME "first" "") ())
+                (APPLY 822
+                  (REF 822 (NAME "srepo" "") ())
+                  (REF 822 (NAME "s" "") ())))
+              (REF 822 (NAME "org" "?") ()))
+            (EQUAL 822
+              (APPLY 822
+                (REF 822 (NAME "soper" "") ())
+                (REF 822 (NAME "s" "") ()))
+              (REF 822 (NAME "user" "?") ())))))
+      (EQUAL 824
+        (REF 824 (NAME "members" "'") ())
+        (INOP 824
+          (NAME "\setminus" "")
+          (REF 824 (NAME "members" "") ())
+          (EXT 824
+            (LIST
+              (TUPLE 824
+                (LIST
+                  (REF 824 (NAME "org" "?") ())
+                  (REF 824 (NAME "user" "?") ())))))))
+      (EQUAL 826
+        (REF 826 (NAME "orgs" "'") ())
+        (REF 826 (NAME "orgs" "") ()))
+      (EQUAL 827
+        (REF 827 (NAME "repos" "'") ())
+        (REF 827 (NAME "repos" "") ()))
+      (EQUAL 828
+        (REF 828 (NAME "machines" "'") ())
+        (REF 828 (NAME "machines" "") ()))
+      (EQUAL 829
+        (REF 829 (NAME "clones" "'") ())
+        (REF 829 (NAME "clones" "") ()))
+      (EQUAL 830
+        (REF 830 (NAME "sessions" "'") ())
+        (REF 830 (NAME "sessions" "") ()))
+      (EQUAL 831
+        (REF 831 (NAME "smach" "'") ())
+        (REF 831 (NAME "smach" "") ()))
+      (EQUAL 832
+        (REF 832 (NAME "srepo" "'") ())
+        (REF 832 (NAME "srepo" "") ()))
+      (EQUAL 833
+        (REF 833 (NAME "sbranch" "'") ())
+        (REF 833 (NAME "sbranch" "") ()))
+      (EQUAL 834
+        (REF 834 (NAME "soper" "'") ())
+        (REF 834 (NAME "soper" "") ()))
+      (EQUAL 835
+        (REF 835 (NAME "processes" "'") ())
+        (REF 835 (NAME "processes" "") ()))
+      (EQUAL 836
+        (REF 836 (NAME "psess" "'") ())
+        (REF 836 (NAME "psess" "") ()))
+      (EQUAL 837
+        (REF 837 (NAME "pkind" "'") ())
+        (REF 837 (NAME "pkind" "") ()))
+      (EQUAL 838
+        (REF 838 (NAME "pname" "'") ())
+        (REF 838 (NAME "pname" "") ()))
+      (EQUAL 839
+        (REF 839 (NAME "ppar" "'") ())
+        (REF 839 (NAME "ppar" "") ())))))
+
+(SDEF 857
+  (SHEAD 857
+    "OpenSession"
+    ())
+  (BODY 858
+    (LIST
+      (SDECL 858
+        (SREF 858 "\Delta BiffWorld" "" () ()))
+      (DECL 859
+        (LIST
+          (NAME "s" "?"))
+        (REF 859 (NAME "SESSION" "") ()))
+      (DECL 860
+        (LIST
+          (NAME "m" "?"))
+        (REF 860 (NAME "HOST" "") ()))
+      (DECL 861
+        (LIST
+          (NAME "org" "?"))
+        (REF 861 (NAME "NAME" "") ()))
+      (DECL 862
+        (LIST
+          (NAME "repo" "?"))
+        (REF 862 (NAME "NAME" "") ()))
+      (DECL 863
+        (LIST
+          (NAME "branch" "?"))
+        (REF 863 (NAME "NAME" "") ()))
+      (DECL 864
+        (LIST
+          (NAME "oper" "?"))
+        (REF 864 (NAME "NAME" "") ())))
+    (LIST
+      (INREL 866
+        (NAME "\notin" "")
+        (REF 866 (NAME "s" "?") ())
+        (REF 866 (NAME "sessions" "") ()))
+      (MEMBER 867
+        (TUPLE 867
+          (LIST
+            (REF 867 (NAME "m" "?") ())
+            (TUPLE 867
+              (LIST
+                (REF 867 (NAME "org" "?") ())
+                (REF 867 (NAME "repo" "?") ())))))
+        (REF 867 (NAME "clones" "") ()))
+      (MEMBER 868
+        (TUPLE 868
+          (LIST
+            (REF 868 (NAME "org" "?") ())
+            (REF 868 (NAME "oper" "?") ())))
+        (REF 868 (NAME "members" "") ()))
+      (EQUAL 870
+        (REF 870 (NAME "sessions" "'") ())
+        (INOP 870
+          (NAME "\cup" "")
+          (REF 870 (NAME "sessions" "") ())
+          (EXT 870
+            (LIST
+              (REF 870 (NAME "s" "?") ())))))
+      (EQUAL 871
+        (REF 871 (NAME "smach" "'") ())
+        (INOP 871
+          (NAME "\cup" "")
+          (REF 871 (NAME "smach" "") ())
+          (EXT 871
+            (LIST
+              (INOP 871
+                (NAME "\mapsto" "")
+                (REF 871 (NAME "s" "?") ())
+                (REF 871 (NAME "m" "?") ()))))))
+      (EQUAL 872
+        (REF 872 (NAME "srepo" "'") ())
+        (INOP 872
+          (NAME "\cup" "")
+          (REF 872 (NAME "srepo" "") ())
+          (EXT 872
+            (LIST
+              (INOP 872
+                (NAME "\mapsto" "")
+                (REF 872 (NAME "s" "?") ())
+                (TUPLE 872
+                  (LIST
+                    (REF 872 (NAME "org" "?") ())
+                    (REF 872 (NAME "repo" "?") ()))))))))
+      (EQUAL 873
+        (REF 873 (NAME "sbranch" "'") ())
+        (INOP 873
+          (NAME "\cup" "")
+          (REF 873 (NAME "sbranch" "") ())
+          (EXT 873
+            (LIST
+              (INOP 873
+                (NAME "\mapsto" "")
+                (REF 873 (NAME "s" "?") ())
+                (REF 873 (NAME "branch" "?") ()))))))
+      (EQUAL 874
+        (REF 874 (NAME "soper" "'") ())
+        (INOP 874
+          (NAME "\cup" "")
+          (REF 874 (NAME "soper" "") ())
+          (EXT 874
+            (LIST
+              (INOP 874
+                (NAME "\mapsto" "")
+                (REF 874 (NAME "s" "?") ())
+                (REF 874 (NAME "oper" "?") ()))))))
+      (EQUAL 876
+        (REF 876 (NAME "orgs" "'") ())
+        (REF 876 (NAME "orgs" "") ()))
+      (EQUAL 877
+        (REF 877 (NAME "repos" "'") ())
+        (REF 877 (NAME "repos" "") ()))
+      (EQUAL 878
+        (REF 878 (NAME "members" "'") ())
+        (REF 878 (NAME "members" "") ()))
+      (EQUAL 879
+        (REF 879 (NAME "machines" "'") ())
+        (REF 879 (NAME "machines" "") ()))
+      (EQUAL 880
+        (REF 880 (NAME "clones" "'") ())
+        (REF 880 (NAME "clones" "") ()))
+      (EQUAL 881
+        (REF 881 (NAME "processes" "'") ())
+        (REF 881 (NAME "processes" "") ()))
+      (EQUAL 882
+        (REF 882 (NAME "psess" "'") ())
+        (REF 882 (NAME "psess" "") ()))
+      (EQUAL 883
+        (REF 883 (NAME "pkind" "'") ())
+        (REF 883 (NAME "pkind" "") ()))
+      (EQUAL 884
+        (REF 884 (NAME "pname" "'") ())
+        (REF 884 (NAME "pname" "") ()))
+      (EQUAL 885
+        (REF 885 (NAME "ppar" "'") ())
+        (REF 885 (NAME "ppar" "") ())))))
+
+(SDEF 895
+  (SHEAD 895
+    "OpenHeadlessSession"
+    ())
+  (BODY 896
+    (LIST
+      (SDECL 896
+        (SREF 896 "\Delta BiffWorld" "" () ()))
+      (DECL 897
+        (LIST
+          (NAME "s" "?"))
+        (REF 897 (NAME "SESSION" "") ()))
+      (DECL 898
+        (LIST
+          (NAME "m" "?"))
+        (REF 898 (NAME "HOST" "") ()))
+      (DECL 899
+        (LIST
+          (NAME "org" "?"))
+        (REF 899 (NAME "NAME" "") ()))
+      (DECL 900
+        (LIST
+          (NAME "repo" "?"))
+        (REF 900 (NAME "NAME" "") ()))
+      (DECL 901
+        (LIST
+          (NAME "branch" "?"))
+        (REF 901 (NAME "NAME" "") ())))
+    (LIST
+      (INREL 903
+        (NAME "\notin" "")
+        (REF 903 (NAME "s" "?") ())
+        (REF 903 (NAME "sessions" "") ()))
+      (MEMBER 904
+        (TUPLE 904
+          (LIST
+            (REF 904 (NAME "m" "?") ())
+            (TUPLE 904
+              (LIST
+                (REF 904 (NAME "org" "?") ())
+                (REF 904 (NAME "repo" "?") ())))))
+        (REF 904 (NAME "clones" "") ()))
+      (EQUAL 906
+        (REF 906 (NAME "sessions" "'") ())
+        (INOP 906
+          (NAME "\cup" "")
+          (REF 906 (NAME "sessions" "") ())
+          (EXT 906
+            (LIST
+              (REF 906 (NAME "s" "?") ())))))
+      (EQUAL 907
+        (REF 907 (NAME "smach" "'") ())
+        (INOP 907
+          (NAME "\cup" "")
+          (REF 907 (NAME "smach" "") ())
+          (EXT 907
+            (LIST
+              (INOP 907
+                (NAME "\mapsto" "")
+                (REF 907 (NAME "s" "?") ())
+                (REF 907 (NAME "m" "?") ()))))))
+      (EQUAL 908
+        (REF 908 (NAME "srepo" "'") ())
+        (INOP 908
+          (NAME "\cup" "")
+          (REF 908 (NAME "srepo" "") ())
+          (EXT 908
+            (LIST
+              (INOP 908
+                (NAME "\mapsto" "")
+                (REF 908 (NAME "s" "?") ())
+                (TUPLE 908
+                  (LIST
+                    (REF 908 (NAME "org" "?") ())
+                    (REF 908 (NAME "repo" "?") ()))))))))
+      (EQUAL 909
+        (REF 909 (NAME "sbranch" "'") ())
+        (INOP 909
+          (NAME "\cup" "")
+          (REF 909 (NAME "sbranch" "") ())
+          (EXT 909
+            (LIST
+              (INOP 909
+                (NAME "\mapsto" "")
+                (REF 909 (NAME "s" "?") ())
+                (REF 909 (NAME "branch" "?") ()))))))
+      (EQUAL 910
+        (REF 910 (NAME "soper" "'") ())
+        (REF 910 (NAME "soper" "") ()))
+      (EQUAL 912
+        (REF 912 (NAME "orgs" "'") ())
+        (REF 912 (NAME "orgs" "") ()))
+      (EQUAL 913
+        (REF 913 (NAME "repos" "'") ())
+        (REF 913 (NAME "repos" "") ()))
+      (EQUAL 914
+        (REF 914 (NAME "members" "'") ())
+        (REF 914 (NAME "members" "") ()))
+      (EQUAL 915
+        (REF 915 (NAME "machines" "'") ())
+        (REF 915 (NAME "machines" "") ()))
+      (EQUAL 916
+        (REF 916 (NAME "clones" "'") ())
+        (REF 916 (NAME "clones" "") ()))
+      (EQUAL 917
+        (REF 917 (NAME "processes" "'") ())
+        (REF 917 (NAME "processes" "") ()))
+      (EQUAL 918
+        (REF 918 (NAME "psess" "'") ())
+        (REF 918 (NAME "psess" "") ()))
+      (EQUAL 919
+        (REF 919 (NAME "pkind" "'") ())
+        (REF 919 (NAME "pkind" "") ()))
+      (EQUAL 920
+        (REF 920 (NAME "pname" "'") ())
+        (REF 920 (NAME "pname" "") ()))
+      (EQUAL 921
+        (REF 921 (NAME "ppar" "'") ())
+        (REF 921 (NAME "ppar" "") ())))))
+
+(SDEF 0
+  (SHEAD 0
+    "\Delta RouteWorld"
+    ())
+  (BODY 0
+    (LIST
+      (SDECL 0
+        (SREF 0 "RouteWorld" "" () ()))
+      (SDECL 0
+        (SREF 0 "RouteWorld" "'" () ())))
+    ()))
+
+(SDEF 0
+  (SHEAD 0
+    "\Xi DaemonSide"
+    ())
+  (BODY 0
+    (LIST
+      (SDECL 0
+        (SREF 0 "DaemonSide" "" () ()))
+      (SDECL 0
+        (SREF 0 "DaemonSide" "'" () ())))
+    (LIST
+      (EQUAL 0
+        (THETA 0
+          "DaemonSide"
+          ""
+          ())
+        (THETA 0
+          "DaemonSide"
+          "'"
+          ())))))
+
+(SDEF 937
+  (SHEAD 937
+    "CloseSession"
+    ())
+  (BODY 938
+    (LIST
+      (SDECL 938
+        (SREF 938 "\Delta RouteWorld" "" () ()))
+      (SDECL 939
+        (SREF 939 "\Xi DaemonSide" "" () ()))
+      (DECL 940
+        (LIST
+          (NAME "s" "?"))
+        (REF 940 (NAME "SESSION" "") ())))
+    (LIST
+      (MEMBER 942
+        (REF 942 (NAME "s" "?") ())
+        (REF 942 (NAME "sessions" "") ()))
+      (INREL 943
+        (NAME "\notin" "")
+        (REF 943 (NAME "s" "?") ())
+        (APPLY 943
+          (REF 943 (NAME "\ran" "") ())
+          (REF 943 (NAME "psess" "") ())))
+      (INREL 944
+        (NAME "\notin" "")
+        (REF 944 (NAME "s" "?") ())
+        (REF 944 (NAME "entries" "") ()))
+      (INREL 945
+        (NAME "\notin" "")
+        (REF 945 (NAME "s" "?") ())
+        (REF 945 (NAME "known" "") ()))
+      (EQUAL 947
+        (REF 947 (NAME "sessions" "'") ())
+        (INOP 947
+          (NAME "\setminus" "")
+          (REF 947 (NAME "sessions" "") ())
+          (EXT 947
+            (LIST
+              (REF 947 (NAME "s" "?") ())))))
+      (EQUAL 948
+        (REF 948 (NAME "smach" "'") ())
+        (INOP 948
+          (NAME "\dres" "")
+          (REF 948 (NAME "sessions" "'") ())
+          (REF 948 (NAME "smach" "") ())))
+      (EQUAL 949
+        (REF 949 (NAME "srepo" "'") ())
+        (INOP 949
+          (NAME "\dres" "")
+          (REF 949 (NAME "sessions" "'") ())
+          (REF 949 (NAME "srepo" "") ())))
+      (EQUAL 950
+        (REF 950 (NAME "sbranch" "'") ())
+        (INOP 950
+          (NAME "\dres" "")
+          (REF 950 (NAME "sessions" "'") ())
+          (REF 950 (NAME "sbranch" "") ())))
+      (EQUAL 951
+        (REF 951 (NAME "soper" "'") ())
+        (INOP 951
+          (NAME "\dres" "")
+          (REF 951 (NAME "sessions" "'") ())
+          (REF 951 (NAME "soper" "") ())))
+      (EQUAL 953
+        (REF 953 (NAME "orgs" "'") ())
+        (REF 953 (NAME "orgs" "") ()))
+      (EQUAL 954
+        (REF 954 (NAME "repos" "'") ())
+        (REF 954 (NAME "repos" "") ()))
+      (EQUAL 955
+        (REF 955 (NAME "members" "'") ())
+        (REF 955 (NAME "members" "") ()))
+      (EQUAL 956
+        (REF 956 (NAME "machines" "'") ())
+        (REF 956 (NAME "machines" "") ()))
+      (EQUAL 957
+        (REF 957 (NAME "clones" "'") ())
+        (REF 957 (NAME "clones" "") ()))
+      (EQUAL 958
+        (REF 958 (NAME "processes" "'") ())
+        (REF 958 (NAME "processes" "") ()))
+      (EQUAL 959
+        (REF 959 (NAME "psess" "'") ())
+        (REF 959 (NAME "psess" "") ()))
+      (EQUAL 960
+        (REF 960 (NAME "pkind" "'") ())
+        (REF 960 (NAME "pkind" "") ()))
+      (EQUAL 961
+        (REF 961 (NAME "pname" "'") ())
+        (REF 961 (NAME "pname" "") ()))
+      (EQUAL 962
+        (REF 962 (NAME "ppar" "'") ())
+        (REF 962 (NAME "ppar" "") ()))
+      (EQUAL 963
+        (REF 963 (NAME "entries" "'") ())
+        (REF 963 (NAME "entries" "") ()))
+      (EQUAL 964
+        (REF 964 (NAME "ttyalias" "'") ())
+        (REF 964 (NAME "ttyalias" "") ()))
+      (EQUAL 965
+        (REF 965 (NAME "savedalias" "'") ())
+        (REF 965 (NAME "savedalias" "") ()))
+      (EQUAL 966
+        (REF 966 (NAME "abind" "'") ())
+        (REF 966 (NAME "abind" "") ()))
+      (EQUAL 967
+        (REF 967 (NAME "routeMode" "'") ())
+        (REF 967 (NAME "routeMode" "") ()))
+      (EQUAL 968
+        (REF 968 (NAME "lostF" "'") ())
+        (REF 968 (NAME "lostF" "") ()))
+      (EQUAL 969
+        (REF 969 (NAME "misF" "'") ())
+        (REF 969 (NAME "misF" "") ())))))
+
+(SDEF 987
+  (SHEAD 987
+    "SpawnProcess"
+    ())
+  (BODY 988
+    (LIST
+      (SDECL 988
+        (SREF 988 "\Delta BiffWorld" "" () ()))
+      (DECL 989
+        (LIST
+          (NAME "p" "?"))
+        (REF 989 (NAME "PROCESS" "") ()))
+      (DECL 990
+        (LIST
+          (NAME "s" "?"))
+        (REF 990 (NAME "SESSION" "") ()))
+      (DECL 991
+        (LIST
+          (NAME "kind" "?"))
+        (REF 991 (NAME "KIND" "") ()))
+      (DECL 992
+        (LIST
+          (NAME "name" "?"))
+        (REF 992 (NAME "NAME" "") ())))
+    (LIST
+      (INREL 994
+        (NAME "\notin" "")
+        (REF 994 (NAME "p" "?") ())
+        (REF 994 (NAME "processes" "") ()))
+      (MEMBER 995
+        (REF 995 (NAME "s" "?") ())
+        (REF 995 (NAME "sessions" "") ()))
+      (EQUAL 997
+        (REF 997 (NAME "processes" "'") ())
+        (INOP 997
+          (NAME "\cup" "")
+          (REF 997 (NAME "processes" "") ())
+          (EXT 997
+            (LIST
+              (REF 997 (NAME "p" "?") ())))))
+      (EQUAL 998
+        (REF 998 (NAME "psess" "'") ())
+        (INOP 998
+          (NAME "\cup" "")
+          (REF 998 (NAME "psess" "") ())
+          (EXT 998
+            (LIST
+              (INOP 998
+                (NAME "\mapsto" "")
+                (REF 998 (NAME "p" "?") ())
+                (REF 998 (NAME "s" "?") ()))))))
+      (EQUAL 999
+        (REF 999 (NAME "pkind" "'") ())
+        (INOP 999
+          (NAME "\cup" "")
+          (REF 999 (NAME "pkind" "") ())
+          (EXT 999
+            (LIST
+              (INOP 999
+                (NAME "\mapsto" "")
+                (REF 999 (NAME "p" "?") ())
+                (REF 999 (NAME "kind" "?") ()))))))
+      (EQUAL 1000
+        (REF 1000 (NAME "pname" "'") ())
+        (INOP 1000
+          (NAME "\cup" "")
+          (REF 1000 (NAME "pname" "") ())
+          (EXT 1000
+            (LIST
+              (INOP 1000
+                (NAME "\mapsto" "")
+                (REF 1000 (NAME "p" "?") ())
+                (REF 1000 (NAME "name" "?") ()))))))
+      (EQUAL 1001
+        (REF 1001 (NAME "ppar" "'") ())
+        (REF 1001 (NAME "ppar" "") ()))
+      (EQUAL 1003
+        (REF 1003 (NAME "orgs" "'") ())
+        (REF 1003 (NAME "orgs" "") ()))
+      (EQUAL 1004
+        (REF 1004 (NAME "repos" "'") ())
+        (REF 1004 (NAME "repos" "") ()))
+      (EQUAL 1005
+        (REF 1005 (NAME "members" "'") ())
+        (REF 1005 (NAME "members" "") ()))
+      (EQUAL 1006
+        (REF 1006 (NAME "machines" "'") ())
+        (REF 1006 (NAME "machines" "") ()))
+      (EQUAL 1007
+        (REF 1007 (NAME "clones" "'") ())
+        (REF 1007 (NAME "clones" "") ()))
+      (EQUAL 1008
+        (REF 1008 (NAME "sessions" "'") ())
+        (REF 1008 (NAME "sessions" "") ()))
+      (EQUAL 1009
+        (REF 1009 (NAME "smach" "'") ())
+        (REF 1009 (NAME "smach" "") ()))
+      (EQUAL 1010
+        (REF 1010 (NAME "srepo" "'") ())
+        (REF 1010 (NAME "srepo" "") ()))
+      (EQUAL 1011
+        (REF 1011 (NAME "sbranch" "'") ())
+        (REF 1011 (NAME "sbranch" "") ()))
+      (EQUAL 1012
+        (REF 1012 (NAME "soper" "'") ())
+        (REF 1012 (NAME "soper" "") ())))))
+
+(SDEF 1022
+  (SHEAD 1022
+    "SpawnChild"
+    ())
+  (BODY 1023
+    (LIST
+      (SDECL 1023
+        (SREF 1023 "\Delta BiffWorld" "" () ()))
+      (DECL 1024
+        (LIST
+          (NAME "p" "?"))
+        (REF 1024 (NAME "PROCESS" "") ()))
+      (DECL 1025
+        (LIST
+          (NAME "parent" "?"))
+        (REF 1025 (NAME "PROCESS" "") ()))
+      (DECL 1026
+        (LIST
+          (NAME "kind" "?"))
+        (REF 1026 (NAME "KIND" "") ()))
+      (DECL 1027
+        (LIST
+          (NAME "name" "?"))
+        (REF 1027 (NAME "NAME" "") ())))
+    (LIST
+      (INREL 1029
+        (NAME "\notin" "")
+        (REF 1029 (NAME "p" "?") ())
+        (REF 1029 (NAME "processes" "") ()))
+      (MEMBER 1030
+        (REF 1030 (NAME "parent" "?") ())
+        (REF 1030 (NAME "processes" "") ()))
+      (EQUAL 1032
+        (REF 1032 (NAME "processes" "'") ())
+        (INOP 1032
+          (NAME "\cup" "")
+          (REF 1032 (NAME "processes" "") ())
+          (EXT 1032
+            (LIST
+              (REF 1032 (NAME "p" "?") ())))))
+      (EQUAL 1033
+        (REF 1033 (NAME "psess" "'") ())
+        (INOP 1033
+          (NAME "\cup" "")
+          (REF 1033 (NAME "psess" "") ())
+          (EXT 1033
+            (LIST
+              (INOP 1033
+                (NAME "\mapsto" "")
+                (REF 1033 (NAME "p" "?") ())
+                (APPLY 1033
+                  (REF 1033 (NAME "psess" "") ())
+                  (REF 1033 (NAME "parent" "?") ())))))))
+      (EQUAL 1034
+        (REF 1034 (NAME "pkind" "'") ())
+        (INOP 1034
+          (NAME "\cup" "")
+          (REF 1034 (NAME "pkind" "") ())
+          (EXT 1034
+            (LIST
+              (INOP 1034
+                (NAME "\mapsto" "")
+                (REF 1034 (NAME "p" "?") ())
+                (REF 1034 (NAME "kind" "?") ()))))))
+      (EQUAL 1035
+        (REF 1035 (NAME "pname" "'") ())
+        (INOP 1035
+          (NAME "\cup" "")
+          (REF 1035 (NAME "pname" "") ())
+          (EXT 1035
+            (LIST
+              (INOP 1035
+                (NAME "\mapsto" "")
+                (REF 1035 (NAME "p" "?") ())
+                (REF 1035 (NAME "name" "?") ()))))))
+      (EQUAL 1036
+        (REF 1036 (NAME "ppar" "'") ())
+        (INOP 1036
+          (NAME "\cup" "")
+          (REF 1036 (NAME "ppar" "") ())
+          (EXT 1036
+            (LIST
+              (INOP 1036
+                (NAME "\mapsto" "")
+                (REF 1036 (NAME "p" "?") ())
+                (REF 1036 (NAME "parent" "?") ()))))))
+      (EQUAL 1038
+        (REF 1038 (NAME "orgs" "'") ())
+        (REF 1038 (NAME "orgs" "") ()))
+      (EQUAL 1039
+        (REF 1039 (NAME "repos" "'") ())
+        (REF 1039 (NAME "repos" "") ()))
+      (EQUAL 1040
+        (REF 1040 (NAME "members" "'") ())
+        (REF 1040 (NAME "members" "") ()))
+      (EQUAL 1041
+        (REF 1041 (NAME "machines" "'") ())
+        (REF 1041 (NAME "machines" "") ()))
+      (EQUAL 1042
+        (REF 1042 (NAME "clones" "'") ())
+        (REF 1042 (NAME "clones" "") ()))
+      (EQUAL 1043
+        (REF 1043 (NAME "sessions" "'") ())
+        (REF 1043 (NAME "sessions" "") ()))
+      (EQUAL 1044
+        (REF 1044 (NAME "smach" "'") ())
+        (REF 1044 (NAME "smach" "") ()))
+      (EQUAL 1045
+        (REF 1045 (NAME "srepo" "'") ())
+        (REF 1045 (NAME "srepo" "") ()))
+      (EQUAL 1046
+        (REF 1046 (NAME "sbranch" "'") ())
+        (REF 1046 (NAME "sbranch" "") ()))
+      (EQUAL 1047
+        (REF 1047 (NAME "soper" "'") ())
+        (REF 1047 (NAME "soper" "") ())))))
+
+(SDEF 1056
+  (SHEAD 1056
+    "ReapProcess"
+    ())
+  (BODY 1057
+    (LIST
+      (SDECL 1057
+        (SREF 1057 "\Delta BiffWorld" "" () ()))
+      (DECL 1058
+        (LIST
+          (NAME "p" "?"))
+        (REF 1058 (NAME "PROCESS" "") ())))
+    (LIST
+      (MEMBER 1060
+        (REF 1060 (NAME "p" "?") ())
+        (REF 1060 (NAME "processes" "") ()))
+      (INREL 1061
+        (NAME "\notin" "")
+        (REF 1061 (NAME "p" "?") ())
+        (APPLY 1061
+          (REF 1061 (NAME "\ran" "") ())
+          (REF 1061 (NAME "ppar" "") ())))
+      (EQUAL 1063
+        (REF 1063 (NAME "processes" "'") ())
+        (INOP 1063
+          (NAME "\setminus" "")
+          (REF 1063 (NAME "processes" "") ())
+          (EXT 1063
+            (LIST
+              (REF 1063 (NAME "p" "?") ())))))
+      (EQUAL 1064
+        (REF 1064 (NAME "psess" "'") ())
+        (INOP 1064
+          (NAME "\dres" "")
+          (REF 1064 (NAME "processes" "'") ())
+          (REF 1064 (NAME "psess" "") ())))
+      (EQUAL 1065
+        (REF 1065 (NAME "pkind" "'") ())
+        (INOP 1065
+          (NAME "\dres" "")
+          (REF 1065 (NAME "processes" "'") ())
+          (REF 1065 (NAME "pkind" "") ())))
+      (EQUAL 1066
+        (REF 1066 (NAME "pname" "'") ())
+        (INOP 1066
+          (NAME "\dres" "")
+          (REF 1066 (NAME "processes" "'") ())
+          (REF 1066 (NAME "pname" "") ())))
+      (EQUAL 1067
+        (REF 1067 (NAME "ppar" "'") ())
+        (INOP 1067
+          (NAME "\dres" "")
+          (REF 1067 (NAME "processes" "'") ())
+          (REF 1067 (NAME "ppar" "") ())))
+      (EQUAL 1069
+        (REF 1069 (NAME "orgs" "'") ())
+        (REF 1069 (NAME "orgs" "") ()))
+      (EQUAL 1070
+        (REF 1070 (NAME "repos" "'") ())
+        (REF 1070 (NAME "repos" "") ()))
+      (EQUAL 1071
+        (REF 1071 (NAME "members" "'") ())
+        (REF 1071 (NAME "members" "") ()))
+      (EQUAL 1072
+        (REF 1072 (NAME "machines" "'") ())
+        (REF 1072 (NAME "machines" "") ()))
+      (EQUAL 1073
+        (REF 1073 (NAME "clones" "'") ())
+        (REF 1073 (NAME "clones" "") ()))
+      (EQUAL 1074
+        (REF 1074 (NAME "sessions" "'") ())
+        (REF 1074 (NAME "sessions" "") ()))
+      (EQUAL 1075
+        (REF 1075 (NAME "smach" "'") ())
+        (REF 1075 (NAME "smach" "") ()))
+      (EQUAL 1076
+        (REF 1076 (NAME "srepo" "'") ())
+        (REF 1076 (NAME "srepo" "") ()))
+      (EQUAL 1077
+        (REF 1077 (NAME "sbranch" "'") ())
+        (REF 1077 (NAME "sbranch" "") ()))
+      (EQUAL 1078
+        (REF 1078 (NAME "soper" "'") ())
+        (REF 1078 (NAME "soper" "") ())))))
+
+(SDEF 0
+  (SHEAD 0
+    "\Xi BiffWorld"
+    ())
+  (BODY 0
+    (LIST
+      (SDECL 0
+        (SREF 0 "BiffWorld" "" () ()))
+      (SDECL 0
+        (SREF 0 "BiffWorld" "'" () ())))
+    (LIST
+      (EQUAL 0
+        (THETA 0
+          "BiffWorld"
+          ""
+          ())
+        (THETA 0
+          "BiffWorld"
+          "'"
+          ())))))
+
+(SDEF 1107
+  (SHEAD 1107
+    "RegisterEntry"
+    ())
+  (BODY 1108
+    (LIST
+      (SDECL 1108
+        (SREF 1108 "\Delta RouteWorld" "" () ()))
+      (SDECL 1109
+        (SREF 1109 "\Xi BiffWorld" "" () ()))
+      (DECL 1110
+        (LIST
+          (NAME "s" "?"))
+        (REF 1110 (NAME "SESSION" "") ()))
+      (DECL 1111
+        (LIST
+          (NAME "n" "?"))
+        (REF 1111 (NAME "ALIAS" "") ())))
+    (LIST
+      (MEMBER 1113
+        (REF 1113 (NAME "s" "?") ())
+        (REF 1113 (NAME "sessions" "") ()))
+      (INREL 1114
+        (NAME "\notin" "")
+        (REF 1114 (NAME "s" "?") ())
+        (REF 1114 (NAME "entries" "") ()))
+      (INREL 1115
+        (NAME "\notin" "")
+        (REF 1115 (NAME "n" "?") ())
+        (APPLY 1115
+          (REF 1115 (NAME "\ran" "") ())
+          (REF 1115 (NAME "ttyalias" "") ())))
+      (EQUAL 1117
+        (REF 1117 (NAME "entries" "'") ())
+        (INOP 1117
+          (NAME "\cup" "")
+          (REF 1117 (NAME "entries" "") ())
+          (EXT 1117
+            (LIST
+              (REF 1117 (NAME "s" "?") ())))))
+      (EQUAL 1118
+        (REF 1118 (NAME "ttyalias" "'") ())
+        (INOP 1118
+          (NAME "\cup" "")
+          (REF 1118 (NAME "ttyalias" "") ())
+          (EXT 1118
+            (LIST
+              (INOP 1118
+                (NAME "\mapsto" "")
+                (REF 1118 (NAME "s" "?") ())
+                (REF 1118 (NAME "n" "?") ()))))))
+      (EQUAL 1119
+        (REF 1119 (NAME "savedalias" "'") ())
+        (INOP 1119
+          (NAME "\oplus" "")
+          (REF 1119 (NAME "savedalias" "") ())
+          (EXT 1119
+            (LIST
+              (INOP 1119
+                (NAME "\mapsto" "")
+                (REF 1119 (NAME "s" "?") ())
+                (REF 1119 (NAME "n" "?") ()))))))
+      (EQUAL 1121
+        (REF 1121 (NAME "abind" "'") ())
+        (REF 1121 (NAME "abind" "") ()))
+      (EQUAL 1122
+        (REF 1122 (NAME "routeMode" "'") ())
+        (REF 1122 (NAME "routeMode" "") ()))
+      (EQUAL 1123
+        (REF 1123 (NAME "lostF" "'") ())
+        (REF 1123 (NAME "lostF" "") ()))
+      (EQUAL 1124
+        (REF 1124 (NAME "misF" "'") ())
+        (REF 1124 (NAME "misF" "") ())))))
+
+(SDEF 1136
+  (SHEAD 1136
+    "SuspendEntry"
+    ())
+  (BODY 1137
+    (LIST
+      (SDECL 1137
+        (SREF 1137 "\Delta RouteWorld" "" () ()))
+      (SDECL 1138
+        (SREF 1138 "\Xi BiffWorld" "" () ()))
+      (DECL 1139
+        (LIST
+          (NAME "s" "?"))
+        (REF 1139 (NAME "SESSION" "") ())))
+    (LIST
+      (MEMBER 1141
+        (REF 1141 (NAME "s" "?") ())
+        (REF 1141 (NAME "entries" "") ()))
+      (EQUAL 1143
+        (REF 1143 (NAME "entries" "'") ())
+        (INOP 1143
+          (NAME "\setminus" "")
+          (REF 1143 (NAME "entries" "") ())
+          (EXT 1143
+            (LIST
+              (REF 1143 (NAME "s" "?") ())))))
+      (EQUAL 1144
+        (REF 1144 (NAME "ttyalias" "'") ())
+        (INOP 1144
+          (NAME "\ndres" "")
+          (EXT 1144
+            (LIST
+              (REF 1144 (NAME "s" "?") ())))
+          (REF 1144 (NAME "ttyalias" "") ())))
+      (EQUAL 1146
+        (REF 1146 (NAME "savedalias" "'") ())
+        (REF 1146 (NAME "savedalias" "") ()))
+      (EQUAL 1147
+        (REF 1147 (NAME "abind" "'") ())
+        (REF 1147 (NAME "abind" "") ()))
+      (EQUAL 1148
+        (REF 1148 (NAME "routeMode" "'") ())
+        (REF 1148 (NAME "routeMode" "") ()))
+      (EQUAL 1149
+        (REF 1149 (NAME "lostF" "'") ())
+        (REF 1149 (NAME "lostF" "") ()))
+      (EQUAL 1150
+        (REF 1150 (NAME "misF" "'") ())
+        (REF 1150 (NAME "misF" "") ())))))
+
+(SDEF 1166
+  (SHEAD 1166
+    "ResumeSession"
+    ())
+  (BODY 1167
+    (LIST
+      (SDECL 1167
+        (SREF 1167 "\Delta RouteWorld" "" () ()))
+      (SDECL 1168
+        (SREF 1168 "\Xi BiffWorld" "" () ()))
+      (DECL 1169
+        (LIST
+          (NAME "s" "?"))
+        (REF 1169 (NAME "SESSION" "") ()))
+      (DECL 1170
+        (LIST
+          (NAME "n" "?"))
+        (REF 1170 (NAME "ALIAS" "") ())))
+    (LIST
+      (MEMBER 1172
+        (REF 1172 (NAME "s" "?") ())
+        (REF 1172 (NAME "sessions" "") ()))
+      (INREL 1173
+        (NAME "\notin" "")
+        (REF 1173 (NAME "s" "?") ())
+        (REF 1173 (NAME "entries" "") ()))
+      (MEMBER 1174
+        (REF 1174 (NAME "s" "?") ())
+        (APPLY 1174
+          (REF 1174 (NAME "\dom" "") ())
+          (REF 1174 (NAME "savedalias" "") ())))
+      (INREL 1175
+        (NAME "\notin" "")
+        (REF 1175 (NAME "n" "?") ())
+        (APPLY 1175
+          (REF 1175 (NAME "\ran" "") ())
+          (REF 1175 (NAME "ttyalias" "") ())))
+      (IMPLIES 1176
+        (INREL 1176
+          (NAME "\notin" "")
+          (APPLY 1176
+            (REF 1176 (NAME "savedalias" "") ())
+            (REF 1176 (NAME "s" "?") ()))
+          (APPLY 1176
+            (REF 1176 (NAME "\ran" "") ())
+            (REF 1176 (NAME "ttyalias" "") ())))
+        (EQUAL 1177
+          (REF 1177 (NAME "n" "?") ())
+          (APPLY 1177
+            (REF 1177 (NAME "savedalias" "") ())
+            (REF 1177 (NAME "s" "?") ()))))
+      (EQUAL 1179
+        (REF 1179 (NAME "entries" "'") ())
+        (INOP 1179
+          (NAME "\cup" "")
+          (REF 1179 (NAME "entries" "") ())
+          (EXT 1179
+            (LIST
+              (REF 1179 (NAME "s" "?") ())))))
+      (EQUAL 1180
+        (REF 1180 (NAME "ttyalias" "'") ())
+        (INOP 1180
+          (NAME "\cup" "")
+          (REF 1180 (NAME "ttyalias" "") ())
+          (EXT 1180
+            (LIST
+              (INOP 1180
+                (NAME "\mapsto" "")
+                (REF 1180 (NAME "s" "?") ())
+                (REF 1180 (NAME "n" "?") ()))))))
+      (EQUAL 1181
+        (REF 1181 (NAME "savedalias" "'") ())
+        (INOP 1181
+          (NAME "\oplus" "")
+          (REF 1181 (NAME "savedalias" "") ())
+          (EXT 1181
+            (LIST
+              (INOP 1181
+                (NAME "\mapsto" "")
+                (REF 1181 (NAME "s" "?") ())
+                (REF 1181 (NAME "n" "?") ()))))))
+      (EQUAL 1183
+        (REF 1183 (NAME "abind" "'") ())
+        (REF 1183 (NAME "abind" "") ()))
+      (EQUAL 1184
+        (REF 1184 (NAME "routeMode" "'") ())
+        (REF 1184 (NAME "routeMode" "") ()))
+      (EQUAL 1185
+        (REF 1185 (NAME "lostF" "'") ())
+        (REF 1185 (NAME "lostF" "") ()))
+      (EQUAL 1186
+        (REF 1186 (NAME "misF" "'") ())
+        (REF 1186 (NAME "misF" "") ())))))
+
+(SDEF 1200
+  (SHEAD 1200
+    "ForkSession"
+    ())
+  (BODY 1201
+    (LIST
+      (SDECL 1201
+        (SREF 1201 "\Delta RouteWorld" "" () ()))
+      (DECL 1202
+        (LIST
+          (NAME "sp" "?"))
+        (REF 1202 (NAME "SESSION" "") ()))
+      (DECL 1203
+        (LIST
+          (NAME "s" "?"))
+        (REF 1203 (NAME "SESSION" "") ()))
+      (DECL 1204
+        (LIST
+          (NAME "m" "?"))
+        (REF 1204 (NAME "HOST" "") ()))
+      (DECL 1205
+        (LIST
+          (NAME "org" "?"))
+        (REF 1205 (NAME "NAME" "") ()))
+      (DECL 1206
+        (LIST
+          (NAME "repo" "?"))
+        (REF 1206 (NAME "NAME" "") ()))
+      (DECL 1207
+        (LIST
+          (NAME "branch" "?"))
+        (REF 1207 (NAME "NAME" "") ()))
+      (DECL 1208
+        (LIST
+          (NAME "na" "?"))
+        (REF 1208 (NAME "ALIAS" "") ())))
+    (LIST
+      (MEMBER 1210
+        (REF 1210 (NAME "sp" "?") ())
+        (REF 1210 (NAME "sessions" "") ()))
+      (INREL 1211
+        (NAME "\notin" "")
+        (REF 1211 (NAME "s" "?") ())
+        (REF 1211 (NAME "sessions" "") ()))
+      (INREL 1212
+        (NAME "\neq" "")
+        (REF 1212 (NAME "s" "?") ())
+        (REF 1212 (NAME "sp" "?") ()))
+      (EQUAL 1213
+        (APPLY 1213
+          (REF 1213 (NAME "smach" "") ())
+          (REF 1213 (NAME "sp" "?") ()))
+        (REF 1213 (NAME "m" "?") ()))
+      (EQUAL 1214
+        (APPLY 1214
+          (REF 1214 (NAME "srepo" "") ())
+          (REF 1214 (NAME "sp" "?") ()))
+        (TUPLE 1214
+          (LIST
+            (REF 1214 (NAME "org" "?") ())
+            (REF 1214 (NAME "repo" "?") ()))))
+      (INREL 1215
+        (NAME "\notin" "")
+        (REF 1215 (NAME "na" "?") ())
+        (APPLY 1215
+          (REF 1215 (NAME "\ran" "") ())
+          (REF 1215 (NAME "ttyalias" "") ())))
+      (EQUAL 1217
+        (REF 1217 (NAME "sessions" "'") ())
+        (INOP 1217
+          (NAME "\cup" "")
+          (REF 1217 (NAME "sessions" "") ())
+          (EXT 1217
+            (LIST
+              (REF 1217 (NAME "s" "?") ())))))
+      (EQUAL 1218
+        (REF 1218 (NAME "smach" "'") ())
+        (INOP 1218
+          (NAME "\cup" "")
+          (REF 1218 (NAME "smach" "") ())
+          (EXT 1218
+            (LIST
+              (INOP 1218
+                (NAME "\mapsto" "")
+                (REF 1218 (NAME "s" "?") ())
+                (REF 1218 (NAME "m" "?") ()))))))
+      (EQUAL 1219
+        (REF 1219 (NAME "srepo" "'") ())
+        (INOP 1219
+          (NAME "\cup" "")
+          (REF 1219 (NAME "srepo" "") ())
+          (EXT 1219
+            (LIST
+              (INOP 1219
+                (NAME "\mapsto" "")
+                (REF 1219 (NAME "s" "?") ())
+                (TUPLE 1219
+                  (LIST
+                    (REF 1219 (NAME "org" "?") ())
+                    (REF 1219 (NAME "repo" "?") ()))))))))
+      (EQUAL 1220
+        (REF 1220 (NAME "sbranch" "'") ())
+        (INOP 1220
+          (NAME "\cup" "")
+          (REF 1220 (NAME "sbranch" "") ())
+          (EXT 1220
+            (LIST
+              (INOP 1220
+                (NAME "\mapsto" "")
+                (REF 1220 (NAME "s" "?") ())
+                (REF 1220 (NAME "branch" "?") ()))))))
+      (EQUAL 1221
+        (REF 1221 (NAME "soper" "'") ())
+        (REF 1221 (NAME "soper" "") ()))
+      (EQUAL 1223
+        (REF 1223 (NAME "entries" "'") ())
+        (INOP 1223
+          (NAME "\cup" "")
+          (REF 1223 (NAME "entries" "") ())
+          (EXT 1223
+            (LIST
+              (REF 1223 (NAME "s" "?") ())))))
+      (EQUAL 1224
+        (REF 1224 (NAME "ttyalias" "'") ())
+        (INOP 1224
+          (NAME "\cup" "")
+          (REF 1224 (NAME "ttyalias" "") ())
+          (EXT 1224
+            (LIST
+              (INOP 1224
+                (NAME "\mapsto" "")
+                (REF 1224 (NAME "s" "?") ())
+                (REF 1224 (NAME "na" "?") ()))))))
+      (EQUAL 1225
+        (REF 1225 (NAME "savedalias" "'") ())
+        (INOP 1225
+          (NAME "\oplus" "")
+          (REF 1225 (NAME "savedalias" "") ())
+          (EXT 1225
+            (LIST
+              (INOP 1225
+                (NAME "\mapsto" "")
+                (REF 1225 (NAME "s" "?") ())
+                (REF 1225 (NAME "na" "?") ()))))))
+      (EQUAL 1226
+        (REF 1226 (NAME "abind" "'") ())
+        (REF 1226 (NAME "abind" "") ()))
+      (EQUAL 1227
+        (REF 1227 (NAME "routeMode" "'") ())
+        (REF 1227 (NAME "routeMode" "") ()))
+      (EQUAL 1228
+        (REF 1228 (NAME "lostF" "'") ())
+        (REF 1228 (NAME "lostF" "") ()))
+      (EQUAL 1229
+        (REF 1229 (NAME "misF" "'") ())
+        (REF 1229 (NAME "misF" "") ()))
+      (EQUAL 1231
+        (REF 1231 (NAME "orgs" "'") ())
+        (REF 1231 (NAME "orgs" "") ()))
+      (EQUAL 1232
+        (REF 1232 (NAME "repos" "'") ())
+        (REF 1232 (NAME "repos" "") ()))
+      (EQUAL 1233
+        (REF 1233 (NAME "members" "'") ())
+        (REF 1233 (NAME "members" "") ()))
+      (EQUAL 1234
+        (REF 1234 (NAME "machines" "'") ())
+        (REF 1234 (NAME "machines" "") ()))
+      (EQUAL 1235
+        (REF 1235 (NAME "clones" "'") ())
+        (REF 1235 (NAME "clones" "") ()))
+      (EQUAL 1236
+        (REF 1236 (NAME "processes" "'") ())
+        (REF 1236 (NAME "processes" "") ()))
+      (EQUAL 1237
+        (REF 1237 (NAME "psess" "'") ())
+        (REF 1237 (NAME "psess" "") ()))
+      (EQUAL 1238
+        (REF 1238 (NAME "pkind" "'") ())
+        (REF 1238 (NAME "pkind" "") ()))
+      (EQUAL 1239
+        (REF 1239 (NAME "pname" "'") ())
+        (REF 1239 (NAME "pname" "") ()))
+      (EQUAL 1240
+        (REF 1240 (NAME "ppar" "'") ())
+        (REF 1240 (NAME "ppar" "") ())))))
+
+(SDEF 1252
+  (SHEAD 1252
+    "Learn"
+    ())
+  (BODY 1253
+    (LIST
+      (SDECL 1253
+        (SREF 1253 "\Delta RouteWorld" "" () ()))
+      (SDECL 1254
+        (SREF 1254 "\Xi BiffWorld" "" () ()))
+      (DECL 1255
+        (LIST
+          (NAME "n" "?"))
+        (REF 1255 (NAME "ALIAS" "") ())))
+    (LIST
+      (MEMBER 1257
+        (REF 1257 (NAME "n" "?") ())
+        (APPLY 1257
+          (REF 1257 (NAME "\ran" "") ())
+          (REF 1257 (NAME "ttyalias" "") ())))
+      (EQUAL 1259
+        (REF 1259 (NAME "abind" "'") ())
+        (INOP 1259
+          (NAME "\oplus" "")
+          (REF 1259 (NAME "abind" "") ())
+          (EXT 1259
+            (LIST
+              (INOP 1259
+                (NAME "\mapsto" "")
+                (REF 1259 (NAME "n" "?") ())
+                (APPLY 1259
+                  (POSTOP 1259
+                    (NAME "\inv" "")
+                    (REF 1259 (NAME "ttyalias" "") ()))
+                  (REF 1259 (NAME "n" "?") ())))))))
+      (EQUAL 1261
+        (REF 1261 (NAME "entries" "'") ())
+        (REF 1261 (NAME "entries" "") ()))
+      (EQUAL 1262
+        (REF 1262 (NAME "ttyalias" "'") ())
+        (REF 1262 (NAME "ttyalias" "") ()))
+      (EQUAL 1263
+        (REF 1263 (NAME "savedalias" "'") ())
+        (REF 1263 (NAME "savedalias" "") ()))
+      (EQUAL 1264
+        (REF 1264 (NAME "routeMode" "'") ())
+        (REF 1264 (NAME "routeMode" "") ()))
+      (EQUAL 1265
+        (REF 1265 (NAME "lostF" "'") ())
+        (REF 1265 (NAME "lostF" "") ()))
+      (EQUAL 1266
+        (REF 1266 (NAME "misF" "'") ())
+        (REF 1266 (NAME "misF" "") ())))))
+
+(SDEF 1283
+  (SHEAD 1283
+    "DeliverIdentity"
+    ())
+  (BODY 1284
+    (LIST
+      (SDECL 1284
+        (SREF 1284 "\Delta RouteWorld" "" () ()))
+      (SDECL 1285
+        (SREF 1285 "\Xi BiffWorld" "" () ()))
+      (DECL 1286
+        (LIST
+          (NAME "to" "?"))
+        (REF 1286 (NAME "ALIAS" "") ())))
+    (LIST
+      (EQUAL 1288
+        (REF 1288 (NAME "routeMode" "") ())
+        (REF 1288 (NAME "rmIdentity" "") ()))
+      (MEMBER 1289
+        (REF 1289 (NAME "to" "?") ())
+        (APPLY 1289
+          (REF 1289 (NAME "\ran" "") ())
+          (REF 1289 (NAME "ttyalias" "") ())))
+      (MEMBER 1290
+        (APPLY 1290
+          (POSTOP 1290
+            (NAME "\inv" "")
+            (REF 1290 (NAME "ttyalias" "") ()))
+          (REF 1290 (NAME "to" "?") ()))
+        (REF 1290 (NAME "entries" "") ()))
+      (EQUAL 1292
+        (REF 1292 (NAME "entries" "'") ())
+        (REF 1292 (NAME "entries" "") ()))
+      (EQUAL 1293
+        (REF 1293 (NAME "ttyalias" "'") ())
+        (REF 1293 (NAME "ttyalias" "") ()))
+      (EQUAL 1294
+        (REF 1294 (NAME "savedalias" "'") ())
+        (REF 1294 (NAME "savedalias" "") ()))
+      (EQUAL 1295
+        (REF 1295 (NAME "abind" "'") ())
+        (REF 1295 (NAME "abind" "") ()))
+      (EQUAL 1296
+        (REF 1296 (NAME "routeMode" "'") ())
+        (REF 1296 (NAME "routeMode" "") ()))
+      (EQUAL 1297
+        (REF 1297 (NAME "lostF" "'") ())
+        (REF 1297 (NAME "lostF" "") ()))
+      (EQUAL 1298
+        (REF 1298 (NAME "misF" "'") ())
+        (REF 1298 (NAME "misF" "") ())))))
+
+(SDEF 1311
+  (SHEAD 1311
+    "DeliverAliasHit"
+    ())
+  (BODY 1312
+    (LIST
+      (SDECL 1312
+        (SREF 1312 "\Delta RouteWorld" "" () ()))
+      (SDECL 1313
+        (SREF 1313 "\Xi BiffWorld" "" () ()))
+      (DECL 1314
+        (LIST
+          (NAME "to" "?"))
+        (REF 1314 (NAME "ALIAS" "") ())))
+    (LIST
+      (EQUAL 1316
+        (REF 1316 (NAME "routeMode" "") ())
+        (REF 1316 (NAME "rmAlias" "") ()))
+      (MEMBER 1317
+        (REF 1317 (NAME "to" "?") ())
+        (APPLY 1317
+          (REF 1317 (NAME "\dom" "") ())
+          (REF 1317 (NAME "abind" "") ())))
+      (MEMBER 1318
+        (APPLY 1318
+          (REF 1318 (NAME "abind" "") ())
+          (REF 1318 (NAME "to" "?") ()))
+        (REF 1318 (NAME "entries" "") ()))
+      (EQUAL 1319
+        (APPLY 1319
+          (REF 1319 (NAME "ttyalias" "") ())
+          (APPLY 1319
+            (REF 1319 (NAME "abind" "") ())
+            (REF 1319 (NAME "to" "?") ())))
+        (REF 1319 (NAME "to" "?") ()))
+      (EQUAL 1321
+        (REF 1321 (NAME "entries" "'") ())
+        (REF 1321 (NAME "entries" "") ()))
+      (EQUAL 1322
+        (REF 1322 (NAME "ttyalias" "'") ())
+        (REF 1322 (NAME "ttyalias" "") ()))
+      (EQUAL 1323
+        (REF 1323 (NAME "savedalias" "'") ())
+        (REF 1323 (NAME "savedalias" "") ()))
+      (EQUAL 1324
+        (REF 1324 (NAME "abind" "'") ())
+        (REF 1324 (NAME "abind" "") ()))
+      (EQUAL 1325
+        (REF 1325 (NAME "routeMode" "'") ())
+        (REF 1325 (NAME "routeMode" "") ()))
+      (EQUAL 1326
+        (REF 1326 (NAME "lostF" "'") ())
+        (REF 1326 (NAME "lostF" "") ()))
+      (EQUAL 1327
+        (REF 1327 (NAME "misF" "'") ())
+        (REF 1327 (NAME "misF" "") ())))))
+
+(SDEF 1341
+  (SHEAD 1341
+    "DeliverAliasLost"
+    ())
+  (BODY 1342
+    (LIST
+      (SDECL 1342
+        (SREF 1342 "\Delta RouteWorld" "" () ()))
+      (SDECL 1343
+        (SREF 1343 "\Xi BiffWorld" "" () ()))
+      (DECL 1344
+        (LIST
+          (NAME "to" "?"))
+        (REF 1344 (NAME "ALIAS" "") ())))
+    (LIST
+      (EQUAL 1346
+        (REF 1346 (NAME "routeMode" "") ())
+        (REF 1346 (NAME "rmAlias" "") ()))
+      (MEMBER 1347
+        (REF 1347 (NAME "to" "?") ())
+        (APPLY 1347
+          (REF 1347 (NAME "\dom" "") ())
+          (REF 1347 (NAME "abind" "") ())))
+      (INREL 1348
+        (NAME "\notin" "")
+        (APPLY 1348
+          (REF 1348 (NAME "abind" "") ())
+          (REF 1348 (NAME "to" "?") ()))
+        (REF 1348 (NAME "entries" "") ()))
+      (EQUAL 1350
+        (REF 1350 (NAME "lostF" "'") ())
+        (REF 1350 (NAME "ztrue" "") ()))
+      (EQUAL 1352
+        (REF 1352 (NAME "entries" "'") ())
+        (REF 1352 (NAME "entries" "") ()))
+      (EQUAL 1353
+        (REF 1353 (NAME "ttyalias" "'") ())
+        (REF 1353 (NAME "ttyalias" "") ()))
+      (EQUAL 1354
+        (REF 1354 (NAME "savedalias" "'") ())
+        (REF 1354 (NAME "savedalias" "") ()))
+      (EQUAL 1355
+        (REF 1355 (NAME "abind" "'") ())
+        (REF 1355 (NAME "abind" "") ()))
+      (EQUAL 1356
+        (REF 1356 (NAME "routeMode" "'") ())
+        (REF 1356 (NAME "routeMode" "") ()))
+      (EQUAL 1357
+        (REF 1357 (NAME "misF" "'") ())
+        (REF 1357 (NAME "misF" "") ())))))
+
+(SDEF 1373
+  (SHEAD 1373
+    "DeliverAliasMis"
+    ())
+  (BODY 1374
+    (LIST
+      (SDECL 1374
+        (SREF 1374 "\Delta RouteWorld" "" () ()))
+      (SDECL 1375
+        (SREF 1375 "\Xi BiffWorld" "" () ()))
+      (DECL 1376
+        (LIST
+          (NAME "to" "?"))
+        (REF 1376 (NAME "ALIAS" "") ())))
+    (LIST
+      (EQUAL 1378
+        (REF 1378 (NAME "routeMode" "") ())
+        (REF 1378 (NAME "rmAlias" "") ()))
+      (MEMBER 1379
+        (REF 1379 (NAME "to" "?") ())
+        (APPLY 1379
+          (REF 1379 (NAME "\dom" "") ())
+          (REF 1379 (NAME "abind" "") ())))
+      (MEMBER 1380
+        (APPLY 1380
+          (REF 1380 (NAME "abind" "") ())
+          (REF 1380 (NAME "to" "?") ()))
+        (REF 1380 (NAME "entries" "") ()))
+      (INREL 1381
+        (NAME "\neq" "")
+        (APPLY 1381
+          (REF 1381 (NAME "ttyalias" "") ())
+          (APPLY 1381
+            (REF 1381 (NAME "abind" "") ())
+            (REF 1381 (NAME "to" "?") ())))
+        (REF 1381 (NAME "to" "?") ()))
+      (EQUAL 1383
+        (REF 1383 (NAME "misF" "'") ())
+        (REF 1383 (NAME "ztrue" "") ()))
+      (EQUAL 1385
+        (REF 1385 (NAME "entries" "'") ())
+        (REF 1385 (NAME "entries" "") ()))
+      (EQUAL 1386
+        (REF 1386 (NAME "ttyalias" "'") ())
+        (REF 1386 (NAME "ttyalias" "") ()))
+      (EQUAL 1387
+        (REF 1387 (NAME "savedalias" "'") ())
+        (REF 1387 (NAME "savedalias" "") ()))
+      (EQUAL 1388
+        (REF 1388 (NAME "abind" "'") ())
+        (REF 1388 (NAME "abind" "") ()))
+      (EQUAL 1389
+        (REF 1389 (NAME "routeMode" "'") ())
+        (REF 1389 (NAME "routeMode" "") ()))
+      (EQUAL 1390
+        (REF 1390 (NAME "lostF" "'") ())
+        (REF 1390 (NAME "lostF" "") ())))))
+
+(SDEF 0
+  (SHEAD 0
+    "\Delta DaemonSide"
+    ())
+  (BODY 0
+    (LIST
+      (SDECL 0
+        (SREF 0 "DaemonSide" "" () ()))
+      (SDECL 0
+        (SREF 0 "DaemonSide" "'" () ())))
+    ()))
+
+(SDEF 0
+  (SHEAD 0
+    "\Xi RouteWorld"
+    ())
+  (BODY 0
+    (LIST
+      (SDECL 0
+        (SREF 0 "RouteWorld" "" () ()))
+      (SDECL 0
+        (SREF 0 "RouteWorld" "'" () ())))
+    (LIST
+      (EQUAL 0
+        (THETA 0
+          "RouteWorld"
+          ""
+          ())
+        (THETA 0
+          "RouteWorld"
+          "'"
+          ())))))
+
+(SDEF 1409
+  (SHEAD 1409
+    "DaemonExit"
+    ())
+  (BODY 1410
+    (LIST
+      (SDECL 1410
+        (SREF 1410 "\Delta DaemonSide" "" () ()))
+      (SDECL 1411
+        (SREF 1411 "\Xi RouteWorld" "" () ())))
+    (LIST
+      (EQUAL 1413
+        (REF 1413 (NAME "daemonUp" "") ())
+        (REF 1413 (NAME "ztrue" "") ()))
+      (EQUAL 1414
+        (REF 1414 (NAME "daemonUp" "'") ())
+        (REF 1414 (NAME "zfalse" "") ()))
+      (EQUAL 1415
+        (REF 1415 (NAME "opened" "'") ())
+        (REF 1415 (NAME "\emptyset" "") ()))
+      (EQUAL 1416
+        (REF 1416 (NAME "hello" "'") ())
+        (REF 1416 (NAME "\emptyset" "") ()))
+      (EQUAL 1417
+        (REF 1417 (NAME "subscribed" "'") ())
+        (REF 1417 (NAME "\emptyset" "") ()))
+      (EQUAL 1418
+        (REF 1418 (NAME "shown" "'") ())
+        (REF 1418 (NAME "\emptyset" "") ()))
+      (EQUAL 1420
+        (REF 1420 (NAME "known" "'") ())
+        (REF 1420 (NAME "known" "") ()))
+      (EQUAL 1421
+        (REF 1421 (NAME "runOf" "'") ())
+        (REF 1421 (NAME "runOf" "") ()))
+      (EQUAL 1422
+        (REF 1422 (NAME "durable" "'") ())
+        (REF 1422 (NAME "durable" "") ())))))
+
+(SDEF 1431
+  (SHEAD 1431
+    "DaemonStart"
+    ())
+  (BODY 1432
+    (LIST
+      (SDECL 1432
+        (SREF 1432 "\Delta DaemonSide" "" () ()))
+      (SDECL 1433
+        (SREF 1433 "\Xi RouteWorld" "" () ())))
+    (LIST
+      (EQUAL 1435
+        (REF 1435 (NAME "daemonUp" "") ())
+        (REF 1435 (NAME "zfalse" "") ()))
+      (EQUAL 1436
+        (REF 1436 (NAME "daemonUp" "'") ())
+        (REF 1436 (NAME "ztrue" "") ()))
+      (EQUAL 1438
+        (REF 1438 (NAME "known" "'") ())
+        (REF 1438 (NAME "known" "") ()))
+      (EQUAL 1439
+        (REF 1439 (NAME "runOf" "'") ())
+        (REF 1439 (NAME "runOf" "") ()))
+      (EQUAL 1440
+        (REF 1440 (NAME "opened" "'") ())
+        (REF 1440 (NAME "opened" "") ()))
+      (EQUAL 1441
+        (REF 1441 (NAME "hello" "'") ())
+        (REF 1441 (NAME "hello" "") ()))
+      (EQUAL 1442
+        (REF 1442 (NAME "subscribed" "'") ())
+        (REF 1442 (NAME "subscribed" "") ()))
+      (EQUAL 1443
+        (REF 1443 (NAME "shown" "'") ())
+        (REF 1443 (NAME "shown" "") ()))
+      (EQUAL 1444
+        (REF 1444 (NAME "durable" "'") ())
+        (REF 1444 (NAME "durable" "") ())))))
+
+(SDEF 1451
+  (SHEAD 1451
+    "Arrive"
+    ())
+  (BODY 1452
+    (LIST
+      (SDECL 1452
+        (SREF 1452 "\Delta DaemonSide" "" () ()))
+      (SDECL 1453
+        (SREF 1453 "\Xi RouteWorld" "" () ()))
+      (DECL 1454
+        (LIST
+          (NAME "s" "?"))
+        (REF 1454 (NAME "SESSION" "") ())))
+    (LIST
+      (INREL 1456
+        (NAME "<" "")
+        (APPLY 1456
+          (REF 1456 (NAME "durable" "") ())
+          (REF 1456 (NAME "s" "?") ()))
+        (REF 1456 (NAME "maxUnread" "") ()))
+      (EQUAL 1457
+        (REF 1457 (NAME "durable" "'") ())
+        (INOP 1457
+          (NAME "\oplus" "")
+          (REF 1457 (NAME "durable" "") ())
+          (EXT 1457
+            (LIST
+              (INOP 1457
+                (NAME "\mapsto" "")
+                (REF 1457 (NAME "s" "?") ())
+                (INOP 1457
+                  (NAME "+" "")
+                  (APPLY 1457
+                    (REF 1457 (NAME "durable" "") ())
+                    (REF 1457 (NAME "s" "?") ()))
+                  (NUMBER 1457 "1")))))))
+      (EQUAL 1459
+        (REF 1459 (NAME "daemonUp" "'") ())
+        (REF 1459 (NAME "daemonUp" "") ()))
+      (EQUAL 1460
+        (REF 1460 (NAME "known" "'") ())
+        (REF 1460 (NAME "known" "") ()))
+      (EQUAL 1461
+        (REF 1461 (NAME "runOf" "'") ())
+        (REF 1461 (NAME "runOf" "") ()))
+      (EQUAL 1462
+        (REF 1462 (NAME "opened" "'") ())
+        (REF 1462 (NAME "opened" "") ()))
+      (EQUAL 1463
+        (REF 1463 (NAME "hello" "'") ())
+        (REF 1463 (NAME "hello" "") ()))
+      (EQUAL 1464
+        (REF 1464 (NAME "subscribed" "'") ())
+        (REF 1464 (NAME "subscribed" "") ()))
+      (EQUAL 1465
+        (REF 1465 (NAME "shown" "'") ())
+        (REF 1465 (NAME "shown" "") ())))))
+
+(SDEF 1477
+  (SHEAD 1477
+    "Connect"
+    ())
+  (BODY 1478
+    (LIST
+      (SDECL 1478
+        (SREF 1478 "\Delta DaemonSide" "" () ()))
+      (SDECL 1479
+        (SREF 1479 "\Xi RouteWorld" "" () ()))
+      (DECL 1480
+        (LIST
+          (NAME "c" "?"))
+        (REF 1480 (NAME "CONN" "") ())))
+    (LIST
+      (EQUAL 1482
+        (REF 1482 (NAME "daemonUp" "") ())
+        (REF 1482 (NAME "ztrue" "") ()))
+      (INREL 1483
+        (NAME "\notin" "")
+        (REF 1483 (NAME "c" "?") ())
+        (REF 1483 (NAME "opened" "") ()))
+      (EQUAL 1484
+        (REF 1484 (NAME "opened" "'") ())
+        (INOP 1484
+          (NAME "\cup" "")
+          (REF 1484 (NAME "opened" "") ())
+          (EXT 1484
+            (LIST
+              (REF 1484 (NAME "c" "?") ())))))
+      (EQUAL 1486
+        (REF 1486 (NAME "daemonUp" "'") ())
+        (REF 1486 (NAME "daemonUp" "") ()))
+      (EQUAL 1487
+        (REF 1487 (NAME "known" "'") ())
+        (REF 1487 (NAME "known" "") ()))
+      (EQUAL 1488
+        (REF 1488 (NAME "runOf" "'") ())
+        (REF 1488 (NAME "runOf" "") ()))
+      (EQUAL 1489
+        (REF 1489 (NAME "hello" "'") ())
+        (REF 1489 (NAME "hello" "") ()))
+      (EQUAL 1490
+        (REF 1490 (NAME "subscribed" "'") ())
+        (REF 1490 (NAME "subscribed" "") ()))
+      (EQUAL 1491
+        (REF 1491 (NAME "shown" "'") ())
+        (REF 1491 (NAME "shown" "") ()))
+      (EQUAL 1492
+        (REF 1492 (NAME "durable" "'") ())
+        (REF 1492 (NAME "durable" "") ())))))
+
+(SDEF 1497
+  (SHEAD 1497
+    "RequestBeforeHello"
+    ())
+  (BODY 1498
+    (LIST
+      (SDECL 1498
+        (SREF 1498 "\Delta DaemonSide" "" () ()))
+      (SDECL 1499
+        (SREF 1499 "\Xi RouteWorld" "" () ()))
+      (DECL 1500
+        (LIST
+          (NAME "c" "?"))
+        (REF 1500 (NAME "CONN" "") ())))
+    (LIST
+      (MEMBER 1502
+        (REF 1502 (NAME "c" "?") ())
+        (REF 1502 (NAME "opened" "") ()))
+      (INREL 1503
+        (NAME "\notin" "")
+        (REF 1503 (NAME "c" "?") ())
+        (APPLY 1503
+          (REF 1503 (NAME "\dom" "") ())
+          (REF 1503 (NAME "hello" "") ())))
+      (EQUAL 1504
+        (REF 1504 (NAME "opened" "'") ())
+        (INOP 1504
+          (NAME "\setminus" "")
+          (REF 1504 (NAME "opened" "") ())
+          (EXT 1504
+            (LIST
+              (REF 1504 (NAME "c" "?") ())))))
+      (EQUAL 1506
+        (REF 1506 (NAME "daemonUp" "'") ())
+        (REF 1506 (NAME "daemonUp" "") ()))
+      (EQUAL 1507
+        (REF 1507 (NAME "known" "'") ())
+        (REF 1507 (NAME "known" "") ()))
+      (EQUAL 1508
+        (REF 1508 (NAME "runOf" "'") ())
+        (REF 1508 (NAME "runOf" "") ()))
+      (EQUAL 1509
+        (REF 1509 (NAME "hello" "'") ())
+        (REF 1509 (NAME "hello" "") ()))
+      (EQUAL 1510
+        (REF 1510 (NAME "subscribed" "'") ())
+        (REF 1510 (NAME "subscribed" "") ()))
+      (EQUAL 1511
+        (REF 1511 (NAME "shown" "'") ())
+        (REF 1511 (NAME "shown" "") ()))
+      (EQUAL 1512
+        (REF 1512 (NAME "durable" "'") ())
+        (REF 1512 (NAME "durable" "") ())))))
+
+(SDEF 1520
+  (SHEAD 1520
+    "HelloCreate"
+    ())
+  (BODY 1521
+    (LIST
+      (SDECL 1521
+        (SREF 1521 "\Delta DaemonSide" "" () ()))
+      (SDECL 1522
+        (SREF 1522 "\Xi RouteWorld" "" () ()))
+      (DECL 1523
+        (LIST
+          (NAME "c" "?"))
+        (REF 1523 (NAME "CONN" "") ()))
+      (DECL 1524
+        (LIST
+          (NAME "s" "?"))
+        (REF 1524 (NAME "SESSION" "") ()))
+      (DECL 1525
+        (LIST
+          (NAME "r" "?"))
+        (REF 1525 (NAME "RUN" "") ())))
+    (LIST
+      (MEMBER 1527
+        (REF 1527 (NAME "c" "?") ())
+        (REF 1527 (NAME "opened" "") ()))
+      (INREL 1528
+        (NAME "\notin" "")
+        (REF 1528 (NAME "c" "?") ())
+        (APPLY 1528
+          (REF 1528 (NAME "\dom" "") ())
+          (REF 1528 (NAME "hello" "") ())))
+      (MEMBER 1529
+        (REF 1529 (NAME "s" "?") ())
+        (REF 1529 (NAME "sessions" "") ()))
+      (INREL 1530
+        (NAME "\notin" "")
+        (REF 1530 (NAME "s" "?") ())
+        (REF 1530 (NAME "known" "") ()))
+      (EQUAL 1531
+        (REF 1531 (NAME "known" "'") ())
+        (INOP 1531
+          (NAME "\cup" "")
+          (REF 1531 (NAME "known" "") ())
+          (EXT 1531
+            (LIST
+              (REF 1531 (NAME "s" "?") ())))))
+      (EQUAL 1532
+        (REF 1532 (NAME "runOf" "'") ())
+        (INOP 1532
+          (NAME "\cup" "")
+          (REF 1532 (NAME "runOf" "") ())
+          (EXT 1532
+            (LIST
+              (INOP 1532
+                (NAME "\mapsto" "")
+                (REF 1532 (NAME "s" "?") ())
+                (REF 1532 (NAME "r" "?") ()))))))
+      (EQUAL 1533
+        (REF 1533 (NAME "hello" "'") ())
+        (INOP 1533
+          (NAME "\cup" "")
+          (REF 1533 (NAME "hello" "") ())
+          (EXT 1533
+            (LIST
+              (INOP 1533
+                (NAME "\mapsto" "")
+                (REF 1533 (NAME "c" "?") ())
+                (TUPLE 1533
+                  (LIST
+                    (REF 1533 (NAME "s" "?") ())
+                    (REF 1533 (NAME "r" "?") ()))))))))
+      (EQUAL 1535
+        (REF 1535 (NAME "daemonUp" "'") ())
+        (REF 1535 (NAME "daemonUp" "") ()))
+      (EQUAL 1536
+        (REF 1536 (NAME "opened" "'") ())
+        (REF 1536 (NAME "opened" "") ()))
+      (EQUAL 1537
+        (REF 1537 (NAME "subscribed" "'") ())
+        (REF 1537 (NAME "subscribed" "") ()))
+      (EQUAL 1538
+        (REF 1538 (NAME "shown" "'") ())
+        (REF 1538 (NAME "shown" "") ()))
+      (EQUAL 1539
+        (REF 1539 (NAME "durable" "'") ())
+        (REF 1539 (NAME "durable" "") ())))))
+
+(SDEF 1545
+  (SHEAD 1545
+    "HelloAttach"
+    ())
+  (BODY 1546
+    (LIST
+      (SDECL 1546
+        (SREF 1546 "\Delta DaemonSide" "" () ()))
+      (SDECL 1547
+        (SREF 1547 "\Xi RouteWorld" "" () ()))
+      (DECL 1548
+        (LIST
+          (NAME "c" "?"))
+        (REF 1548 (NAME "CONN" "") ()))
+      (DECL 1549
+        (LIST
+          (NAME "s" "?"))
+        (REF 1549 (NAME "SESSION" "") ()))
+      (DECL 1550
+        (LIST
+          (NAME "r" "?"))
+        (REF 1550 (NAME "RUN" "") ())))
+    (LIST
+      (MEMBER 1552
+        (REF 1552 (NAME "c" "?") ())
+        (REF 1552 (NAME "opened" "") ()))
+      (INREL 1553
+        (NAME "\notin" "")
+        (REF 1553 (NAME "c" "?") ())
+        (APPLY 1553
+          (REF 1553 (NAME "\dom" "") ())
+          (REF 1553 (NAME "hello" "") ())))
+      (MEMBER 1554
+        (REF 1554 (NAME "s" "?") ())
+        (REF 1554 (NAME "known" "") ()))
+      (EQUAL 1555
+        (APPLY 1555
+          (REF 1555 (NAME "runOf" "") ())
+          (REF 1555 (NAME "s" "?") ()))
+        (REF 1555 (NAME "r" "?") ()))
+      (EQUAL 1556
+        (REF 1556 (NAME "hello" "'") ())
+        (INOP 1556
+          (NAME "\cup" "")
+          (REF 1556 (NAME "hello" "") ())
+          (EXT 1556
+            (LIST
+              (INOP 1556
+                (NAME "\mapsto" "")
+                (REF 1556 (NAME "c" "?") ())
+                (TUPLE 1556
+                  (LIST
+                    (REF 1556 (NAME "s" "?") ())
+                    (REF 1556 (NAME "r" "?") ()))))))))
+      (EQUAL 1558
+        (REF 1558 (NAME "daemonUp" "'") ())
+        (REF 1558 (NAME "daemonUp" "") ()))
+      (EQUAL 1559
+        (REF 1559 (NAME "known" "'") ())
+        (REF 1559 (NAME "known" "") ()))
+      (EQUAL 1560
+        (REF 1560 (NAME "runOf" "'") ())
+        (REF 1560 (NAME "runOf" "") ()))
+      (EQUAL 1561
+        (REF 1561 (NAME "opened" "'") ())
+        (REF 1561 (NAME "opened" "") ()))
+      (EQUAL 1562
+        (REF 1562 (NAME "subscribed" "'") ())
+        (REF 1562 (NAME "subscribed" "") ()))
+      (EQUAL 1563
+        (REF 1563 (NAME "shown" "'") ())
+        (REF 1563 (NAME "shown" "") ()))
+      (EQUAL 1564
+        (REF 1564 (NAME "durable" "'") ())
+        (REF 1564 (NAME "durable" "") ())))))
+
+(SDEF 1573
+  (SHEAD 1573
+    "HelloNewRun"
+    ())
+  (BODY 1574
+    (LIST
+      (SDECL 1574
+        (SREF 1574 "\Delta DaemonSide" "" () ()))
+      (SDECL 1575
+        (SREF 1575 "\Xi RouteWorld" "" () ()))
+      (DECL 1576
+        (LIST
+          (NAME "c" "?"))
+        (REF 1576 (NAME "CONN" "") ()))
+      (DECL 1577
+        (LIST
+          (NAME "s" "?"))
+        (REF 1577 (NAME "SESSION" "") ()))
+      (DECL 1578
+        (LIST
+          (NAME "r" "?"))
+        (REF 1578 (NAME "RUN" "") ())))
+    (LIST
+      (MEMBER 1580
+        (REF 1580 (NAME "c" "?") ())
+        (REF 1580 (NAME "opened" "") ()))
+      (INREL 1581
+        (NAME "\notin" "")
+        (REF 1581 (NAME "c" "?") ())
+        (APPLY 1581
+          (REF 1581 (NAME "\dom" "") ())
+          (REF 1581 (NAME "hello" "") ())))
+      (MEMBER 1582
+        (REF 1582 (NAME "s" "?") ())
+        (REF 1582 (NAME "known" "") ()))
+      (INREL 1583
+        (NAME "\neq" "")
+        (APPLY 1583
+          (REF 1583 (NAME "runOf" "") ())
+          (REF 1583 (NAME "s" "?") ()))
+        (REF 1583 (NAME "r" "?") ()))
+      (EQUAL 1584
+        (REF 1584 (NAME "runOf" "'") ())
+        (INOP 1584
+          (NAME "\oplus" "")
+          (REF 1584 (NAME "runOf" "") ())
+          (EXT 1584
+            (LIST
+              (INOP 1584
+                (NAME "\mapsto" "")
+                (REF 1584 (NAME "s" "?") ())
+                (REF 1584 (NAME "r" "?") ()))))))
+      (EQUAL 1585
+        (REF 1585 (NAME "hello" "'") ())
+        (INOP 1585
+          (NAME "\cup" "")
+          (REF 1585 (NAME "hello" "") ())
+          (EXT 1585
+            (LIST
+              (INOP 1585
+                (NAME "\mapsto" "")
+                (REF 1585 (NAME "c" "?") ())
+                (TUPLE 1585
+                  (LIST
+                    (REF 1585 (NAME "s" "?") ())
+                    (REF 1585 (NAME "r" "?") ()))))))))
+      (EQUAL 1586
+        (REF 1586 (NAME "subscribed" "'") ())
+        (INOP 1586
+          (NAME "\setminus" "")
+          (REF 1586 (NAME "subscribed" "") ())
+          (COMP 1587
+            (BODY 1587
+              (LIST
+                (DECL 1587
+                  (LIST
+                    (NAME "c" ""))
+                  (REF 1587 (NAME "subscribed" "") ())))
+              (LIST
+                (EQUAL 1587
+                  (APPLY 1587
+                    (REF 1587 (NAME "first" "") ())
+                    (APPLY 1587
+                      (REF 1587 (NAME "hello" "") ())
+                      (REF 1587 (NAME "c" "") ())))
+                  (REF 1587 (NAME "s" "?") ()))))
+            (NOTHING 0))))
+      (EQUAL 1588
+        (REF 1588 (NAME "shown" "'") ())
+        (INOP 1588
+          (NAME "\ndres" "")
+          (COMP 1588
+            (BODY 1588
+              (LIST
+                (DECL 1588
+                  (LIST
+                    (NAME "c" ""))
+                  (REF 1588 (NAME "subscribed" "") ())))
+              (LIST
+                (EQUAL 1588
+                  (APPLY 1588
+                    (REF 1588 (NAME "first" "") ())
+                    (APPLY 1588
+                      (REF 1588 (NAME "hello" "") ())
+                      (REF 1588 (NAME "c" "") ())))
+                  (REF 1588 (NAME "s" "?") ()))))
+            (NOTHING 0))
+          (REF 1588 (NAME "shown" "") ())))
+      (EQUAL 1590
+        (REF 1590 (NAME "daemonUp" "'") ())
+        (REF 1590 (NAME "daemonUp" "") ()))
+      (EQUAL 1591
+        (REF 1591 (NAME "known" "'") ())
+        (REF 1591 (NAME "known" "") ()))
+      (EQUAL 1592
+        (REF 1592 (NAME "opened" "'") ())
+        (REF 1592 (NAME "opened" "") ()))
+      (EQUAL 1593
+        (REF 1593 (NAME "durable" "'") ())
+        (REF 1593 (NAME "durable" "") ())))))
+
+(SDEF 1604
+  (SHEAD 1604
+    "RequestReplacedRun"
+    ())
+  (BODY 1605
+    (LIST
+      (SDECL 1605
+        (SREF 1605 "\Xi DaemonSide" "" () ()))
+      (SDECL 1606
+        (SREF 1606 "\Xi RouteWorld" "" () ()))
+      (DECL 1607
+        (LIST
+          (NAME "c" "?"))
+        (REF 1607 (NAME "CONN" "") ())))
+    (LIST
+      (MEMBER 1609
+        (REF 1609 (NAME "c" "?") ())
+        (APPLY 1609
+          (REF 1609 (NAME "\dom" "") ())
+          (REF 1609 (NAME "hello" "") ())))
+      (INREL 1610
+        (NAME "\neq" "")
+        (APPLY 1610
+          (REF 1610 (NAME "second" "") ())
+          (APPLY 1610
+            (REF 1610 (NAME "hello" "") ())
+            (REF 1610 (NAME "c" "?") ())))
+        (APPLY 1610
+          (REF 1610 (NAME "runOf" "") ())
+          (APPLY 1610
+            (REF 1610 (NAME "first" "") ())
+            (APPLY 1610
+              (REF 1610 (NAME "hello" "") ())
+              (REF 1610 (NAME "c" "?") ()))))))))
+
+(SDEF 1620
+  (SHEAD 1620
+    "Subscribe"
+    ())
+  (BODY 1621
+    (LIST
+      (SDECL 1621
+        (SREF 1621 "\Delta DaemonSide" "" () ()))
+      (SDECL 1622
+        (SREF 1622 "\Xi RouteWorld" "" () ()))
+      (DECL 1623
+        (LIST
+          (NAME "c" "?"))
+        (REF 1623 (NAME "CONN" "") ())))
+    (LIST
+      (MEMBER 1625
+        (REF 1625 (NAME "c" "?") ())
+        (APPLY 1625
+          (REF 1625 (NAME "\dom" "") ())
+          (REF 1625 (NAME "hello" "") ())))
+      (INREL 1626
+        (NAME "\notin" "")
+        (REF 1626 (NAME "c" "?") ())
+        (REF 1626 (NAME "subscribed" "") ()))
+      (EQUAL 1627
+        (APPLY 1627
+          (REF 1627 (NAME "second" "") ())
+          (APPLY 1627
+            (REF 1627 (NAME "hello" "") ())
+            (REF 1627 (NAME "c" "?") ())))
+        (APPLY 1627
+          (REF 1627 (NAME "runOf" "") ())
+          (APPLY 1627
+            (REF 1627 (NAME "first" "") ())
+            (APPLY 1627
+              (REF 1627 (NAME "hello" "") ())
+              (REF 1627 (NAME "c" "?") ())))))
+      (EQUAL 1628
+        (REF 1628 (NAME "subscribed" "'") ())
+        (INOP 1628
+          (NAME "\cup" "")
+          (REF 1628 (NAME "subscribed" "") ())
+          (EXT 1628
+            (LIST
+              (REF 1628 (NAME "c" "?") ())))))
+      (EQUAL 1629
+        (REF 1629 (NAME "shown" "'") ())
+        (INOP 1629
+          (NAME "\cup" "")
+          (REF 1629 (NAME "shown" "") ())
+          (EXT 1629
+            (LIST
+              (INOP 1629
+                (NAME "\mapsto" "")
+                (REF 1629 (NAME "c" "?") ())
+                (APPLY 1629
+                  (REF 1629 (NAME "durable" "") ())
+                  (APPLY 1629
+                    (REF 1629 (NAME "first" "") ())
+                    (APPLY 1629
+                      (REF 1629 (NAME "hello" "") ())
+                      (REF 1629 (NAME "c" "?") ())))))))))
+      (EQUAL 1631
+        (REF 1631 (NAME "daemonUp" "'") ())
+        (REF 1631 (NAME "daemonUp" "") ()))
+      (EQUAL 1632
+        (REF 1632 (NAME "known" "'") ())
+        (REF 1632 (NAME "known" "") ()))
+      (EQUAL 1633
+        (REF 1633 (NAME "runOf" "'") ())
+        (REF 1633 (NAME "runOf" "") ()))
+      (EQUAL 1634
+        (REF 1634 (NAME "opened" "'") ())
+        (REF 1634 (NAME "opened" "") ()))
+      (EQUAL 1635
+        (REF 1635 (NAME "hello" "'") ())
+        (REF 1635 (NAME "hello" "") ()))
+      (EQUAL 1636
+        (REF 1636 (NAME "durable" "'") ())
+        (REF 1636 (NAME "durable" "") ())))))
+
+(SDEF 1645
+  (SHEAD 1645
+    "Deliver"
+    ())
+  (BODY 1646
+    (LIST
+      (SDECL 1646
+        (SREF 1646 "\Delta DaemonSide" "" () ()))
+      (SDECL 1647
+        (SREF 1647 "\Xi RouteWorld" "" () ()))
+      (DECL 1648
+        (LIST
+          (NAME "c" "?"))
+        (REF 1648 (NAME "CONN" "") ())))
+    (LIST
+      (MEMBER 1650
+        (REF 1650 (NAME "c" "?") ())
+        (REF 1650 (NAME "subscribed" "") ()))
+      (INREL 1651
+        (NAME "<" "")
+        (APPLY 1651
+          (REF 1651 (NAME "shown" "") ())
+          (REF 1651 (NAME "c" "?") ()))
+        (APPLY 1651
+          (REF 1651 (NAME "durable" "") ())
+          (APPLY 1651
+            (REF 1651 (NAME "first" "") ())
+            (APPLY 1651
+              (REF 1651 (NAME "hello" "") ())
+              (REF 1651 (NAME "c" "?") ())))))
+      (EQUAL 1652
+        (REF 1652 (NAME "shown" "'") ())
+        (INOP 1652
+          (NAME "\oplus" "")
+          (REF 1652 (NAME "shown" "") ())
+          (EXT 1652
+            (LIST
+              (INOP 1652
+                (NAME "\mapsto" "")
+                (REF 1652 (NAME "c" "?") ())
+                (INOP 1652
+                  (NAME "+" "")
+                  (APPLY 1652
+                    (REF 1652 (NAME "shown" "") ())
+                    (REF 1652 (NAME "c" "?") ()))
+                  (NUMBER 1652 "1")))))))
+      (EQUAL 1654
+        (REF 1654 (NAME "daemonUp" "'") ())
+        (REF 1654 (NAME "daemonUp" "") ()))
+      (EQUAL 1655
+        (REF 1655 (NAME "known" "'") ())
+        (REF 1655 (NAME "known" "") ()))
+      (EQUAL 1656
+        (REF 1656 (NAME "runOf" "'") ())
+        (REF 1656 (NAME "runOf" "") ()))
+      (EQUAL 1657
+        (REF 1657 (NAME "opened" "'") ())
+        (REF 1657 (NAME "opened" "") ()))
+      (EQUAL 1658
+        (REF 1658 (NAME "hello" "'") ())
+        (REF 1658 (NAME "hello" "") ()))
+      (EQUAL 1659
+        (REF 1659 (NAME "subscribed" "'") ())
+        (REF 1659 (NAME "subscribed" "") ()))
+      (EQUAL 1660
+        (REF 1660 (NAME "durable" "'") ())
+        (REF 1660 (NAME "durable" "") ())))))
+
+(SDEF 1667
+  (SHEAD 1667
+    "ReadUnread"
+    ())
+  (BODY 1668
+    (LIST
+      (SDECL 1668
+        (SREF 1668 "\Delta DaemonSide" "" () ()))
+      (SDECL 1669
+        (SREF 1669 "\Xi RouteWorld" "" () ()))
+      (DECL 1670
+        (LIST
+          (NAME "c" "?"))
+        (REF 1670 (NAME "CONN" "") ())))
+    (LIST
+      (MEMBER 1672
+        (REF 1672 (NAME "c" "?") ())
+        (REF 1672 (NAME "subscribed" "") ()))
+      (EQUAL 1673
+        (REF 1673 (NAME "durable" "'") ())
+        (INOP 1673
+          (NAME "\oplus" "")
+          (REF 1673 (NAME "durable" "") ())
+          (EXT 1673
+            (LIST
+              (INOP 1673
+                (NAME "\mapsto" "")
+                (APPLY 1673
+                  (REF 1673 (NAME "first" "") ())
+                  (APPLY 1673
+                    (REF 1673 (NAME "hello" "") ())
+                    (REF 1673 (NAME "c" "?") ())))
+                (NUMBER 1673 "0"))))))
+      (EQUAL 1674
+        (REF 1674 (NAME "shown" "'") ())
+        (INOP 1675
+          (NAME "\cup" "")
+          (COMP 1675
+            (BODY 1675
+              (LIST
+                (DECL 1675
+                  (LIST
+                    (NAME "c" ""))
+                  (REF 1675 (NAME "subscribed" "") ())))
+              (LIST
+                (EQUAL 1675
+                  (APPLY 1675
+                    (REF 1675 (NAME "first" "") ())
+                    (APPLY 1675
+                      (REF 1675 (NAME "hello" "") ())
+                      (REF 1675 (NAME "c" "") ())))
+                  (APPLY 1675
+                    (REF 1675 (NAME "first" "") ())
+                    (APPLY 1675
+                      (REF 1675 (NAME "hello" "") ())
+                      (REF 1675 (NAME "c" "?") ()))))))
+            (JUST 1675
+              (INOP 1675
+                (NAME "\mapsto" "")
+                (REF 1675 (NAME "c" "") ())
+                (NUMBER 1675 "0"))))
+          (COMP 1677
+            (BODY 1677
+              (LIST
+                (DECL 1677
+                  (LIST
+                    (NAME "c" ""))
+                  (REF 1677 (NAME "subscribed" "") ())))
+              (LIST
+                (INREL 1677
+                  (NAME "\neq" "")
+                  (APPLY 1677
+                    (REF 1677 (NAME "first" "") ())
+                    (APPLY 1677
+                      (REF 1677 (NAME "hello" "") ())
+                      (REF 1677 (NAME "c" "") ())))
+                  (APPLY 1677
+                    (REF 1677 (NAME "first" "") ())
+                    (APPLY 1677
+                      (REF 1677 (NAME "hello" "") ())
+                      (REF 1677 (NAME "c" "?") ()))))))
+            (JUST 1678
+              (INOP 1678
+                (NAME "\mapsto" "")
+                (REF 1678 (NAME "c" "") ())
+                (APPLY 1678
+                  (REF 1678 (NAME "shown" "") ())
+                  (REF 1678 (NAME "c" "") ())))))))
+      (EQUAL 1680
+        (REF 1680 (NAME "daemonUp" "'") ())
+        (REF 1680 (NAME "daemonUp" "") ()))
+      (EQUAL 1681
+        (REF 1681 (NAME "known" "'") ())
+        (REF 1681 (NAME "known" "") ()))
+      (EQUAL 1682
+        (REF 1682 (NAME "runOf" "'") ())
+        (REF 1682 (NAME "runOf" "") ()))
+      (EQUAL 1683
+        (REF 1683 (NAME "opened" "'") ())
+        (REF 1683 (NAME "opened" "") ()))
+      (EQUAL 1684
+        (REF 1684 (NAME "hello" "'") ())
+        (REF 1684 (NAME "hello" "") ()))
+      (EQUAL 1685
+        (REF 1685 (NAME "subscribed" "'") ())
+        (REF 1685 (NAME "subscribed" "") ())))))
+
+(SDEF 1696
+  (SHEAD 1696
+    "Detach"
+    ())
+  (BODY 1697
+    (LIST
+      (SDECL 1697
+        (SREF 1697 "\Delta DaemonSide" "" () ()))
+      (SDECL 1698
+        (SREF 1698 "\Xi RouteWorld" "" () ()))
+      (DECL 1699
+        (LIST
+          (NAME "c" "?"))
+        (REF 1699 (NAME "CONN" "") ())))
+    (LIST
+      (MEMBER 1701
+        (REF 1701 (NAME "c" "?") ())
+        (REF 1701 (NAME "opened" "") ()))
+      (EQUAL 1702
+        (REF 1702 (NAME "opened" "'") ())
+        (INOP 1702
+          (NAME "\setminus" "")
+          (REF 1702 (NAME "opened" "") ())
+          (EXT 1702
+            (LIST
+              (REF 1702 (NAME "c" "?") ())))))
+      (EQUAL 1703
+        (REF 1703 (NAME "hello" "'") ())
+        (INOP 1703
+          (NAME "\ndres" "")
+          (EXT 1703
+            (LIST
+              (REF 1703 (NAME "c" "?") ())))
+          (REF 1703 (NAME "hello" "") ())))
+      (EQUAL 1704
+        (REF 1704 (NAME "subscribed" "'") ())
+        (INOP 1704
+          (NAME "\setminus" "")
+          (REF 1704 (NAME "subscribed" "") ())
+          (EXT 1704
+            (LIST
+              (REF 1704 (NAME "c" "?") ())))))
+      (EQUAL 1705
+        (REF 1705 (NAME "shown" "'") ())
+        (INOP 1705
+          (NAME "\ndres" "")
+          (EXT 1705
+            (LIST
+              (REF 1705 (NAME "c" "?") ())))
+          (REF 1705 (NAME "shown" "") ())))
+      (EQUAL 1707
+        (REF 1707 (NAME "daemonUp" "'") ())
+        (REF 1707 (NAME "daemonUp" "") ()))
+      (EQUAL 1708
+        (REF 1708 (NAME "known" "'") ())
+        (REF 1708 (NAME "known" "") ()))
+      (EQUAL 1709
+        (REF 1709 (NAME "runOf" "'") ())
+        (REF 1709 (NAME "runOf" "") ()))
+      (EQUAL 1710
+        (REF 1710 (NAME "durable" "'") ())
+        (REF 1710 (NAME "durable" "") ())))))
+
+(SDEF 1717
+  (SHEAD 1717
+    "SessionEnd"
+    ())
+  (BODY 1718
+    (LIST
+      (SDECL 1718
+        (SREF 1718 "\Delta DaemonSide" "" () ()))
+      (SDECL 1719
+        (SREF 1719 "\Xi RouteWorld" "" () ()))
+      (DECL 1720
+        (LIST
+          (NAME "s" "?"))
+        (REF 1720 (NAME "SESSION" "") ())))
+    (LIST
+      (MEMBER 1722
+        (REF 1722 (NAME "s" "?") ())
+        (REF 1722 (NAME "known" "") ()))
+      (EXISTS 1723
+        (BODY 1723
+          (LIST
+            (DECL 1723
+              (LIST
+                (NAME "c" ""))
+              (APPLY 1723
+                (REF 1723 (NAME "\dom" "") ())
+                (REF 1723 (NAME "hello" "") ()))))
+          ())
+        (AND 1724
+          (EQUAL 1724
+            (APPLY 1724
+              (REF 1724 (NAME "first" "") ())
+              (APPLY 1724
+                (REF 1724 (NAME "hello" "") ())
+                (REF 1724 (NAME "c" "") ())))
+            (REF 1724 (NAME "s" "?") ()))
+          (EQUAL 1724
+            (APPLY 1724
+              (REF 1724 (NAME "second" "") ())
+              (APPLY 1724
+                (REF 1724 (NAME "hello" "") ())
+                (REF 1724 (NAME "c" "") ())))
+            (APPLY 1724
+              (REF 1724 (NAME "runOf" "") ())
+              (REF 1724 (NAME "s" "?") ())))))
+      (EQUAL 1725
+        (REF 1725 (NAME "known" "'") ())
+        (INOP 1725
+          (NAME "\setminus" "")
+          (REF 1725 (NAME "known" "") ())
+          (EXT 1725
+            (LIST
+              (REF 1725 (NAME "s" "?") ())))))
+      (EQUAL 1726
+        (REF 1726 (NAME "runOf" "'") ())
+        (INOP 1726
+          (NAME "\ndres" "")
+          (EXT 1726
+            (LIST
+              (REF 1726 (NAME "s" "?") ())))
+          (REF 1726 (NAME "runOf" "") ())))
+      (EQUAL 1727
+        (REF 1727 (NAME "opened" "'") ())
+        (INOP 1727
+          (NAME "\setminus" "")
+          (REF 1727 (NAME "opened" "") ())
+          (COMP 1728
+            (BODY 1728
+              (LIST
+                (DECL 1728
+                  (LIST
+                    (NAME "c" ""))
+                  (APPLY 1728
+                    (REF 1728 (NAME "\dom" "") ())
+                    (REF 1728 (NAME "hello" "") ()))))
+              (LIST
+                (EQUAL 1728
+                  (APPLY 1728
+                    (REF 1728 (NAME "first" "") ())
+                    (APPLY 1728
+                      (REF 1728 (NAME "hello" "") ())
+                      (REF 1728 (NAME "c" "") ())))
+                  (REF 1728 (NAME "s" "?") ()))))
+            (NOTHING 0))))
+      (EQUAL 1729
+        (REF 1729 (NAME "hello" "'") ())
+        (INOP 1729
+          (NAME "\ndres" "")
+          (COMP 1729
+            (BODY 1729
+              (LIST
+                (DECL 1729
+                  (LIST
+                    (NAME "c" ""))
+                  (APPLY 1729
+                    (REF 1729 (NAME "\dom" "") ())
+                    (REF 1729 (NAME "hello" "") ()))))
+              (LIST
+                (EQUAL 1729
+                  (APPLY 1729
+                    (REF 1729 (NAME "first" "") ())
+                    (APPLY 1729
+                      (REF 1729 (NAME "hello" "") ())
+                      (REF 1729 (NAME "c" "") ())))
+                  (REF 1729 (NAME "s" "?") ()))))
+            (NOTHING 0))
+          (REF 1729 (NAME "hello" "") ())))
+      (EQUAL 1730
+        (REF 1730 (NAME "subscribed" "'") ())
+        (INOP 1730
+          (NAME "\setminus" "")
+          (REF 1730 (NAME "subscribed" "") ())
+          (COMP 1731
+            (BODY 1731
+              (LIST
+                (DECL 1731
+                  (LIST
+                    (NAME "c" ""))
+                  (APPLY 1731
+                    (REF 1731 (NAME "\dom" "") ())
+                    (REF 1731 (NAME "hello" "") ()))))
+              (LIST
+                (EQUAL 1731
+                  (APPLY 1731
+                    (REF 1731 (NAME "first" "") ())
+                    (APPLY 1731
+                      (REF 1731 (NAME "hello" "") ())
+                      (REF 1731 (NAME "c" "") ())))
+                  (REF 1731 (NAME "s" "?") ()))))
+            (NOTHING 0))))
+      (EQUAL 1732
+        (REF 1732 (NAME "shown" "'") ())
+        (INOP 1732
+          (NAME "\ndres" "")
+          (COMP 1732
+            (BODY 1732
+              (LIST
+                (DECL 1732
+                  (LIST
+                    (NAME "c" ""))
+                  (APPLY 1732
+                    (REF 1732 (NAME "\dom" "") ())
+                    (REF 1732 (NAME "hello" "") ()))))
+              (LIST
+                (EQUAL 1732
+                  (APPLY 1732
+                    (REF 1732 (NAME "first" "") ())
+                    (APPLY 1732
+                      (REF 1732 (NAME "hello" "") ())
+                      (REF 1732 (NAME "c" "") ())))
+                  (REF 1732 (NAME "s" "?") ()))))
+            (NOTHING 0))
+          (REF 1732 (NAME "shown" "") ())))
+      (EQUAL 1734
+        (REF 1734 (NAME "daemonUp" "'") ())
+        (REF 1734 (NAME "daemonUp" "") ()))
+      (EQUAL 1735
+        (REF 1735 (NAME "durable" "'") ())
+        (REF 1735 (NAME "durable" "") ())))))
+
+(SDEF 1743
+  (SHEAD 1743
+    "RetentionExpire"
+    ())
+  (BODY 1744
+    (LIST
+      (SDECL 1744
+        (SREF 1744 "\Delta DaemonSide" "" () ()))
+      (SDECL 1745
+        (SREF 1745 "\Xi RouteWorld" "" () ()))
+      (DECL 1746
+        (LIST
+          (NAME "s" "?"))
+        (REF 1746 (NAME "SESSION" "") ())))
+    (LIST
+      (MEMBER 1748
+        (REF 1748 (NAME "s" "?") ())
+        (REF 1748 (NAME "known" "") ()))
+      (NOT 1749
+        (EXISTS 1749
+          (BODY 1749
+            (LIST
+              (DECL 1749
+                (LIST
+                  (NAME "c" ""))
+                (APPLY 1749
+                  (REF 1749 (NAME "\dom" "") ())
+                  (REF 1749 (NAME "hello" "") ()))))
+            ())
+          (EQUAL 1749
+            (APPLY 1749
+              (REF 1749 (NAME "first" "") ())
+              (APPLY 1749
+                (REF 1749 (NAME "hello" "") ())
+                (REF 1749 (NAME "c" "") ())))
+            (REF 1749 (NAME "s" "?") ()))))
+      (EQUAL 1750
+        (REF 1750 (NAME "known" "'") ())
+        (INOP 1750
+          (NAME "\setminus" "")
+          (REF 1750 (NAME "known" "") ())
+          (EXT 1750
+            (LIST
+              (REF 1750 (NAME "s" "?") ())))))
+      (EQUAL 1751
+        (REF 1751 (NAME "runOf" "'") ())
+        (INOP 1751
+          (NAME "\ndres" "")
+          (EXT 1751
+            (LIST
+              (REF 1751 (NAME "s" "?") ())))
+          (REF 1751 (NAME "runOf" "") ())))
+      (EQUAL 1753
+        (REF 1753 (NAME "daemonUp" "'") ())
+        (REF 1753 (NAME "daemonUp" "") ()))
+      (EQUAL 1754
+        (REF 1754 (NAME "opened" "'") ())
+        (REF 1754 (NAME "opened" "") ()))
+      (EQUAL 1755
+        (REF 1755 (NAME "hello" "'") ())
+        (REF 1755 (NAME "hello" "") ()))
+      (EQUAL 1756
+        (REF 1756 (NAME "subscribed" "'") ())
+        (REF 1756 (NAME "subscribed" "") ()))
+      (EQUAL 1757
+        (REF 1757 (NAME "shown" "'") ())
+        (REF 1757 (NAME "shown" "") ()))
+      (EQUAL 1758
+        (REF 1758 (NAME "durable" "'") ())
+        (REF 1758 (NAME "durable" "") ())))))
+
+
