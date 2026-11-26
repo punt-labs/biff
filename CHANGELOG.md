@@ -218,11 +218,24 @@
 
 ### Removed
 
+- The blanket `[untrusted]` / `(unverified)` labels on teammates' messages, and
+  the server instructions telling the model not to act on message bodies or to
+  ask the user first. In a live test they made an agent refuse to answer a
+  teammate's mail. Message trust will come from signed identities (ethos
+  DES-086), not labels (DES-093).
 - The `--prefix` option of `biff mcp` and `biff serve`. Use `--data-dir` to
   place the local relay elsewhere.
 
 ### Fixed
 
+- `read_messages` no longer loses mail when recording activity fails after the
+  fetch: on NATS the fetch has already consumed the messages, so the result is
+  returned and the failure is logged. A failed presence refresh no longer stops
+  the inbox fetch and its retry.
+- Reading the inbox keeps a session's presence row alive, so a bare-user `write`
+  still reaches a session that only reads after a long idle.
+- `/tty sid` is refused: `sid` names the resume-hint records, so a session with
+  that name could neither save its resume hint nor be rebuilt after expiry.
 - The model now reads the whole `talk`, `plan` and `wall` confirmation. The
   output hook cut each to its first line and 60 characters, so an invite
   confirmation stopped mid-word and a plan echo showed only `Plan:` without the
