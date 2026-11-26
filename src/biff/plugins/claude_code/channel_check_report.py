@@ -16,8 +16,11 @@ from typing import TYPE_CHECKING, Protocol, Self, final
 
 from nats.errors import Error as NatsError
 
+from biff.config import load_cli_config
+from biff.nats_relay import NatsRelay
 from biff.plugins.contract import CheckResult
 from biff.relay import PRESENCE_LIVENESS_SECONDS
+from biff.relay_select import RelaySelector
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -78,13 +81,8 @@ class CheckTarget:
         """Resolve the configured user, repo and relay the way the CLI does.
 
         Without a repository or an identity, or with the local relay, there is
-        no relay to ask.  The import is deferred: ``nats`` is loaded only when
-        doctor reaches this check.
+        no relay to ask.
         """
-        from biff.config import load_cli_config  # noqa: PLC0415
-        from biff.nats_relay import NatsRelay  # noqa: PLC0415
-        from biff.relay_select import RelaySelector  # noqa: PLC0415
-
         try:
             resolved = load_cli_config()
         except SystemExit:
