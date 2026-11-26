@@ -10,35 +10,16 @@ import yaml
 
 from biff.commands.key import KeyCommands
 from biff.key_store import CallerKind, KeyStore
-from biff.key_vault import VaultError
+from biff.nostr_bech32 import Bech32Key
 from biff.nostr_crypto import NostrCrypto
 from biff.nostr_directory import NostrDirectory
+from tests._memory_vault import MemoryVault
 
 if TYPE_CHECKING:
     import pytest
 
 NOW = 1_800_000_000
 NPUB_RE = re.compile(r"npub1[a-z0-9]{58}")
-
-
-class _Vault:
-    label = "memory"
-
-    def __init__(self) -> None:
-        self.items: dict[tuple[str, str], str] = {}
-        self.fail_get = False
-
-    def get(self, service: str, account: str) -> str | None:
-        if self.fail_get:
-            msg = "the keychain is locked"
-            raise VaultError(msg)
-        return self.items.get((service, account))
-
-    def has(self, service: str, account: str) -> bool:
-        return (service, account) in self.items
-
-    def put(self, service: str, account: str, secret: str) -> None:
-        self.items[service, account] = secret
 
 
 class _Ethos:
@@ -73,7 +54,7 @@ class _Rig:
         with_ethos: bool = True,
         now: int = NOW,
     ) -> None:
-        self.owner_vault, self.agent_vault = _Vault(), _Vault()
+        self.owner_vault, self.agent_vault = MemoryVault(), MemoryVault()
         self.ethos = _Ethos()
         self.directory = NostrDirectory(
             self.ethos if with_ethos else None, tmp_path / "nostr.yaml"
@@ -132,7 +113,7 @@ def test_init_again_republishes_a_key_that_was_never_published(tmp_path: Path) -
     rig.ethos.refuse = False
     result = rig.commands.init("jfreeman")
     assert not result.error
-    assert rig.ethos.data["jfreeman"]["npub"] == NostrCrypto().npub(
+    assert rig.ethos.data["jfreeman"]["npub"] == Bech32Key.PUBLIC.encode(
         rig.store.owner_pubkey("jfreeman")
     )
 
@@ -145,11 +126,28 @@ def test_init_again_makes_no_second_owner_key(tmp_path: Path) -> None:
     assert rig.owner_vault.items == before
 
 
-def test_init_again_without_a_recorded_key_is_an_error(tmp_path: Path) -> None:
+def test_init_again_records_a_public_key_that_was_never_recorded(
+    tmp_path: Path,
+) -> None:
     rig = _Rig(tmp_path)
     rig.commands.init("jfreeman")
+    secret = rig.owner_vault.items["biff-owner", "jfreeman"]
     del rig.agent_vault.items["biff-owner-pub", "jfreeman"]
+    result = rig.commands.init("jfreeman")
+    assert not result.error
+    assert rig.owner_vault.items["biff-owner", "jfreeman"] == secret
+    recorded = rig.store.owner_pubkey("jfreeman")
+    assert NostrCrypto().public_key(bytes.fromhex(secret)) == recorded
+
+
+def test_init_recovers_when_recording_the_public_key_failed(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.agent_vault.fail_put_after = 0
     assert rig.commands.init("jfreeman").error
+    rig.agent_vault.fail_put_after = None
+    result = rig.commands.init("jfreeman")
+    assert not result.error
+    assert NPUB_RE.fullmatch(rig.ethos.data["jfreeman"]["npub"])
 
 
 def test_init_from_an_agent_process_is_refused(tmp_path: Path) -> None:
@@ -183,6 +181,7 @@ def test_agent_command_works_from_an_agent_process(tmp_path: Path) -> None:
 
 def test_agent_vault_failure_is_an_error_result(tmp_path: Path) -> None:
     rig = _Rig(tmp_path)
+    rig.commands.agent("claude")
     rig.agent_vault.fail_get = True
     assert rig.commands.agent("claude").error
 
@@ -321,7 +320,7 @@ def test_show_does_not_trust_an_owner_the_agent_named(tmp_path: Path) -> None:
     rig.commands.init("jfreeman")
     rig.commands.attest("jfreeman", "claude", hours=1)
     # An agent rewrites the namespace to claim a different owner.
-    mallory = NostrCrypto().npub(NostrCrypto().public_key(bytes([7]) * 32))
+    mallory = Bech32Key.PUBLIC.encode(NostrCrypto().public_key(bytes([7]) * 32))
     rig.directory.publish("mallory", {"npub": mallory})
     rig.directory.publish("claude", {"owner": "mallory"})
     text = rig.commands.show("claude").text
@@ -347,3 +346,58 @@ def test_show_is_loud_when_ethos_cannot_be_asked(tmp_path: Path) -> None:
     result = rig.commands.show("claude")
     assert result.error
     assert "store corrupt" in result.text
+
+
+def test_show_of_a_handle_with_an_at_sign_is_an_error_result(tmp_path: Path) -> None:
+    result = _Rig(tmp_path).commands.show("@jfreeman")
+    assert result.error
+    assert "invalid handle" in result.text
+
+
+def _published_elsewhere(rig: _Rig, agent: str) -> bytes:
+    """Publish a key for *agent* as if its own host had made it; return the key."""
+    pubkey = NostrCrypto().public_key(bytes([9]) * 32)
+    rig.directory.publish(agent, {"npub": Bech32Key.PUBLIC.encode(pubkey)})
+    return pubkey
+
+
+def test_attest_signs_the_published_key_not_a_replacement(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    published = _published_elsewhere(rig, "claude")
+    result = rig.commands.attest("jfreeman", "claude", image=True)
+    assert not result.error, result.text
+    assert rig.directory.npub("claude") == Bech32Key.PUBLIC.encode(published)
+
+
+def test_attest_of_a_published_key_creates_no_local_agent_key(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    _published_elsewhere(rig, "claude")
+    rig.commands.attest("jfreeman", "claude", image=True)
+    assert ("biff-agent", "claude") not in rig.agent_vault.items
+
+
+def test_attestation_of_a_published_key_verifies_against_that_key(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    published = _published_elsewhere(rig, "claude")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    assert "valid until" in rig.commands.show("claude").text
+    assert rig.directory.fields("claude")["npub"] == Bech32Key.PUBLIC.encode(published)
+
+
+def test_attest_refuses_when_the_local_key_differs_from_the_published_one(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.agent("claude")
+    published = _published_elsewhere(rig, "claude")
+    result = rig.commands.attest("jfreeman", "claude", hours=1)
+    assert result.error
+    assert "differs" in result.text
+    assert rig.directory.npub("claude") == Bech32Key.PUBLIC.encode(published)
+    assert "auth_sig" not in rig.directory.fields("claude")

@@ -692,12 +692,17 @@ paid tier.
     (\texttt{from biff import commands}). Dev/prod plugin namespace
     isolation (\texttt{biff-dev} vs \texttt{biff}). Released and in daily
     use. See Appendix~A for the full command reference.
-    \item[Future: Security] Per-person and per-agent keys, signed messages,
-    end-to-end encrypted direct messages and talk, and per-sender grants,
-    in four waves: (a) keys and owner attestation, (b) signed events over NATS
-    and encrypted DMs, (c) grants, the trust floor and graded delivery, and
-    (d) beadle email on the same grants. Message bodies join channel events
-    in wave (c). A per-user daemon, \texttt{biffd}, holds the relay
+    \item[Shipped: Keys] Wave (a) of the security work: each person and each
+    agent has a Nostr key (\texttt{biff key init}, \texttt{biff key agent}),
+    and an owner signs an expiring attestation of an agent's key
+    (\texttt{biff key attest}, NIP-OA). Private keys rest in the OS keyring or
+    a passphrase-encrypted file; the owner key needs the person present.
+    \texttt{biff who} shows each user's published key.
+    \item[Future: Security] Signed messages, end-to-end encrypted direct
+    messages and talk, and per-sender grants, in the remaining waves:
+    (b) signed events over NATS and encrypted DMs, (c) grants, the trust floor
+    and graded delivery, and (d) beadle email on the same grants. Message
+    bodies join channel events in wave (c). A per-user daemon, \texttt{biffd}, holds the relay
     connection and the private keys, so the CLI, the MCP server and hooks
     are thin clients (DES-095).
     \item[Future: Real-Time] \texttt{/pair} for session sharing with
@@ -1135,10 +1140,6 @@ paid tier.
   \toprule
   \textbf{Feature} & \textbf{Description} \\
   \midrule
-
-  Keys and attestation &
-  One key per person and per agent; an owner-signed attestation lets an
-  agent act on its owner's behalf (NIP-OA). \\
 
   Signed events and E2E encryption &
   Messages are signed Nostr events over NATS; direct messages and talk are

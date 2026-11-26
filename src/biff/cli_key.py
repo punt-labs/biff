@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, final
+from typing import Annotated, Self, final
 
 import typer
 
@@ -24,10 +25,24 @@ class KeyCli:
 
     Each command runs locally and opens no relay session.  The global
     ``--json``, ``--quiet`` and ``--user`` flags are read from the root
-    command's parameters.
+    command's parameters.  The commands are built per call by *commands*, so a
+    test hands in a stand-in and a person's shell gets this machine's vaults.
     """
 
-    __slots__ = ()
+    __slots__ = ("_commands",)
+
+    _commands: Callable[[], KeyCommands]
+
+    def __new__(cls, commands: Callable[[], KeyCommands]) -> Self:
+        """Build the commands to run with *commands*, once per invocation."""
+        self = super().__new__(cls)
+        self._commands = commands
+        return self
+
+    @classmethod
+    def on_this_machine(cls) -> Self:
+        """Return the group over this machine's vaults, directory and clock."""
+        return cls(cls._machine_commands)
 
     def typer_app(self) -> typer.Typer:
         """Return the ``key`` command group."""
@@ -84,7 +99,7 @@ class KeyCli:
         self._emit(ctx, self._commands().show(handle))
 
     @staticmethod
-    def _commands() -> KeyCommands:
+    def _machine_commands() -> KeyCommands:
         """Build the commands for this process, this machine and this clock."""
         owner_vault, agent_vault = machine_vaults(Path.home())
         store = KeyStore(owner_vault, agent_vault, CallerKind.current())

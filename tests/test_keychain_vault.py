@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from biff.key_vault import VaultError
+from biff.key_vault import VaultError, VaultKey
 from biff.keychain_vault import MacKeychainVault
 
 SECRET = "ab" * 32
@@ -63,6 +63,7 @@ class _Security:
         self.items: dict[tuple[str, str], tuple[str, str]] = {}
         self.open_acl = False
         self.reject = False
+        self.prompt_first = False
         self.drop = False
         self.failure: Exception | None = None
         self.dump_override: str | None = None
@@ -85,7 +86,11 @@ class _Security:
 
     def _add(self, words: list[str]) -> str:
         if self.reject:
-            return "security: SecKeychainItemModifyContent: Interaction not allowed.\n"
+            prompt = "password data for new item:\n" if self.prompt_first else ""
+            return (
+                prompt
+                + "security: SecKeychainItemModifyContent: Interaction not allowed.\n"
+            )
         if not self.drop:
             key = (words[words.index("-s") + 1], words[words.index("-a") + 1])
             self.items[key] = (
@@ -115,124 +120,132 @@ def _mac(run: _Security, keychain: Path | None = None) -> MacKeychainVault:
 
 def test_mac_vault_secret_is_never_in_argv() -> None:
     run = _Security()
-    _mac(run).put("biff-owner", "jfreeman", SECRET)
+    _mac(run).put(VaultKey("biff-owner", "jfreeman"), SECRET)
     assert SECRET not in " ".join(run.argv)
 
 
 def test_mac_vault_secret_travels_on_stdin() -> None:
     run = _Security()
-    _mac(run).put("biff-owner", "jfreeman", SECRET)
+    _mac(run).put(VaultKey("biff-owner", "jfreeman"), SECRET)
     assert run.calls[0][0] == ["-i"]
     assert SECRET in (run.calls[0][1] or "")
 
 
 def test_mac_vault_item_trusts_no_application() -> None:
     run = _Security()
-    _mac(run).put("biff-owner", "jfreeman", SECRET)
+    _mac(run).put(VaultKey("biff-owner", "jfreeman"), SECRET)
     assert ' -T "" ' in (run.calls[0][1] or "")
 
 
 def test_mac_vault_stdin_is_one_command_line() -> None:
     run = _Security()
-    _mac(run).put("biff-owner", "jfreeman", SECRET)
+    _mac(run).put(VaultKey("biff-owner", "jfreeman"), SECRET)
     assert (run.calls[0][1] or "").count("\n") == 1
+
+
+def test_mac_vault_reports_a_refusal_that_follows_an_interactive_prompt() -> None:
+    run = _Security()
+    run.reject = True
+    run.prompt_first = True
+    with pytest.raises(VaultError, match="Interaction not allowed"):
+        _mac(run).put(VaultKey("biff-owner", "jfreeman"), SECRET)
 
 
 def test_mac_vault_refuses_a_secret_that_is_not_hex() -> None:
     with pytest.raises(VaultError, match="hex"):
-        _mac(_Security()).put("biff-owner", "jfreeman", 'x" -T "any')
+        _mac(_Security()).put(VaultKey("biff-owner", "jfreeman"), 'x" -T "any')
 
 
 def test_mac_vault_quotes_a_keychain_path_with_spaces_and_quotes() -> None:
     run = _Security()
-    _mac(run, Path('/tmp/a b/"x".keychain')).put("s", "a", SECRET)
+    _mac(run, Path('/tmp/a b/"x".keychain')).put(VaultKey("s", "a"), SECRET)
     assert (run.calls[0][1] or "").endswith(' "/tmp/a b/\\"x\\".keychain"\n')
 
 
 def test_mac_vault_reads_back_what_it_stored() -> None:
     vault = _mac(_Security())
-    vault.put("biff-owner", "jfreeman", SECRET)
-    assert vault.get("biff-owner", "jfreeman") == SECRET
+    vault.put(VaultKey("biff-owner", "jfreeman"), SECRET)
+    assert vault.get(VaultKey("biff-owner", "jfreeman")) == SECRET
 
 
 def test_mac_vault_has_does_not_ask_for_the_secret() -> None:
     run = _Security()
-    _mac(run).has("biff-owner", "jfreeman")
+    _mac(run).has(VaultKey("biff-owner", "jfreeman"))
     assert "-w" not in run.calls[0][0]
 
 
 def test_mac_vault_absence_is_none() -> None:
-    assert _mac(_Security()).get("biff-owner", "nobody") is None
+    assert _mac(_Security()).get(VaultKey("biff-owner", "nobody")) is None
 
 
 def test_a_rejected_write_is_a_vault_error_carrying_the_message() -> None:
     run = _Security()
     run.reject = True
     with pytest.raises(VaultError, match="Interaction not allowed"):
-        _mac(run).put("biff-owner", "jim", SECRET)
+        _mac(run).put(VaultKey("biff-owner", "jim"), SECRET)
 
 
 def test_a_rejected_update_of_an_existing_item_is_an_error_too() -> None:
     run = _Security()
     vault = _mac(run)
-    vault.put("biff-owner", "jim", SECRET)
+    vault.put(VaultKey("biff-owner", "jim"), SECRET)
     run.reject = True
     with pytest.raises(VaultError, match="Interaction not allowed"):
-        vault.put("biff-owner", "jim", "cd" * 32)
+        vault.put(VaultKey("biff-owner", "jim"), "cd" * 32)
 
 
 def test_a_write_that_changes_nothing_is_detected_even_when_the_item_exists() -> None:
     run = _Security()
     vault = _mac(run)
-    vault.put("biff-owner", "jim", SECRET)
+    vault.put(VaultKey("biff-owner", "jim"), SECRET)
     run.drop = True
     with pytest.raises(VaultError, match="did not land"):
-        vault.put("biff-owner", "jim", "cd" * 32)
+        vault.put(VaultKey("biff-owner", "jim"), "cd" * 32)
 
 
 def test_an_updated_secret_is_the_one_read_back() -> None:
     vault = _mac(_Security())
-    vault.put("biff-owner", "jim", SECRET)
-    vault.put("biff-owner", "jim", "cd" * 32)
-    assert vault.get("biff-owner", "jim") == "cd" * 32
+    vault.put(VaultKey("biff-owner", "jim"), SECRET)
+    vault.put(VaultKey("biff-owner", "jim"), "cd" * 32)
+    assert vault.get(VaultKey("biff-owner", "jim")) == "cd" * 32
 
 
 def test_get_refuses_an_item_that_trusts_an_application() -> None:
     run = _Security()
     vault = _mac(run)
-    vault.put("biff-owner", "jim", SECRET)
+    vault.put(VaultKey("biff-owner", "jim"), SECRET)
     run.open_acl = True
     with pytest.raises(VaultError, match="Always Allow"):
-        vault.get("biff-owner", "jim")
+        vault.get(VaultKey("biff-owner", "jim"))
 
 
 def test_refusal_tells_the_user_to_delete_and_recreate_the_item() -> None:
     run = _Security()
     vault = _mac(run)
-    vault.put("biff-owner", "jim", SECRET)
+    vault.put(VaultKey("biff-owner", "jim"), SECRET)
     run.open_acl = True
     with pytest.raises(VaultError, match=r"delete.*biff key init"):
-        vault.get("biff-owner", "jim")
+        vault.get(VaultKey("biff-owner", "jim"))
 
 
 def test_get_never_reads_the_secret_from_an_open_item() -> None:
     run = _Security()
     vault = _mac(run)
-    vault.put("biff-owner", "jim", SECRET)
+    vault.put(VaultKey("biff-owner", "jim"), SECRET)
     run.open_acl = True
     run.calls.clear()
     with pytest.raises(VaultError):
-        vault.get("biff-owner", "jim")
+        vault.get(VaultKey("biff-owner", "jim"))
     assert not any("-w" in args for args, _ in run.calls)
 
 
 def test_the_access_list_is_checked_before_every_read() -> None:
     run = _Security()
     vault = _mac(run)
-    vault.put("biff-owner", "jim", SECRET)
+    vault.put(VaultKey("biff-owner", "jim"), SECRET)
     run.calls.clear()
-    vault.get("biff-owner", "jim")
-    vault.get("biff-owner", "jim")
+    vault.get(VaultKey("biff-owner", "jim"))
+    vault.get(VaultKey("biff-owner", "jim"))
     dumps = [args for args, _ in run.calls if args[0] == "dump-keychain"]
     assert len(dumps) == 2
 
@@ -240,24 +253,24 @@ def test_the_access_list_is_checked_before_every_read() -> None:
 def test_get_fails_closed_when_the_access_list_cannot_be_read() -> None:
     run = _Security()
     vault = _mac(run)
-    vault.put("biff-owner", "jim", SECRET)
+    vault.put(VaultKey("biff-owner", "jim"), SECRET)
     run.dump_override = "keychain: nothing parseable here\n"
     with pytest.raises(VaultError, match="access list"):
-        vault.get("biff-owner", "jim")
+        vault.get(VaultKey("biff-owner", "jim"))
 
 
 def test_put_over_an_item_that_now_trusts_an_application_is_refused() -> None:
     run = _Security()
     vault = _mac(run)
-    vault.put("biff-owner", "jim", SECRET)
+    vault.put(VaultKey("biff-owner", "jim"), SECRET)
     run.open_acl = True
     with pytest.raises(VaultError, match="Always Allow"):
-        vault.put("biff-owner", "jim", "cd" * 32)
+        vault.put(VaultKey("biff-owner", "jim"), "cd" * 32)
 
 
 def test_the_acl_dump_is_scoped_to_the_chosen_keychain() -> None:
     run = _Security()
-    _mac(run, Path("/tmp/k.keychain-db")).put("s", "a", SECRET)
+    _mac(run, Path("/tmp/k.keychain-db")).put(VaultKey("s", "a"), SECRET)
     dumps = [args for args, _ in run.calls if args[0] == "dump-keychain"]
     assert dumps == [["dump-keychain", "-a", "/tmp/k.keychain-db"]]
 
@@ -276,7 +289,7 @@ def test_subprocess_failures_become_vault_errors_naming_the_item(
     run = _Security()
     run.failure = failure
     with pytest.raises(VaultError, match=r"biff-owner/jim"):
-        _mac(run).get("biff-owner", "jim")
+        _mac(run).get(VaultKey("biff-owner", "jim"))
 
 
 def test_mac_vault_names_itself() -> None:

@@ -9,7 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Self, final
 
-from biff.key_vault import SecretVault, VaultError
+from biff.key_vault import SecretVault, VaultError, VaultKey
 from biff.nostr_attest import OwnerAttestation
 from biff.nostr_crypto import NostrCrypto
 
@@ -113,35 +113,49 @@ class KeyStore:
         secret against it, and a republish needs no secret at all.
         """
         self._require_human("create the owner key")
-        if self._owner.has(OWNER_SERVICE, handle):
-            msg = f"owner key for {handle} already exists"
-            raise KeyExistsError(msg)
+        secret_key = VaultKey(OWNER_SERVICE, handle)
+        record_key = VaultKey(OWNER_PUBLIC_SERVICE, handle)
+        if self._owner.has(secret_key):
+            if self._agents.has(record_key):
+                msg = f"owner key for {handle} already exists"
+                raise KeyExistsError(msg)
+            return self._record_existing_owner(handle)
         secret = self._crypto.generate_secret()
-        self._owner.put(OWNER_SERVICE, handle, secret.hex())
+        self._owner.put(secret_key, secret.hex())
         pubkey = self._crypto.public_key(secret)
-        self._agents.put(OWNER_PUBLIC_SERVICE, handle, pubkey.hex())
+        self._agents.put(record_key, pubkey.hex())
         logger.info("key created: role=owner handle=%s", handle)
         return pubkey
 
     def owner_pubkey(self, handle: str) -> bytes:
         """Return the public key recorded when *handle*'s owner key was created."""
-        stored = self._agents.get(OWNER_PUBLIC_SERVICE, handle)
+        key = VaultKey(OWNER_PUBLIC_SERVICE, handle)
+        stored = self._agents.get(key)
         if stored is None:
             msg = f"no recorded owner key for {handle}; run `biff key init`"
             raise KeyNotFoundError(msg)
-        return self._decode(stored, OWNER_PUBLIC_SERVICE, handle, self._agents)
+        return self._decode(stored, key, self._agents)
 
     def agent_pubkey(self, handle: str) -> bytes:
         """Return the agent's public key, creating its key on first use."""
-        if not self._agents.has(AGENT_SERVICE, handle):
-            secret = self._crypto.generate_secret()
-            self._agents.put(AGENT_SERVICE, handle, secret.hex())
-            logger.info("key created: role=agent handle=%s", handle)
+        existing = self.existing_agent_pubkey(handle)
+        if existing is not None:
+            return existing
+        secret = self._crypto.generate_secret()
+        self._agents.put(VaultKey(AGENT_SERVICE, handle), secret.hex())
+        logger.info("key created: role=agent handle=%s", handle)
+        return self._crypto.public_key(secret)
+
+    def existing_agent_pubkey(self, handle: str) -> bytes | None:
+        """Return the public key of the agent's key, or ``None`` when it has none."""
+        if not self._agents.has(VaultKey(AGENT_SERVICE, handle)):
+            return None
         return self._crypto.public_key(self.agent_secret(handle, purpose="derive"))
 
     def agent_secret(self, handle: str, *, purpose: str) -> bytes:
         """Return the agent's secret key, logging who read it and why."""
-        stored = self._agents.get(AGENT_SERVICE, handle)
+        key = VaultKey(AGENT_SERVICE, handle)
+        stored = self._agents.get(key)
         logger.info(
             "key access: role=agent handle=%s purpose=%s pid=%d",
             handle,
@@ -151,20 +165,24 @@ class KeyStore:
         if stored is None:
             msg = f"no key for agent {handle}"
             raise KeyNotFoundError(msg)
-        return self._decode(stored, AGENT_SERVICE, handle, self._agents)
+        return self._decode(stored, key, self._agents)
 
     def attest(
-        self, owner: str, agent: str, *, lifetime_seconds: int, now: int
+        self, owner: str, agent_pubkey: bytes, *, lifetime_seconds: int, now: int
     ) -> OwnerAttestation:
-        """Sign *agent*'s public key as *owner*; the owner must be present."""
+        """Sign *agent_pubkey* as *owner*; the owner must be present.
+
+        The key is whatever the caller names, so an agent whose private key
+        lives on another host is attested without minting a second one here.
+        """
         self._require_human("sign an attestation")
         recorded = self.owner_pubkey(owner)
-        agent_pubkey = self.agent_pubkey(agent).hex()
-        stored = self._owner.get(OWNER_SERVICE, owner)
+        key = VaultKey(OWNER_SERVICE, owner)
+        stored = self._owner.get(key)
         if stored is None:
             msg = f"no owner key for {owner}; run `biff key init`"
             raise KeyNotFoundError(msg)
-        secret = self._decode(stored, OWNER_SERVICE, owner, self._owner)
+        secret = self._decode(stored, key, self._owner)
         logger.info("key access: role=owner handle=%s purpose=attest", owner)
         if self._crypto.public_key(secret) != recorded:
             msg = (
@@ -173,11 +191,23 @@ class KeyStore:
             )
             raise OwnerKeyMismatchError(msg)
         return OwnerAttestation.mint(
-            secret, agent_pubkey, now=now, lifetime_seconds=lifetime_seconds
+            secret, agent_pubkey.hex(), now=now, lifetime_seconds=lifetime_seconds
         )
 
+    def _record_existing_owner(self, handle: str) -> bytes:
+        """Record the public key of an owner secret whose record never landed."""
+        key = VaultKey(OWNER_SERVICE, handle)
+        stored = self._owner.get(key)
+        if stored is None:
+            msg = f"no owner key for {handle}; run `biff key init`"
+            raise KeyNotFoundError(msg)
+        pubkey = self._crypto.public_key(self._decode(stored, key, self._owner))
+        self._agents.put(VaultKey(OWNER_PUBLIC_SERVICE, handle), pubkey.hex())
+        logger.info("key repaired: role=owner handle=%s public record written", handle)
+        return pubkey
+
     @staticmethod
-    def _decode(stored: str, service: str, account: str, vault: SecretVault) -> bytes:
+    def _decode(stored: str, key: VaultKey, vault: SecretVault) -> bytes:
         """Return the 32 bytes in *stored*, or raise naming where they came from."""
         try:
             raw = bytes.fromhex(stored)
@@ -185,7 +215,7 @@ class KeyStore:
             raw = b""
         if len(raw) != _KEY_BYTES:
             msg = (
-                f"the value stored for {service}/{account} in {vault.label} "
+                f"the value stored for {key.where} in {vault.label} "
                 "is not a 32-byte hex key"
             )
             raise VaultError(msg)

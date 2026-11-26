@@ -84,6 +84,22 @@ def test_failed_republish_does_not_leave_a_stale_npub_winning(tmp_path: Path) ->
     assert directory.npub("jim") == "npub1OLD"
 
 
+def test_ethos_reads_ignore_a_local_file_from_before_ethos(tmp_path: Path) -> None:
+    local = tmp_path / "nostr.yaml"
+    NostrDirectory(None, local).publish("jim", {"npub": "npub1OLD", "auth_sig": "aa"})
+    directory = NostrDirectory(_FakeEthos(), local)
+    directory.publish("jim", {"npub": "npub1NEW"})
+    assert directory.fields("jim") == {"npub": "npub1NEW"}
+
+
+def test_ethos_with_nothing_set_does_not_fall_back_to_the_local_file(
+    tmp_path: Path,
+) -> None:
+    local = tmp_path / "nostr.yaml"
+    NostrDirectory(None, local).publish("jim", {"npub": "npub1OLD"})
+    assert NostrDirectory(_FakeEthos(), local).npub("jim") is None
+
+
 def test_unknown_handle_has_no_npub(tmp_path: Path) -> None:
     assert NostrDirectory(_FakeEthos(), tmp_path / "n.yaml").npub("nobody") is None
 

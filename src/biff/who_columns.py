@@ -8,7 +8,7 @@ from typing import Self, final
 
 from biff._formatting import clip_to_width, terminal_safe
 from biff.models import UserSession
-from biff.nostr_crypto import NostrCrypto
+from biff.nostr_bech32 import Bech32Key
 from biff.session_routing import ID_RE
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ class WhoColumns:
         if not raw:
             return ""
         try:
-            NostrCrypto().decode_npub(raw)
+            Bech32Key.PUBLIC.decode(raw)
         except ValueError:
             return "?"
         return f"{raw[:10]}…{raw[-5:]}"

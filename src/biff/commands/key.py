@@ -17,7 +17,7 @@ from biff.key_store import (
 )
 from biff.key_vault import VaultError
 from biff.nostr_attest import OwnerAttestation
-from biff.nostr_crypto import NostrCrypto
+from biff.nostr_bech32 import Bech32Key
 from biff.nostr_directory import NostrDirectory
 
 LIFETIME_ENV = "BIFF_ATTESTATION_HOURS"
@@ -33,6 +33,10 @@ class InvalidLifetimeError(ValueError):
     """An attestation lifetime that is not a positive number of hours."""
 
 
+class PublishedKeyError(ValueError):
+    """The key published for an agent is unusable or is not this machine's key."""
+
+
 _STORE_ERRORS = (
     OwnerKeyDeniedError,
     VaultError,
@@ -40,6 +44,8 @@ _STORE_ERRORS = (
     KeyExistsError,
     OwnerKeyMismatchError,
     InvalidLifetimeError,
+    PublishedKeyError,
+    OSError,
 )
 
 
@@ -47,12 +53,11 @@ _STORE_ERRORS = (
 class KeyCommands:
     """The operations behind ``biff key``, returning results, never printing."""
 
-    __slots__ = ("_clock", "_crypto", "_directory", "_store")
+    __slots__ = ("_clock", "_directory", "_store")
 
     _store: KeyStore
     _directory: NostrDirectory
     _clock: Callable[[], float]
-    _crypto: NostrCrypto
 
     def __new__(
         cls, store: KeyStore, directory: NostrDirectory, clock: Callable[[], float]
@@ -62,7 +67,6 @@ class KeyCommands:
         self._store = store
         self._directory = directory
         self._clock = clock
-        self._crypto = NostrCrypto()
         return self
 
     def init(self, owner: str) -> CommandResult:
@@ -75,7 +79,7 @@ class KeyCommands:
             pubkey, created = self._owner_pubkey(owner)
         except _STORE_ERRORS as exc:
             return CommandResult(text=str(exc), error=True)
-        npub = self._crypto.npub(pubkey)
+        npub = Bech32Key.PUBLIC.encode(pubkey)
         try:
             self._directory.publish(owner, {"npub": npub})
         except OSError as exc:
@@ -91,7 +95,7 @@ class KeyCommands:
     def agent(self, handle: str) -> CommandResult:
         """Create *handle*'s agent key if it has none and publish its npub."""
         try:
-            npub = self._crypto.npub(self._store.agent_pubkey(handle))
+            npub = Bech32Key.PUBLIC.encode(self._store.agent_pubkey(handle))
         except _STORE_ERRORS as exc:
             return CommandResult(text=str(exc), error=True)
         vault = self._store.agent_vault_label
@@ -116,13 +120,14 @@ class KeyCommands:
         """Sign *agent*'s key as *owner*; the owner must be present."""
         try:
             lifetime = self._lifetime_hours(hours, image=image)
+            target = self._attestation_target(agent)
             attestation = self._store.attest(
                 owner,
-                agent,
+                target,
                 lifetime_seconds=lifetime * 3600,
                 now=int(self._clock()),
             )
-            agent_npub = self._crypto.npub(self._store.agent_pubkey(agent))
+            agent_npub = Bech32Key.PUBLIC.encode(target)
         except _STORE_ERRORS as exc:
             return CommandResult(text=str(exc), error=True)
         try:
@@ -152,7 +157,7 @@ class KeyCommands:
             lines = [f"{handle}: {fields['npub']}"]
             if "auth_sig" in fields:
                 lines.append(f"  {self._attestation_line(fields)}")
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             return CommandResult(text=str(exc), error=True)
         return CommandResult(text="\n".join(lines), json_data=dict(fields))
 
@@ -162,6 +167,38 @@ class KeyCommands:
             return self._store.init_owner(owner), True
         except KeyExistsError:
             return self._store.owner_pubkey(owner), False
+
+    def _attestation_target(self, agent: str) -> bytes:
+        """Return the key to attest: the agent's own, wherever it is kept.
+
+        An agent image holds its key and publishes the npub; the owner signs
+        from another machine that has no secret for it.  That published key is
+        what gets signed, and nothing is minted.  Only an agent with no key
+        anywhere gets a new one, and a published key that is not the local key
+        is a conflict the owner must settle, never a silent replacement.
+        """
+        local = self._store.existing_agent_pubkey(agent)
+        published = self._published_pubkey(agent)
+        if local is not None and published is not None and local != published:
+            msg = (
+                f"the npub published for {agent} differs from the key on this "
+                "machine; nothing was signed. Run `biff key agent` on the host "
+                "that holds the key you mean to keep, or remove one of them"
+            )
+            raise PublishedKeyError(msg)
+        if local is not None:
+            return local
+        return published if published is not None else self._store.agent_pubkey(agent)
+
+    def _published_pubkey(self, agent: str) -> bytes | None:
+        npub = self._directory.npub(agent)
+        if npub is None:
+            return None
+        try:
+            return Bech32Key.PUBLIC.decode(npub)
+        except ValueError as exc:
+            msg = f"the npub published for {agent} is not valid: {exc}"
+            raise PublishedKeyError(msg) from exc
 
     @staticmethod
     def _lifetime_hours(hours: int | None, *, image: bool) -> int:
@@ -192,11 +229,11 @@ class KeyCommands:
             return f"authorized by @{owner or '?'}: no published key for the owner"
         try:
             attestation = OwnerAttestation(
-                self._crypto.decode_npub(owner_npub).hex(),
+                Bech32Key.PUBLIC.decode(owner_npub).hex(),
                 fields["auth_conditions"],
                 fields["auth_sig"],
             )
-            agent = self._crypto.decode_npub(fields["npub"]).hex()
+            agent = Bech32Key.PUBLIC.decode(fields["npub"]).hex()
             expiry = _iso(attestation.expires_at())
             if attestation.is_live(agent, now=int(self._clock())):
                 return f"authorized by @{owner}: valid until {expiry}"

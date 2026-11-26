@@ -218,6 +218,7 @@ prefixes = [
     "logging_config",
     "markers",
     "nostr_attest",
+    "nostr_bech32",
     "nostr_crypto",
     "nostr_event",
     "prob_gate",

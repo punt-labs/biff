@@ -1230,7 +1230,7 @@ def status() -> None:
     _run(commands.status)
 
 
-app.add_typer(KeyCli().typer_app(), name="key")
+app.add_typer(KeyCli.on_this_machine().typer_app(), name="key")
 
 
 # ---------------------------------------------------------------------------

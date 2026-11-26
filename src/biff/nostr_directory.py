@@ -161,12 +161,15 @@ class NostrDirectory:
     def fields(self, handle: str) -> dict[str, str]:
         """Return *handle*'s published fields; empty when it has none.
 
-        Raises ``OSError`` when ethos cannot be asked.  An unreadable local
-        file degrades to no fields, with a warning that names it.
+        Raises ``OSError`` when ethos cannot be asked.  With ethos present its
+        namespace is the only source: a local file from before ethos was
+        installed would mix an old key into a new one.  Without ethos an
+        unreadable local file degrades to no fields, with a warning naming it.
         """
         self._check_handle(handle)
-        local = self._local_fields(self._read_mapping(self._local), handle)
-        return {**local, **(self._ext.get(handle) if self._ext else {})}
+        if self._ext is not None:
+            return self._ext.get(handle)
+        return self._local_fields(self._read_mapping(self._local), handle)
 
     def npub(self, handle: str) -> str | None:
         """Return *handle*'s npub; ``None`` is a handle with no published key."""

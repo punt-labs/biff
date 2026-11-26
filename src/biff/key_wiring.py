@@ -31,11 +31,27 @@ class KeyringProbe(KeyringModule, Protocol):
         ...
 
 
+class KeyringPackage(KeyringModule, Protocol):
+    """The ``keyring`` package: its two password calls and its backend lookup."""
+
+    def get_keyring(self) -> object:
+        """Return the backend ``keyring`` has chosen."""
+        ...
+
+
 @final
 class SystemKeyring:
     """The installed ``keyring`` package behind :class:`KeyringProbe`."""
 
-    __slots__ = ()
+    __slots__ = ("_package",)
+
+    _package: KeyringPackage
+
+    def __new__(cls, package: KeyringPackage = keyring) -> Self:
+        """Wrap *package*, the ``keyring`` module unless a test supplies one."""
+        self = super().__new__(cls)
+        self._package = package
+        return self
 
     def is_usable(self) -> bool:
         """Return whether a Keychain or Secret Service backend is installed.
@@ -46,7 +62,7 @@ class SystemKeyring:
         store beside a keyring that may already hold keys.
         """
         try:
-            backend = keyring.get_keyring()
+            backend = self._package.get_keyring()
         except (keyring.errors.KeyringError, RuntimeError) as exc:
             msg = f"cannot determine the keyring backend: {exc}"
             raise VaultError(msg) from exc
@@ -54,11 +70,11 @@ class SystemKeyring:
 
     def get_password(self, service: str, account: str) -> str | None:
         """Return the stored password or ``None``."""
-        return keyring.get_password(service, account)
+        return self._package.get_password(service, account)
 
     def set_password(self, service: str, account: str, password: str) -> None:
         """Store a password."""
-        keyring.set_password(service, account, password)
+        self._package.set_password(service, account, password)
 
 
 @final
@@ -98,6 +114,55 @@ class TtyPassphrase:
 
 DEFAULT_ASK = TtyPassphrase()
 
+_KEYRING_BACKEND = "keyring"
+_FILE_BACKEND = "file"
+
+
+@final
+class BackendRecord:
+    """Which backend holds this machine's agent keys, remembered across runs.
+
+    Without it, a login session that cannot reach the Secret Service would
+    quietly select the encrypted-file vault, find no key there and mint a
+    second one, and ``biff key agent`` would publish it over the first.
+    """
+
+    __slots__ = ("_path",)
+
+    _path: Path
+
+    def __new__(cls, path: Path) -> Self:
+        """Keep the record in the file at *path*."""
+        self = super().__new__(cls)
+        self._path = path
+        return self
+
+    def read(self) -> str | None:
+        """Return the recorded backend, or ``None`` before any key command ran."""
+        try:
+            text = self._path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeDecodeError) as exc:
+            msg = f"cannot read {self._path}: {exc}"
+            raise VaultError(msg) from exc
+        if text not in {_KEYRING_BACKEND, _FILE_BACKEND}:
+            msg = (
+                f"{self._path} holds {text!r}, not 'keyring' or 'file'; "
+                "fix it to name the backend that holds your agent keys"
+            )
+            raise VaultError(msg)
+        return text
+
+    def write(self, backend: str) -> None:
+        """Record *backend* for every later run."""
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self._path.write_text(backend + "\n", encoding="utf-8")
+        except OSError as exc:
+            msg = f"cannot record the agent key backend in {self._path}: {exc}"
+            raise VaultError(msg) from exc
+
 
 def machine_vaults(
     home: Path,
@@ -113,7 +178,9 @@ def machine_vaults(
     a passphrase-encrypted file: the Secret Service releases its secrets to
     any process of the logged-in user, which is the threat.  Agent keys use
     the keyring when a backend exists and the encrypted file only when none
-    does; the vault in use is named in the output of ``biff key agent``.
+    does; the vault in use is named in the output of ``biff key agent``.  The
+    choice is made once per machine and recorded: a keyring that is
+    unavailable later is an error, never a reason to start a second key store.
     """
     ask = ask or DEFAULT_ASK
     probe = backend or SystemKeyring()
@@ -123,7 +190,23 @@ def machine_vaults(
         if (platform or sys.platform) == "darwin"
         else PassphraseFileVault(keys / "owner", ask)
     )
-    if probe.is_usable():
+    is_usable = probe.is_usable()
+    record = BackendRecord(keys / "agent-backend")
+    chosen = record.read()
+    if chosen is None:
+        chosen = _KEYRING_BACKEND if is_usable else _FILE_BACKEND
+        record.write(chosen)
+    if chosen == _KEYRING_BACKEND:
+        if not is_usable:
+            msg = (
+                "agent keys on this machine live in the OS keyring, which is not "
+                "available in this session; unlock it or run from a session that "
+                "has it, so no second key is made"
+            )
+            raise VaultError(msg)
         return owner, KeyringVault(probe)
-    logger.warning("no keyring backend; agent keys will rest in an encrypted file")
+    if is_usable:
+        logger.info("agent keys stay in an encrypted file; the keyring is unused")
+    else:
+        logger.warning("no keyring backend; agent keys will rest in an encrypted file")
     return owner, PassphraseFileVault(keys / "agent", ask)

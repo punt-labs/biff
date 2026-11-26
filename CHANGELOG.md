@@ -82,7 +82,17 @@
   silent local copy. The `biff who` KEY column shows `?` for an invalid
   npub or a failed lookup.
   Public keys and attestations go in the identity's ext `nostr` namespace,
-  or in `~/.punt-labs/biff/nostr.yaml` when ethos is absent.
+  or in `~/.punt-labs/biff/nostr.yaml` when ethos is absent. With ethos
+  present, reads use ethos alone, so an older local file cannot mix a stale
+  key into a current one.
+  `biff key init` run again after a failed first run finishes the setup with
+  the stored owner secret instead of stranding it. `biff key attest` signs the
+  npub already published for an agent when this machine holds no key for it,
+  so an owner on a laptop can attest an agent image, and it refuses when the
+  published npub differs from the local key. The first `biff key` command on a
+  machine records whether agent keys live in the OS keyring or in files
+  (`~/.punt-labs/biff/keys/agent-backend`); a later session that cannot reach
+  the keyring is an error, not a second key.
 - `biff who` adds a KEY column with each user's short npub when one is
   published.
 

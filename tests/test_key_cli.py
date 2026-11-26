@@ -12,24 +12,9 @@ import biff.__main__ as cli
 from biff import cli_key, key_store
 from biff.key_vault import SecretVault
 from biff.passphrase_vault import PassphraseFileVault
+from tests._memory_vault import MemoryVault
 
 runner = CliRunner()
-
-
-class _Memory:
-    label = "memory"
-
-    def __init__(self) -> None:
-        self.items: dict[tuple[str, str], str] = {}
-
-    def get(self, service: str, account: str) -> str | None:
-        return self.items.get((service, account))
-
-    def has(self, service: str, account: str) -> bool:
-        return (service, account) in self.items
-
-    def put(self, service: str, account: str, secret: str) -> None:
-        self.items[service, account] = secret
 
 
 @pytest.fixture(autouse=True)
@@ -44,7 +29,7 @@ def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     owner = PassphraseFileVault(
         home / "owner-keys", lambda _p: "a long enough passphrase"
     )
-    agents: SecretVault = _Memory()
+    agents: SecretVault = MemoryVault()
 
     def fake_vaults(_home: Path) -> tuple[SecretVault, SecretVault]:
         return owner, agents

@@ -10,7 +10,7 @@ import pytest
 from keyring.errors import KeyringError
 
 from biff import key_wiring
-from biff.key_vault import KeyringVault, SecretVault, VaultError
+from biff.key_vault import KeyringVault, SecretVault, VaultError, VaultKey
 from biff.key_wiring import (
     KeyringProbe,
     SystemKeyring,
@@ -86,10 +86,30 @@ def test_a_probe_that_errors_does_not_fall_back_to_the_file(tmp_path: Path) -> N
         _vaults(tmp_path, "linux", Broken(usable=True))
 
 
+def test_agent_keys_stay_in_the_keyring_they_were_created_in(tmp_path: Path) -> None:
+    _vaults(tmp_path, "linux", _Probe(usable=True))
+    with pytest.raises(VaultError, match="OS keyring"):
+        _vaults(tmp_path, "linux", _Probe(usable=False))
+
+
+def test_agent_keys_stay_in_files_when_a_keyring_appears_later(tmp_path: Path) -> None:
+    _vaults(tmp_path, "linux", _Probe(usable=False))
+    _, agent = _vaults(tmp_path, "linux", _Probe(usable=True))
+    assert isinstance(agent, PassphraseFileVault)
+
+
+def test_an_unreadable_backend_record_is_a_vault_error(tmp_path: Path) -> None:
+    keys = tmp_path / ".punt-labs" / "biff" / "keys"
+    keys.mkdir(parents=True)
+    (keys / "agent-backend").write_text("floppy disk")
+    with pytest.raises(VaultError, match="agent-backend"):
+        _vaults(tmp_path, "linux", _Probe(usable=True))
+
+
 def test_key_files_live_under_the_home_directory(tmp_path: Path) -> None:
     owner, agent = _vaults(tmp_path / "home", "linux", _Probe(usable=False))
-    owner.put("biff-owner", "me", "ab" * 32)
-    agent.put("biff-agent", "claude", "cd" * 32)
+    owner.put(VaultKey("biff-owner", "me"), "ab" * 32)
+    agent.put(VaultKey("biff-agent", "claude"), "cd" * 32)
     files = {
         p.relative_to(tmp_path / "home") for p in (tmp_path / "home").rglob("*.enc")
     }
@@ -130,7 +150,7 @@ def test_a_keyring_read_failure_is_a_vault_error(
 
     monkeypatch.setattr(keyring, "get_password", boom)
     with pytest.raises(VaultError, match="locked"):
-        KeyringVault(SystemKeyring()).get("biff-agent", "claude")
+        KeyringVault(SystemKeyring()).get(VaultKey("biff-agent", "claude"))
 
 
 def test_the_passphrase_is_read_through_the_tty(tmp_path: Path) -> None:

@@ -16,7 +16,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from biff.key_vault import VaultError, check_vault_name
+from biff.key_vault import VaultError, VaultKey
 
 _SCRYPT_N = 2**17
 _SCRYPT_R = 8
@@ -98,10 +98,10 @@ class PassphraseFileVault:
         """Name this vault for a message to the user."""
         return f"an encrypted file in {self._directory}"
 
-    def get(self, service: str, account: str) -> str | None:
+    def get(self, key: VaultKey) -> str | None:
         """Decrypt the secret after asking for the passphrase."""
-        path = self._path(service, account)
-        where = f"{service}/{account}"
+        path = self._path(key)
+        where = key.where
         try:
             text = path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -110,28 +110,28 @@ class PassphraseFileVault:
             msg = f"cannot read the key file for {where}: {exc}"
             raise VaultError(msg) from exc
         blob = self._parse(text, where)
-        key = self._derive(self._prompt(f"passphrase for {where}: ", where), blob)
+        derived = self._derive(self._prompt(f"passphrase for {where}: ", where), blob)
         try:
-            plain = AESGCM(key).decrypt(
-                blob.nonce, blob.ciphertext, f"{service}:{account}".encode()
+            plain = AESGCM(derived).decrypt(
+                blob.nonce, blob.ciphertext, f"{key.service}:{key.account}".encode()
             )
         except InvalidTag as exc:
             msg = f"wrong passphrase for {where}"
             raise VaultError(msg) from exc
         return plain.decode()
 
-    def has(self, service: str, account: str) -> bool:
+    def has(self, key: VaultKey) -> bool:
         """Return whether the encrypted file exists; no passphrase is asked."""
-        return self._path(service, account).exists()
+        return self._path(key).exists()
 
-    def put(self, service: str, account: str, secret: str) -> None:
+    def put(self, key: VaultKey, secret: str) -> None:
         """Encrypt *secret* under a confirmed passphrase and write it, mode 0600.
 
         The file is written beside the live one and renamed over it, so a
         failure never leaves a truncated key behind.
         """
-        path = self._path(service, account)
-        where = f"{service}/{account}"
+        path = self._path(key)
+        where = key.where
         passphrase = self._prompt(f"new passphrase for {where}: ", where)
         if len(passphrase) < _MIN_PASSPHRASE:
             msg = f"the passphrase must be at least {_MIN_PASSPHRASE} characters"
@@ -141,9 +141,9 @@ class PassphraseFileVault:
             raise VaultError(msg)
         salt, nonce = os.urandom(16), os.urandom(12)
         blank = _SealedFile(_SCRYPT_N, _SCRYPT_R, _SCRYPT_P, salt, nonce, b"")
-        key = self._derive(passphrase, blank)
-        cipher = AESGCM(key).encrypt(
-            nonce, secret.encode(), f"{service}:{account}".encode()
+        derived = self._derive(passphrase, blank)
+        cipher = AESGCM(derived).encrypt(
+            nonce, secret.encode(), f"{key.service}:{key.account}".encode()
         )
         sealed = _SealedFile(_SCRYPT_N, _SCRYPT_R, _SCRYPT_P, salt, nonce, cipher)
         self._write_atomically(path, sealed.to_json(), where)
@@ -173,10 +173,8 @@ class PassphraseFileVault:
             msg = f"could not write the key file for {where}: {exc}"
             raise VaultError(msg) from exc
 
-    def _path(self, service: str, account: str) -> Path:
-        check_vault_name("service", service)
-        check_vault_name("account", account)
-        return self._directory / f"{service}.{account}.enc"
+    def _path(self, key: VaultKey) -> Path:
+        return self._directory / f"{key.service}.{key.account}.enc"
 
     @staticmethod
     def _parse(text: str, where: str) -> _SealedFile:

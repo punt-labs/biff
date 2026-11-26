@@ -7,7 +7,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/__main__.py": {
-    "efferent_coupling": 15.0,
+    "efferent_coupling": 16.0,
     "public_names": 28.0,
     "circular_imports": 0.0,
     "max_lcom": 0.533,
@@ -132,6 +132,13 @@
     "max_lcom": 1.0,
     "avg_lcom": 1.0
   },
+  "src/biff/cli_key.py": {
+    "efferent_coupling": 7.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 1.0
+  },
   "src/biff/cli_session.py": {
     "efferent_coupling": 7.0,
     "public_names": 4.0,
@@ -251,6 +258,20 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/commands/inbox.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
+  },
+  "src/biff/commands/key.py": {
+    "efferent_coupling": 6.0,
+    "public_names": 6.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.222,
+    "avg_lcom": 0.222
+  },
   "src/biff/commands/last.py": {
     "efferent_coupling": 4.0,
     "public_names": 1.0,
@@ -315,7 +336,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/commands/who.py": {
-    "efferent_coupling": 4.0,
+    "efferent_coupling": 5.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -337,6 +358,13 @@
   },
   "src/biff/daemon/__init__.py": {
     "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/daemon/acks.py": {
+    "efferent_coupling": 0.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -377,6 +405,20 @@
     "max_lcom": 0.267,
     "avg_lcom": 0.134
   },
+  "src/biff/daemon/orgs.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/daemon/outbox.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/daemon/presence.py": {
     "efferent_coupling": 2.0,
     "public_names": 1.0,
@@ -411,6 +453,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.476,
     "avg_lcom": 0.476
+  },
+  "src/biff/daemon/session_key.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/biff/daemon/sessions.py": {
     "efferent_coupling": 10.0,
@@ -484,7 +533,14 @@
   },
   "src/biff/formatting.py": {
     "efferent_coupling": 6.0,
-    "public_names": 32.0,
+    "public_names": 31.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/frame_ack.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -559,12 +615,47 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/key_store.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 11.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.244,
+    "avg_lcom": 0.244
+  },
+  "src/biff/key_vault.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 5.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/key_wiring.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 8.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/keychain_vault.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.583,
+    "avg_lcom": 0.583
+  },
   "src/biff/local_watch.py": {
     "efferent_coupling": 5.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.717,
     "avg_lcom": 0.454
+  },
+  "src/biff/log_hint.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/biff/logging_config.py": {
     "efferent_coupling": 0.0,
@@ -607,6 +698,48 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/biff/nostr_attest.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/nostr_bech32.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/nostr_crypto.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.933,
+    "avg_lcom": 0.933
+  },
+  "src/biff/nostr_directory.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 7.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.5,
+    "avg_lcom": 0.167
+  },
+  "src/biff/nostr_event.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/passphrase_vault.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.786,
+    "avg_lcom": 0.786
   },
   "src/biff/plugins/__init__.py": {
     "efferent_coupling": 0.0,
@@ -1232,7 +1365,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/server/tools/who.py": {
-    "efferent_coupling": 5.0,
+    "efferent_coupling": 6.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -1366,6 +1499,13 @@
   },
   "src/biff/user_scope.py": {
     "efferent_coupling": 1.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/who_columns.py": {
+    "efferent_coupling": 4.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,

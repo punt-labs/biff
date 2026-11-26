@@ -7,7 +7,7 @@ from collections.abc import Callable
 import pytest
 from keyring.errors import KeyringError
 
-from biff.key_vault import KeyringVault, VaultError
+from biff.key_vault import KeyringVault, VaultError, VaultKey
 
 SECRET = "ab" * 32
 
@@ -32,19 +32,19 @@ class _FakeKeyring:
 
 def test_keyring_vault_round_trips() -> None:
     vault = KeyringVault(_FakeKeyring())
-    vault.put("biff-agent", "claude", SECRET)
-    assert vault.get("biff-agent", "claude") == SECRET
+    vault.put(VaultKey("biff-agent", "claude"), SECRET)
+    assert vault.get(VaultKey("biff-agent", "claude")) == SECRET
 
 
 def test_keyring_vault_reports_absence_as_none() -> None:
-    assert KeyringVault(_FakeKeyring()).get("biff-agent", "nobody") is None
+    assert KeyringVault(_FakeKeyring()).get(VaultKey("biff-agent", "nobody")) is None
 
 
 def test_keyring_vault_has_follows_put() -> None:
     vault = KeyringVault(_FakeKeyring())
-    before = vault.has("biff-agent", "claude")
-    vault.put("biff-agent", "claude", SECRET)
-    assert (before, vault.has("biff-agent", "claude")) == (False, True)
+    before = vault.has(VaultKey("biff-agent", "claude"))
+    vault.put(VaultKey("biff-agent", "claude"), SECRET)
+    assert (before, vault.has(VaultKey("biff-agent", "claude"))) == (False, True)
 
 
 @pytest.mark.parametrize("operation", ["get", "has", "put"])
@@ -53,9 +53,9 @@ def test_keyring_errors_become_vault_errors_naming_the_item(operation: str) -> N
     keyring.failure = KeyringError("the Secret Service is locked")
     vault = KeyringVault(keyring)
     calls: dict[str, Callable[[], object]] = {
-        "get": lambda: vault.get("biff-agent", "claude"),
-        "has": lambda: vault.has("biff-agent", "claude"),
-        "put": lambda: vault.put("biff-agent", "claude", SECRET),
+        "get": lambda: vault.get(VaultKey("biff-agent", "claude")),
+        "has": lambda: vault.has(VaultKey("biff-agent", "claude")),
+        "put": lambda: vault.put(VaultKey("biff-agent", "claude"), SECRET),
     }
     call = calls[operation]
     with pytest.raises(VaultError, match=r"biff-agent/claude.*locked"):

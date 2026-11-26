@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from biff.key_vault import VaultKey
 from biff.keychain_vault import MacKeychainVault
 
 pytestmark = pytest.mark.keychain
@@ -30,7 +31,7 @@ def keychain(tmp_path: Path) -> Iterator[Path]:
 
 def test_owner_item_is_not_released_without_the_person(keychain: Path) -> None:
     vault = MacKeychainVault(keychain=keychain)
-    vault.put("biff-owner", "probe", SECRET)
+    vault.put(VaultKey("biff-owner", "probe"), SECRET)
     read = ["find-generic-password", "-s", "biff-owner", "-a", "probe", "-w"]
     with pytest.raises((subprocess.TimeoutExpired, subprocess.CalledProcessError)):
         MacKeychainVault.run_security([*read, str(keychain)], timeout=8)
