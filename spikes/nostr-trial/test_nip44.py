@@ -152,8 +152,9 @@ MALFORMED_PADDING = {
     "zero length prefix": _framed(0, b"\0" * 32),
     "prefix longer than the data": _framed(40, b"hello" + b"\0" * 27),
     "block longer than the padded length": _framed(5, b"hello" + b"\0" * 59),
-    "block shorter than the padded length": _framed(5, b"hello" + b"\0" * 10),
 }
+# A block shorter than 34 bytes is not a padding case: the payload is then under
+# the 99-byte minimum and is rejected for its length before padding is read.
 
 
 @pytest.fixture(params=sorted(MALFORMED_PADDING))
