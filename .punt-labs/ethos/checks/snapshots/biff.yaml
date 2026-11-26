@@ -1,0 +1,72 @@
+{
+  "checks": {
+    "full-gate": {
+      "profile": "linux-worktree-v1",
+      "epoch": "biff-v1",
+      "sources": {
+        "mode": "worktree"
+      },
+      "runtime": {
+        "platforms": {
+          "linux-amd64": {
+            "bundle": "biff-handoff-linux-amd64.tar.gz",
+            "sha256": "c365226b2bb2290fe5b8372a12cf96a6a244c6fb6aaa49f970a22fa1b338f4db",
+            "url": "https://github.com/punt-labs/biff/releases/download/handoff-runtime-v1/biff-handoff-linux-amd64.tar.gz",
+            "path": [
+              "{runtime}/bin",
+              "{runtime}/node/bin",
+              "/usr/bin",
+              "/bin"
+            ],
+            "env": {
+              "UV_PYTHON": "{runtime}/python/bin/python3",
+              "UV_OFFLINE": "1",
+              "UV_PYTHON_DOWNLOADS": "never",
+              "UV_LINK_MODE": "copy",
+              "UV_CACHE_DIR": "{scratch}/uv-cache",
+              "npm_config_cache": "{scratch}/npm-cache",
+              "npm_config_offline": "true",
+              "npm_config_update_notifier": "false",
+              "RUFF_CACHE_DIR": "{scratch}/ruff-cache",
+              "MYPY_CACHE_DIR": "{scratch}/mypy-cache",
+              "PYTHONDONTWRITEBYTECODE": "1"
+            }
+          }
+        }
+      },
+      "system": {
+        "tools": [
+          "bash",
+          "git",
+          "jq",
+          "make"
+        ]
+      },
+      "scratch": {
+        "checkout": [
+          ".venv",
+          ".pytest_cache",
+          ".tmp"
+        ],
+        "seed": {
+          "{scratch}/uv-cache": "{runtime}/cache/uv",
+          "{scratch}/npm-cache": "{runtime}/cache/npm"
+        }
+      },
+      "git": {
+        "base_ref": "refs/remotes/origin/main"
+      },
+      "network": "loopback",
+      "prehydrate": {
+        "run": [
+          "uv",
+          "sync",
+          "--offline",
+          "--locked",
+          "--extra",
+          "dev"
+        ]
+      }
+    }
+  }
+}
