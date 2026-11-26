@@ -1941,17 +1941,13 @@ verified by model checking with probcli (\texttt{z-spec test}):
 %% Five-kind model (channelCheck added, PL-1365): the state space is
 %% 831,363 states / 8,920,352 transitions at DEFAULT_SETSIZE 1.  Run on that
 %% model, the formula above is TRUE for k = talk and k = inboxNotify (both
-%% the not-closed and, for talk, the connected form).  The remaining runs,
-%% k = channelCheck included, each took more than 25 minutes on a developer
-%% machine and were not completed; they were bounded instead:
-%%
-%%   "$PROBCLI" docs/nats-relay.tex $P -mc 2000000
-%%
-%% explores 2,000,000 states with no invariant violation and no deadlock and
-%% covers every operation, Subscribe and SubscribeRetry at kind? = channelCheck
-%% among them.  The channelCheck instance of the formula is the same schema as
-%% the four above: Subscribe is quantified over SubKind, so the code (the
-%% ChannelCheckSub class) meets it exactly as the other kinds' reconcilers do.
+%% the not-closed and, for talk, the connected form) and for
+%% k = channelCheck in the not-closed form: every one of the 831,363 states
+%% visited, no counterexample, about 4.5 minutes walltime on an idle machine
+%% (2026-11-25; an earlier attempt under load did not finish in 25 minutes).
+%% A bounded run, "$PROBCLI" docs/nats-relay.tex $P -mc 2000000, also covers
+%% every operation, Subscribe and SubscribeRetry at kind? = channelCheck among
+%% them, with no invariant violation and no deadlock.
 %%
 %%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
 %%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 4 -p MAX_INITIALISATIONS 100 \
