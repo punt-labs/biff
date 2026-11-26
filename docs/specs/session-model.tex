@@ -917,7 +917,10 @@ Close a session after all processes have been reaped and all live routing
 entries have been suspended.  Live presence cleanup is automatic before
 final close; this verification ordering adds no user-visible workflow
 step.  $SuspendEntry$ releases each live alias while retaining routing
-history; final close leaves that history unchanged.
+history; final close leaves that history unchanged.  A session that the
+daemon still holds a record for ($s? \in known$) cannot be closed: the
+record goes first, by $SessionEnd$ or $RetentionExpire$
+(\S\ref{sec:daemonops}).
 
 \begin{schema}{CloseSession}
   \Delta RouteWorld \\

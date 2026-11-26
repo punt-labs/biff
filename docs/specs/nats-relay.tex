@@ -187,6 +187,23 @@ exercised three times, not a hypothetical.  (A constructor, for the dual-session
 companion's inbox SUB, once existed; the companion was removed, PL-231,
 and the constructor with it.)
 
+A seventh refinement, added here, models the per-user daemon of DES-095
+(\texttt{docs/design/biffd.md}).  Until now every client process opened
+its own relay connection, so the model's single $Connection$ stood for
+``the relay handle of a process''.  With the daemon it stands for the
+relay handle of \emph{the daemon}, one per relay target, and the clients
+that talk to the daemon are a new layer on top of it
+(\S\ref{sec:daemon}, \S\ref{sec:daemonops}).  The layer adds the three
+situations a client can be in --- attached, detached, and facing an absent
+daemon --- and the four operations that move between them.  It proves that
+a client never holds a relay handle, that attaching and detaching leave
+the relay exactly as it was, that a daemon that does not exist holds
+nothing, and that every state with an attached client can reach a state in
+which that client's arrivals are delivered (\S\ref{sec:modelcheck}).  The
+transport machinery of the earlier refinements is unchanged and unweakened;
+three operations gained a guard that records that a dead process dials and
+closes nothing.
+
 %%----------------------------------------------------------------------
 \section{Basic Types}
 %%----------------------------------------------------------------------
