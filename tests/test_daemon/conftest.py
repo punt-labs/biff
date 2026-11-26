@@ -119,6 +119,7 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         poll_interval=0.02,
         attach_timeout=0.5,
         request_timeout=0.5,
+        read_budget=4000,
     )
     await daemon.start()
     env = Harness(daemon=daemon, run_dir=run_dir, factory=factory)

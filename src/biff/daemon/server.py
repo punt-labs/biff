@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Self, final
 from websockets.asyncio.server import Server, ServerConnection, serve
 
 from biff.daemon.connection import ConnectionHandler, DaemonCore
-from biff.daemon.methods import Methods
+from biff.daemon.methods import READ_BUDGET_BYTES, Methods
 from biff.daemon.relays import RelayPool
 from biff.daemon.resolver import DiskResolver
 from biff.daemon.sessions import SessionTable
@@ -72,6 +72,7 @@ class BiffDaemon:
         poll_interval: float = POLL_SECONDS,
         attach_timeout: float = ATTACH_SECONDS,
         request_timeout: float = REQUEST_SECONDS,
+        read_budget: int = READ_BUDGET_BYTES,
     ) -> Self:
         """Create a daemon that will listen on *port* (0 picks a free one).
 
@@ -85,7 +86,7 @@ class BiffDaemon:
             resolver=resolver or DiskResolver(),
             pool=RelayPool(relay_factory or RelayPool.selecting()),
             sessions=SessionTable(heartbeat_interval=heartbeat_interval),
-            methods=Methods(),
+            methods=Methods(read_budget),
             seq=count(1),
             poll_interval=poll_interval,
             attach_timeout=attach_timeout,

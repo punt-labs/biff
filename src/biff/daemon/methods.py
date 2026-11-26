@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Self, final
 
 from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from biff import commands
+from biff.commands.read import Inbox
 from biff.daemon.refusal import RefusalError
 from biff.frame_reply import ErrorCode
 
@@ -17,14 +20,31 @@ if TYPE_CHECKING:
 
     from biff.cli_context import CliContext
     from biff.commands import CommandResult
+    from biff.models import Message
 
-__all__ = ["Methods", "Params"]
+__all__ = ["READ_BUDGET_BYTES", "Acknowledge", "Methods", "Outcome", "Params"]
 
 logger = logging.getLogger(__name__)
 
 _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 type Handler = Callable[[CliContext, Params], Awaitable[CommandResult]]
+type Acknowledge = Callable[[], Awaitable[None]]
+
+READ_BUDGET_BYTES = 512 * 1024
+"""The most mail one ``read`` reply carries; a frame may not exceed 1 MiB."""
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """A method's wire result, and what to do once that result has been delivered.
+
+    ``acknowledge`` is for effects that must not happen if the reply is lost:
+    marking mail read.  The connection runs it only after the reply was written.
+    """
+
+    result: JsonValue
+    acknowledge: Acknowledge | None = None
 
 
 @final
@@ -108,18 +128,23 @@ class Params:
 class Methods:
     """Dispatches a method name to its command object."""
 
-    __slots__ = ("_table",)
+    __slots__ = ("_read_budget", "_table")
 
     _table: dict[str, Handler]
+    _read_budget: int
 
-    def __new__(cls) -> Self:
-        """Create the table of every served method."""
+    def __new__(cls, read_budget: int = READ_BUDGET_BYTES) -> Self:
+        """Create the table of every served method.
+
+        *read_budget* is the most mail, in bytes of JSON, one ``read`` reply
+        carries; the rest stays unread for the next ``read``.
+        """
         self = super().__new__(cls)
+        self._read_budget = read_budget
         self._table = {
             "who": Methods._who,
             "finger": Methods._finger,
             "write": Methods._write,
-            "read": Methods._read,
             "plan": Methods._plan,
             "last": Methods._last,
             "wall": Methods._wall,
@@ -132,11 +157,11 @@ class Methods:
     @property
     def names(self) -> tuple[str, ...]:
         """The served method names."""
-        return tuple(self._table)
+        return ("read", *self._table)
 
     async def call(
         self, ctx: CliContext, method: str, raw: dict[str, JsonValue]
-    ) -> JsonValue:
+    ) -> Outcome:
         """Run *method* for the session *ctx* and return its wire result.
 
         The result is ``{"data": <the command's JSON payload>, "error": bool}``;
@@ -146,13 +171,39 @@ class Methods:
         Raises:
             RefusalError: The method is unknown or its params are invalid.
         """
+        if method == "read":
+            return await self._read(ctx, Params(method, raw))
         handler = self._table.get(method)
         if handler is None:
             msg = f"unknown method {method!r}; served: {', '.join(self.names)}"
             raise RefusalError.of(ErrorCode.UNKNOWN_METHOD, msg)
         result = await handler(ctx, Params(method, raw))
         data = _JSON.validate_python(to_jsonable_python(result.json_data))
-        return {"data": data, "error": result.error}
+        return Outcome({"data": data, "error": result.error})
+
+    async def _read(self, ctx: CliContext, p: Params) -> Outcome:
+        """Return the next batch of unread mail, to be marked read once delivered.
+
+        The batch is as much of the inbox as fits the read budget, and always at
+        least one message, so a message larger than the budget still gets out.
+        ``more`` counts what the batch leaves unread.
+        """
+        p.done()
+        inbox = await Inbox.unread(ctx)
+        batch: list[Message] = []
+        size = 0
+        for message in inbox.messages:
+            size += len(message.model_dump_json())
+            if batch and size > self._read_budget:
+                break
+            batch.append(message)
+        data = _JSON.validate_python(
+            to_jsonable_python([m.model_dump(mode="json") for m in batch])
+        )
+        result: dict[str, JsonValue] = {"data": data, "error": False}
+        if (left := len(inbox.messages) - len(batch)) > 0:
+            result["more"] = left
+        return Outcome(result, partial(inbox.mark_read, batch) if batch else None)
 
     @staticmethod
     async def _who(ctx: CliContext, p: Params) -> CommandResult:
@@ -170,11 +221,6 @@ class Methods:
         to, message = p.text("to"), p.text("message")
         p.done()
         return await commands.write(ctx, to, message)
-
-    @staticmethod
-    async def _read(ctx: CliContext, p: Params) -> CommandResult:
-        p.done()
-        return await commands.read(ctx)
 
     @staticmethod
     async def _plan(ctx: CliContext, p: Params) -> CommandResult:

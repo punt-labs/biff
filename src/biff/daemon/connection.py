@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
 
     from biff.daemon.attachment import Attachment
-    from biff.daemon.methods import Methods
+    from biff.daemon.methods import Acknowledge, Methods
     from biff.daemon.relays import RelayPool
     from biff.daemon.resolver import SessionResolver
     from biff.daemon.sessions import SessionTable
@@ -247,34 +247,51 @@ class ConnectionHandler:
     async def _reply(
         self, ws: ServerConnection, attachment: Attachment, request: Request
     ) -> None:
-        await self._send(ws, await self._answer(attachment, request))
+        """Answer *request*, then run what the answer left to acknowledge.
 
-    async def _answer(self, attachment: Attachment, request: Request) -> Reply:
-        """Run one request and return its reply; no failure escapes this method."""
+        Mail marked read before the reply was sent would be lost with the reply,
+        so acknowledgement waits for the write.
+        """
+        reply, acknowledge = await self._answer(attachment, request)
+        if not await self._send(ws, reply) or acknowledge is None:
+            return
+        try:
+            await acknowledge()
+        except Exception:
+            logger.exception("acknowledging %s failed", request.method)
+
+    async def _answer(
+        self, attachment: Attachment, request: Request
+    ) -> tuple[Reply, Acknowledge | None]:
+        """Run one request; no failure escapes this method.
+
+        Returns the reply and the acknowledgement to run once it was sent.
+        """
         method, core = request.method, self._core
         if not attachment.is_current:
-            return self._failure(
+            replaced = self._failure(
                 request.id, ErrorCode.SESSION_REPLACED, _REPLACED_REASON
             )
+            return replaced, None
         try:
             async with asyncio.timeout(core.request_timeout):
-                result = await core.methods.call(
+                outcome = await core.methods.call(
                     attachment.session.context, method, request.params
                 )
         except RefusalError as exc:
-            return Reply(id=request.id, error=exc.reply_error)
+            return Reply(id=request.id, error=exc.reply_error), None
         except TimeoutError:
             msg = f"{method} timed out after {core.request_timeout:g}s"
-            return self._failure(request.id, ErrorCode.INTERNAL, msg)
+            return self._failure(request.id, ErrorCode.INTERNAL, msg), None
         except RELAY_ERRORS as exc:
             logger.warning("%s failed", method, exc_info=True)
             msg = f"{method} failed: {exc}"
-            return self._failure(request.id, ErrorCode.INTERNAL, msg)
+            return self._failure(request.id, ErrorCode.INTERNAL, msg), None
         except Exception as exc:
             logger.exception("%s failed in biffd", method)
             msg = f"{method} failed in biffd: {exc}; {_LOG_HINT}"
-            return self._failure(request.id, ErrorCode.INTERNAL, msg)
-        return Reply(id=request.id, result=result)
+            return self._failure(request.id, ErrorCode.INTERNAL, msg), None
+        return Reply(id=request.id, result=outcome.result), outcome.acknowledge
 
     @staticmethod
     def _failure(request_id: int, code: ErrorCode, message: str) -> Reply:
@@ -320,8 +337,11 @@ class ConnectionHandler:
         await ws.close(code, clipped)
 
     @staticmethod
-    async def _send(ws: ServerConnection, frame: Reply | Event | Proof) -> None:
+    async def _send(ws: ServerConnection, frame: Reply | Event | Proof) -> bool:
+        """Write *frame*; ``False`` means the client had already left."""
         try:
             await ws.send(Frames.encode(frame))
         except ConnectionClosed:
             logger.debug("client left before the frame was sent", exc_info=True)
+            return False
+        return True
