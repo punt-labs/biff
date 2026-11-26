@@ -29,16 +29,6 @@
               "{runtime}/bin",
               "{runtime}/node/bin"
             ]
-          },
-          "darwin-arm64": {
-            "bundle": "biff-handoff-darwin-arm64.tar.gz",
-            "sha256": "2cd02a5b5898a648d78be5308ddf2aeef06a4550728d3e587ccc6dfe1b0e4486",
-            "url": "https://github.com/punt-labs/biff/releases/download/handoff-runtime-v1/biff-handoff-darwin-arm64.tar.gz",
-            "path": [
-              "{runtime}/bin",
-              "{runtime}/node/bin",
-              "/opt/homebrew/bin"
-            ]
           }
         }
       },
