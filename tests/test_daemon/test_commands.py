@@ -127,3 +127,28 @@ async def test_repos_on_one_relay_server_get_one_relay_each_and_stay_apart(
     assert harness.factory.repos == ["nats-a", "nats-b"]
     await eric.request("write", to="kai", message="for repo b only")
     assert _rows(await kai.request("read")) == []
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "WS_PROXY",
+        "ws_proxy",
+        "WSS_PROXY",
+        "wss_proxy",
+    ],
+)
+async def test_a_proxy_in_the_environment_is_not_used_for_the_loopback_daemon(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, variable: str
+) -> None:
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(variable, "http://127.0.0.1:1")  # nothing listens there
+    kai = await harness.connect("s-kai", "kai")
+    assert cast("dict[str, object]", await kai.request("who"))["error"] is False

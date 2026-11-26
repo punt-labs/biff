@@ -213,8 +213,12 @@ class DaemonClient:
     async def _open(port: int) -> ClientConnection:
         """Open the WebSocket, telling a missing daemon from a wrong listener."""
         try:
+            # proxy=None: the daemon is on this machine, never behind a proxy that
+            # the environment's HTTP_PROXY or WS_PROXY would otherwise name.
             return await connect(
-                f"ws://{_LOOPBACK}:{port}/", open_timeout=_OPEN_TIMEOUT_SECONDS
+                f"ws://{_LOOPBACK}:{port}/",
+                open_timeout=_OPEN_TIMEOUT_SECONDS,
+                proxy=None,
             )
         except InvalidHandshake as exc:
             msg = (
