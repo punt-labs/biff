@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from biff.client.connection import DaemonError
-from biff.frames import ErrorCode
+from biff.frame_reply import ErrorCode
 from biff.relay import LocalRelay
 from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting

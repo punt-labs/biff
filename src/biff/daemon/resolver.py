@@ -10,7 +10,7 @@ from biff.config import load_cli_config, load_mcp_config
 from biff.daemon.relays import ResolvedSession
 
 if TYPE_CHECKING:
-    from biff.frames import Hello
+    from biff.frame_client import Hello
 
 __all__ = ["DiskResolver", "ResolveError", "SessionResolver"]
 

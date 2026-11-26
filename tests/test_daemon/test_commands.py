@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from biff.client.connection import DaemonError
-from biff.frames import ErrorCode
+from biff.frame_reply import ErrorCode
 
 if TYPE_CHECKING:
     from tests.test_daemon.conftest import Harness
@@ -117,3 +117,13 @@ async def test_results_are_wire_data_never_rendered_text(harness: Harness) -> No
     client = await harness.connect("s-kai", "kai")
     result = cast("dict[str, object]", await client.request("who"))
     assert set(result) == {"data", "error"}
+
+
+async def test_repos_on_one_relay_server_get_one_relay_each_and_stay_apart(
+    harness: Harness,
+) -> None:
+    kai = await harness.connect("s-kai", "kai", cwd="/work/nats-a")
+    eric = await harness.connect("s-eric", "eric", cwd="/work/nats-b")
+    assert harness.factory.repos == ["nats-a", "nats-b"]
+    await eric.request("write", to="kai", message="for repo b only")
+    assert _rows(await kai.request("read")) == []

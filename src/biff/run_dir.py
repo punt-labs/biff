@@ -55,8 +55,14 @@ class RunDir:
         return self._path / "serve.port"
 
     def ensure(self) -> None:
-        """Create the directory private to the user when it is absent."""
+        """Create the directory private to the user, or refuse one that is not.
+
+        Raises:
+            PermissionError: The directory exists but another user could read
+                or replace what is in it.
+        """
         self._path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._require_private(self._path, 0o700, "chmod 700")
 
     def ensure_token(self) -> str:
         """Return the token, creating it once at mode 0600.
@@ -79,17 +85,15 @@ class RunDir:
 
         Raises:
             FileNotFoundError: No daemon has created the token.
-            PermissionError: The file is readable by someone but its owner.
+            PermissionError: The directory or the file is not private to the
+                current user, so the token cannot be trusted.
         """
         path = self.token_path
-        try:
-            mode = stat.S_IMODE(path.stat().st_mode)
-        except FileNotFoundError as exc:
+        if not path.exists():
             msg = f"no token at {path}: biffd has never run here"
-            raise FileNotFoundError(msg) from exc
-        if mode & 0o077:
-            msg = f"{path} has mode {mode:04o}; it must be 0600"
-            raise PermissionError(msg)
+            raise FileNotFoundError(msg)
+        self._require_private(self._path, 0o700, "chmod 700")
+        self._require_private(path, 0o600, "chmod 600")
         return path.read_text().strip()
 
     def write_port(self, port: int) -> None:
@@ -116,3 +120,26 @@ class RunDir:
     def remove_port(self) -> None:
         """Remove the port file; a daemon that never wrote it is not an error."""
         self.port_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _require_private(path: Path, mode: int, repair: str) -> None:
+        """Refuse *path* unless the current user owns it at exactly *mode*.
+
+        Raises:
+            PermissionError: Another user owns *path*, or it is more open than
+                *mode*.
+        """
+        info = path.stat()
+        if info.st_uid != os.getuid():
+            msg = (
+                f"{path} is owned by uid {info.st_uid}, not you (uid "
+                f"{os.getuid()}); biffd's token cannot be trusted there"
+            )
+            raise PermissionError(msg)
+        actual = stat.S_IMODE(info.st_mode)
+        if actual & ~mode:
+            msg = (
+                f"{path} has mode {actual:04o}; it must be {mode:04o}. "
+                f"Run: {repair} {path}"
+            )
+            raise PermissionError(msg)

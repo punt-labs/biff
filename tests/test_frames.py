@@ -6,18 +6,11 @@ import json
 
 import pytest
 
-from biff.frames import (
-    PROTOCOL_VERSION,
-    ErrorCode,
-    Event,
-    FrameError,
-    Frames,
-    Hello,
-    Reply,
-    ReplyError,
-    Request,
-    Subscribe,
-)
+from biff.frame_base import PROTOCOL_VERSION
+from biff.frame_client import Hello, Request, Subscribe
+from biff.frame_proof import Challenge
+from biff.frame_reply import ErrorCode, Reply, ReplyError
+from biff.frames import Event, FrameError, Frames
 
 
 def _hello(**overrides: object) -> dict[str, object]:
@@ -101,3 +94,29 @@ def test_a_request_id_must_be_positive() -> None:
 def test_a_bad_session_id_is_refused_at_the_boundary() -> None:
     with pytest.raises(FrameError, match="session_id"):
         Frames.decode(json.dumps(_hello(session_id="../x")))
+
+
+def test_challenge_and_proof_round_trip() -> None:
+    challenge = Challenge.fresh()
+    assert Frames.decode(Frames.encode(challenge)) == challenge
+    proof = challenge.answer("token")
+    assert Frames.decode(Frames.encode(proof)) == proof
+
+
+def test_a_proof_answers_only_its_own_challenge_and_token() -> None:
+    challenge = Challenge.fresh()
+    proof = challenge.answer("token")
+    assert proof.answers(challenge, "token")
+    assert not proof.answers(challenge, "other-token")
+    assert not proof.answers(Challenge.fresh(), "token")
+
+
+def test_fresh_challenges_differ() -> None:
+    assert Challenge.fresh().nonce != Challenge.fresh().nonce
+
+
+@pytest.mark.parametrize("nonce", ["zz" * 16, "ab"])
+def test_a_non_hex_or_short_nonce_is_refused(nonce: str) -> None:
+    raw = {"type": "challenge", "version": 1, "nonce": nonce}
+    with pytest.raises(FrameError, match="nonce"):
+        Frames.decode(json.dumps(raw))

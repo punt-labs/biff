@@ -17,6 +17,16 @@
   sessions share it, binds each connection to the one session its hello named,
   and closes any connection whose first frame is not a valid hello with the
   right token. `biff.client` is the matching client; it imports no relay.
+- A client sends the biffd token only to a daemon that proved it holds it:
+  the client sends a random challenge, the daemon answers with the HMAC of it
+  under the token, and only then does the client send its hello. A process
+  that merely bound the port never sees the token. The client also refuses a
+  run directory that is not 0700, or a token file that is not 0600, or not
+  owned by the current user, and prints the `chmod` that repairs it.
+- The daemon keeps one relay per relay server, credentials and repository.
+  Two repositories on one NATS server get two relays, each scoped to its own
+  repository, so one repository's mail, presence and wall stay in its own
+  namespace.
 
 ### Changed
 

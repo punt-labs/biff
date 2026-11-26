@@ -8,7 +8,7 @@ import pytest
 
 from biff.daemon.methods import Methods, Params
 from biff.daemon.refusal import RefusalError
-from biff.frames import ErrorCode
+from biff.frame_reply import ErrorCode
 
 if TYPE_CHECKING:
     from pydantic import JsonValue

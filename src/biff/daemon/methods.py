@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff import commands
 from biff.daemon.refusal import RefusalError
-from biff.frames import ErrorCode
+from biff.frame_reply import ErrorCode
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

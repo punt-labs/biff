@@ -6,6 +6,7 @@ from pathlib import Path
 
 from biff.daemon.relays import RelayPool, ResolvedSession
 from biff.models import BiffConfig, RelayAuth
+from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay, Relay
 
 
@@ -29,7 +30,7 @@ def test_local_sessions_share_a_target_per_data_directory(tmp_path: Path) -> Non
     assert _session(tmp_path, name="a").target != _session(tmp_path, name="b").target
 
 
-def test_nats_sessions_share_a_target_whatever_their_data_directory(
+def test_nats_sessions_of_one_repo_share_a_target_whatever_their_data_directory(
     tmp_path: Path,
 ) -> None:
     one = _session(tmp_path, url="tls://relay.example", token="t", name="a")
@@ -62,3 +63,31 @@ def test_the_selecting_factory_builds_a_local_relay_without_a_url(
 ) -> None:
     relay = RelayPool.selecting()(_session(tmp_path))
     assert isinstance(relay, LocalRelay)
+
+
+def _repo_session(
+    tmp_path: Path, repo: str, url: str = "tls://relay.example"
+) -> ResolvedSession:
+    return ResolvedSession(
+        config=BiffConfig(user="kai", repo_name=repo, relay_url=url),
+        data_dir=tmp_path / "shared",
+        repo_root=None,
+    )
+
+
+def test_two_repos_on_one_nats_server_are_two_targets(tmp_path: Path) -> None:
+    a = _repo_session(tmp_path, "repo-a")
+    b = _repo_session(tmp_path, "repo-b")
+    assert a.target != b.target
+
+
+def test_two_repos_on_one_nats_server_get_two_relays_scoped_to_their_repo(
+    tmp_path: Path,
+) -> None:
+    pool = RelayPool(RelayPool.selecting())
+    a = pool.acquire(_repo_session(tmp_path, "repo-a"))
+    b = pool.acquire(_repo_session(tmp_path, "repo-b"))
+    assert (a is not b, pool.connection_count) == (True, 2)
+    assert isinstance(a, NatsRelay)
+    assert isinstance(b, NatsRelay)
+    assert (a._repo_name, b._repo_name) == ("repo-a", "repo-b")

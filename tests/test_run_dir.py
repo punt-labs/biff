@@ -72,3 +72,48 @@ def test_default_run_dir_is_under_the_home_tree(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     assert RunDir.default().path == tmp_path / ".punt-labs" / "biff" / "run"
+
+
+def test_a_run_directory_others_can_enter_is_refused(tmp_path: Path) -> None:
+    run = RunDir(tmp_path / "run")
+    run.ensure_token()
+    run.path.chmod(0o755)
+    with pytest.raises(PermissionError, match=r"chmod 700"):
+        run.read_token()
+
+
+def test_a_loose_run_directory_is_refused_before_a_token_is_created(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "run").mkdir(mode=0o755)
+    (tmp_path / "run").chmod(0o755)
+    with pytest.raises(PermissionError, match=r"chmod 700"):
+        RunDir(tmp_path / "run").ensure_token()
+
+
+def test_a_token_file_owned_by_someone_else_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = RunDir(tmp_path / "run")
+    run.ensure_token()
+    monkeypatch.setattr("os.getuid", lambda: run.token_path.stat().st_uid + 1)
+    with pytest.raises(PermissionError, match="owned by"):
+        run.read_token()
+
+
+def test_a_run_directory_owned_by_someone_else_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = RunDir(tmp_path / "run")
+    run.ensure_token()
+    monkeypatch.setattr("os.getuid", lambda: run.path.stat().st_uid + 1)
+    with pytest.raises(PermissionError, match="owned by"):
+        run.read_token()
+
+
+def test_the_refusal_names_the_repair(tmp_path: Path) -> None:
+    run = RunDir(tmp_path / "run")
+    run.ensure_token()
+    run.token_path.chmod(0o640)
+    with pytest.raises(PermissionError, match=r"chmod 600"):
+        run.read_token()

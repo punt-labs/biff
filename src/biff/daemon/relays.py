@@ -22,16 +22,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class RelayTarget:
-    """What identifies a relay: a NATS server with its credentials, or a directory.
+    """What identifies a relay: a NATS server, its credentials and a repository.
 
-    Two sessions share a connection exactly when their targets are equal.  A
-    local relay is its own target per data directory, so the sessions of one
-    repository share one and another repository's sessions do not.
+    Two sessions share a connection exactly when their targets are equal.
+    ``NatsRelay`` scopes its subjects, presence and wall by repository name, so
+    two repositories on one NATS server are two targets; sharing one NATS
+    client between them is a later optimization.  A local relay is its own
+    target per data directory.
     """
 
     url: str | None
     auth: RelayAuth | None
     tls_handshake_first: bool
+    repo_name: str | None
     data_dir: Path | None
 
 
@@ -52,10 +55,15 @@ class ResolvedSession:
                 url=config.relay_url,
                 auth=config.relay_auth,
                 tls_handshake_first=config.relay_tls_handshake_first,
+                repo_name=config.repo_name,
                 data_dir=None,
             )
         return RelayTarget(
-            url=None, auth=None, tls_handshake_first=False, data_dir=self.data_dir
+            url=None,
+            auth=None,
+            tls_handshake_first=False,
+            repo_name=None,
+            data_dir=self.data_dir,
         )
 
 

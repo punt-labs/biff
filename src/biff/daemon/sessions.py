@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_context import CliContext
 from biff.daemon.refusal import RefusalError
-from biff.frames import ErrorCode
+from biff.frame_reply import ErrorCode
 from biff.models import UserSession
 from biff.nats_relay import NatsRelay
 from biff.relay_errors import RELAY_ERRORS
@@ -20,7 +20,7 @@ from biff.tty import claim_tty_name, get_hostname
 
 if TYPE_CHECKING:
     from biff.daemon.relays import RelayTarget, ResolvedSession
-    from biff.frames import Hello
+    from biff.frame_client import Hello
     from biff.relay import Relay
 
 __all__ = ["Attachment", "SessionStatus", "SessionTable"]

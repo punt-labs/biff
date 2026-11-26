@@ -19,7 +19,7 @@ from biff.run_dir import RunDir
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from biff.frames import ClientType, Hello
+    from biff.frame_client import ClientType, Hello
     from biff.relay import Relay
 
 
@@ -38,9 +38,17 @@ class FakeResolver:
         if Path(hello.cwd).name == "missing":
             msg = f"{hello.cwd} is not a biff repository"
             raise ResolveError(msg)
+        name = Path(hello.cwd).name
+        if name.startswith("nats-"):  # many repos, one relay server
+            config = BiffConfig(
+                user=hello.user or "kai", repo_name=name, relay_url="nats://fake"
+            )
+            return ResolvedSession(
+                config=config, data_dir=self._base / "nats", repo_root=None
+            )
         return ResolvedSession(
             config=BiffConfig(user=hello.user or "kai", repo_name="test"),
-            data_dir=self._base / Path(hello.cwd).name,
+            data_dir=self._base / name,
             repo_root=None,
         )
 
@@ -51,10 +59,17 @@ class CountingFactory:
 
     def __init__(self) -> None:
         self.built: list[Path] = []
+        self.repos: list[str] = []
 
     def __call__(self, resolved: ResolvedSession) -> Relay:
-        self.built.append(resolved.data_dir)
-        return LocalRelay(resolved.data_dir)
+        # A fake NATS relay is one directory per repo, as NatsRelay is one
+        # subject namespace per repo on a shared server.
+        directory = resolved.data_dir
+        if resolved.config.relay_url:
+            directory = directory / resolved.config.repo_name
+        self.built.append(directory)
+        self.repos.append(resolved.config.repo_name)
+        return LocalRelay(directory)
 
 
 @dataclass

@@ -13,18 +13,11 @@ from websockets.exceptions import ConnectionClosed
 from biff.daemon.refusal import RefusalError
 from biff.daemon.resolver import ResolveError
 from biff.daemon.subscription import Subscription
-from biff.frames import (
-    PROTOCOL_VERSION,
-    ErrorCode,
-    Event,
-    FrameError,
-    Frames,
-    Hello,
-    Reply,
-    ReplyError,
-    Request,
-    Subscribe,
-)
+from biff.frame_base import PROTOCOL_VERSION
+from biff.frame_client import Hello, Request, Subscribe
+from biff.frame_proof import Challenge, Proof
+from biff.frame_reply import ErrorCode, Reply, ReplyError
+from biff.frames import Event, FrameError, Frames
 from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
@@ -94,16 +87,20 @@ class ConnectionHandler:
             logger.debug("connection closed by the client", exc_info=True)
 
     async def _authenticate(self, ws: ServerConnection) -> Attachment | None:
-        """Read the hello; return the attachment, or ``None`` after closing *ws*."""
-        try:
-            raw = await asyncio.wait_for(ws.recv(), timeout=_HELLO_TIMEOUT_SECONDS)
-            frame = Frames.decode(raw if isinstance(raw, str) else raw.decode())
-        except (TimeoutError, FrameError, UnicodeDecodeError):
-            await ws.close(_POLICY_VIOLATION, "expected a hello")
+        """Prove the token, read the hello; return the attachment.
+
+        Returns ``None`` after closing *ws* when the first frame is not a
+        challenge or the next is not a hello holding the token.  The proof comes
+        first so a client can refuse an impostor before it sends the token.
+        """
+        challenge = await self._expect(ws, Challenge, "expected a challenge")
+        if challenge is None:
             return None
-        if not isinstance(frame, Hello) or not hmac.compare_digest(
-            frame.token.encode(), self._token.encode()
-        ):
+        await self._send(ws, challenge.answer(self._token))
+        frame = await self._expect(ws, Hello, "expected a hello")
+        if frame is None:
+            return None
+        if not hmac.compare_digest(frame.token.encode(), self._token.encode()):
             await ws.close(_POLICY_VIOLATION, "unauthorized")
             return None
         try:
@@ -123,6 +120,22 @@ class ConnectionHandler:
             ),
         )
         return attachment
+
+    @staticmethod
+    async def _expect[F: Challenge | Hello](
+        ws: ServerConnection, kind: type[F], why: str
+    ) -> F | None:
+        """Read one *kind* frame; close *ws* and return ``None`` on anything else."""
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=_HELLO_TIMEOUT_SECONDS)
+            frame = Frames.decode(raw if isinstance(raw, str) else raw.decode())
+        except (TimeoutError, FrameError, UnicodeDecodeError):
+            await ws.close(_POLICY_VIOLATION, why)
+            return None
+        if not isinstance(frame, kind):
+            await ws.close(_POLICY_VIOLATION, why)
+            return None
+        return frame
 
     async def _attach(self, hello: Hello) -> Attachment:
         if hello.version != PROTOCOL_VERSION:
@@ -193,7 +206,7 @@ class ConnectionHandler:
             task.cancel()
 
     @staticmethod
-    async def _send(ws: ServerConnection, frame: Reply | Event) -> None:
+    async def _send(ws: ServerConnection, frame: Reply | Event | Proof) -> None:
         try:
             await ws.send(Frames.encode(frame))
         except ConnectionClosed:

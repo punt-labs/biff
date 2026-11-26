@@ -29,7 +29,7 @@ Terms used below:
 
 | State or duty | Why it is in the daemon |
 |---------------|-------------------------|
-| The relay connections and their reconnect lifecycle | One connection per relay target, however many sessions use it. Today every `biff mcp` process opens its own. |
+| The relay connections and their reconnect lifecycle | One connection per relay target (server, credentials and repository), however many sessions use it. Today every `biff mcp` process opens its own. |
 | Inbox and unread state | Several clients read and mark the same unread set; read-once semantics need one writer. |
 | Presence and `.plan` | One heartbeat per session, sent by the daemon, not by each client. |
 | Talk sessions | A talk has two ends and a queue (`docs/specs/talk.tex`); one owner keeps the queue bounded. |
@@ -38,10 +38,13 @@ Terms used below:
 | Private keys and signing | biffd signs on behalf of clients; a client gets a token, never a key. Custody, attestation and verification are specified in [trust-model.md](trust-model.md). |
 | Message semantics and delivery policy | Identical for every harness (R-D.4): classification, read-once behavior and what a harness may show live in the engine, so an adapter cannot differ. |
 
-One relay connection serves every session that targets the same relay. A
-repository with the local relay (`.punt-labs/local/biff/relay/`, DES-091) is its
-own target, so biffd holds one connection per distinct target and the sessions
-of one repository share it.
+One relay connection serves every session that targets the same relay. The
+target is the key `(server, credentials, repository)`: the NATS relay scopes
+its subjects, presence and wall by repository name, so two repositories on one
+NATS server are two targets, and sharing one NATS client between them is a
+later optimization. A repository with the local relay
+(`.punt-labs/local/biff/relay/`, DES-091) is its own target, so biffd holds one
+connection per distinct target and the sessions of one repository share it.
 
 ## What stays in clients
 
@@ -98,14 +101,28 @@ Every frame is a JSON object with a protocol `version`.
 
 | Frame | Direction | Content |
 |-------|-----------|---------|
-| `hello` | client to daemon, first frame | Token, client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id`, `main_agent_id` (empty when the harness states none), `cwd` (the directory the client runs in, which names the repository and so the relay target) and an optional `user` override. The daemon answers a valid hello with a `reply` whose `id` is 0 |
+| `challenge` | client to daemon, first frame | A random 128-bit `nonce`. Nothing secret |
+| `proof` | daemon to client | HMAC-SHA256 of the nonce, keyed by the token, as hex |
+| `hello` | client to daemon, after the proof checks | Token, client type (`mcp`, `cli`, `hook`, `plugin`), and the caller facts: `session_id`, `main_agent_id` (empty when the harness states none), `cwd` (the directory the client runs in, which names the repository and so the relay target) and an optional `user` override. The daemon answers a valid hello with a `reply` whose `id` is 0 |
 | `request` | client to daemon | `id`, `method`, `params`. One `method` per command object in `commands/` |
 | `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message). A command's `result` is `{"data": <the command's JSON payload>, "error": <bool>}` |
 | `subscribe` | client to daemon | Starts the arrival subscription for the connection's session |
 | `event` | daemon to client | One arrival summary, with a per-daemon `seq` |
 
-A request that arrives before a valid `hello`, or with a wrong token, closes
-the connection and changes no state. A `hello` whose `version` the daemon does
+**The daemon proves itself first.** The client's port is a guess (8424 when
+no port file exists), and any local process can bind a port biffd is not using,
+so the client must not hand the token to whatever answers. The client sends a
+`challenge`; the daemon answers with the `proof`; the client compares it with
+`hmac.compare_digest` against the HMAC it computes from its own token file, and
+sends `hello` only on a match. A missing, late or wrong proof ends the attempt
+with an error that names the port and says the token was not sent. The client
+also reads the token only from a run directory at mode 0700 and a token file at
+mode 0600, both owned by the current user, and refuses otherwise with the
+`chmod` that repairs it.
+
+A frame other than a `challenge` first, a `hello` before the proof, a second
+`hello`, a request before a valid `hello`, or a wrong token closes the
+connection and changes no state. A `hello` whose `version` the daemon does
 not support gets an error naming both versions and the command that fixes the
 mismatch (`biff daemon restart`, or upgrade the client).
 

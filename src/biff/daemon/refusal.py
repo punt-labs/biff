@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
-from biff.frames import ErrorCode, ReplyError
+from biff.frame_reply import ErrorCode, ReplyError
 
 __all__ = ["RefusalError"]
 
