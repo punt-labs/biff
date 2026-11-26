@@ -74,3 +74,28 @@ def test_doctor_reports_channel_live_for_a_session_that_acknowledges(
         assert line.message.startswith(f"{server.user}:")
     finally:
         server.kill()
+
+
+def test_doctor_reports_not_confirmed_when_channels_are_off(
+    tmp_path: Path, nats_server: str
+) -> None:
+    """A server without channel mode cannot send the event: doctor says so."""
+    server = _Server(tmp_path, channel_mode=False, relay_url=nats_server)
+    try:
+        server.initialize()
+        server.request("tools/call", {"name": "who", "arguments": {}})
+        asyncio.run(_registered(nats_server, server.user))
+
+        def target() -> CheckTarget:
+            relay = NatsRelay(url=nats_server, repo_name=_REPO)
+            return CheckTarget(relay, server.user)
+
+        (line,) = DoctorChecks(tmp_path / "settings.json", {}, target).channel_check()
+
+        assert not line.passed
+        assert not line.required  # doctor never fails on a channel
+        assert line.message.startswith(f"{server.user}:")
+        assert ": channel not confirmed." in line.message
+        assert "Channels lines above" in line.message
+    finally:
+        server.kill()
