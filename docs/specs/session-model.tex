@@ -325,13 +325,99 @@ recycled alias could otherwise break, is that $ttyalias$ is an injection
 $SESSION \pinj ALIAS$ --- no display alias names two live entries at
 once.
 
-ProZ selects $RouteWorld$ as the state through $Init$, but requires the
+%%--------------------------------------------------------------------
+\section{The Daemon Layer}
+\label{sec:daemon}
+%%--------------------------------------------------------------------
+
+DES-095 puts the session records, the arrival subscription and the
+unread state in one per-user daemon, \texttt{biffd}, and makes every
+client a connection to it.  Three further notions are needed.
+
+\begin{zed}
+  [RUN, CONN]
+\end{zed}
+
+$RUN$ is the \texttt{main\_agent\_id} of a session: a new value for a
+known session id is a new \emph{run} of that session (resume with a
+fresh agent).  $CONN$ identifies one client connection to the daemon.
+A connection is opened, becomes \emph{bound} to a session and run by a
+valid \texttt{hello}, and may then \emph{subscribe}.
+
+\begin{axdef}
+  maxUnread : \nat
+  \where
+  maxUnread = 1
+\end{axdef}
+
+$maxUnread$ bounds the unread count so that ProB can enumerate it.  Mail
+is durable, so the count of unread arrivals of a session is kept
+\emph{outside} the daemon, with the relay: it survives the daemon.
+
+\begin{schema}{DaemonSide}
+  daemonUp : ZBOOL \\
+  known : \power SESSION \\
+  runOf : SESSION \pfun RUN \\
+  opened : \power CONN \\
+  hello : CONN \pfun (SESSION \cross RUN) \\
+  subscribed : \power CONN \\
+  shown : CONN \pfun (0 \upto maxUnread) \\
+  durable : SESSION \fun (0 \upto maxUnread)
+  \where
+  \dom runOf = known \\
+  \dom hello \subseteq opened \\
+  \forall c : \dom hello @ first(hello~c) \in known \\
+  subscribed \subseteq \dom hello \\
+  \forall c : subscribed @ second(hello~c) = runOf(first(hello~c)) \\
+  \dom shown = subscribed \\
+  \forall c : subscribed @ shown~c \leq durable(first(hello~c)) \\
+  daemonUp = zfalse \implies opened = \emptyset
+\end{schema}
+
+$known$ is the set of session records the daemon holds, and $runOf$ the
+current run of each.  A record is \emph{live} when some connection is
+bound to it under its current run, and \emph{dormant} otherwise; there is
+no third kind of record, and an ended session has none ($s \notin known$).
+$opened$ is the set of open connections; $hello$ binds the
+authenticated ones to a session and a run, so $\dom hello \subseteq
+opened$ says that only an open connection can be bound, and a connection
+in $opened \setminus \dom hello$ has sent no valid \texttt{hello}.
+$subscribed$ is the set of bound connections with an arrival subscription,
+and the quantified predicate over it is the replacement rule: a
+subscription belongs to the \emph{current} run of its session, so the run
+that a new \texttt{main\_agent\_id} has replaced holds none.
+$shown~c$ is the unread summary that connection $c$ has been given, and
+$durable~s$ the unread count that is kept for session $s$.  The pair is
+the whole of invariant~4: $shown~c \leq durable(\ldots)$ says no
+connection is ever told of more arrivals than exist (none duplicated),
+and $Deliver$ and $Subscribe$ below say it is told of every one (none
+lost).  When the daemon is not running there is no open connection, so no
+record is live: a restart returns every record to dormant.
+
+A connection holds no relay handle: $DaemonSide$ has no component of that
+type, and the relay handle is a component of the daemon
+(\texttt{nats-relay.tex}, $holdsHandle$).  Invariant~1 of DES-095 is
+therefore a property of the shape of this schema, and is checked in the
+relay specification, where the handle exists.
+
+$DaemonWorld$ ties the daemon to the structural layer: a record exists
+only for a session that exists.
+
+\begin{schema}{DaemonWorld}
+  RouteWorld \\
+  DaemonSide
+  \where
+  known \subseteq sessions
+\end{schema}
+
+ProZ selects $DaemonWorld$ as the state through $Init$, but requires the
 reserved schema name $Invariant$ to install its predicates as the
 machine-checkable invariant.  Inclusion preserves all structural,
-function, injection, and delivery predicates without duplicating them.
+function, injection, delivery and daemon predicates without duplicating
+them.
 
 \begin{schema}{Invariant}
-  RouteWorld
+  DaemonWorld
 \end{schema}
 
 %%--------------------------------------------------------------------
@@ -342,7 +428,7 @@ The system starts empty: no organizations, machines, sessions,
 processes, entries, aliases, or messages.
 
 \begin{schema}{Init}
-  RouteWorld'
+  DaemonWorld'
   \where
   orgs' = \emptyset \\
   repos' = \emptyset \\
@@ -368,8 +454,22 @@ processes, entries, aliases, or messages.
   savedalias' = \emptyset \\
   abind' = \emptyset \\
   lostF' = zfalse \\
-  misF' = zfalse
+  misF' = zfalse \\
+  %%
+  %% Daemon layer: running, no record, no connection, nothing unread
+  %%
+  daemonUp' = ztrue \\
+  known' = \emptyset \\
+  runOf' = \emptyset \\
+  opened' = \emptyset \\
+  hello' = \emptyset \\
+  subscribed' = \emptyset \\
+  shown' = \emptyset \\
+  durable' = (\lambda s : SESSION @ 0)
 \end{schema}
+
+The daemon starts running with no session record, no open connection and
+no unread arrival.
 
 $routeMode'$ is left unconstrained: $Init$ admits both disciplines and no
 operation reassigns it, so each discipline is a separate branch of the
@@ -821,11 +921,13 @@ history; final close leaves that history unchanged.
 
 \begin{schema}{CloseSession}
   \Delta RouteWorld \\
+  \Xi DaemonSide \\
   s? : SESSION
   \where
   s? \in sessions \\
   s? \notin \ran psess \\
   s? \notin entries \\
+  s? \notin known \\
   %%
   sessions' = sessions \setminus \{ s? \} \\
   smach' = sessions' \dres smach \\
@@ -1272,6 +1374,379 @@ under $rmAlias$.
   routeMode' = routeMode \\
   lostF' = lostF
 \end{schema}
+
+%%--------------------------------------------------------------------
+\section{Daemon Operations}
+\label{sec:daemonops}
+%%--------------------------------------------------------------------
+
+Every operation below is a $\Delta DaemonSide$ conjoined with $\Xi
+RouteWorld$: it leaves the structural and routing layers alone and frames
+each of the eight daemon components explicitly.  The frames are the
+content.  An operation that does not mention $known$, $runOf$ or
+$durable$ in its effect leaves them as they were, and that is how
+``detach is not session end'' and ``a restart loses no mail'' are stated.
+
+%%--------------------------------------------------------------------
+\subsection{Daemon lifecycle}
+%%--------------------------------------------------------------------
+
+\begin{schema}{DaemonExit}
+  \Delta DaemonSide \\
+  \Xi RouteWorld
+  \where
+  daemonUp = ztrue \\
+  daemonUp' = zfalse \\
+  opened' = \emptyset \\
+  hello' = \emptyset \\
+  subscribed' = \emptyset \\
+  shown' = \emptyset \\
+  %%
+  known' = known \\
+  runOf' = runOf \\
+  durable' = durable
+\end{schema}
+
+The process ends, by a clean stop or a crash.  Every connection goes, so
+every record is dormant, and nothing else changes: the records, their
+runs and the unread counts are kept ($known'$, $runOf'$, $durable'$).  A
+restart therefore finds every session where it was, with no client
+attached, and loses no arrival.
+
+\begin{schema}{DaemonStart}
+  \Delta DaemonSide \\
+  \Xi RouteWorld
+  \where
+  daemonUp = zfalse \\
+  daemonUp' = ztrue \\
+  %%
+  known' = known \\
+  runOf' = runOf \\
+  opened' = opened \\
+  hello' = hello \\
+  subscribed' = subscribed \\
+  shown' = shown \\
+  durable' = durable
+\end{schema}
+
+The service manager, or a client's autostart nudge, starts the daemon.
+It starts with no connection, because $daemonUp = zfalse \implies opened =
+\emptyset$ held before it.
+
+\begin{schema}{Arrive}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  s? : SESSION
+  \where
+  durable~s? < maxUnread \\
+  durable' = durable \oplus \{ s? \mapsto durable~s? + 1 \} \\
+  %%
+  daemonUp' = daemonUp \\
+  known' = known \\
+  runOf' = runOf \\
+  opened' = opened \\
+  hello' = hello \\
+  subscribed' = subscribed \\
+  shown' = shown
+\end{schema}
+
+A message reaches the identity-keyed inbox of $s?$.  It is enabled whether
+or not the daemon is running and whether or not the session has a record:
+the relay keeps the mail.  Only $durable$ moves; telling a client is the
+separate step $Deliver$.
+
+%%--------------------------------------------------------------------
+\subsection{Connections and the hello}
+%%--------------------------------------------------------------------
+
+\begin{schema}{Connect}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN
+  \where
+  daemonUp = ztrue \\
+  c? \notin opened \\
+  opened' = opened \cup \{ c? \} \\
+  %%
+  daemonUp' = daemonUp \\
+  known' = known \\
+  runOf' = runOf \\
+  hello' = hello \\
+  subscribed' = subscribed \\
+  shown' = shown \\
+  durable' = durable
+\end{schema}
+
+A client opens a connection.  It is not yet bound to any session.
+
+\begin{schema}{RequestBeforeHello}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN
+  \where
+  c? \in opened \\
+  c? \notin \dom hello \\
+  opened' = opened \setminus \{ c? \} \\
+  %%
+  daemonUp' = daemonUp \\
+  known' = known \\
+  runOf' = runOf \\
+  hello' = hello \\
+  subscribed' = subscribed \\
+  shown' = shown \\
+  durable' = durable
+\end{schema}
+
+A request, or a \texttt{hello} with a wrong token, on a connection that has
+no valid \texttt{hello}.  The daemon closes the connection and changes
+nothing else: every component of the session layer other than the
+rejected connection itself is as it was.  This is invariant~2 of DES-095.
+
+\begin{schema}{HelloCreate}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN \\
+  s? : SESSION \\
+  r? : RUN
+  \where
+  c? \in opened \\
+  c? \notin \dom hello \\
+  s? \in sessions \\
+  s? \notin known \\
+  known' = known \cup \{ s? \} \\
+  runOf' = runOf \cup \{ s? \mapsto r? \} \\
+  hello' = hello \cup \{ c? \mapsto (s?, r?) \} \\
+  %%
+  daemonUp' = daemonUp \\
+  opened' = opened \\
+  subscribed' = subscribed \\
+  shown' = shown \\
+  durable' = durable
+\end{schema}
+
+The first \texttt{hello} for a session id creates its record, bound to the
+run it names.
+
+\begin{schema}{HelloAttach}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN \\
+  s? : SESSION \\
+  r? : RUN
+  \where
+  c? \in opened \\
+  c? \notin \dom hello \\
+  s? \in known \\
+  runOf~s? = r? \\
+  hello' = hello \cup \{ c? \mapsto (s?, r?) \} \\
+  %%
+  daemonUp' = daemonUp \\
+  known' = known \\
+  runOf' = runOf \\
+  opened' = opened \\
+  subscribed' = subscribed \\
+  shown' = shown \\
+  durable' = durable
+\end{schema}
+
+A client for a known session, in the run the record holds, attaches to the
+existing record.  $known'$ and $runOf'$ are unchanged, so the daemon never
+holds two records for one session id; $subscribed'$ and $shown'$ are
+unchanged, so a second client attaching does not disturb the subscription
+of the first.
+
+\begin{schema}{HelloNewRun}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN \\
+  s? : SESSION \\
+  r? : RUN
+  \where
+  c? \in opened \\
+  c? \notin \dom hello \\
+  s? \in known \\
+  runOf~s? \neq r? \\
+  runOf' = runOf \oplus \{ s? \mapsto r? \} \\
+  hello' = hello \cup \{ c? \mapsto (s?, r?) \} \\
+  subscribed' = subscribed \setminus
+    \{ c : subscribed | first(hello~c) = s? \} \\
+  shown' = \{ c : subscribed | first(hello~c) = s? \} \ndres shown \\
+  %%
+  daemonUp' = daemonUp \\
+  known' = known \\
+  opened' = opened \\
+  durable' = durable
+\end{schema}
+
+A new \texttt{main\_agent\_id} for a known session is a new run.  The
+record is kept ($known'$, $durable'$) and takes the new run.  The previous
+run's subscription and its pending deliveries are released: every
+subscribed connection of the session was subscribed under the old run, so
+$subscribed'$ and $shown'$ drop them.  The old run's connection stays open
+and bound, so that the daemon can answer it with a named error
+($RequestReplacedRun$), but it holds no subscription.
+
+\begin{schema}{RequestReplacedRun}
+  \Xi DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN
+  \where
+  c? \in \dom hello \\
+  second(hello~c?) \neq runOf(first(hello~c?))
+\end{schema}
+
+A call from a replaced run is refused with a named error and changes
+nothing.
+
+%%--------------------------------------------------------------------
+\subsection{Subscription and unread state}
+%%--------------------------------------------------------------------
+
+\begin{schema}{Subscribe}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN
+  \where
+  c? \in \dom hello \\
+  c? \notin subscribed \\
+  second(hello~c?) = runOf(first(hello~c?)) \\
+  subscribed' = subscribed \cup \{ c? \} \\
+  shown' = shown \cup \{ c? \mapsto durable(first(hello~c?)) \} \\
+  %%
+  daemonUp' = daemonUp \\
+  known' = known \\
+  runOf' = runOf \\
+  opened' = opened \\
+  hello' = hello \\
+  durable' = durable
+\end{schema}
+
+The current run's connection subscribes.  The daemon first sends the
+session's current unread summary, so $shown'~c? = durable(\ldots)$: a
+client that reattaches after a restart is told exactly the durable unread
+count, and $durable'$ is unchanged, so the restart neither lost an arrival
+nor counted one twice.  This is invariant~4 of DES-095.
+
+\begin{schema}{Deliver}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN
+  \where
+  c? \in subscribed \\
+  shown~c? < durable(first(hello~c?)) \\
+  shown' = shown \oplus \{ c? \mapsto shown~c? + 1 \} \\
+  %%
+  daemonUp' = daemonUp \\
+  known' = known \\
+  runOf' = runOf \\
+  opened' = opened \\
+  hello' = hello \\
+  subscribed' = subscribed \\
+  durable' = durable
+\end{schema}
+
+One pending arrival is told to a subscribed connection.  It raises the
+summary by one and no more, so a connection is told of each arrival
+once.  A pending arrival is one with $shown~c < durable(\ldots)$.
+
+\begin{schema}{ReadUnread}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN
+  \where
+  c? \in subscribed \\
+  durable' = durable \oplus \{ first(hello~c?) \mapsto 0 \} \\
+  shown' =
+    \{ c : subscribed | first(hello~c) = first(hello~c?) @ c \mapsto 0 \}
+    \cup
+    \{ c : subscribed | first(hello~c) \neq first(hello~c?) @
+        c \mapsto shown~c \} \\
+  %%
+  daemonUp' = daemonUp \\
+  known' = known \\
+  runOf' = runOf \\
+  opened' = opened \\
+  hello' = hello \\
+  subscribed' = subscribed
+\end{schema}
+
+Reading consumes the session's unread mail --- read-once, one writer ---
+and every subscribed connection of that session is told the new, empty
+summary.
+
+%%--------------------------------------------------------------------
+\subsection{Detach and the end of a session}
+%%--------------------------------------------------------------------
+
+\begin{schema}{Detach}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  c? : CONN
+  \where
+  c? \in opened \\
+  opened' = opened \setminus \{ c? \} \\
+  hello' = \{ c? \} \ndres hello \\
+  subscribed' = subscribed \setminus \{ c? \} \\
+  shown' = \{ c? \} \ndres shown \\
+  %%
+  daemonUp' = daemonUp \\
+  known' = known \\
+  runOf' = runOf \\
+  durable' = durable
+\end{schema}
+
+A dropped connection.  $known'$, $runOf'$ and $durable'$ are unchanged:
+detaching ends no session, loses no mail and forgets no run.  The record
+simply becomes dormant when its last connection goes.
+
+\begin{schema}{SessionEnd}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  s? : SESSION
+  \where
+  s? \in known \\
+  ( \exists c : \dom hello @
+      first(hello~c) = s? \land second(hello~c) = runOf~s? ) \\
+  known' = known \setminus \{ s? \} \\
+  runOf' = \{ s? \} \ndres runOf \\
+  opened' = opened \setminus
+    \{ c : \dom hello | first(hello~c) = s? \} \\
+  hello' = \{ c : \dom hello | first(hello~c) = s? \} \ndres hello \\
+  subscribed' = subscribed \setminus
+    \{ c : \dom hello | first(hello~c) = s? \} \\
+  shown' = \{ c : \dom hello | first(hello~c) = s? \} \ndres shown \\
+  %%
+  daemonUp' = daemonUp \\
+  durable' = durable
+\end{schema}
+
+The \texttt{SessionEnd} hook, which arrives over a connection of the
+session's current run, ends the session: the record goes and so do its
+connections.  The unread count of the identity-keyed inbox stays.  This is
+one of the two operations that remove a record.
+
+\begin{schema}{RetentionExpire}
+  \Delta DaemonSide \\
+  \Xi RouteWorld \\
+  s? : SESSION
+  \where
+  s? \in known \\
+  \lnot ( \exists c : \dom hello @ first(hello~c) = s? ) \\
+  known' = known \setminus \{ s? \} \\
+  runOf' = \{ s? \} \ndres runOf \\
+  %%
+  daemonUp' = daemonUp \\
+  opened' = opened \\
+  hello' = hello \\
+  subscribed' = subscribed \\
+  shown' = shown \\
+  durable' = durable
+\end{schema}
+
+A crashed session, with no client for the whole retention period, expires.
+Only a dormant record can expire.  This is the other operation that
+removes a record; with $SessionEnd$ it is the only way a session ends, so
+detach, daemon exit and a new run all keep the record.
 
 %%--------------------------------------------------------------------
 \section{Delivery Properties and Verification}
