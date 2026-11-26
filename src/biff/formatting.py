@@ -41,7 +41,7 @@ __all__ = [
     "READ_SPECS",
     "WHO_SPECS",
     "ColumnSpec",
-    "format_dead_footnote",
+    "dead_sessions_summary",
     "format_finger",
     "format_finger_multi",
     "format_idle",
@@ -396,29 +396,22 @@ def format_who(sessions: list[UserSession]) -> str:
     return format_table(specs, rows)
 
 
-def format_dead_footnote(dead: list[UserSession]) -> str:
-    """Render a trailing summary line for KV rows that died without deregistering.
+def dead_sessions_summary(dead: list[UserSession]) -> str:
+    """Summarize KV rows that died without deregistering, for the log.
 
     A session that shuts down cleanly deletes its own KV row, so a row
-    :func:`~biff.presence_liveness.dead_sessions` still finds is a session that stopped
-    heartbeating without cleanup — killed, wedged, or its host vanished
-    (DES-057). The main ``/who`` table only ever renders *live* rows, so
-    this signal would otherwise be invisible until the 3-day storage TTL
-    reaps the row.
-
-    Deliberately reports counts and idle durations only, never a `user` or
-    `tty_name` — unlike :data:`WHO_SPECS`, there is no fixed column here for
-    an unbounded field to widen, so there is nothing to sanitize or clip.
-    Returns ``""`` when *dead* is empty so callers can append unconditionally.
+    :func:`~biff.presence_liveness.dead_sessions` still finds stopped
+    heartbeating without cleanup: killed, wedged, or its host vanished
+    (DES-057). This is operator information for biff.log, never ``/who``
+    output. Counts and idle durations only, no names. Returns ``""`` when
+    *dead* is empty.
     """
     if not dead:
         return ""
     by_recency = sorted(dead, key=lambda s: s.last_active, reverse=True)
     ages = ", ".join(format_idle(s.last_active) for s in by_recency)
     noun = "session" if len(dead) == 1 else "sessions"
-    text = f"{len(dead)} {noun} stopped responding (last seen {ages})"
-    chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
-    return "\n".join(ROW_PREFIX + chunk for chunk in chunks)
+    return f"{len(dead)} {noun} stopped responding (last seen {ages})"
 
 
 # ---------------------------------------------------------------------------

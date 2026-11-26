@@ -17,7 +17,11 @@ from typing import cast
 import biff.commands.talk as talk_commands
 from biff.cli_context import CliContext
 from biff.commands._messaging import Delivery
-from biff.formatting import format_talk_echo, format_wall_confirmation
+from biff.formatting import (
+    format_talk_echo,
+    format_wall_confirmation,
+    format_who,
+)
 from biff.models import BiffConfig, UserSession, WallPost
 from biff.relay import LocalRelay
 from biff.server.tools._write_target import WriteRouter
@@ -122,42 +126,22 @@ class TestReadMessagesCount:
 
 
 class TestWhoCount:
-    """who row counting excludes the dead-session footnote (DES-057)."""
+    """The who panel line counts the rows of the table /who prints."""
 
-    def test_dead_footnote_not_counted_as_online(self) -> None:
-        """The footnote shares ROW_PREFIX with live rows but is not a session."""
-        response = (
-            "▶  NAME  IDLE\n"
-            "   kai:tty01  0:03\n"
-            "   1 session stopped responding (last seen 3 hours)"
+    def test_each_live_row_counts_once(self) -> None:
+        now = datetime.now(UTC)
+        table = format_who(
+            [
+                UserSession(user="kai", tty="aa", tty_name="tty1", last_active=now),
+                UserSession(user="eric", tty="bb", tty_name="tty2", last_active=now),
+            ]
         )
-        output = _run_hook("mcp__plugin_biff_tty__who", response)
-        summary = _panel_summary(output)
-        assert summary == "1 online"
+        output = _run_hook("mcp__plugin_biff_tty__who", table)
+        assert _panel_summary(output) == "2 online"
 
-    def test_all_dead_reports_zero_online(self) -> None:
-        """When only orphans remain, the online count must not inflate to 1+."""
-        response = "No sessions.\n   2 sessions stopped responding (last seen 3 hours)"
-        output = _run_hook("mcp__plugin_biff_tty__who", response)
-        summary = _panel_summary(output)
-        assert summary == "0 online"
-
-    def test_wrapped_footnote_continuation_not_counted(self) -> None:
-        """A footnote long enough to wrap must not inflate the count either.
-
-        Continuation lines share ROW_PREFIX but never contain "stopped
-        responding" themselves -- a line-by-line filter on that phrase alone
-        would miss them.
-        """
-        response = (
-            "▶  NAME  IDLE\n"
-            "   kai:tty01  0:03\n"
-            "   3 sessions stopped responding (last seen 3 hours, 1 day 2\n"
-            "   hours, 5 days)"
-        )
-        output = _run_hook("mcp__plugin_biff_tty__who", response)
-        summary = _panel_summary(output)
-        assert summary == "1 online"
+    def test_no_sessions_is_passed_through(self) -> None:
+        output = _run_hook("mcp__plugin_biff_tty__who", "No sessions.")
+        assert _panel_summary(output) == "No sessions."
 
 
 class TestWriteForwardNotice:

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `/who` no longer prints the "N sessions stopped responding (last seen ...)"
+  footnote under the table. Sessions that died without deregistering are
+  logged to biff.log at INFO instead.
+
 ## [1.25.0] - 2026-11-25
 
 ### Added
