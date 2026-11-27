@@ -30,7 +30,7 @@ DES_088_IMPORTS: dict[str, frozenset[str]] = {
     "engine": frozenset({"kernel", "wire"}),
     "render": frozenset(_INNER),
     "commands": frozenset({*_INNER, "render"}),
-    "server": frozenset({*_INNER, "render", "commands"}),
+    "server": frozenset({*_INNER, "render", "commands", "client"}),
     "plugins": frozenset(_INNER),
     "service": frozenset({*_INNER, "render", "plugins"}),
     "claude_code": frozenset({*_INNER, "render", "commands", "plugins", "service"}),

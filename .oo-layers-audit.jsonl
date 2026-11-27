@@ -3,3 +3,4 @@
 {"ts":"2026-11-26T22:04:52Z","commit":"839c876","source":null,"modules_scanned":203,"violations":19,"verdict":"pass","added":[],"removed":[]}
 {"ts":"2026-11-26T23:52:42Z","commit":"57674d9","source":null,"modules_scanned":216,"violations":19,"verdict":"pass","added":[],"removed":[]}
 {"ts":"2026-11-27T17:30:41Z","commit":"cda5002","source":null,"modules_scanned":258,"violations":17,"verdict":"pass","added":[],"removed":["biff.commands.session -> biff.cli_session_host","biff.commands.session -> biff.cli_session_store"]}
+{"ts":"2026-11-27T20:58:37Z","commit":"abb852f","source":null,"modules_scanned":272,"violations":17,"verdict":"pass","added":[],"removed":[],"config_change":true}

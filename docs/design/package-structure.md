@@ -36,7 +36,7 @@ From the bottom up:
 | `engine` | The relays (local and NATS), talk state, session registry, identity, configuration, tty names; the arrival summaries and the `DeliverySink` interface they are handed to | `kernel`, `wire` |
 | `render` | Text formatting that both the command line and the MCP server print: tables, `finger` output, message lists | `kernel`, `wire`, `engine` |
 | `commands` | One command object per biff operation, plus the context each command receives | `kernel`, `wire`, `engine`, `render` |
-| `server` | The MCP server and its tools, the same for every AI tool that connects | `kernel`, `wire`, `engine`, `render`, `commands` |
+| `server` | The MCP server and its tools, the same for every AI tool that connects | `kernel`, `wire`, `engine`, `render`, `commands`, `client` |
 | `plugins` | The plugin contract (`plugins/contract.py`): the `Installer` and `SessionStart` interfaces, and the registry that holds each tool's adapter | `kernel`, `wire`, `engine` |
 | `service` | Install, enable, `biff doctor`, git hooks, the CI notification workflow, optional integrations such as vox | `kernel`, `wire`, `engine`, `render`, `plugins` |
 | `plugins/<tool>` | One Python adapter per AI tool: `claude_code`, `codex`, `opencode`, `pi`, `devin`. Each implements the parts of the contract its tool needs, and may own that tool's console script (Claude Code's `biff-hook`) | `kernel`, `wire`, `engine`, `render`, `commands`, `plugins`, `service`; never `server`, `cli` or another tool's adapter |
@@ -45,6 +45,12 @@ From the bottom up:
 `testing` (the test helpers in `biff.testing`) is outside this stack. It may
 import `kernel`, `wire`, `engine`, `render`, `commands` and `server`; no
 production layer may import it.
+
+`server` imports `client` as `biff mcp` becomes a client of biffd
+([biffd.md](biffd.md), "Package layout"); that allowance is permanent. What ends
+is the server's import of `engine`: it stays while the in-process server exists,
+and the last step of the migration deletes that path, so that no client-side
+package imports `engine`.
 
 `cli` sits on top because it starts every other piece, including `biff mcp`,
 and it is the one place that knows which adapters exist.
