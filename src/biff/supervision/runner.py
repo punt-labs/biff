@@ -55,19 +55,27 @@ class Supervisor:
         return result.returncode == 0
 
     @staticmethod
-    def excerpt(*argv: str) -> str:
-        """Run *argv* and return the first eight lines of what it printed.
+    def excerpt(*argv: str, keys: tuple[str, ...] = ()) -> str:
+        """Run *argv* and return what it printed, cut to the part worth reading.
 
-        A supervisor reports "not running" with a non-zero exit, so the exit
-        status is not read; stderr stands in when stdout is empty.
+        With *keys*, the ``key = value`` lines whose key is one of them, as a
+        report whose answer comes late needs; with none of them present, or no
+        *keys*, the first eight lines.  A supervisor reports "not running" with a
+        non-zero exit, so the exit status is not read; stderr stands in when
+        stdout is empty.
 
         Raises:
             OSError: The program is missing or cannot be run.
             subprocess.TimeoutExpired: The supervisor did not answer in 30 seconds.
         """
         result = Supervisor.run(*argv)
-        text = result.stdout.strip() or result.stderr.strip() or "no output"
-        return "\n".join(text.splitlines()[:_EXCERPT_LINES])
+        lines = (
+            result.stdout.strip() or result.stderr.strip() or "no output"
+        ).splitlines()
+        wanted = [
+            line.strip() for line in lines if line.strip().partition(" = ")[0] in keys
+        ]
+        return "\n".join(wanted or lines[:_EXCERPT_LINES])
 
     @staticmethod
     def require(spec: ServiceSpec, action: str, *argv: str) -> None:

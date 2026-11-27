@@ -17,12 +17,12 @@ __all__ = ["SupervisorEvidence"]
 
 @final
 class SupervisorEvidence:
-    """The run time, aliveness and report of one service start.
+    """How long a start was waited on, and what its supervisor shows now.
 
-    A service its supervisor shows running that does not answer is slow, not
-    crashed; one the supervisor does not show running exited, and its log says
-    why.  Read it before a rollback removes the service, or there is nothing to
-    ask.
+    The wait is not the process's run time: biffd may have exited early and been
+    restarted.  So the supervisor's present state is reported as present, and its
+    own report supplies the exit status.  Read it before a rollback removes the
+    service, or there is nothing to ask.
     """
 
     __slots__ = ("_backend", "_started")
@@ -37,22 +37,23 @@ class SupervisorEvidence:
         self._started = time.monotonic()
         return self
 
-    def describe(self, ending: str) -> str:
-        """Say how long the service has run, *ending* the sentence, and what shows.
+    def describe(self) -> str:
+        """Say how long the wait was, what the supervisor shows now, and its report.
 
         A supervisor that cannot be asked is part of the answer, not an error.
         """
-        ran = f"It ran {time.monotonic() - self._started:.1f} seconds {ending}"
+        waited = f"Waited {time.monotonic() - self._started:.1f} seconds."
         try:
             alive = self._backend.is_active()
         except (ServiceActionFailedError, OSError, subprocess.TimeoutExpired) as exc:
-            return f"{ran}, and the supervisor could not be asked about it ({exc})."
+            return f"{waited} The supervisor could not be asked about it ({exc})."
         verdict = (
-            "showed it running, so it had not crashed: it is slow to start"
+            "shows it running now: it is slow to start, or it exited and was "
+            "restarted (its report has the last exit status)"
             if alive
-            else "did not show it running: it exited or never started"
+            else "does not show it running: it exited or never started"
         )
-        return f"{ran}, and the supervisor {verdict}.{self._report()}"
+        return f"{waited} The supervisor {verdict}.{self._report()}"
 
     def _report(self) -> str:
         """Return the supervisor's own report on the service, as one sentence."""

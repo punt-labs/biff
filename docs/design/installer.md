@@ -593,16 +593,28 @@ outcomes: done, failed, or no service manager.
   The nudge keeps 5 seconds: it blocks a client's own call, the longest measured
   start under load (2.34 s) fits, and its error names the commands that find out
   why. A client that must wait longer starts biffd with `biff daemon start`.
-- **A timeout says what the supervisor knew.** The error reports how long biffd
-  ran before the rollback removed it, whether the supervisor showed it running
-  (slow to start) or not (it exited, so read `biff.log`), and the first eight
-  lines of the supervisor's own report: `launchctl print gui/<uid>/<label>` on
-  macOS (state, last exit status), `systemctl --user status` on Linux. All of it
-  is read before the rollback, which still removes the unit.
+- **A timeout says what the supervisor knew.** The error reports how long the
+  wait was (not how long biffd ran: it may have exited early and been
+  restarted), whether the supervisor shows biffd running now (slow to start, or
+  restarted after an exit) or not (it exited or never started, so read
+  `biff.log`), and the supervisor's own report: the state, run count and last
+  exit code from `launchctl print gui/<uid>/<label>` on macOS, which prints the
+  exit code after the program, arguments and environment; the first eight lines
+  of `systemctl --user status` on Linux. All of it is read before the rollback,
+  which still removes the unit.
+- **start and restart refuse a port the service does not hold.** A foreground
+  biffd answers `/health` too, so `start` and `restart` apply the install
+  guard first: a biffd the service does not supervise, or another program, on
+  the port is refused with the command to run after stopping it.
+- **A long wait says so.** After 3 seconds without an answer, `install`,
+  `start` and `restart` print one line to stderr, so a person does not think a
+  command that waits up to 30 seconds has hung.
 - **biffd logs its own start.** Its first line in `biff.log` after logging is
   configured gives version, pid, port, run directory and interpreter; a second
-  says when it listens. Under a service manager they are the only record that
-  biffd ran at all.
+  says when it listens. The relay stack is imported after the first line, not
+  before it (`biff.daemon` imports nothing at package level), so a daemon that
+  is still loading has said it started. Under a service manager they are the
+  only record that biffd ran at all.
 - **A failed service install** does not skip the plugin step, because nothing
   routes through biffd yet, but it fails the command with exit 1.
 

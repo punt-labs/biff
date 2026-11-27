@@ -7,17 +7,20 @@ import errno
 import logging
 import os
 import sys
+from importlib import import_module
 from importlib.metadata import version as pkg_version
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, cast, final
 
 import typer
 from punt_observe.logging import Role
 
 from biff.daemon.environment import DaemonEnvironment
-from biff.daemon.server import BiffDaemon
 from biff.logging_config import configure_logging
 from biff.run_dir import RunDir
 from biff.supervision.biffd import PERMANENT_EXIT_STATUS
+
+if TYPE_CHECKING:
+    from biff.daemon.server import BiffDaemon
 
 __all__ = ["Foreground"]
 
@@ -66,7 +69,10 @@ class Foreground:
                 "each session resolves its own",
                 err=True,
             )
-        daemon = BiffDaemon(run_dir=run_dir, port=self._port)
+        # Loaded here, after the line above: the relay stack is most of biffd's
+        # start-up time, and a daemon that is still importing it has said so.
+        server = import_module("biff.daemon.server")
+        daemon = cast("BiffDaemon", server.BiffDaemon(run_dir=run_dir, port=self._port))
         try:
             asyncio.run(daemon.run_foreground())
         except PermissionError as exc:

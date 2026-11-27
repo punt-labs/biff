@@ -13,6 +13,7 @@ from biff.supervision.errors import ServiceActionFailedError
 from biff.supervision.health_wait import HealthWait
 from biff.supervision.launchd import LaunchdBackend
 from biff.supervision.manager import ServiceManager
+from biff.supervision.port import PortProbe
 from biff.supervision.systemd import SystemdBackend
 from tests.test_supervision.fake_backend import (
     DiagnosableBackend,
@@ -26,6 +27,31 @@ if TYPE_CHECKING:
     from tests.test_supervision.scripted import ScriptedSupervisor
 
 VARIABLE = HealthWait.ENVIRONMENT_VARIABLE
+
+# The shape of ``launchctl print gui/<uid>/<label>``: the exit code comes well
+# after the first eight lines.
+LAUNCHCTL_PRINT = "\n".join(
+    [
+        "gui/501/com.punt-labs.biffd = {",
+        "\tactive count = 0",
+        "\tpath = /Users/me/Library/LaunchAgents/com.punt-labs.biffd.plist",
+        "\ttype = LaunchAgent",
+        "\tstate = not running",
+        "",
+        "\tprogram = /Users/me/.local/bin/biffd",
+        "\targuments = {",
+        "\t\t/Users/me/.local/bin/biffd",
+        "\t\t--port",
+        "\t\t8424",
+        "\t}",
+        "",
+        "\tstdout path = /Users/me/.punt-labs/biff/logs/biff.log",
+        "\tdomain = gui/501 [100001]",
+        "\truns = 3",
+        "\tlast exit code = 78",
+        "}",
+    ]
+)
 
 
 def _install_that_times_out(backend: FakeBackend) -> str:
@@ -121,24 +147,35 @@ class TestTheWaitReachesTheService:
 
 
 class TestTheTimeoutSaysWhatTheSupervisorKnows:
-    def test_how_long_it_ran_before_the_rollback_removed_it(
-        self, tmp_path: Path
-    ) -> None:
+    def test_the_error_says_how_long_the_wait_was(self, tmp_path: Path) -> None:
         message = _install_that_times_out(DiagnosableBackend(tmp_path / "u", "state"))
-        assert re.search(r"It ran \d+\.\d seconds before it was removed", message)
+        assert re.search(r"Waited \d+\.\d seconds\.", message)
 
-    def test_a_service_the_supervisor_shows_running_is_slow_not_crashed(
+    def test_it_does_not_claim_how_long_biffd_itself_ran(self, tmp_path: Path) -> None:
+        message = _install_that_times_out(DiagnosableBackend(tmp_path / "u", "state"))
+        assert "It ran" not in message
+
+    def test_a_service_shown_running_is_slow_or_was_restarted(
         self, tmp_path: Path
     ) -> None:
         message = _install_that_times_out(DiagnosableBackend(tmp_path / "u", "state"))
-        assert "showed it running, so it had not crashed" in message
+        assert (
+            "shows it running now: it is slow to start, or it exited and was "
+            "restarted" in message
+        )
+
+    def test_a_service_shown_running_is_not_called_uncrashed(
+        self, tmp_path: Path
+    ) -> None:
+        message = _install_that_times_out(DiagnosableBackend(tmp_path / "u", "state"))
+        assert "had not crashed" not in message
 
     def test_a_service_the_supervisor_does_not_show_running_exited(
         self, tmp_path: Path
     ) -> None:
         backend = DiagnosableBackend(tmp_path / "u", "state", alive=False)
         message = _install_that_times_out(backend)
-        assert "did not show it running: it exited or never started" in message
+        assert "does not show it running: it exited or never started" in message
 
     def test_the_supervisors_own_report_is_in_the_error(self, tmp_path: Path) -> None:
         report = "state = running\nlast exit status = 0"
@@ -160,12 +197,12 @@ class TestTheTimeoutSaysWhatTheSupervisorKnows:
             False,
         )
 
-    def test_a_backend_with_no_report_still_says_how_long_it_ran(
+    def test_a_backend_with_no_report_still_says_how_long_it_waited(
         self, tmp_path: Path
     ) -> None:
         message = _install_that_times_out(FakeBackend(tmp_path / "u"))
         assert "Its report" not in message
-        assert "It ran" in message
+        assert "Waited" in message
 
     def test_a_refused_report_is_said_to_be_unavailable(self, tmp_path: Path) -> None:
         class Refusing(DiagnosableBackend):
@@ -186,6 +223,10 @@ class TestTheTimeoutSaysWhatTheSupervisorKnows:
         assert "Its report: state = running." in str(caught.value)
 
 
+def test_a_wait_earns_its_one_line_after_three_seconds() -> None:
+    assert PortProbe.NOTICE_AFTER_SECONDS == 3.0
+
+
 class TestTheBackendsReport:
     def test_launchd_prints_the_job_in_the_gui_domain(
         self, script: ScriptedSupervisor
@@ -198,7 +239,19 @@ class TestTheBackendsReport:
             [("launchctl", "print", target)],
         )
 
-    def test_launchd_keeps_only_the_first_lines(
+    def test_launchd_keeps_the_exit_status_that_prints_late(
+        self, script: ScriptedSupervisor
+    ) -> None:
+        script.answer("launchctl", out=LAUNCHCTL_PRINT)
+        report = LaunchdBackend(BIFFD_SPEC).diagnosis().splitlines()
+        assert report == [
+            "active count = 0",
+            "state = not running",
+            "runs = 3",
+            "last exit code = 78",
+        ]
+
+    def test_launchd_falls_back_to_the_first_lines_of_a_report_it_cannot_read(
         self, script: ScriptedSupervisor
     ) -> None:
         script.answer("launchctl", out="\n".join(f"line {i}" for i in range(30)))

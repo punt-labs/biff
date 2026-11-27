@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import final
 
 import typer
@@ -34,7 +35,7 @@ class MachineScope:
         except (OSError, RuntimeError) as exc:
             typer.echo(f"Could not create biff's home directory: {exc}", err=True)
             raise typer.Exit(code=1) from exc
-        outcome = BiffdService.for_host().install()
+        outcome = BiffdService.for_host(partial(typer.echo, err=True)).install()
         failed = outcome.status == "failed"
         typer.echo(outcome.message, err=failed or outcome.status == "unreachable")
         return failed
@@ -46,7 +47,7 @@ class MachineScope:
         A host with no usable service manager has nothing to remove and prints
         nothing.
         """
-        outcome = BiffdService.for_host().uninstall()
+        outcome = BiffdService.for_host(partial(typer.echo, err=True)).uninstall()
         failed = outcome.status == "failed"
         if outcome.status == "done" or failed:
             typer.echo(outcome.message, err=failed)

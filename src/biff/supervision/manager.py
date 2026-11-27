@@ -77,28 +77,13 @@ class ServiceManager:
         """
         port = self._spec.health_port
         wait = HealthWait.from_environ(os.environ).seconds
-        state = self._port.state()
-        lsof = f"lsof -nP -iTCP:{port} -sTCP:LISTEN"
-        if state == "foreign":
-            msg = (
-                f"port {port} is held by another program; see what holds it "
-                f"with: {lsof}"
-            )
-            raise PortConflictError(msg)
-        if state == "ours" and not self._backend.is_active():
-            msg = (
-                f"a biffd that this service does not supervise already answers on "
-                f"port {port} (perhaps `biff daemon serve`); stop it, then run: "
-                f"{self._spec.cli_name} {self._spec.cli_verb} install. "
-                f"See what holds the port with: {lsof}"
-            )
-            raise PortConflictError(msg)
+        self._refuse_other_holder("install")
         exec_display = " ".join(self._spec.resolve_exec_args())
         up_to_date = self._backend.install()
         evidence = SupervisorEvidence(self._backend)
         if not self._port.wait_until_answering(wait):
             # What the supervisor knows must be read before the rollback removes it.
-            seen = evidence.describe("before it was removed")
+            seen = evidence.describe()
             detail = (
                 f"registered, but it does not answer /health on port {port} within "
                 f"{wait:g} seconds. {seen} {self._remove_after_failure()} "
@@ -117,6 +102,34 @@ class ServiceManager:
         if warning := self._backend.linger_warning():
             lines.append(warning)
         return os.linesep.join(lines)
+
+    def _refuse_other_holder(self, action: str) -> None:
+        """Refuse *action* while a program outside the service holds the port.
+
+        A foreground biffd answers ``/health`` too, so without this guard a start
+        would report success for a unit whose own biffd cannot bind.
+
+        Raises:
+            PortConflictError: Another program, or a biffd the service does not
+                supervise, holds the port.
+        """
+        port = self._spec.health_port
+        state = self._port.state()
+        lsof = f"lsof -nP -iTCP:{port} -sTCP:LISTEN"
+        if state == "foreign":
+            msg = (
+                f"port {port} is held by another program; see what holds it "
+                f"with: {lsof}"
+            )
+            raise PortConflictError(msg)
+        if state == "ours" and not self._backend.is_active():
+            msg = (
+                f"a biffd that this service does not supervise already answers on "
+                f"port {port} (perhaps `biff daemon serve`); stop it, then run: "
+                f"{self._spec.cli_name} {self._spec.cli_verb} {action}. "
+                f"See what holds the port with: {lsof}"
+            )
+            raise PortConflictError(msg)
 
     def _remove_after_failure(self) -> str:
         """Undo the registration of a service that does not answer; say how it went.
@@ -149,6 +162,7 @@ class ServiceManager:
         """
         self._require_installed()
         wait = HealthWait.from_environ(os.environ).seconds
+        self._refuse_other_holder("start")
         if not self._backend.start():
             raise ServiceActionFailedError(self._spec.failure_message("start"))
         self._require_answering("start", wait)
@@ -174,6 +188,7 @@ class ServiceManager:
         """
         self._require_installed()
         wait = HealthWait.from_environ(os.environ).seconds
+        self._refuse_other_holder("restart")
         if not self._backend.restart():
             raise ServiceActionFailedError(self._spec.failure_message("restart"))
         self._require_answering("restart", wait)
@@ -187,7 +202,7 @@ class ServiceManager:
         detail = (
             f"the supervisor accepted it, but it does not answer /health on port "
             f"{self._spec.health_port} within {wait:g} seconds. "
-            f"{evidence.describe('so far')} Run: {self._spec.cli_name} "
+            f"{evidence.describe()} Run: {self._spec.cli_name} "
             f"{self._spec.cli_verb} status, then biff doctor"
         )
         raise ServiceActionFailedError(self._spec.failure_message(action, detail))

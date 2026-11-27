@@ -52,13 +52,17 @@
   reported yet, because biffd has no method that returns them.
 - `biff daemon install`, `start` and `restart` wait 30 seconds, not 5, for
   `/health`; `BIFF_DAEMON_HEALTH_WAIT` (seconds, above 0, at most 600) sets the
-  wait. `start` and `restart` now wait for `/health` too. A timeout says how
-  long biffd ran before the rollback removed it, whether the supervisor showed
-  it running, and the first lines of `launchctl print` or `systemctl --user
-  status`. The client nudge keeps its 5 seconds.
+  wait. `start` and `restart` now wait for `/health` too, and refuse, as
+  `install` does, a port held by a biffd the service does not supervise. A
+  timeout says how long the wait was, whether the supervisor shows biffd
+  running now, and the supervisor's report (state, run count and last exit code
+  from `launchctl print`; the first lines of `systemctl --user status`). The
+  client nudge keeps its 5 seconds. A wait longer than 3 seconds prints one
+  `still waiting for biffd to answer /health` line to stderr.
 - biffd writes `biffd starting: version=... pid=... port=... run_dir=...
-  python=...` to `~/.punt-labs/biff/logs/biff.log` before it does anything
-  else, and `biffd listening on 127.0.0.1:<port>` once it listens.
+  python=...` to `~/.punt-labs/biff/logs/biff.log` before it loads the relay
+  stack, and `biffd listening on 127.0.0.1:<port>` once it listens. `biff.daemon`
+  no longer re-exports `BiffDaemon`; import it from `biff.daemon.server`.
 - The service code lives in `biff.supervision` behind a `ServiceBackend`
   protocol that mirrors punt-service, which is not yet on PyPI. Moving to
   punt-service replaces `biff.supervision.systemd`, `launchd`, `host` and
