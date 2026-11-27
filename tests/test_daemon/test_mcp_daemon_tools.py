@@ -7,16 +7,22 @@ other tool still runs in the server's own process.  Both reach one local relay.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, final
+from typing import TYPE_CHECKING, final
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
 from fastmcp.exceptions import ToolError
 
-from biff.client.connection import ClientIdentity, DaemonClient, DaemonUnreachableError
+from biff.client.connection import (
+    ClientIdentity,
+    ConnectionLostError,
+    DaemonClient,
+    DaemonUnreachableError,
+)
 from biff.daemon.relays import ResolvedSession
 from biff.daemon.server import BiffDaemon
 from biff.daemon.session_store import CliSessionStore
@@ -39,8 +45,11 @@ from tests._mcp_golden import (
 from tests._state import create_state
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
     from pathlib import Path
+
+    from fastmcp.tools import Tool
+    from pydantic import JsonValue
 
     from biff.client.held_reply import HeldReply
     from biff.frame_client import Hello
@@ -56,10 +65,12 @@ class _OneRepo:
 
     def __init__(self, base: Path) -> None:
         self._base = base
+        self.moved = False
 
     async def resolve(self, hello: Hello) -> ResolvedSession:
         config = BiffConfig(user=hello.user or "kai", repo_name=REPO)
-        return ResolvedSession(config=config, data_dir=self._base, repo_root=None)
+        data_dir = self._base.parent / "moved" if self.moved else self._base
+        return ResolvedSession(config=config, data_dir=data_dir, repo_root=None)
 
 
 def _local(resolved: ResolvedSession) -> Relay:
@@ -86,11 +97,12 @@ class _Rig:
     base: Path
     daemon: BiffDaemon
     run_dir: RunDir
+    resolver: _OneRepo
     asked: list[str] = field(default_factory=list[str])
     stack: AsyncExitStack = field(default_factory=AsyncExitStack)
     connected: list[DaemonClient] = field(default_factory=list[DaemonClient])
 
-    def link(self, user: str) -> McpLink:
+    def link(self, user: str, settle: float = 5.0) -> McpLink:
         async def connect(identity: ClientIdentity) -> DaemonClient:
             client = await DaemonClient.connect(
                 run_dir=self.run_dir, port=self.daemon.port, identity=identity
@@ -98,7 +110,9 @@ class _Rig:
             self.connected.append(client)
             return client
 
-        return McpLink(user=user, cwd="/work/repo", connect=connect)
+        return McpLink(
+            user=user, cwd="/work/repo", connect=connect, settle_seconds=settle
+        )
 
     async def client(
         self, user: str, link: McpLink | None = None, relay: Relay | None = None
@@ -129,11 +143,12 @@ async def _running(
 ) -> AsyncGenerator[_Rig]:
     """A daemon over the relays *relay_factory* builds, counting what clients ask."""
     run_dir = RunDir(tmp_path / "run")
+    resolver = _OneRepo(tmp_path / "relay")
     daemon = BiffDaemon(
         run_dir=run_dir,
         port=0,
         sessions=CliSessionStore(tmp_path / "home" / "sessions"),
-        resolver=_OneRepo(tmp_path / "relay"),
+        resolver=resolver,
         relay_factory=relay_factory,
         heartbeat_interval=0.05,
         poll_interval=0.02,
@@ -143,10 +158,14 @@ async def _running(
         org_refresh_interval=0.05,
     )
     await daemon.start()
-    env = _Rig(base=tmp_path / "relay", daemon=daemon, run_dir=run_dir)
+    env = _Rig(
+        base=tmp_path / "relay", daemon=daemon, run_dir=run_dir, resolver=resolver
+    )
     original = DaemonClient.request_held
 
-    async def counted(self: DaemonClient, method: str, **params: Any) -> HeldReply:  # pyright: ignore[reportExplicitAny]
+    async def counted(
+        self: DaemonClient, method: str, **params: JsonValue
+    ) -> HeldReply:
         env.asked.append(method)
         return await original(self, method, **params)
 
@@ -201,7 +220,7 @@ async def test_the_tools_a_daemon_server_lists_are_the_ones_the_in_process_serve
     served = create_server(served_state)
     McpAssembly.answer_reads_from(rig.link("kai"), served, served_state)
 
-    def listing(tools: list[Any]) -> dict[str, tuple[object, ...]]:  # pyright: ignore[reportExplicitAny]
+    def listing(tools: Sequence[Tool]) -> dict[str, tuple[object, ...]]:
         return {t.name: (t.description, t.parameters, t.meta) for t in tools}
 
     assert listing(list(await served.list_tools())) == listing(
@@ -238,7 +257,7 @@ async def test_a_confirmation_biffd_never_gets_leaves_the_mail_for_the_next_read
 
         patch.setattr(HeldReply, "confirm", lost)
         first = await reader.call("read_messages")
-    second = await reader.call("read_messages")
+        second = await reader.call("read_messages")
 
     assert ("hello" in first, "hello" in second) == (True, True)
 
@@ -298,3 +317,120 @@ async def test_last_prints_the_table_the_in_process_server_prints(
         text = await kai.call("last")
 
     assert text == last_table(login, rank)
+
+
+async def test_mail_in_a_reply_that_never_got_out_is_served_again(rig: _Rig) -> None:
+    """The process died after the tool returned and before the client had the text."""
+    writer = await rig.client("eric")
+    link = rig.link("kai")
+    reader = await rig.client("kai", link=link)
+    await reader.call("tty", name="kaitty")
+    await writer.call("write", to="kai:kaitty", message="hello")
+    first = await reader.call("read_messages")
+
+    await link.close()
+    again = await (await rig.client("kai")).call("read_messages")
+
+    assert ("hello" in first, "hello" in again) == (True, True)
+
+
+async def test_mail_is_confirmed_once_the_process_has_outlived_the_reply(
+    rig: _Rig,
+) -> None:
+    writer = await rig.client("eric")
+    reader = await rig.client("kai", link=rig.link("kai", settle=0.05))
+    await reader.call("tty", name="kaitty")
+    await writer.call("write", to="kai:kaitty", message="hello")
+    await reader.call("read_messages")
+
+    await asyncio.sleep(0.4)
+    again = await (await rig.client("kai")).call("read_messages")
+
+    assert again == "No new messages."
+
+
+async def test_a_malformed_finger_address_fails_as_it_does_in_process(
+    rig: _Rig, tmp_path: Path
+) -> None:
+    served = await rig.client("kai")
+    plain = _Caller("kai", await _plain(tmp_path, rig.stack))
+    with pytest.raises(ToolError) as want:
+        await plain.call("finger", user="kai:")
+
+    with pytest.raises(ToolError) as got:
+        await served.call("finger", user="kai:")
+
+    assert str(got.value) == str(want.value)
+
+
+async def test_reading_mail_counts_as_activity_and_an_empty_read_does_not(
+    rig: _Rig,
+) -> None:
+    key = SessionRouting("kai-session").session_key("kai")
+    relay = LocalRelay(rig.base)
+    writer = await rig.client("eric")
+    reader = await rig.client("kai")
+    await reader.call("tty", name="kaitty")
+
+    async def last_tool_at() -> datetime:
+        row = await relay.get_session(key)
+        assert row is not None
+        return row.last_tool_at
+
+    start = await last_tool_at()
+    await asyncio.sleep(0.05)
+    await reader.call("read_messages")
+    after_empty = await last_tool_at()
+    await writer.call("write", to="kai:kaitty", message="hello")
+    await asyncio.sleep(0.05)
+    await reader.call("read_messages")
+    after_mail = await last_tool_at()
+
+    assert (after_empty == start, after_mail > start) == (True, True)
+
+
+async def test_moving_to_another_session_drops_the_old_connection(rig: _Rig) -> None:
+    link = rig.link("kai")
+    await link.ask("old-session", "who")
+
+    await link.ask("new-session", "who")
+
+    with pytest.raises(ConnectionLostError):
+        await rig.connected[0].request("who")
+
+
+async def test_a_session_biffd_holds_on_another_relay_says_how_to_let_it_go(
+    rig: _Rig,
+) -> None:
+    link = rig.link("kai")
+    first = await rig.client("kai", link=link)
+    await first.call("who")
+    await link.close()
+    rig.resolver.moved = True
+    resumed = await rig.client("kai")
+
+    with pytest.raises(ToolError, match=r"biff daemon restart"):
+        await resumed.call("who")
+
+
+async def _plain(tmp_path: Path, stack: AsyncExitStack) -> RecordingClient:
+    """An in-process server's client, over a relay of its own."""
+    state = create_state(
+        BiffConfig(user="kai", repo_name=REPO),
+        tmp_path / "plain",
+        hostname="test-host",
+        pwd="/test",
+    )
+    stamped = StampedClient(FastMCPTransport(create_server(state)))
+    await stack.enter_async_context(stamped)
+    return RecordingClient(client=stamped, transcript=Transcript(title=""))
+
+
+async def test_a_relay_set_only_in_this_process_is_refused_by_name(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BIFF_RELAY_URL", "nats://elsewhere:4222")
+    kai = await rig.client("kai")
+
+    with pytest.raises(ToolError, match="BIFF_RELAY_URL"):
+        await kai.call("who")

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
+from biff.commands.unread_fetch import UnreadFetch
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -40,8 +42,7 @@ class Inbox:
     @classmethod
     async def unread(cls, ctx: CliContext) -> Self:
         """Fetch the session's unread mail without marking any of it read."""
-        tty = await ctx.relay.fetch(ctx.session_key)
-        user = await ctx.relay.fetch_user_inbox(ctx.user)
+        tty, user = await UnreadFetch.of(ctx)
         return cls(ctx, tty, user)
 
     @property

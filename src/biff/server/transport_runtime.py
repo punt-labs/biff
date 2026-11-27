@@ -16,6 +16,7 @@ from biff.server.mcp_assembly import McpAssembly
 
 if TYPE_CHECKING:
     from biff.server.channel_server import ChannelServer
+    from biff.server.entrypoints import McpServerOptions
     from biff.server.state import RepoToggle, ServerState
 
 _logger = logging.getLogger(__name__)
@@ -31,14 +32,15 @@ class McpServerBuilder:
     """Bind transport launch policy to the resolved process configuration."""
 
     _resolved: ResolvedConfig
-    _user: str | None
-    _transport: str
+    _options: McpServerOptions
     _toggle: RepoToggle
 
     def create_server(self) -> ChannelServer[ServerState]:
         """Create unbound resources with the transport's default caller policy."""
+        options = self._options
+        overrides = (options.data_dir, options.relay_url)
         return McpAssembly(
-            self._resolved, self._user, self._transport, self._toggle
+            self._resolved, options.user, options.transport, self._toggle, overrides
         ).server()
 
 

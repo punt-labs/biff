@@ -350,7 +350,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/commands/inbox.py": {
-    "efferent_coupling": 0.0,
+    "efferent_coupling": 1.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.3,
@@ -414,6 +414,13 @@
   },
   "src/biff/commands/tty.py": {
     "efferent_coupling": 4.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/commands/unread_fetch.py": {
+    "efferent_coupling": 1.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -1301,13 +1308,6 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
-  "src/biff/server/after_call.py": {
-    "efferent_coupling": 2.0,
-    "public_names": 1.0,
-    "circular_imports": 0.0,
-    "max_lcom": 0.0,
-    "avg_lcom": 0.0
-  },
   "src/biff/server/app.py": {
     "efferent_coupling": 13.0,
     "public_names": 2.0,
@@ -1421,11 +1421,11 @@
     "avg_lcom": 0.0
   },
   "src/biff/server/daemon_tools.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 8.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.311,
-    "avg_lcom": 0.311
+    "max_lcom": 0.291,
+    "avg_lcom": 0.291
   },
   "src/biff/server/display_queue.py": {
     "efferent_coupling": 0.0,
@@ -1463,7 +1463,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/server/mcp_assembly.py": {
-    "efferent_coupling": 8.0,
+    "efferent_coupling": 7.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -1473,8 +1473,8 @@
     "efferent_coupling": 3.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.4,
-    "avg_lcom": 0.4
+    "max_lcom": 0.571,
+    "avg_lcom": 0.571
   },
   "src/biff/server/mcp_protocol.py": {
     "efferent_coupling": 1.0,

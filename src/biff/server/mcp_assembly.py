@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Final
 
 from biff.config import ResolvedConfig, load_yaml_config, load_yaml_local, merge_config
 from biff.mcp_transport import McpTransport
-from biff.server.after_call import AfterCall
 from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
 from biff.server.daemon_tools import DaemonReadTools
@@ -25,6 +24,11 @@ if TYPE_CHECKING:
 __all__ = ["McpAssembly"]
 
 _READS: Final = ("who", "finger", "last", "read_messages")
+_MOVED: Final = (
+    "mcp.transport: daemon cannot be used with --data-dir or --relay-url: biffd "
+    "resolves the relay from the repository, so the read tools would read another "
+    "relay than the write tools. Drop the option, or set mcp.transport: inprocess"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +39,7 @@ class McpAssembly:
     user: str | None
     transport: str
     toggle: RepoToggle
+    overrides: tuple[Path | None, str | None]  # --data-dir, --relay-url
 
     @staticmethod
     def transport_for(
@@ -53,13 +58,34 @@ class McpAssembly:
             )
         return McpTransport.from_settings(merged, environ)
 
+    @staticmethod
+    def uses_biffd(
+        transport: str, repo_root: Path | None, environ: Mapping[str, str]
+    ) -> bool:
+        """Return whether the read tools ask biffd.
+
+        Only the stdio server does: the HTTP server (``biff serve``) has no
+        caller identity of its own to give biffd, so it keeps its relay.
+        """
+        choice = McpAssembly.transport_for(repo_root, environ)
+        return transport == "stdio" and choice is McpTransport.DAEMON
+
     def server(self) -> ChannelServer[ServerState]:
-        """Create the server; with ``mcp.transport: daemon``, biffd answers reads."""
+        """Create the server; with ``mcp.transport: daemon``, biffd answers reads.
+
+        Raises:
+            SystemExit: The daemon transport was chosen and an option moves the
+                relay, which biffd would not follow.
+        """
+        asks_biffd = self.uses_biffd(
+            self.transport, self.resolved.repo_root, os.environ
+        )
+        if asks_biffd and any(o is not None for o in self.overrides):
+            raise SystemExit(_MOVED)
         state = McpLaunch(self.resolved, self.toggle).state()
         caller = CallerPolicy.for_launch(self.user, self.transport)
         server = create_server(state, default_caller=caller)
-        choice = self.transport_for(self.resolved.repo_root, os.environ)
-        if choice is McpTransport.DAEMON:
+        if asks_biffd:
             cwd = str(Path.cwd())
             link = McpLink.for_host(user=self.resolved.config.user, cwd=cwd)
             self.answer_reads_from(link, server, state)
@@ -73,4 +99,3 @@ class McpAssembly:
         for name in _READS:
             server.local_provider.remove_tool(name)
         DaemonReadTools(server, state, link).register()
-        server.add_middleware(AfterCall())

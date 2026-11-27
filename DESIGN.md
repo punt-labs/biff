@@ -9764,15 +9764,32 @@ read-only tools (`who`, `finger`, `last`, `read_messages`) answered by biffd.
    the first request for a session id, starts biffd when it is down (as `biff`
    does), and opens it again once, repeating the read, when it was lost. A biffd
    that cannot be reached is a tool error carrying the nudge's own sentence.
-4. **`read_messages` is at-least-once.** The tool asks for the batch, returns its
-   text, and `AfterCall` (a FastMCP middleware) confirms the reply to biffd once
-   the tool has returned. A tool that raises confirms nothing. A confirmation
-   that fails is logged and the next call serves the mail again. In-process the
-   mail was marked read before the text was built.
+4. **`read_messages` is at-least-once, and confirmed late.** The tool asks for
+   the batch and returns its text. Nothing in the process can see the text reach
+   the client, so biffd is told the mail was delivered only when the process has
+   outlived the reply by five seconds (a failed send ends it well before) or the
+   session makes its next request. A process that dies first leaves the mail
+   unread, and the next read serves it again; a confirmation that fails is logged
+   and does the same. In-process the mail was marked read before the text was
+   built. Rejected: confirming when the tool returns, which loses the mail when
+   the send fails.
 5. **Hybrid until B2.** With `daemon` set, the write and talk tools still use the
    server's own relay, so the process holds a connection; only the reads move.
    `update_current_session` stays in the read tools (it stamps `last_tool_at`); a
-   daemon method that touches the session on a request replaces it.
+   daemon method that touches the session on a request replaces it. A read that
+   finds mail stamps activity too, as in-process: mail routing follows it.
+6. **Where it applies.** Only to the stdio server: `biff serve` has no caller
+   identity to give biffd and keeps its own relay. `--data-dir` and
+   `--relay-url` are refused with the daemon transport (biffd resolves the relay
+   from the repository, so reads and writes would use different relays); a
+   `BIFF_RELAY_*` variable set only in the process is refused by name when the
+   first request connects. A session that biffd holds on another relay (the
+   repository's relay changed) is refused with the command that lets it go,
+   `biff daemon restart`; ending a retained session needs a daemon method that
+   does not exist yet. `/clear` closes the old session's connection.
+7. **A fetch that fails halfway loses nothing.** `Inbox.unread` files the session
+   mail again when the broadcast inbox cannot be fetched after a consuming relay
+   already gave it up.
 
 **Layers.** `server` may import `client`, as `docs/design/biffd.md` says
 ("Package layout"). The policy change landed alone, as oo-ratchet requires.
