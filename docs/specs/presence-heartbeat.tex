@@ -479,9 +479,13 @@ about the bound and nothing about the protocol.
     vacuous.
   \item \textbf{The race is real}: $EF\;(phase = hbRead \land curRev \neq
     seenRev)$.
-  \item \textbf{The stamp moves the idle clock}: $EF\;(beatHas = ztrue \land
-    lastTool > 0)$, a committed heartbeat that carried a stamp and moved the
-    clock.
+  \item \textbf{The heartbeat itself moves the idle clock}: $EF\;(phase =
+    hbIdle \land beatHas = ztrue \land beatAt > seenTool \land lastTool \geq
+    beatAt)$.  $seenTool$ is the idle clock as the heartbeat read it and $beatAt$
+    the stamp it committed.  A call of biff before the read is already in
+    $seenTool$, and one between the read and the commit makes $curRev \neq
+    seenRev$ so the commit does not happen; so the clock reached $beatAt$ by the
+    heartbeat alone, not by $BiffCall$.
   \item \textbf{The guard refuses}: $EF$ of an auto plan write that finds a
     non-empty manual plan is the operation $PlanRefused$ enabled, stated as the
     goal $planSource = srcManual \land fields~fplan \neq 0$.
@@ -515,7 +519,7 @@ thing taken out, each reporting an invariant violation.
 %%   ( ulimit -v 8000000; "$PROBCLI" docs/specs/presence-heartbeat.tex $P -model_check )
 %%   "$PROBCLI" docs/specs/presence-heartbeat.tex $P -model_check -goal "beat/=0"
 %%   "$PROBCLI" docs/specs/presence-heartbeat.tex $P -model_check \
-%%       -goal "beatHas=ztrue & lastTool>0"
+%%       -goal "phase=hbIdle & beatHas=ztrue & beatAt>seenTool & lastTool>=beatAt"
 %%
 %% Negative controls, each of which must report an invariant violation:
 %%

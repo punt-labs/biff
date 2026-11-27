@@ -17,6 +17,8 @@ from biff.relay import LocalRelay
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
     from tests.test_daemon.conftest import Harness
 
 _TEN_MINUTES = timedelta(minutes=10)
@@ -80,3 +82,35 @@ async def test_another_sessions_stamp_does_not_count(harness: Harness) -> None:
     _stamp(harness, "s-theirs", datetime.now(UTC))
     await asyncio.sleep(_SETTLE_SECONDS)
     assert await _idle(viewer, key) >= _TEN_MINUTES
+
+
+async def test_an_unreadable_unread_directory_does_not_stop_the_presence_refresh(
+    harness: Harness,
+) -> None:
+    # A file where the directory should be: stat raises NotADirectoryError.
+    harness.unread_dir.parent.mkdir(parents=True, exist_ok=True)
+    harness.unread_dir.write_text("not a directory")
+    mcp = await harness.connect("s-blocked", "kai", client="mcp")
+    status = cast("dict[str, dict[str, str]]", await mcp.request("status"))
+    key = status["data"]["session_key"]
+    viewer = LocalRelay(harness.factory.built[0])
+    row = await viewer.get_session(key)
+    assert row is not None
+    old = datetime.now(UTC) - _TEN_MINUTES
+    await viewer.update_session(row.model_copy(update={"last_active": old}))
+    await asyncio.sleep(_SETTLE_SECONDS)
+    refreshed = await viewer.get_session(key)
+    assert refreshed is not None
+    assert refreshed.last_active > old + _ONE_MINUTE
+
+
+async def test_an_unreadable_stamp_is_logged_once_not_every_beat(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness.unread_dir.parent.mkdir(parents=True, exist_ok=True)
+    harness.unread_dir.write_text("not a directory")
+    with caplog.at_level("WARNING", logger="biff.daemon.heartbeat"):
+        await harness.connect("s-noisy", "kai", client="mcp")
+        await asyncio.sleep(_SETTLE_SECONDS)
+    failures = [r for r in caplog.records if "activity stamp failed" in r.getMessage()]
+    assert len(failures) == 1

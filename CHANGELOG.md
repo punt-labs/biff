@@ -7,7 +7,11 @@
 - The biffd `plan` method takes `source`, `manual` (the default) or `auto`. An
   auto plan from a hook never replaces a non-empty manual one: the reply reads
   `Plan unchanged (manual):` and carries `"unchanged": true`, so the client
-  rewrites its plan-gate marker. Any other source is refused.
+  rewrites its plan-gate marker. Any other source is refused. The check and
+  the write are one compare-and-set on the row (`Relay.update_session_if`), so
+  a manual plan that lands in between is never overwritten.
+- biffd's heartbeat keeps refreshing presence when the unread directory cannot
+  be read; the error is logged once per episode.
 - The biffd `status` method (and `biff status --json`) reports `relay_counters`,
   the relay's request and timeout counts for a NATS relay and `null` for the
   local relay. The status text does not change.

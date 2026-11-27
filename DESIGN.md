@@ -9772,6 +9772,13 @@ PL-1670: `plan` `source`, the heartbeat's activity stamp, relay counters on
   may not import; it is deleted with the in-process path, and `ActivityStamp`
   replaces it.
 
-**Model obligations.** The stamp transition (heartbeat advances `last_tool_at`
-from an external clock, forward only) is not in `presence-heartbeat.tex`; the
-DES-097 note already records that gap.
+**Model.** `docs/specs/presence-heartbeat.tex` models both transitions.
+`HeartbeatCommit` is the compare-and-set that moves `last_tool_at` forward to
+the stamp only; `PlanWrite` and `PlanRefused` are the plan rule. Each is one
+compare-and-set on the row's revision, in the code as in the model:
+`Relay.update_session_if` reads the row, applies the change and writes it, and
+a manual plan that lands after an auto write read the row fails the write; the
+retry (three tries, then `SessionChangedError`) reads the manual plan and keeps
+it. The model's goal for the stamp is a heartbeat that moved the clock past the
+value it read (`beatAt > seenTool`), which no biff call can have caused, since
+a call between the read and the commit makes the commit fail.

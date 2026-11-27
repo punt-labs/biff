@@ -276,5 +276,8 @@
   "biff.daemon.read_steps": "daemon",
   "biff.commands._relay_counters": "commands",
   "biff.commands._status_report": "commands",
-  "biff.commands.plan_source": "commands"
+  "biff.commands.plan_source": "commands",
+  "biff.local_tty_names": "engine",
+  "biff.nats_session_rows": "engine",
+  "biff.session_edit": "engine"
 }
