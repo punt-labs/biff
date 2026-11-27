@@ -42,6 +42,8 @@ def _answers_only_for(sha: str, pulls: str) -> str:
 
 
 TARGETS = ["check-oo", "check-coupling", "check-suppressions", "check-layers"]
+BEFORE = "609d79d5bd1246d4af45623d1550a406714fc349"
+STRICT_LAYERS_BASE = f"--base-ref {BEFORE} --require-base --tripwire"
 
 
 def _make_arguments(stdout: str) -> list[str]:
@@ -89,7 +91,7 @@ def _run_step(
     _stub(bin_dir, "make", "printf 'ARG:%s\\n' \"$@\"")
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
-        "BEFORE_SHA": "609d79d5bd1246d4af45623d1550a406714fc349",
+        "BEFORE_SHA": BEFORE,
         "GITHUB_REPOSITORY": "punt-labs/biff",
         "GITHUB_SHA": sha,
     }
@@ -108,6 +110,8 @@ def test_a_labelled_merge_allows_the_layers_widening(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "::warning::" not in result.stdout
     assert _variables_with_flag(result.stdout) == ["LAYERS_BASE"]
+    variables = _make_variables(result.stdout)
+    assert variables.get("LAYERS_BASE") == f"{STRICT_LAYERS_BASE} {ALLOW}"
     assert _make_targets(result.stdout) == TARGETS
 
 
@@ -117,6 +121,7 @@ def test_the_prs_head_commit_does_not_allow_it(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "::warning::" not in result.stdout
     assert _variables_with_flag(result.stdout) == []
+    assert _make_variables(result.stdout).get("LAYERS_BASE") == STRICT_LAYERS_BASE
     assert _make_targets(result.stdout) == TARGETS
 
 
@@ -126,6 +131,7 @@ def test_the_step_asks_about_the_pushed_commit(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "::warning::" in result.stdout
     assert _variables_with_flag(result.stdout) == []
+    assert _make_variables(result.stdout).get("LAYERS_BASE") == STRICT_LAYERS_BASE
 
 
 def test_a_failed_lookup_warns_stays_strict_and_still_runs_every_ratchet(
@@ -135,6 +141,7 @@ def test_a_failed_lookup_warns_stays_strict_and_still_runs_every_ratchet(
     assert result.returncode == 0, result.stderr
     assert "::warning::" in result.stdout
     assert _variables_with_flag(result.stdout) == []
+    assert _make_variables(result.stdout).get("LAYERS_BASE") == STRICT_LAYERS_BASE
     assert _make_targets(result.stdout) == TARGETS
 
 
@@ -143,4 +150,5 @@ def test_unreadable_pr_data_warns_and_stays_strict(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "::warning::" in result.stdout
     assert _variables_with_flag(result.stdout) == []
+    assert _make_variables(result.stdout).get("LAYERS_BASE") == STRICT_LAYERS_BASE
     assert _make_targets(result.stdout) == TARGETS

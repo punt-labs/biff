@@ -66,7 +66,7 @@ jobs:
           LAYERS_ARGS="${BASE_ARGS}"
           if pulls="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls")" \
             && allow="$(printf '%s' "${pulls}" | uv run python tools/layers_allowance.py "${GITHUB_SHA}")"; then
-            LAYERS_ARGS="${LAYERS_ARGS} ${allow}"
+            LAYERS_ARGS="${LAYERS_ARGS}${allow:+ ${allow}}"
           else
             echo "::warning::could not read the merged PR's labels; the layers tripwire stays strict"
           fi
