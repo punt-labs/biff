@@ -2191,9 +2191,9 @@ verified by model checking with probcli (\texttt{z-spec test}):
   \item \textbf{No lost write (PL-1704)}: a heartbeat never overwrites a
     plan, a name or any other field written after its read.  Checked in
     \texttt{presence-heartbeat.tex}, where $fields = intended$ is a state
-    invariant: ProB visits all 922 states of the compare-and-set model with no
+    invariant: ProB visits all 32,918 states of the compare-and-set model with no
     violation, and finds the lost plan, in five steps ($HeartbeatRead \to
-    WriteField \to HeartbeatCommit$), in the frozen variant
+    WritePlan \to HeartbeatCommit$), in the frozen variant
     \texttt{presence-heartbeat-blindput.tex}, whose commit is the blind put the
     code made before.  $EF\,(beat \neq 0)$ and $EF\,(phase = hbRead \land
     curRev \neq seenRev)$ are both \textbf{TRUE}, so the invariant is not

@@ -60,6 +60,8 @@ from biff.models import (
     WallPost,
 )
 from biff.nats_connection import NatsSupport, Scrub
+from biff.nats_session_rows import SessionRows
+from biff.session_edit import SessionChangedError, SessionEdit
 from biff.tty import (
     SID_HINT_NAMESPACE,
     build_session_key,
@@ -419,7 +421,7 @@ class _ConnectionHealth:
         return f"{time.monotonic() - self._last_ok:.0f}s"
 
 
-class NatsRelay:
+class NatsRelay(SessionRows):
     """NATS-backed relay with JetStream messages and KV sessions.
 
     All infrastructure (KV bucket, stream) is provisioned lazily on the
@@ -1865,36 +1867,22 @@ class NatsRelay:
         write fails if the row changed since the read and is retried, so a plan
         saved in between survives; one skipped tick is harmless (3-day TTL).
         """
-        kv_key = self._kv_key(session_key)
-        for _ in range(3):  # a later tick retries what these do not land
-            _, kv = await self._ensure_connected()
-            try:
-                entry = await self._tracked("kv.get", kv.get(kv_key))
-                if entry.value is None:
-                    self._warn_heartbeat_missing_once(session_key)
-                    return  # No session to heartbeat
-                existing = UserSession.model_validate_json(entry.value)
-            except (KeyNotFoundError, BucketNotFoundError):
-                self._warn_heartbeat_missing_once(session_key)
-                return  # Session not found — nothing to heartbeat
-            except (ValidationError, ValueError):
-                # INFO: runs in the background loop and must not print into the
-                # interactive REPL; biff.log records the anomaly.
-                logger.info("Corrupt session, skip heartbeat")
-                return
-            self._heartbeat_missing_warned.discard(session_key)
-            _, kv = await self._ensure_connected()  # re-anchor after the get
-            try:
-                updated = existing.beat(at).model_dump_json().encode()
-                await self._tracked(
-                    "kv.update", kv.update(kv_key, updated, last=entry.revision)
-                )
-                break
-            except KeyWrongLastSequenceError:
-                continue
-        else:
+        try:
+            existing = await self.update_session_if(
+                SessionEdit(session_key, lambda row: row.beat(at))
+            )
+        except (ValidationError, ValueError):
+            # INFO: runs in the background loop and must not print into the
+            # interactive REPL; biff.log records the anomaly.
+            logger.info("Corrupt session, skip heartbeat")
+            return
+        except SessionChangedError:
             logger.info("Session changed concurrently, skip heartbeat")
             return
+        if existing is None:
+            self._warn_heartbeat_missing_once(session_key)
+            return  # No session to heartbeat
+        self._heartbeat_missing_warned.discard(session_key)
         # Refresh TTY name reservation to prevent TTL expiry (DES-035).
         if existing.tty_name:
             try:

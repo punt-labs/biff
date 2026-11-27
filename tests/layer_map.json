@@ -274,5 +274,15 @@
   "biff.server.daemon_tools": "server",
   "biff.server.mcp_assembly": "server",
   "biff.server.mcp_link": "server",
-  "biff.commands.unread_fetch": "commands"
+  "biff.commands.unread_fetch": "commands",
+  "biff.daemon.activity_stamp": "daemon",
+  "biff.daemon.heartbeat": "daemon",
+  "biff.daemon.plan_method": "daemon",
+  "biff.daemon.read_steps": "daemon",
+  "biff.commands._relay_counters": "commands",
+  "biff.commands._status_report": "commands",
+  "biff.commands.plan_source": "commands",
+  "biff.local_tty_names": "engine",
+  "biff.nats_session_rows": "engine",
+  "biff.session_edit": "engine"
 }

@@ -3,8 +3,8 @@
   "testDirectory": "tests/",
   "timestamp": "2026-11-27T12:00:00Z",
   "summary": {
-    "covered": 8,
-    "total": 8,
+    "covered": 16,
+    "total": 16,
     "percentage": 100,
     "gaps": 0
   },
@@ -64,10 +64,67 @@
       "source": "NextTick",
       "coveredBy": "tests/test_nats_heartbeat_race.py::test_the_next_tick_starts_with_a_fresh_budget_after_one_gave_up",
       "confidence": "high"
+    },
+    {
+      "text": "lastTool = peak: the idle clock never moves backwards",
+      "category": "invariant",
+      "source": "PresenceInv",
+      "coveredBy": "tests/test_daemon/test_heartbeat_stamp.py::test_a_stale_stamp_never_moves_the_clock_backwards",
+      "confidence": "high"
+    },
+    {
+      "text": "beatHas => lastTool >= beatAt: a committed heartbeat leaves idle no older than its stamp",
+      "category": "invariant",
+      "source": "PresenceInv",
+      "coveredBy": "tests/test_daemon/test_heartbeat_stamp.py::test_a_stamp_from_bash_and_edit_keeps_the_session_active",
+      "confidence": "high"
+    },
+    {
+      "text": "HeartbeatCommit: with no stamp the idle clock is unchanged",
+      "category": "effect",
+      "source": "HeartbeatCommit",
+      "coveredBy": "tests/test_daemon/test_heartbeat_stamp.py::test_without_a_stamp_the_session_stays_idle",
+      "confidence": "high"
+    },
+    {
+      "text": "HeartbeatCommit: only this session's stamp counts",
+      "category": "precondition",
+      "source": "HeartbeatRead",
+      "coveredBy": "tests/test_daemon/test_heartbeat_stamp.py::test_another_sessions_stamp_does_not_count",
+      "confidence": "medium"
+    },
+    {
+      "text": "manualLive => planSource = srcManual & plan = manualPlan: an auto plan never replaces a non-empty manual one",
+      "category": "invariant",
+      "source": "PresenceInv",
+      "coveredBy": "tests/test_commands/test_plan_source.py::test_auto_never_overwrites_a_manual_plan; tests/test_daemon/test_plan_source.py::test_auto_plan_keeps_a_manual_plan",
+      "confidence": "high"
+    },
+    {
+      "text": "WritePlan: any other plan write succeeds (auto over auto or over an emptied manual plan, manual over anything)",
+      "category": "precondition",
+      "source": "WritePlan",
+      "coveredBy": "tests/test_commands/test_plan_source.py::test_auto_replaces_an_auto_plan; ::test_manual_replaces_an_auto_plan; ::test_auto_over_an_emptied_manual_plan_sets_it; ::test_auto_sets_a_plan_when_none_is_set",
+      "confidence": "high"
+    },
+    {
+      "text": "PlanRefused: a refused auto plan changes nothing",
+      "category": "effect",
+      "source": "PlanRefused",
+      "coveredBy": "tests/test_commands/test_plan_source.py::test_auto_never_overwrites_a_manual_plan",
+      "confidence": "medium"
+    },
+    {
+      "text": "BiffCall: a stale stamp does not undo a later biff call",
+      "category": "effect",
+      "source": "BiffCall",
+      "coveredBy": "tests/test_daemon/test_heartbeat_stamp.py::test_a_stale_stamp_never_moves_the_clock_backwards",
+      "confidence": "high"
     }
   ],
   "notModelled": [
     "maxRev, maxBeat: bounds that keep ProB finite",
-    "Quiesce: the stutter that ends a bounded history"
+    "Quiesce: the stutter that ends a bounded history",
+    "maxNow, maxTries = 2: bounds (the code retries three times)"
   ]
 }

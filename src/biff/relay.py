@@ -32,10 +32,11 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import IO, Protocol
+from typing import IO, TYPE_CHECKING, Protocol
 
 from pydantic import ValidationError
 
+from biff.local_tty_names import LocalTtyNames
 from biff.mailbox_line import MailboxLine
 from biff.models import (
     Message,
@@ -46,7 +47,10 @@ from biff.models import (
 )
 from biff.relay_config import RelayLocation
 from biff.session_lock import routing_lock
-from biff.tty import build_session_key, validate_reclaimable_name, validate_routing_id
+from biff.tty import build_session_key
+
+if TYPE_CHECKING:
+    from biff.session_edit import RowChange, SessionEdit
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +153,10 @@ class Relay(Protocol):
 
     async def get_session(self, session_key: str) -> UserSession | None:
         """Return the session record, or None if it is absent."""
+        ...
+
+    async def update_session_if(self, edit: SessionEdit) -> UserSession | None:
+        """Atomically store ``edit.change(row)``; the row, or None if absent."""
         ...
 
     async def get_sessions_for_user(self, user: str) -> list[UserSession]:
@@ -295,6 +303,11 @@ class DormantRelay:
         """Return no session while disabled."""
         return None
 
+    async def update_session_if(self, edit: SessionEdit) -> UserSession | None:
+        """Return no session while disabled."""
+        del edit
+        return None
+
     async def get_sessions_for_user(self, user: str) -> list[UserSession]:  # noqa: ARG002
         """Return an empty result while disabled."""
         return []
@@ -384,6 +397,7 @@ class LocalRelay:
 
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
+        self._names = LocalTtyNames(data_dir, self._validate_user)
         # Session keys for which heartbeat() has already logged a missing-
         # session warning -- caps the warning at once per key rather than
         # once per heartbeat tick, which runs on a fixed interval forever.
@@ -589,22 +603,33 @@ class LocalRelay:
         in its ``update`` mapping, so ``last_tool_at`` on the existing
         session survives unchanged.
         """
-        self._validate_session_key(session_key)
+        if self._edit_row(session_key, lambda row: row.beat(at)) is None:
+            # A session vanishing under a running heartbeat loop is
+            # anomalous (expired, deleted, or never created) -- warn once
+            # per key, not on every tick, since the loop runs on a fixed
+            # interval for the lifetime of the process.
+            if session_key not in self._heartbeat_missing_warned:
+                self._heartbeat_missing_warned.add(session_key)
+                logger.warning("Heartbeat found no session; skipping")
+        else:
+            self._heartbeat_missing_warned.discard(session_key)
+
+    async def update_session_if(self, edit: SessionEdit) -> UserSession | None:
+        """Store ``edit.change(row)`` under the relay's file lock."""
+        return self._edit_row(edit.key, edit.change)
+
+    def _edit_row(self, key: str, change: RowChange) -> UserSession | None:
+        self._validate_session_key(key)
         with self._lock():
             sessions = self._read_sessions()
-            existing = sessions.get(session_key)
+            existing = sessions.get(key)
             if existing is None:
-                # A session vanishing under a running heartbeat loop is
-                # anomalous (expired, deleted, or never created) -- warn once
-                # per key, not on every tick, since the loop runs on a fixed
-                # interval for the lifetime of the process.
-                if session_key not in self._heartbeat_missing_warned:
-                    self._heartbeat_missing_warned.add(session_key)
-                    logger.warning("Heartbeat found no session; skipping")
-                return
-            self._heartbeat_missing_warned.discard(session_key)
-            sessions[session_key] = existing.beat(at)
-            self._write_sessions(sessions)
+                return None
+            updated = change(existing)
+            if updated is not existing:
+                sessions[key] = updated
+                self._write_sessions(sessions)
+            return updated
 
     async def get_sessions(self) -> list[UserSession]:
         """Get all sessions, reaping removals and filtering expired."""
@@ -743,103 +768,37 @@ class LocalRelay:
             return None
         return wall
 
-    # -- TTY name reservation (DES-035) --
-
-    def _tty_lock_path(self, user: str, name: str) -> Path:
-        """Lockfile path for an atomic TTY name reservation."""
-        self._validate_user(user)
-        return self._data_dir / f"ttyname-{user}-{name}.lock"
+    # -- TTY name reservation (DES-035) and reclaim hints --
 
     async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool:
         """Reserve a TTY name atomically via O_CREAT|O_EXCL lockfile."""
-        RelayLocation.ensure(self._data_dir)
-        path = self._tty_lock_path(user, name)
-        try:
-            with path.open("x") as fd:
-                fd.write(session_key)
-            path.chmod(0o600)
-            return True
-        except FileExistsError:
-            return False
+        return self._names.reserve(user, name, session_key)
 
     async def release_tty_name(self, user: str, name: str) -> None:
         """Release a TTY name reservation by removing the lockfile."""
-        self._tty_lock_path(user, name).unlink(missing_ok=True)
+        self._names.release(user, name)
 
     async def refresh_tty_reservation(
         self, user: str, name: str, session_key: str
     ) -> None:
-        """Refresh reservation by rewriting the lockfile content.
-
-        Only overwrites if the current owner matches *session_key*,
-        preventing clobbering a reservation legitimately claimed by
-        another session after TTL lapse.
-        """
-        path = self._tty_lock_path(user, name)
-        if path.exists() and path.read_text() == session_key:
-            path.write_text(session_key)
-            path.chmod(0o600)
+        """Refresh the reservation, if *session_key* still owns it."""
+        self._names.refresh(user, name, session_key)
 
     async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
         """Return the session key that holds *name*, or ``None``."""
-        path = self._tty_lock_path(user, name)
-        return path.read_text() if path.exists() else None
+        return self._names.owner(user, name)
 
     async def list_reserved_names(self, user: str) -> list[str]:
-        """List reserved TTY names for a user via glob on lockfiles.
-
-        The ``sidmap-`` session-id hint files use a distinct prefix, so they
-        are naturally excluded from the ``ttyname-`` glob.
-        """
-        self._validate_user(user)
-        if not self._data_dir.exists():
-            return []
-        prefix = f"ttyname-{user}-"
-        suffix = ".lock"
-        names: list[str] = []
-        for path in self._data_dir.glob(f"{prefix}*{suffix}"):
-            fname = path.name
-            name = fname.removeprefix(prefix).removesuffix(suffix)
-            if name:
-                names.append(name)
-        return names
-
-    def _sid_hint_path(self, user: str, session_id: str) -> Path:
-        """File path for a ``session_id -> tty_name`` reclaim hint.
-
-        Validate the session_id (identical contract to
-        ``NatsRelay._sid_hint_key``) so both backends reject the same inputs
-        and an unvalidated routing id can never build an odd/oversized
-        filename under the data dir.  A validated routing id is
-        ``[0-9a-fA-F-]`` — inherently free of path separators and traversal.
-        """
-        self._validate_user(user)
-        error = validate_routing_id(session_id)
-        if error is not None:
-            raise ValueError(error)
-        return self._data_dir / f"sidmap-{user}-{session_id}"
+        """List reserved TTY names for a user via glob on lockfiles."""
+        return self._names.reserved(user)
 
     async def get_session_tty_hint(self, user: str, session_id: str) -> str | None:
         """Return the last tty_name this session_id claimed, or ``None``."""
-        path = self._sid_hint_path(user, session_id)
-        try:
-            return path.read_text().strip() or None
-        except OSError:
-            return None
+        return self._names.hint(user, session_id)
 
     async def set_session_tty_hint(self, user: str, session_id: str, name: str) -> None:
-        """Record the tty_name this session_id claimed (overwrites).
-
-        Validate the name before writing (defense in depth) — the value is
-        read back as a reclaim candidate and reserved as a KV key.
-        """
-        error = validate_reclaimable_name(name)
-        if error is not None:
-            raise ValueError(error)
-        RelayLocation.ensure(self._data_dir)
-        hint = self._sid_hint_path(user, session_id)
-        hint.write_text(name)
-        hint.chmod(0o600)
+        """Record the tty_name this session_id claimed (overwrites)."""
+        self._names.set_hint(user, session_id, name)
 
     async def disconnect(self) -> None:
         """No-op — filesystem relay has no connection to release."""

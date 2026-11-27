@@ -19,8 +19,8 @@ from biff.client.connection import DaemonError
 from biff.commands.inbox import Inbox
 from biff.daemon import connection as connection_module
 from biff.daemon.connection import ConnectionHandler
-from biff.daemon.methods import Methods
 from biff.daemon.outbox import Outbox
+from biff.daemon.read_steps import ReadSteps
 from biff.daemon.session_drain import InboxDrain
 from biff.frame_reply import ErrorCode
 from biff.models import Message, UnreadSummary
@@ -378,7 +378,7 @@ async def test_a_read_cancelled_between_refiles_leaves_one_copy_of_each_message(
     with monkeypatch.context() as patch:
         patch.setattr(CancellingRelay, "allowed", 2)
         with pytest.raises(asyncio.CancelledError):
-            await Methods._refile(session, Inbox(ctx, [], []), pending, pending[:1])
+            await ReadSteps.refile(session, Inbox(ctx, [], []), pending, pending[:1])
     filed = [m.body for m in await relay.fetch(key)]
     held = [m.body for m in outbox.merge([])]
     assert sorted([*filed, *held]) == sorted(m.body for m in mail)
@@ -414,7 +414,9 @@ async def test_a_refile_that_landed_but_timed_out_is_read_once(
     session = cast("Session", SimpleNamespace(outbox=outbox))
     with monkeypatch.context() as patch:
         patch.setattr(LandingTimeoutRelay, "timing_out", True)
-        filed = await Methods._refile(session, Inbox(ctx, [], []), pending, pending[:1])
+        filed = await ReadSteps.refile(
+            session, Inbox(ctx, [], []), pending, pending[:1]
+        )
     assert filed == 0  # every write was reported as failed, though each landed
     merged = outbox.merge(await relay.fetch(key))
     assert sorted(m.body for m in merged) == ["m0", "m1", "m2", "m3"]

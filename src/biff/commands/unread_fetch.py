@@ -41,11 +41,21 @@ class UnreadFetch:
         return tty, user
 
     @staticmethod
-    async def _filed_again(ctx: CliContext, fetched: Sequence[Message]) -> None:
+    async def refile(ctx: CliContext, message: Message) -> bool:
+        """File *message* in the relay again; say whether the relay held it before.
+
+        A relay that keeps unread mail is left alone: filing the message again
+        would copy it.
+        """
         if not ctx.relay.consumes_on_fetch:
-            return
+            return False
+        await ctx.relay.deliver(message.refiled())
+        return True
+
+    @staticmethod
+    async def _filed_again(ctx: CliContext, fetched: Sequence[Message]) -> None:
         for message in fetched:
             try:
-                await ctx.relay.deliver(message.refiled())
+                await UnreadFetch.refile(ctx, message)
             except RELAY_ERRORS:
                 logger.warning("could not file message %s again", message.id)

@@ -92,6 +92,7 @@ class Harness:
     run_dir: RunDir
     factory: CountingFactory
     sessions: CliSessionStore
+    unread_dir: Path
     clients: list[DaemonClient] = field(default_factory=list[DaemonClient])
 
     async def connect(
@@ -145,12 +146,17 @@ def bus(harness: Harness) -> TalkBus:
 
 
 @pytest.fixture
-async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
+async def harness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Harness]:
     run_dir = RunDir(tmp_path / "run")
     factory = CountingFactory()
-    # The path ``CliSessionStore.default()`` names when a test sets HOME to
-    # ``tmp_path / "home"``, so a client and the daemon share one store.
-    sessions = CliSessionStore(tmp_path / "home" / ".punt-labs" / "biff" / "sessions")
+    # The daemon finds the session store and the hook's activity stamps under
+    # the user's home directory, so the test's home is the one it builds below.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    biff_home = tmp_path / "home" / ".punt-labs" / "biff"
+    sessions = CliSessionStore(biff_home / "sessions")
+    unread_dir = biff_home / "unread"
     daemon = BiffDaemon(
         run_dir=run_dir,
         port=0,
@@ -165,7 +171,13 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         org_refresh_interval=0.05,
     )
     await daemon.start()
-    env = Harness(daemon=daemon, run_dir=run_dir, factory=factory, sessions=sessions)
+    env = Harness(
+        daemon=daemon,
+        run_dir=run_dir,
+        factory=factory,
+        sessions=sessions,
+        unread_dir=unread_dir,
+    )
     yield env
     for connected in env.clients:
         await connected.close()

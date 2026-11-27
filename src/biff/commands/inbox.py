@@ -69,10 +69,7 @@ class Inbox:
         read from another process finds it.  A relay that keeps unread mail is
         left alone: filing the message again would copy it.
         """
-        if not self._ctx.relay.consumes_on_fetch:
-            return False
-        await self._ctx.relay.deliver(message.refiled())
-        return True
+        return await UnreadFetch.refile(self._ctx, message)
 
     async def mark_read(self, delivered: Sequence[Message]) -> None:
         """Mark *delivered*, and only those messages, read."""
