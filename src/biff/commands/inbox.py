@@ -62,7 +62,7 @@ class Inbox:
         return (await relay.get_unread_summary(self._ctx.session_key)).count
 
     async def refile(self, message: Message) -> bool:
-        """File *message* in the relay again; say whether the relay held it before.
+        """File *message* in the relay again; say whether it was filed.
 
         A relay that consumes mail when it is fetched holds none of it afterwards,
         so mail a read could not deliver goes back, where ending the session or a

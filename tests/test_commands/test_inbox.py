@@ -8,6 +8,7 @@ import pytest
 
 from biff.cli_context import CliContext
 from biff.commands.inbox import Inbox
+from biff.commands.unread_fetch import UnreadFetch
 from biff.models import BiffConfig, Message
 from biff.relay import LocalRelay
 
@@ -74,3 +75,38 @@ async def test_session_mail_survives_a_broadcast_inbox_that_fails(
     again = await Inbox.unread(ctx)
 
     assert [m.body for m in again.messages] == ["for the session"]
+
+
+async def test_refile_says_true_when_a_consumed_message_went_back(
+    ctx: CliContext, consuming: _ConsumingRelay
+) -> None:
+    message = Message(from_user="eric", to_user="kai:abc12345", body="back")
+
+    filed = await UnreadFetch.refile(ctx, message)
+
+    assert (filed, [m.body for m in await consuming.fetch("kai:abc12345")]) == (
+        True,
+        ["back"],
+    )
+
+
+async def test_refile_says_false_and_writes_nothing_when_the_relay_kept_the_mail(
+    tmp_path: Path,
+) -> None:
+    relay = LocalRelay(tmp_path)
+    ctx = CliContext(
+        relay=relay,
+        config=BiffConfig(user="kai", repo_name="test"),
+        session_key="kai:abc12345",
+        user="kai",
+        tty="abc12345",
+    )
+    message = Message(from_user="eric", to_user="kai:abc12345", body="kept")
+    await relay.deliver(message)
+
+    filed = await UnreadFetch.refile(ctx, message)
+
+    assert (filed, [m.body for m in await relay.fetch("kai:abc12345")]) == (
+        False,
+        ["kept"],
+    )

@@ -42,10 +42,13 @@ class UnreadFetch:
 
     @staticmethod
     async def refile(ctx: CliContext, message: Message) -> bool:
-        """File *message* in the relay again; say whether the relay held it before.
+        """File *message* in the relay again; say whether it was filed.
 
-        A relay that keeps unread mail is left alone: filing the message again
-        would copy it.
+        ``True``: the relay consumed the message when it was fetched, so it holds
+        none now, and a refiled copy is in it; the caller may let go of its own.
+        ``False``: the relay keeps unread mail, so it still holds the message,
+        nothing was written (a second copy would be a duplicate), and a caller
+        that holds its own copy is not to let go of anything on this result.
         """
         if not ctx.relay.consumes_on_fetch:
             return False
