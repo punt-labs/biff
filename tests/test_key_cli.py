@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -130,3 +131,42 @@ def test_key_init_still_refuses_when_the_recorded_keyring_is_unavailable(
     result = runner.invoke(cli.app, ["key", "init", "--owner", "jfreeman"])
     assert result.exit_code == 1
     assert "OS keyring" in result.output
+
+
+def _attested_claude() -> None:
+    runner.invoke(cli.app, ["key", "init", "--owner", "jfreeman"])
+    attested = runner.invoke(
+        cli.app, ["key", "attest", "claude", "--owner", "jfreeman", "--hours", "2"]
+    )
+    assert attested.exit_code == 0, attested.output
+
+
+def test_key_show_verifies_an_attestation_with_the_keyring_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _attested_claude()
+    _keyring_unavailable(monkeypatch)
+    result = runner.invoke(cli.app, ["key", "show", "claude"])
+    assert result.exit_code == 0, result.output
+    assert "recorded on this machine" in result.output
+    assert "valid until" in result.output
+
+
+def test_key_show_is_unverified_when_the_owner_record_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _attested_claude()
+    records = tmp_path / "home" / ".punt-labs" / "biff" / "keys" / "owner"
+    shutil.rmtree(records)
+    records.write_text("in the way")
+    _keyring_unavailable(monkeypatch)
+    result = runner.invoke(cli.app, ["key", "show", "claude"])
+    assert result.exit_code == 0, result.output
+    assert "unverified" in result.output
+    assert "valid until" not in result.output
+
+
+def test_key_show_json_reports_the_owner_key_verdict() -> None:
+    _attested_claude()
+    result = runner.invoke(cli.app, ["--json", "key", "show", "claude"])
+    assert json.loads(result.output)["attestation"]["state"] == "valid"

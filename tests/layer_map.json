@@ -103,6 +103,7 @@
   "biff.nostr_crypto": "kernel",
   "biff.nostr_directory": "engine",
   "biff.nostr_event": "kernel",
+  "biff.owner_records": "engine",
   "biff.passphrase_vault": "engine",
   "biff.plugins": "plugins",
   "biff.plugins.claude_code": "claude_code",

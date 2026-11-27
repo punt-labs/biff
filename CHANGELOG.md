@@ -93,7 +93,11 @@
   It refuses when the published npub differs from the local key. The first `biff key` command on a
   machine records whether agent keys live in the OS keyring or in files
   (`~/.punt-labs/biff/keys/agent-backend`); a later session that cannot reach
-  the keyring is an error, not a second key.
+  the keyring is an error, not a second key. The owner's public key is
+  recorded in the clear in `~/.punt-labs/biff/keys/owner/<handle>.pub`, so
+  `biff key show` verifies an attestation with no passphrase and no keyring;
+  `biff --json key show` carries the verdict. A recorded key that cannot be
+  read leaves the attestation unverified, and a corrupt one is invalid.
 - `biff who` adds an NPUB column with each user's short published npub. It is
   the key published under that name, not proof the session holds it.
   `biff key show` checks an attestation against the owner key recorded on this

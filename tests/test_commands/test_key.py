@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import yaml
 
@@ -14,6 +16,8 @@ from biff.nostr_attest import OwnerAttestation
 from biff.nostr_bech32 import Bech32Key
 from biff.nostr_crypto import NostrCrypto
 from biff.nostr_directory import NostrDirectory
+from biff.owner_records import OwnerRecords
+from biff.passphrase_vault import PassphraseFileVault
 from tests._memory_vault import MemoryVault
 
 if TYPE_CHECKING:
@@ -60,7 +64,13 @@ class _Rig:
         self.directory = NostrDirectory(
             self.ethos if with_ethos else None, tmp_path / "nostr.yaml"
         )
-        self.store = KeyStore(self.owner_vault, self.agent_vault, caller)
+        self.records_dir = tmp_path / "records"
+        self.store = KeyStore(
+            self.owner_vault,
+            self.agent_vault,
+            caller,
+            OwnerRecords(self.records_dir),
+        )
         self.commands = KeyCommands(self.store, self.directory, lambda: float(now))
         self.clock = now
 
@@ -133,7 +143,7 @@ def test_init_again_records_a_public_key_that_was_never_recorded(
     rig = _Rig(tmp_path)
     rig.commands.init("jfreeman")
     secret = rig.owner_vault.items["biff-owner", "jfreeman"]
-    del rig.agent_vault.items["biff-owner-pub", "jfreeman"]
+    (rig.records_dir / "jfreeman.pub").unlink()
     result = rig.commands.init("jfreeman")
     assert not result.error
     assert rig.owner_vault.items["biff-owner", "jfreeman"] == secret
@@ -143,9 +153,9 @@ def test_init_again_records_a_public_key_that_was_never_recorded(
 
 def test_init_recovers_when_recording_the_public_key_failed(tmp_path: Path) -> None:
     rig = _Rig(tmp_path)
-    rig.agent_vault.fail_put_after = 0
+    rig.records_dir.write_text("in the way")
     assert rig.commands.init("jfreeman").error
-    rig.agent_vault.fail_put_after = None
+    rig.records_dir.unlink()
     result = rig.commands.init("jfreeman")
     assert not result.error
     assert NPUB_RE.fullmatch(rig.ethos.data["jfreeman"]["npub"])
@@ -521,7 +531,8 @@ def test_show_is_unverified_when_the_recorded_owner_key_is_unavailable(
     rig = _Rig(tmp_path)
     rig.commands.init("jfreeman")
     rig.commands.attest("jfreeman", "claude", hours=1)
-    rig.agent_vault.fail_get = True
+    shutil.rmtree(rig.records_dir)
+    rig.records_dir.write_text("in the way")
     result = rig.commands.show("claude")
     assert not result.error
     assert (
@@ -537,8 +548,77 @@ def test_show_calls_a_corrupt_recorded_owner_key_invalid_not_unreadable(
     rig = _Rig(tmp_path)
     rig.commands.init("jfreeman")
     rig.commands.attest("jfreeman", "claude", hours=1)
-    rig.agent_vault.items["biff-owner-pub", "jfreeman"] = "not hex at all"
+    (rig.records_dir / "jfreeman.pub").write_text("not hex at all")
     text = rig.commands.show("claude").text
     assert "invalid" in text
     assert "unverified" not in text
     assert "valid until" not in text
+
+
+def test_show_verifies_on_a_headless_linux_machine_without_a_prompt(
+    tmp_path: Path,
+) -> None:
+    keys = tmp_path / "keys"
+    ethos = _Ethos()
+    directory = NostrDirectory(ethos, tmp_path / "nostr.yaml")
+
+    def sealed_store(ask: Callable[[str], str]) -> KeyStore:
+        return KeyStore(
+            PassphraseFileVault(keys / "owner", ask),
+            PassphraseFileVault(keys / "agent", ask),
+            CallerKind.HUMAN,
+            OwnerRecords(keys / "owner"),
+        )
+
+    def forbidden(prompt: str) -> str:
+        msg = f"show asked for a passphrase: {prompt}"
+        raise AssertionError(msg)
+
+    typing = KeyCommands(
+        sealed_store(lambda _p: "a long enough passphrase"),
+        directory,
+        lambda: float(NOW),
+    )
+    typing.init("jfreeman")
+    typing.attest("jfreeman", "claude", hours=1)
+    text = KeyCommands(sealed_store(forbidden), directory, lambda: float(NOW)).show(
+        "claude"
+    )
+    assert "recorded on this machine" in text.text
+    assert "valid until" in text.text
+
+
+def _show_json(rig: _Rig) -> dict[str, object]:
+    data = rig.commands.show("claude").json_data
+    assert isinstance(data, dict)
+    return cast("dict[str, object]", data)
+
+
+def test_show_json_carries_the_owner_key_verdict(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    data = _show_json(rig)
+    assert data["attestation"] == {
+        "owner": "jfreeman",
+        "state": "valid",
+        "standing": "recorded on this machine",
+    }
+
+
+def test_show_json_marks_an_unreadable_owner_record_unverified(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    shutil.rmtree(rig.records_dir)
+    rig.records_dir.write_text("in the way")
+    attestation = cast("dict[str, str]", _show_json(rig)["attestation"])
+    assert attestation["state"] == "unverified"
+
+
+def test_show_json_has_no_verdict_for_an_unattested_key(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.agent("claude")
+    assert "attestation" not in _show_json(rig)

@@ -248,6 +248,7 @@ prefixes = [
     "key_store",
     "key_vault",
     "keychain_vault",
+    "owner_records",
     "passphrase_vault",
     "key_wiring",
     "local_watch",

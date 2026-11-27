@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from biff.key_store import (
 )
 from biff.key_vault import VaultError
 from biff.nostr_crypto import NostrCrypto
+from biff.owner_records import OwnerRecords
 from biff.passphrase_vault import PassphraseFileVault
 from tests._memory_vault import MemoryVault
 
@@ -28,8 +30,14 @@ def _store(
     caller: CallerKind = CallerKind.HUMAN,
     owner: MemoryVault | None = None,
     agents: MemoryVault | None = None,
+    records: OwnerRecords | None = None,
 ) -> KeyStore:
-    return KeyStore(owner or MemoryVault(), agents or MemoryVault(), caller)
+    return KeyStore(
+        owner or MemoryVault(),
+        agents or MemoryVault(),
+        caller,
+        records or OwnerRecords(Path(tempfile.mkdtemp())),
+    )
 
 
 def test_agent_key_is_created_once_and_stable() -> None:
@@ -106,14 +114,17 @@ def test_the_owner_public_key_is_recorded_without_reading_the_secret() -> None:
     assert owner.reads == []
 
 
-def test_init_owner_completes_after_the_public_record_write_failed() -> None:
-    owner, agents = MemoryVault(), MemoryVault()
-    store = _store(owner=owner, agents=agents)
-    agents.fail_put_after = 0
+def test_init_owner_completes_after_the_public_record_write_failed(
+    tmp_path: Path,
+) -> None:
+    owner = MemoryVault()
+    directory = tmp_path / "records"
+    store = _store(owner=owner, records=OwnerRecords(directory))
+    directory.write_text("in the way")
     with pytest.raises(VaultError):
         store.init_owner("jfreeman")
     secret = owner.items["biff-owner", "jfreeman"]
-    agents.fail_put_after = None
+    directory.unlink()
     pubkey = store.init_owner("jfreeman")
     assert owner.items["biff-owner", "jfreeman"] == secret
     assert store.owner_pubkey("jfreeman") == pubkey
@@ -157,7 +168,10 @@ def test_owner_signing_prompts_for_the_passphrase_each_time(tmp_path: Path) -> N
         return PASS
 
     store = KeyStore(
-        PassphraseFileVault(tmp_path, ask), MemoryVault(), CallerKind.HUMAN
+        PassphraseFileVault(tmp_path, ask),
+        MemoryVault(),
+        CallerKind.HUMAN,
+        OwnerRecords(tmp_path / "records"),
     )
     store.init_owner("jfreeman")
     prompts.clear()
@@ -168,12 +182,19 @@ def test_owner_signing_prompts_for_the_passphrase_each_time(tmp_path: Path) -> N
 
 def test_owner_signing_fails_without_the_right_passphrase(tmp_path: Path) -> None:
     agents = MemoryVault()
+    records = OwnerRecords(tmp_path / "records")
     right = KeyStore(
-        PassphraseFileVault(tmp_path, lambda _p: PASS), agents, CallerKind.HUMAN
+        PassphraseFileVault(tmp_path, lambda _p: PASS),
+        agents,
+        CallerKind.HUMAN,
+        records,
     )
     right.init_owner("jfreeman")
     wrong = KeyStore(
-        PassphraseFileVault(tmp_path, lambda _p: PASS + "x"), agents, CallerKind.HUMAN
+        PassphraseFileVault(tmp_path, lambda _p: PASS + "x"),
+        agents,
+        CallerKind.HUMAN,
+        records,
     )
     with pytest.raises(VaultError, match="passphrase"):
         wrong.attest("jfreeman", AGENT_KEY, lifetime_seconds=60, now=0)

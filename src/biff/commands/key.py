@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Self, final
 
@@ -30,6 +31,7 @@ _ALLOW_WARNING = (
 
 
 _UNREADABLE = "recorded owner key unreadable in this session"
+_CONTRADICTS = "contradicts the owner key recorded on this machine"
 
 
 class InvalidLifetimeError(ValueError):
@@ -163,11 +165,14 @@ class KeyCommands:
             if "npub" not in fields:
                 return CommandResult(text=f"no key published for {handle}", error=True)
             lines = [f"{handle}: {fields['npub']}"]
+            data: dict[str, object] = dict(fields)
             if "auth_sig" in fields:
-                lines.append(f"  {self._attestation_line(fields)}")
+                verdict = self._attestation_verdict(fields)
+                lines.append(f"  {verdict.text}")
+                data["attestation"] = verdict.as_json()
         except (OSError, ValueError, VaultError) as exc:
             return CommandResult(text=str(exc), error=True)
-        return CommandResult(text="\n".join(lines), json_data=dict(fields))
+        return CommandResult(text="\n".join(lines), json_data=data)
 
     def _owner_pubkey(self, owner: str) -> tuple[bytes, bool]:
         """Return the owner's public key and whether this call created the key."""
@@ -279,8 +284,8 @@ class KeyCommands:
             raise InvalidLifetimeError(msg)
         return hours
 
-    def _attestation_line(self, fields: dict[str, str]) -> str:
-        """Describe the stored attestation, judged on this machine's clock.
+    def _attestation_verdict(self, fields: dict[str, str]) -> AttestationVerdict:
+        """Judge the stored attestation on this machine's clock.
 
         The owner is looked up by the handle the agent's namespace names and
         checked against that owner's own published key, so an agent that
@@ -289,17 +294,20 @@ class KeyCommands:
         owner = fields.get("owner", "")
         owner_npub = self._directory.npub(owner) if owner else None
         if owner_npub is None:
-            return f"authorized by @{owner or '?'}: no published key for the owner"
+            text = f"authorized by @{owner or '?'}: no published key for the owner"
+            return AttestationVerdict(owner, "no-owner-key", "", text)
         try:
             published_owner = Bech32Key.PUBLIC.decode(owner_npub)
             standing = self._owner_standing(owner, published_owner)
             if standing is None:
-                return (
+                text = (
                     f"authorized by @{owner}: invalid; the key published for "
                     f"@{owner} is not the owner key recorded on this machine"
                 )
+                return AttestationVerdict(owner, "invalid", _CONTRADICTS, text)
             if standing == _UNREADABLE:
-                return f"authorized by @{owner}: unverified, {_UNREADABLE}"
+                text = f"authorized by @{owner}: unverified, {_UNREADABLE}"
+                return AttestationVerdict(owner, "unverified", standing, text)
             who = f"@{owner} ({Bech32Key.abbreviate(owner_npub)}, {standing})"
             attestation = OwnerAttestation(
                 published_owner.hex(),
@@ -309,12 +317,31 @@ class KeyCommands:
             agent = Bech32Key.PUBLIC.decode(fields["npub"]).hex()
             expiry = _iso(attestation.expires_at())
             if attestation.is_live(agent, now=int(self._clock())):
-                return f"authorized by {who}: valid until {expiry}"
+                text = f"authorized by {who}: valid until {expiry}"
+                return AttestationVerdict(owner, "valid", standing, text)
             if attestation.signature_is_valid(agent):
-                return f"authorized by {who}: expired {expiry}"
+                text = f"authorized by {who}: expired {expiry}"
+                return AttestationVerdict(owner, "expired", standing, text)
         except (KeyError, ValueError):
             pass
-        return f"authorized by @{owner}: invalid"
+        return AttestationVerdict(
+            owner, "invalid", "", f"authorized by @{owner}: invalid"
+        )
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class AttestationVerdict:
+    """What ``biff key show`` concluded about an agent's attestation."""
+
+    owner: str
+    state: str
+    standing: str
+    text: str
+
+    def as_json(self) -> dict[str, str]:
+        """Return the verdict as ``biff --json key show`` reports it."""
+        return {"owner": self.owner, "state": self.state, "standing": self.standing}
 
 
 def _iso(timestamp: int | None) -> str:
