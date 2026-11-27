@@ -280,6 +280,9 @@ class _Starter:
         self.starts.append("start")
         return self._outcome
 
+    def exit_note(self) -> str:
+        return ""  # the fake process never exits
+
 
 def _nudge(outcome: StartOutcome, *, comes_up: bool) -> tuple[DaemonNudge, _Starter]:
     starter = _Starter(outcome)
