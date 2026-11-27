@@ -37,7 +37,7 @@ _MATCHES_PIN = (
     "matches the owner key pinned on this machine "
     "(a file your user can write; not proof against code running as you)"
 )
-_NOT_PINNED = "not pinned on this machine: published under that name only"
+_NOT_PINNED = "not pinned on this machine"
 
 
 class InvalidLifetimeError(ValueError):
@@ -183,6 +183,9 @@ class KeyCommands:
             data: dict[str, object] = {
                 terminal_safe(k): terminal_safe(v) for k, v in fields.items()
             }
+            if len(data) != len(fields):
+                msg = f"the directory entry for {handle} has conflicting field names"
+                raise PublishedKeyError(msg)
             data["npub"] = npub
             if "auth_sig" in fields:
                 verdict = self._attestation_verdict(fields)
@@ -362,20 +365,23 @@ class KeyCommands:
     def _timeliness(
         self, attestation: OwnerAttestation, agent: str, parts: tuple[str, str, str]
     ) -> AttestationVerdict | None:
-        """Return valid or expired for a signed attestation, else ``None``.
+        """Return the verdict for a signed attestation, else ``None``.
 
         *parts* is the owner handle, how the owner is shown and the owner key's
-        standing.
+        standing.  Only a match with the local pin counts as pinned.
         """
         owner, who, standing = parts
-        expiry = _iso(attestation.expires_at())
-        if attestation.is_live(agent, now=int(self._clock())):
-            text = f"authorized by {who}: valid until {expiry}"
-            return AttestationVerdict(owner, "valid", standing, text)
-        if attestation.signature_is_valid(agent):
-            text = f"authorized by {who}: expired {expiry}"
-            return AttestationVerdict(owner, "expired", standing, text)
-        return None
+        live = attestation.is_live(agent, now=int(self._clock()))
+        if not live and not attestation.signature_is_valid(agent):
+            return None
+        return AttestationVerdict.signed(
+            owner,
+            who,
+            standing,
+            _iso(attestation.expires_at()),
+            live=live,
+            pinned=standing == _MATCHES_PIN,
+        )
 
 
 def _iso(timestamp: int | None) -> str:

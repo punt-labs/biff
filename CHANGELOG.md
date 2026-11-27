@@ -8,6 +8,9 @@
   string it prints or returns from the shared directory (npub, owner, handles,
   ethos error text), so a published entry cannot write control sequences into
   your terminal; the `biff who` NPUB column shows the canonical npub or `?`.
+- npubs must be all-lowercase or all-uppercase ASCII (BIP-173), so a mixed-case
+  or lookalike spelling is refused by `show`, `attest` and `who`; `show`
+  refuses a directory entry whose field names collide once neutralised.
 - `biff key show` says what the owner pin proves: the pin is a file your user
   can write, so a match is not proof against code running as you.
 
@@ -105,7 +108,9 @@
   the keyring is an error, not a second key. The owner's public key is
   recorded in the clear in `~/.punt-labs/biff/keys/owner/<handle>.pub`, so
   `biff key show` verifies an attestation with no passphrase and no keyring;
-  `biff --json key show` carries the verdict. A recorded key that cannot be
+  `biff --json key show` carries the verdict: `valid`/`expired` only when the
+  owner key matched the local pin, `unpinned`/`unpinned-expired` when the
+  signature verifies but no pin exists for the owner. A recorded key that cannot be
   read leaves the attestation unverified, and a corrupt one is invalid.
 - `biff who` adds an NPUB column with each user's short published npub. It is
   the key published under that name, not proof the session holds it.

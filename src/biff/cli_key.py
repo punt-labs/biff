@@ -106,7 +106,9 @@ class KeyCli:
         """Show a published key and the state of its owner attestation.
 
         A match with the pinned owner key is a file your user can write, so it is
-        not proof against code running as you.
+        not proof against code running as you.  An owner with no pin here is
+        reported as unpinned: the signature verifies against the published key,
+        but nothing local confirms that key.
         """
         self._emit(ctx, self._commands().show(handle))
 

@@ -38,6 +38,7 @@ class Bech32Key:
 
     def decode(self, text: str) -> bytes:
         """Return the 32 bytes named by *text*, or raise ``ValueError``."""
+        self._require_plain_spelling(text)
         hrp, sep, payload = text.lower().rpartition("1")
         if not sep or hrp != self._hrp:
             msg = f"expected an {self._hrp} string, got {text[:8]!r}"
@@ -54,6 +55,19 @@ class Bech32Key:
             msg = f"{self._hrp} must hold {_KEY_BYTES} bytes, got {len(data)}"
             raise ValueError(msg)
         return data
+
+    def _require_plain_spelling(self, text: str) -> None:
+        """Refuse what ``str.lower`` would quietly fold into a valid string.
+
+        BIP-173 allows all-lowercase or all-uppercase and nothing else, and
+        some non-ASCII characters (KELVIN SIGN) lowercase to ASCII letters.
+        """
+        if not text.isascii():
+            msg = f"invalid {self._hrp} string: it must be ASCII"
+            raise ValueError(msg)
+        if text != text.lower() and text != text.upper():
+            msg = f"invalid {self._hrp} string: mixed case"
+            raise ValueError(msg)
 
     @staticmethod
     def abbreviate(text: str) -> str:

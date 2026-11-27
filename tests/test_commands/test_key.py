@@ -523,6 +523,49 @@ def test_show_says_when_the_owner_key_is_only_published(tmp_path: Path) -> None:
     assert "npub1" in text
 
 
+def _unpinned_owner_rig(tmp_path: Path) -> _Rig:
+    """An agent attested by an owner this machine holds no pin for."""
+    rig = _Rig(tmp_path)
+    rig.commands.agent("claude")
+    stranger = bytes([7]) * 32
+    rig.directory.publish(
+        "mallory", {"npub": Bech32Key.PUBLIC.encode(NostrCrypto().public_key(stranger))}
+    )
+    rig.directory.publish("claude", {"owner": "mallory"})
+    _forge(rig, "claude", stranger)
+    return rig
+
+
+def test_an_unpinned_owner_is_never_reported_valid(tmp_path: Path) -> None:
+    rig = _unpinned_owner_rig(tmp_path)
+    text = rig.commands.show("claude").text
+    attestation = cast("dict[str, str]", _show_json(rig)["attestation"])
+    assert attestation["state"] == "unpinned"
+    assert "not pinned on this machine" in text
+    assert "nothing local confirms that key" in text
+    assert "valid until" in text
+
+
+def test_an_unpinned_owner_with_an_expired_attestation_is_unpinned_expired(
+    tmp_path: Path,
+) -> None:
+    rig = _unpinned_owner_rig(tmp_path)
+    later = rig.later(NOW + 7200).show("claude")
+    data = cast("dict[str, object]", later.json_data)
+    verdict = cast("dict[str, str]", data["attestation"])
+    assert verdict["state"] == "unpinned-expired"
+    assert "expired" in later.text
+    assert "nothing local confirms that key" in later.text
+
+
+def test_a_pinned_matching_owner_is_still_valid_in_json(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    attestation = cast("dict[str, str]", _show_json(rig)["attestation"])
+    assert attestation["state"] == "valid"
+
+
 def test_show_names_the_owner_key_it_checked(tmp_path: Path) -> None:
     rig = _Rig(tmp_path)
     rig.commands.init("jfreeman")
@@ -733,3 +776,17 @@ def test_show_neutralises_a_hostile_ethos_failure(tmp_path: Path, hostile: str) 
     result = rig.commands.show("claude")
     assert result.error
     assert _controls(result.text) == []
+
+
+def test_show_refuses_field_names_that_collide_once_neutralised(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    rig.directory.publish("claude", {"owner\x1b": "mallory"})
+    result = rig.commands.show("claude")
+    assert result.error
+    assert "conflicting field names" in result.text
+    assert result.json_data is None
+    assert "authorized by" not in result.text
