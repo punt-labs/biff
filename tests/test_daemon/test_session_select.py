@@ -96,6 +96,13 @@ class TestLookup:
         assert sel.lookup("main") == rec
         assert sel.lookup(rec.session_id) == rec
 
+    def test_an_id_wins_over_a_live_session_named_like_it(self, tmp_path: Path) -> None:
+        sel = _selector(tmp_path)
+        original = _make(sel, "alpha")
+        alias = _make(sel, "beta")
+        sel.store.rename(alias.session_id, original.session_id)  # an old alias
+        assert sel.lookup(original.session_id) == original
+
     def test_unknown(self, tmp_path: Path) -> None:
         with pytest.raises(SessionSelectionError, match="unknown session: x"):
             _selector(tmp_path).lookup("x")

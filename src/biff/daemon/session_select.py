@@ -48,13 +48,16 @@ class SessionSelector:
     def lookup(self, ref: str) -> CliSessionRecord:
         """Return this user's record named *ref* (tty name or id) on this host.
 
-        A live or dormant record wins over an ended one that reused the name.
+        An exact id always wins, so ending a session by its id cannot reach another
+        session that carries that id as its name.  Otherwise a live or dormant
+        record wins over an ended one that reused the name.
         """
         here = self._named(ref)
         mine = [r for r in here if r.user == self.user]
         if not mine:
             raise self._not_found(ref, here)
-        return self._pick(ref, mine)
+        by_id = [r for r in mine if r.session_id == ref]
+        return by_id[0] if by_id else self._pick(ref, mine)
 
     def _named(self, ref: str) -> list[CliSessionRecord]:
         return [

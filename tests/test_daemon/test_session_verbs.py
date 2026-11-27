@@ -46,6 +46,13 @@ class TestNew:
     async def test_auto_name(self, host: SessionHost) -> None:
         assert (await SessionVerbs(host).new(None)).text == "tty1"
 
+    async def test_a_name_shaped_like_a_session_id_is_refused(
+        self, host: SessionHost
+    ) -> None:
+        with pytest.raises(ValueError, match="looks like a session id"):
+            await SessionVerbs(host).new("cli-0123456789abcdef")
+        assert host.selector.store.list() == ()
+
     async def test_taken_name_is_an_error_with_no_fallback(
         self, host: SessionHost
     ) -> None:

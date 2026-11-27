@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
 _TTY_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
+_SESSION_ID_SHAPE_RE = re.compile(r"^cli-[0-9a-f]{16}$")
 # Routing token: hex digits and hyphens, at least one hex digit (a bare
 # "----" is not a valid id), max 64 chars (a UUID is 36).
 _ROUTING_ID_RE = re.compile(r"^(?=.*[0-9a-fA-F])[0-9a-fA-F-]{1,64}$")
@@ -51,6 +52,8 @@ def validate_tty_name(name: str) -> str | None:
             f"Invalid tty name {name!r}: "
             "only letters, digits, hyphens, and underscores are allowed."
         )
+    if _SESSION_ID_SHAPE_RE.match(name):  # it would alias that session's id
+        return f"tty name {name!r} looks like a session id; choose another name."
     if name == SID_HINT_NAMESPACE:  # the resume hint could never record it
         return f"tty name {name!r} is reserved."
     return None

@@ -68,6 +68,7 @@ class Session:
         "_orgs",
         "_outbox",
         "_presence",
+        "_queued",
         "_retired",
         "_run",
         "_session_id",
@@ -88,6 +89,7 @@ class Session:
     _beat: asyncio.Task[None] | None
     _log: RelayLog
     _busy: asyncio.Lock
+    _queued: int
     _is_ended: bool
 
     def __new__(
@@ -118,6 +120,7 @@ class Session:
         self._beat = None
         self._log = RelayLog(logger)
         self._busy = asyncio.Lock()
+        self._queued = 0
         self._is_ended = False
         return self
 
@@ -239,8 +242,21 @@ class Session:
         or expiring the session holds it while it files the outbox back and drains
         the relay, so neither can run between the other's steps.
         """
-        async with self._busy:
-            yield
+        self._queued += 1
+        try:
+            async with self._busy:
+                yield
+        finally:
+            self._queued -= 1
+
+    @property
+    def queued(self) -> int:
+        """How many callers hold :meth:`exclusive` or wait for it.
+
+        Nothing in the daemon reads it: a test waits for it to reach a number to
+        know a caller is parked at the hold, instead of guessing how long that takes.
+        """
+        return self._queued
 
     @property
     def is_ended(self) -> bool:

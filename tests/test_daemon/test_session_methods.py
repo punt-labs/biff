@@ -259,7 +259,7 @@ async def test_the_daemon_sweeps_again_on_its_timer(
 ) -> None:
     daemon, store, _ = sweeping
     await daemon.start()
-    await asyncio.sleep(0.2)  # the start sweep found nothing to do
+    await daemon.sweep_sessions()  # a sweep that finds nothing, completed
     late = _stored(store, "late", "live", LEASE + timedelta(minutes=1))
     await _eventually(lambda: store.read(late.session_id).state == "dormant")
 
@@ -284,6 +284,13 @@ async def test_the_sweep_renews_a_session_a_connection_is_attached_to(
         await watcher.close()
     assert kept.state == "live"
     assert datetime.now(UTC) - kept.last_attached_at < timedelta(minutes=1)
+
+
+async def _parked(harness: Harness, session_id: str, count: int) -> None:
+    """Wait until *count* callers hold or wait for the session's exclusive hold."""
+    held = harness.daemon._core.sessions.holding(session_id)
+    assert held is not None
+    await _eventually(lambda: held.queued == count)
 
 
 async def _bodies_a_new_session_reads(harness: Harness) -> list[str]:
@@ -446,7 +453,7 @@ async def test_ending_a_session_waits_for_a_read_that_has_fetched_its_mail(
     reading = asyncio.create_task(holder.request_held("read"))
     await asyncio.wait_for(GatedRelay.fetched.wait(), timeout=_WAIT)
     ending = asyncio.create_task(_call(kai, "session_end", ref="alpha"))
-    await asyncio.sleep(0.1)  # the end is blocked behind the read, not past it
+    await _parked(harness, record.session_id, 2)  # the read, and the end behind it
     assert not ending.done()
     GatedRelay.release.set()
     await asyncio.wait_for(ending, timeout=_WAIT)
@@ -493,7 +500,7 @@ async def test_the_sweep_waits_for_a_session_with_a_read_in_flight(
     assert held is not None
     async with held.exclusive():
         sweep = asyncio.create_task(daemon.sweep_sessions())
-        await asyncio.sleep(0.1)
+        await _eventually(lambda: held.queued == 2)  # this hold, and the sweep
         assert not sweep.done()
     await asyncio.wait_for(sweep, timeout=_WAIT)
     await client.close()
@@ -516,7 +523,8 @@ async def test_an_end_that_waited_for_a_read_leaves_a_session_that_took_the_name
     reading = asyncio.create_task(reader.request_held("read"))
     await asyncio.wait_for(GatedRelay.fetched.wait(), timeout=_WAIT)
     ending = asyncio.create_task(_call(kai, "session_end", ref="alpha"))
-    await asyncio.sleep(0.1)  # the end has resolved "alpha" and waits for the read
+    # The end has resolved "alpha" to its id and waits for the read.
+    await _parked(harness, old.session_id, 2)
     renamer = await harness.connect(old.session_id, "kai")
     await renamer.request("tty", name="beta")
     harness.sessions.rename(old.session_id, "beta")  # what the CLI does after
@@ -564,3 +572,20 @@ async def test_the_sweep_files_a_dormant_sessions_held_mail_before_it_expires_it
     await daemon.sweep_sessions()
     assert store.list() == ()
     assert [m.body for m in await relay.fetch_user_inbox("kai")] == ["unconfirmed"]
+
+
+async def test_ending_by_id_ends_that_session_not_one_named_like_it(
+    harness: Harness,
+) -> None:
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="alpha")
+    await _call(kai, "session_new", tty="beta")
+    alpha = next(r for r in harness.sessions.list() if r.tty == "alpha")
+    beta = next(r for r in harness.sessions.list() if r.tty == "beta")
+    harness.sessions.rename(beta.session_id, alpha.session_id)  # an old alias
+    reply = await _call(kai, "session_end", ref=alpha.session_id)
+    assert reply["error"] is False
+    assert (
+        harness.sessions.read(alpha.session_id).state,
+        harness.sessions.read(beta.session_id).state,
+    ) == ("ended", "live")
