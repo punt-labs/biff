@@ -121,3 +121,22 @@ def test_a_bad_handshake_carries_no_traceback(biffd: Biffd) -> None:
         sock.recv(4096)
     biffd.wait_for_log(_HANDSHAKE)
     assert "Traceback" not in biffd.log_text()
+
+
+@pytest.mark.parametrize(
+    "partial",
+    [
+        pytest.param(b"GET / HTTP/1.1\r\nHost: x\r\n", id="disconnect-mid-header"),
+        pytest.param(b"GET / HTTP/1.1\nHost: x\n\n", id="lf-only-line-endings"),
+    ],
+)
+def test_a_partial_request_is_a_warning_not_a_probe(
+    biffd: Biffd, partial: bytes
+) -> None:
+    with socket.create_connection(("127.0.0.1", biffd.port), timeout=5) as sock:
+        sock.sendall(partial)
+        sock.shutdown(socket.SHUT_WR)
+        sock.recv(4096)
+    biffd.wait_for_log(_HANDSHAKE)
+    lines = [line for line in biffd.log_text().splitlines() if _HANDSHAKE in line]
+    assert (len(lines), "[WARNING]" in lines[0]) == (1, True)

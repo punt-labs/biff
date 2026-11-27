@@ -23,7 +23,7 @@ from biff.supervision.port import PortProbe
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-__all__ = ["NO_MANAGER_EXIT", "BiffdService", "Outcome"]
+__all__ = ["NO_MANAGER_EXIT", "STARTING_EXIT", "BiffdService", "Outcome"]
 
 _HEALTH_SECONDS: Final = 1.0
 NO_MANAGER: Final = (
@@ -34,6 +34,10 @@ NO_MANAGER_EXIT: Final = 3
 """Exit status of a service command on a host with no usable manager, apart from
 1, a manager that refused: a bootstrap treats the first as a note, the second as
 a failure."""
+STARTING_EXIT: Final = 4
+"""Exit status of a service command whose biffd is running and has not answered
+yet.  It is not 3: a bootstrap that reads 3 as "no manager" would tell the user to
+start a foreground biffd that competes with the one the service is starting."""
 NOT_REPORTED: Final = "not reported by biffd yet"
 
 

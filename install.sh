@@ -162,6 +162,7 @@ done
 
 # >>> biffd service
 # Exit 3 means this host has no usable service manager (a container): a note.
+# Exit 4 means the service is installed and biffd is still starting: also a note.
 # Any other failure is real, so it fails the script after the plugin step ran.
 # A pinned release without the command is skipped, not failed.
 SERVICE_STATUS=0
@@ -173,6 +174,7 @@ if [ "$PROBE_STATUS" = "0" ]; then
   case "$SERVICE_STATUS" in
     0) ok "biffd service installed" ;;
     3) warn "no service manager here; biffd is not supervised (start it: biff daemon serve)" ;;
+    4) warn "biffd service installed and still starting; see: biff daemon status" ;;
     *) warn "biffd service not installed (see: biff daemon status, biff doctor)" ;;
   esac
 else
@@ -249,7 +251,7 @@ printf '\n'
 # >>> service verdict
 # A real service failure fails the script, after the plugin and doctor ran.
 case "$SERVICE_STATUS" in
-  0|3) ;;
+  0|3|4) ;;
   *) fail "The biffd service was not installed; fix it with: biff daemon install" ;;
 esac
 # <<< service verdict

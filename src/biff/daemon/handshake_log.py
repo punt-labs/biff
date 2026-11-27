@@ -12,7 +12,7 @@ __all__ = ["HandshakeLog"]
 class HandshakeLog(logging.Filter):
     """Turns websockets' ERROR-with-traceback for a failed handshake into one line.
 
-    A port probe (a connect, then close, with no request) fails the handshake the
+    A port probe (a connect, then close, with no byte sent) fails the handshake the
     same way a broken client does, and websockets logs both at ERROR with a
     traceback.  A probe is routine, so it becomes one DEBUG line; a client that
     sent something that is not HTTP is a WARNING with its reason and no traceback.
@@ -28,6 +28,23 @@ class HandshakeLog(logging.Filter):
         if not any(isinstance(existing, cls) for existing in server.filters):
             server.addFilter(cls())
 
+    @staticmethod
+    def _is_probe(cause: BaseException | None) -> bool:
+        """Return whether the connection closed before sending a single byte.
+
+        websockets chains the end of stream through the request-line error to the
+        stream's own ``stream ends after N bytes``.  A probe ends while it reads
+        the request line, with nothing pending.  A client that sent a request line
+        and left during the headers also ends with nothing pending, but under the
+        headers error; one that used LF-only line endings leaves a line without
+        CRLF.  Those are clients with something wrong, and are a WARNING.
+        """
+        if not isinstance(cause, EOFError) or str(cause) != (
+            "connection closed while reading HTTP request line"
+        ):
+            return False
+        return str(cause.__cause__).startswith("stream ends after 0 bytes")
+
     @override
     def filter(self, record: logging.LogRecord) -> bool:
         """Rewrite a handshake failure's level and drop its traceback; keep the rest."""
@@ -37,7 +54,7 @@ class HandshakeLog(logging.Filter):
         cause = None if error is None else error.__cause__
         record.exc_info = None
         record.exc_text = None
-        if isinstance(cause, EOFError | ConnectionResetError):
+        if self._is_probe(cause):
             record.levelno, record.levelname = logging.DEBUG, "DEBUG"
             record.msg = "port probe: connection closed before a request"
             record.args = ()

@@ -198,7 +198,7 @@ class TestDaemonControl:
 
 
 class TestAStillStartingDaemon:
-    """A slow start under load exits 3 with its own text, not 1 with a failure."""
+    """A slow start under load exits 4 with its own text, not 1 with a failure."""
 
     @pytest.fixture
     def starting(self, home: Path, monkeypatch: pytest.MonkeyPatch) -> PiddedBackend:
@@ -217,11 +217,11 @@ class TestAStillStartingDaemon:
         log.write_text("biffd starting: version=1 pid=4242 port=8424\n")
         return backend
 
-    def test_install_keeps_the_service_and_exits_3(
+    def test_install_keeps_the_service_and_exits_4(
         self, starting: PiddedBackend
     ) -> None:
         result = runner.invoke(app, ["daemon", "install"])
-        assert (result.exit_code, starting.config_path().exists()) == (3, True)
+        assert (result.exit_code, starting.config_path().exists()) == (4, True)
 
     def test_install_says_it_is_running_not_crashed_on_stderr(
         self, starting: PiddedBackend
@@ -230,10 +230,10 @@ class TestAStillStartingDaemon:
         assert "it is running, not crashed" in result.stderr
 
     @pytest.mark.parametrize("verb", ["start", "restart"])
-    def test_start_and_restart_exit_3(self, starting: PiddedBackend, verb: str) -> None:
+    def test_start_and_restart_exit_4(self, starting: PiddedBackend, verb: str) -> None:
         starting.install()
         result = runner.invoke(app, ["daemon", verb])
-        assert (result.exit_code, "still starting" in result.stderr) == (3, True)
+        assert (result.exit_code, "still starting" in result.stderr) == (4, True)
 
 
 class TestDaemonStatus:

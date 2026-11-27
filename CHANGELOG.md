@@ -59,7 +59,7 @@
   from `launchctl print`; the first lines of `systemctl --user status`). The
   client nudge keeps its 5 seconds. A wait longer than 3 seconds prints one
   `still waiting for biffd to answer /health` line to stderr.
-- `biff daemon install`, `start` and `restart` exit 3 with `still starting after
+- `biff daemon install`, `start` and `restart` exit 4 with `still starting after
   N seconds (machine load average X); it is running, not crashed` when the
   supervisor shows biffd running as a pid whose `biffd starting` line is in
   `biff.log` but `/health` has not answered; `install` keeps the service then.

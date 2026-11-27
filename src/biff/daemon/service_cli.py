@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, final
 
 import typer
 
-from biff.daemon.lifecycle import NO_MANAGER_EXIT, BiffdService
+from biff.daemon.lifecycle import NO_MANAGER_EXIT, STARTING_EXIT, BiffdService
 
 if TYPE_CHECKING:
     from biff.daemon.lifecycle import Outcome
@@ -70,4 +70,6 @@ class ServiceCommands:
         failed = outcome.status == "failed" or unmanaged
         typer.echo(outcome.message, err=failed or starting)
         if failed or starting:
-            raise typer.Exit(code=NO_MANAGER_EXIT if unmanaged or starting else 1)
+            if starting:
+                raise typer.Exit(code=STARTING_EXIT)
+            raise typer.Exit(code=NO_MANAGER_EXIT if unmanaged else 1)

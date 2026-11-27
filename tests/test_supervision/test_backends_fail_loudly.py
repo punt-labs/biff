@@ -665,6 +665,13 @@ class TestInstallScript:
         mutant = self._moved(self.SCRIPT.read_text(), before=self.CLI_CALL)
         assert not self.order_is_right(mutant)
 
+    def test_a_still_starting_service_is_not_called_unsupervised(
+        self, tmp_path: Path
+    ) -> None:
+        done = self._run(tmp_path, help_status=0, install_status=4)
+        assert (done.returncode, "no service manager" in done.stdout) == (0, False)
+        assert "still starting" in done.stdout
+
     @pytest.mark.parametrize("status", [0, 3])
     def test_installed_or_no_manager_succeeds(
         self, tmp_path: Path, status: int

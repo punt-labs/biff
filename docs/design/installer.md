@@ -607,7 +607,10 @@ outcomes: done, failed, or no service manager.
   supervisor shows biffd running as a pid whose own `biffd starting` line is in
   `biff.log` (read from the log's last megabyte), the command says `still
   starting after N seconds (machine load average X); it is running, not
-  crashed` and exits 3, the code a bootstrap already treats as a note. `install`
+  crashed` and exits 4. It is not 3, which means no service manager: the
+  bootstrap answers 3 by telling the user to start a foreground biffd, which
+  would compete for the port with the one the service is starting. `install.sh`
+  treats 4 as a note. `install`
   keeps the service in that case and says so; it removes it only for the
   failures it always did. A supervisor that does not show biffd running, no
   startup line for that pid, or a pid the supervisor cannot name keeps the
@@ -617,8 +620,8 @@ outcomes: done, failed, or no service manager.
 - **A probe is not an error in the log.** A connect and close with no request
   fails websockets' handshake as a broken client does, and websockets logs both
   at ERROR with a traceback. biffd now logs a probe as one DEBUG line and a
-  client that sent something else as one WARNING line with its reason, no
-  traceback. The record had also been written twice: the daemon's stderr
+  client that sent anything else, including a partial request or LF-only line
+  endings, as one WARNING line with its reason, no traceback. The record had also been written twice: the daemon's stderr
   handler and its file handler both took it, and under a LaunchAgent stderr is
   `biff.log`. biffd now sends only CRITICAL to stderr.
 - **`biff daemon status` prints the pid** that `/health` reports, which is
