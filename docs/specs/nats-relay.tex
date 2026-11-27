@@ -840,53 +840,6 @@ never return --- so $halfOpen$ must be escaped by autonomous
 wedge detection, not by $Close$.  From $closed$ the operation is
 an idempotent self-loop, which keeps $closed$ deadlock-free.
 
-\subsection{Reset Infrastructure}
-
-\begin{schema}{ResetInfrastructure}
-  \Delta Connection
-  \where
-  connState \neq halfOpen \\
-  connState \neq connected \\
-  connState' = connState \\
-  kvProvisioned' = zfalse \\
-  streamsProvisioned' = zfalse \\
-  namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse \\
-  generation' = generation \\
-  subGen' = subGen \\
-  reconnectEpoch' = reconnectEpoch \\
-  spuriousTeardown' = spuriousTeardown \\
-  epochPending' = epochPending
-\end{schema}
-
-Clears cached handles without changing the transport state
-(\texttt{reset\_infrastructure()}).  By the handle-validity
-invariant, $connState' = connState$ together with cleared handles
-forces $connState \neq connected$; the operation is therefore a
-self-loop at $disconnected$, $reconnecting$, and $closed$, where
-the handles are already absent.  It is excluded from $halfOpen$
-for the same reason as $Close$: clearing a cached handle does not
-lift the wedge (the socket is still up and still unresponsive),
-so it must not be modelled as an escape.
-
-The guard $connState \neq connected$ states what the paragraph above
-derived.  It was previously implicit: the handle-validity predicate was
-a guard on every $\Delta Connection$ operation, so the $connected$ case
-had an unsatisfiable after-state and was silently never enabled.  With
-the predicates now checked rather than assumed (\S\ref{sec:daemon}), the
-implicit guard is gone, and without the explicit one ProB reports the
-trace $EnsureConnected \to ResetInfrastructure$ against $connState =
-connected \implies kvProvisioned = ztrue \land streamsProvisioned =
-ztrue \land namesProvisioned = ztrue$.  This is an \emph{open finding}:
-the code reaches that state --- \texttt{reset\_infrastructure} sets the
-cached handles to \texttt{None} and keeps the connection, and its
-docstring names test cleanup as the caller --- so the predicate is false
-of the code in the window between a reset and the next provisioning call.
-The guard confines the model to production paths and does not weaken the
-predicate; whether to restate it as an eventual property (as was done for
-$reconnectEpoch$ in \S\ref{sec:flushwindow}) or to remove the helper from
-the relay is a ruling for the owner.
-
 \subsection{Request (JetStream / KV Round-Trip)}
 
 \begin{schema}{Request}

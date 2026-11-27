@@ -72,6 +72,15 @@
   footnote under the table. Sessions that died without deregistering are
   logged to biff.log at INFO instead.
 
+### Removed
+
+- `NatsRelay.reset_infrastructure()`. It cleared the cached KV and stream
+  handles while keeping the connection, so a relay could report a connected
+  transport with no handles. It had no caller; its docstring named test
+  cleanup. The `ResetInfrastructure` operation is gone from
+  `docs/specs/nats-relay.tex` with it, which closes the handle-validity finding
+  without changing the invariant (PL-1702).
+
 ## [1.25.0] - 2026-11-25
 
 ### Added

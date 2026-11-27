@@ -32,7 +32,7 @@ biffd (PL-1670). Until then the GAPs below are documented, not blocking.
 
 | Specification | Constraints audited | Covered | GAP |
 |---------------|--------------------:|--------:|----:|
-| `nats-relay.tex` | 32 | 20 | 12 |
+| `nats-relay.tex` | 31 | 19 | 12 |
 | `session-model.tex` | 26 | 17 | 9 |
 
 The daemon exists (`src/biff/daemon`, `tests/test_daemon/`), and its handshake,
@@ -81,8 +81,8 @@ Run with `probcli -model_check -strict -p DEFAULT_SETSIZE 1 -p MAXINT 4`
 |----------------|--------|
 | `session-model.tex`, gate scope (1 session, 1 run, 1 connection) | 2,342 states, all visited, 0 invariant violations; `HelloNewRun` and `RequestReplacedRun` not reached at this scope |
 | `session-model.tex`, `-card RUN 2 -card CONN 2` | 15,098 states, 170,079 transitions (after `ReadUnread` and `SessionEnd` were corrected to guard on the calling connection), all visited, 0 invariant violations; every daemon operation covered |
-| `nats-relay.tex`, `-card CLIENT 1`, full counters (`maxGeneration 3`, `maxEpoch 2`, `maxRestarts 2`) | 1,610,778 states, 20,314,058 transitions, all visited, 0 invariant violations, all 30 operations covered (`-mc 2000000`, about 8 minutes, 7.4 GB) |
-| `nats-relay.tex`, `-card CLIENT 1`, `maxGeneration 2`, `maxEpoch 1`, `maxRestarts 1` | 177,118 states, 1,959,126 transitions, all visited, 0 invariant violations; CTL `AG(attached /= {} => EF(attached /= {} & connState = connected & every subGen(k) = generation))` TRUE |
+| `nats-relay.tex`, `-card CLIENT 1`, full counters (`maxGeneration 3`, `maxEpoch 2`, `maxRestarts 2`) | 1,610,778 states, 20,314,058 transitions, all visited, 0 invariant violations, all 30 operations covered (`-mc 2000000`, about 8 minutes, 7.4 GB); measured before `ResetInfrastructure` was removed and not re-run since |
+| `nats-relay.tex`, `-card CLIENT 1`, `maxGeneration 2`, `maxEpoch 1`, `maxRestarts 1` | 177,118 states, 1,874,410 transitions, all visited, 0 invariant violations, all 29 operations covered (1,959,126 transitions and 30 operations before `ResetInfrastructure` was removed; the state count is unchanged because the operation was a self-loop); CTL `AG(attached /= {} => EF(attached /= {} & connState = connected & every subGen(k) = generation))` TRUE |
 
 The 87,482-state `session-model.tex` figure quoted earlier was not reproduced;
 these runs use one alias (ALIAS=1). The CTL run for invariant 5 did not finish
@@ -101,10 +101,14 @@ model run at `-card CLIENT 1` with the reduced counters):
 |--------|-------------|
 | `MutClientOpensHandle`: `c? in attached`, `holdsHandle' = holdsHandle \cup {c?}` | `COUNTER EXAMPLE FOUND` after 3 states: `INITIALISATION, ClientAttach(CLIENT1), MutClientOpensHandle(CLIENT1)`; `Invariant 9 is false: holdsHandle = {}` |
 | `MutProvisionWhileDown`: at `disconnected`, set all three provisioned flags to `ztrue` | `COUNTER EXAMPLE FOUND` after 5 states: `INITIALISATION, EnsureConnectFailed, MutProvisionWhileDown`; `Invariant 5 is false: connState /= connected => kvProvisioned = zfalse & streamsProvisioned = zfalse & namesProvisioned = zfalse` |
-| `ResetInfrastructure` with its guard `connState /= connected` removed | `COUNTER EXAMPLE FOUND` after 10 states: `INITIALISATION, EnsureConnected, ResetInfrastructure`; `Invariant 6 is false: connState = connected => kvProvisioned = ztrue & streamsProvisioned = ztrue & namesProvisioned = ztrue` |
+| `ResetInfrastructure` with its guard `connState /= connected` removed (the operation no longer exists; this row records why it was dropped) | `COUNTER EXAMPLE FOUND` after 10 states: `INITIALISATION, EnsureConnected, ResetInfrastructure`; `Invariant 6 is false: connState = connected => kvProvisioned = ztrue & streamsProvisioned = ztrue & namesProvisioned = ztrue` |
 
-The third row is the open finding recorded in `nats-relay.tex`, Reset
-Infrastructure: the code's `reset_infrastructure` reaches that state.
+The third row was a real finding, now closed (PL-1702). The relay method
+`reset_infrastructure` cleared the cached handles and kept the connection, so
+the code reached `connState = connected` with no handles. Its only stated
+purpose was test cleanup and it had no callers. The method and its
+`ResetInfrastructure` operation are removed; Invariant 6 is unchanged, so the
+handle-validity predicate holds of every operation that remains.
 
 ## Known divergences between model and code
 
