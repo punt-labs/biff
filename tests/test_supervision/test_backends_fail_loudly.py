@@ -26,6 +26,7 @@ from biff.supervision.host import ServiceHost
 from biff.supervision.launchd import LaunchdBackend
 from biff.supervision.manager import ServiceManager
 from biff.supervision.port import PortProbe
+from biff.supervision.runner import Supervisor
 from biff.supervision.systemd import SystemdBackend
 from tests.test_supervision.fake_backend import (
     FailingUninstall,
@@ -591,10 +592,65 @@ class TestLeftoverFiles:
 
 
 class TestInstallScript:
-    def test_the_bootstrap_installs_the_service_before_the_plugin(self) -> None:
-        text = (Path(__file__).parents[2] / "install.sh").read_text()
+    """The bootstrap's service step, run with a stub in place of ``biff``."""
+
+    SCRIPT = Path(__file__).parents[2] / "install.sh"
+
+    def _blocks(self) -> tuple[str, str]:
+        text = self.SCRIPT.read_text()
+
+        def block(name: str) -> str:
+            start = text.index(f"# >>> {name}")
+            return text[start : text.index(f"# <<< {name}")]
+
+        return block("biffd service"), block("service verdict")
+
+    def _run(
+        self, tmp_path: Path, *, help_ok: bool, install_status: int
+    ) -> subprocess.CompletedProcess[str]:
+        stub = tmp_path / "biff"
+        stub.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$3" = "--help" ]; then exit {0 if help_ok else 2}; fi\n'
+            f"exit {install_status}\n"
+        )
+        stub.chmod(0o755)
+        service, verdict = self._blocks()
+        program = (
+            'info() { echo "info: $1"; }\n'
+            'ok() { echo "ok: $1"; }\n'
+            'warn() { echo "warn: $1"; }\n'
+            'fail() { echo "fail: $1"; exit 1; }\n'
+            f'BINARY="{stub}"\n{service}\necho plugin-step-ran\n{verdict}\n'
+        )
+        return Supervisor.run("/bin/sh", "-c", program)
+
+    def test_the_service_step_sits_between_the_cli_install_and_the_plugin(
+        self,
+    ) -> None:
+        text = self.SCRIPT.read_text()
         assert (
             text.index("uv tool install")
             < text.index('"$BINARY" daemon install')
             < text.index("claude plugin marketplace")
         )
+
+    @pytest.mark.parametrize("status", [0, 3])
+    def test_installed_or_no_manager_succeeds(
+        self, tmp_path: Path, status: int
+    ) -> None:
+        done = self._run(tmp_path, help_ok=True, install_status=status)
+        assert (done.returncode, "plugin-step-ran" in done.stdout) == (0, True)
+
+    def test_a_refusing_manager_fails_after_the_plugin_step(
+        self, tmp_path: Path
+    ) -> None:
+        done = self._run(tmp_path, help_ok=True, install_status=1)
+        assert done.returncode == 1
+        assert done.stdout.index("plugin-step-ran") < done.stdout.index("fail:")
+
+    def test_a_release_without_the_command_is_skipped_not_failed(
+        self, tmp_path: Path
+    ) -> None:
+        done = self._run(tmp_path, help_ok=False, install_status=2)
+        assert (done.returncode, "no 'daemon install'" in done.stdout) == (0, True)
