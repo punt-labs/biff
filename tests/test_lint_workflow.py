@@ -63,6 +63,11 @@ def _make_variables(stdout: str) -> dict[str, str]:
     return variables
 
 
+def _variables_with_flag(stdout: str) -> list[str]:
+    """Return the names of every make variable that carries the allowance flag."""
+    return [name for name, value in _make_variables(stdout).items() if ALLOW in value]
+
+
 def _make_targets(stdout: str) -> list[str]:
     """Return the targets make was asked to build."""
     return [arg for arg in _make_arguments(stdout) if "=" not in arg]
@@ -102,11 +107,7 @@ def test_a_labelled_merge_allows_the_layers_widening(tmp_path: Path) -> None:
     result = _run_step(tmp_path, sha=MERGE, gh_body=_answers_only_for(MERGE, PULLS))
     assert result.returncode == 0, result.stderr
     assert "::warning::" not in result.stdout
-    variables = _make_variables(result.stdout)
-    assert ALLOW in variables["LAYERS_BASE"]
-    assert [name for name, value in variables.items() if ALLOW in value] == [
-        "LAYERS_BASE"
-    ]
+    assert _variables_with_flag(result.stdout) == ["LAYERS_BASE"]
     assert _make_targets(result.stdout) == TARGETS
 
 
@@ -115,7 +116,7 @@ def test_the_prs_head_commit_does_not_allow_it(tmp_path: Path) -> None:
     result = _run_step(tmp_path, sha=HEAD, gh_body=_answers_only_for(HEAD, PULLS))
     assert result.returncode == 0, result.stderr
     assert "::warning::" not in result.stdout
-    assert ALLOW not in _make_variables(result.stdout)["LAYERS_BASE"]
+    assert _variables_with_flag(result.stdout) == []
     assert _make_targets(result.stdout) == TARGETS
 
 
@@ -124,7 +125,7 @@ def test_the_step_asks_about_the_pushed_commit(tmp_path: Path) -> None:
     result = _run_step(tmp_path, sha=MERGE, gh_body=_answers_only_for(HEAD, PULLS))
     assert result.returncode == 0, result.stderr
     assert "::warning::" in result.stdout
-    assert ALLOW not in result.stdout
+    assert _variables_with_flag(result.stdout) == []
 
 
 def test_a_failed_lookup_warns_stays_strict_and_still_runs_every_ratchet(
@@ -133,7 +134,7 @@ def test_a_failed_lookup_warns_stays_strict_and_still_runs_every_ratchet(
     result = _run_step(tmp_path, sha=MERGE, gh_body="exit 1")
     assert result.returncode == 0, result.stderr
     assert "::warning::" in result.stdout
-    assert ALLOW not in _make_variables(result.stdout)["LAYERS_BASE"]
+    assert _variables_with_flag(result.stdout) == []
     assert _make_targets(result.stdout) == TARGETS
 
 
@@ -141,4 +142,5 @@ def test_unreadable_pr_data_warns_and_stays_strict(tmp_path: Path) -> None:
     result = _run_step(tmp_path, sha=MERGE, gh_body="echo 'not json'")
     assert result.returncode == 0, result.stderr
     assert "::warning::" in result.stdout
-    assert ALLOW not in result.stdout
+    assert _variables_with_flag(result.stdout) == []
+    assert _make_targets(result.stdout) == TARGETS
