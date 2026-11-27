@@ -113,10 +113,36 @@ async def test_a_command_error_is_data_not_a_protocol_error(harness: Harness) ->
     assert result["error"] is True
 
 
-async def test_results_are_wire_data_never_rendered_text(harness: Harness) -> None:
+async def test_a_result_carries_data_error_and_the_engines_text(
+    harness: Harness,
+) -> None:
     client = await harness.connect("s-kai", "kai")
     result = cast("dict[str, object]", await client.request("who"))
-    assert set(result) == {"data", "error"}
+    assert set(result) == {"data", "error", "text"}
+
+
+async def test_who_text_is_the_engines_rendering_of_the_rows(
+    harness: Harness,
+) -> None:
+    client = await harness.connect("s-kai", "kai")
+    result = cast("dict[str, object]", await client.request("who"))
+    assert "kai:tty1" in cast("str", result["text"])
+
+
+async def test_read_text_says_no_new_messages_when_the_inbox_is_empty(
+    harness: Harness,
+) -> None:
+    client = await harness.connect("s-kai", "kai")
+    result = cast("dict[str, object]", await client.request("read"))
+    assert result["text"] == "No new messages."
+
+
+async def test_read_text_renders_the_delivered_mail(harness: Harness) -> None:
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await kai.request("write", to="eric", message="ready for review")
+    result = cast("dict[str, object]", await eric.request("read"))
+    assert "ready for review" in cast("str", result["text"])
 
 
 async def test_repos_on_one_relay_server_get_one_relay_each_and_stay_apart(

@@ -14,6 +14,7 @@ from biff import commands
 from biff.commands.inbox import Inbox
 from biff.daemon.refusal import RefusalError
 from biff.frame_base import MAX_FRAME_BYTES
+from biff.formatting import format_read
 from biff.frame_reply import ErrorCode
 from biff.relay_errors import RELAY_ERRORS
 
@@ -176,9 +177,10 @@ class Methods:
     ) -> Outcome:
         """Run *method* for the session *ctx* and return its wire result.
 
-        The result is ``{"data": <the command's JSON payload>, "error": bool}``;
-        display text is the client's to render from the data.  A payload that
-        cannot be serialised raises, rather than being turned into a string.
+        The result is ``{"data": <the command's JSON payload>, "error": bool,
+        "text": <the command's display text>}``.  The engine renders the text once,
+        so every client prints the same words.  A payload that cannot be
+        serialised raises, rather than being turned into a string.
 
         Raises:
             RefusalError: The method is unknown or its params are invalid.
@@ -192,7 +194,7 @@ class Methods:
             raise RefusalError.of(ErrorCode.UNKNOWN_METHOD, msg)
         result = await handler(ctx, Params(method, raw))
         data = _JSON.validate_python(to_jsonable_python(result.json_data))
-        return Outcome({"data": data, "error": result.error})
+        return Outcome({"data": data, "error": result.error, "text": result.text})
 
     async def _read(self, session: Session, p: Params) -> Outcome:
         """Return the next batch of unread mail, acknowledged once delivered.
@@ -211,7 +213,8 @@ class Methods:
         data = _JSON.validate_python(
             to_jsonable_python([m.model_dump(mode="json") for m in batch])
         )
-        result: dict[str, JsonValue] = {"data": data, "error": False}
+        text = format_read(batch) if batch else "No new messages."
+        result: dict[str, JsonValue] = {"data": data, "error": False, "text": text}
         # The backlog summary is a hint for ``more``; a relay that fails to report
         # it must not sink a batch that was already fetched and is deliverable.
         left = len(pending) - len(batch)
