@@ -54,26 +54,36 @@ def _parse_repo_slug(url: str) -> str | None:
 
 
 def get_repo_slug(repo_root: Path) -> str | None:
-    """Resolve ``owner/repo`` from the raw ``remote.origin.url`` config value.
+    """Resolve ``owner/repo`` from the origin remote.
 
-    The raw value is read instead of ``git remote get-url origin`` because
-    ``get-url`` applies ``url.<base>.insteadOf`` rewrites.  An agent container
-    rewrites github remotes through a gateway whose URL carries an extra route
-    segment, which would hide the slug; the raw value is the canonical clone URL.
+    The raw first ``remote.origin.url`` value is parsed first: git fetches
+    from the first URL, and the raw value is the canonical clone URL even
+    when ``url.<base>.insteadOf`` rewrites it (an agent container rewrites
+    github remotes through a gateway whose URL carries an extra route
+    segment that would hide the slug).  When the raw value does not parse
+    (a shorthand such as ``gh:owner/repo``), the expanded
+    ``git remote get-url origin`` is parsed instead.
 
     Returns ``None`` when git is unavailable, no remote exists (git exits
-    non-zero with empty stdout), or the URL doesn't parse to a two-part slug.
+    non-zero with empty stdout), or neither URL parses to a two-part slug.
     """
+    raw = _git_stdout(repo_root, "config", "--get-all", "remote.origin.url")
+    expanded = _git_stdout(repo_root, "remote", "get-url", "origin")
+    return _parse_repo_slug(raw.partition("\n")[0]) or _parse_repo_slug(expanded)
+
+
+def _git_stdout(repo_root: Path, *args: str) -> str:
+    """Return stripped stdout of ``git -C repo_root *args``; ``""`` on any failure."""
     try:
         result = subprocess.run(  # noqa: S603
-            ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],  # noqa: S607
+            ["git", "-C", str(repo_root), *args],  # noqa: S607
             capture_output=True,
             text=True,
             check=False,
         )
     except FileNotFoundError:
-        return None
-    return _parse_repo_slug(result.stdout.strip())
+        return ""
+    return result.stdout.strip()
 
 
 def display_repo_name(name: str) -> str:

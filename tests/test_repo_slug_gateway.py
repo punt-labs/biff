@@ -37,15 +37,24 @@ def gateway_rewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIT_CONFIG_COUNT", "0")
 
 
+def _git(path: Path, *args: str) -> None:
+    subprocess.run(  # noqa: S603
+        ["git", "-C", str(path), *args],  # noqa: S607
+        check=True,
+        capture_output=True,
+    )
+
+
 def _repo_with_origin(path: Path, url: str) -> Path:
     path.mkdir()
-    for args in (("init", "-q"), ("remote", "add", "origin", url)):
-        subprocess.run(  # noqa: S603
-            ["git", "-C", str(path), *args],  # noqa: S607
-            check=True,
-            capture_output=True,
-        )
+    _git(path, "init", "-q")
+    _git(path, "remote", "add", "origin", url)
     return path
+
+
+def _add_rewrite(config: Path, base: str, prefix: str) -> None:
+    with config.open("a") as f:
+        f.write(f'[url "{base}"]\n\tinsteadOf = {prefix}\n')
 
 
 @pytest.mark.parametrize(
@@ -60,3 +69,31 @@ def test_rewritten_remote_resolves_to_canonical_slug(
 ) -> None:
     repo = _repo_with_origin(tmp_path / "repo", origin)
     assert get_repo_slug(repo) == "punt-labs/punt-labs"
+
+
+def test_first_origin_url_wins_over_a_later_mirror(
+    tmp_path: Path, gateway_rewrite: None
+) -> None:
+    repo = _repo_with_origin(tmp_path / "repo", "https://github.com/team/project.git")
+    _git(
+        repo, "remote", "set-url", "--add", "origin", "https://github.com/x/mirror.git"
+    )
+    assert get_repo_slug(repo) == "team/project"
+
+
+def test_shorthand_alias_resolves_through_its_expansion(
+    tmp_path: Path, gateway_rewrite: None
+) -> None:
+    _add_rewrite(tmp_path / "gitconfig", "https://github.com/", "gh:")
+    repo = _repo_with_origin(tmp_path / "repo", "gh:team/project.git")
+    assert get_repo_slug(repo) == "team/project"
+
+
+def test_raw_value_that_parses_wins_over_a_different_expansion(
+    tmp_path: Path, gateway_rewrite: None
+) -> None:
+    _add_rewrite(
+        tmp_path / "gitconfig", "https://github.com/other/", "https://example.org/"
+    )
+    repo = _repo_with_origin(tmp_path / "repo", "https://example.org/team/project.git")
+    assert get_repo_slug(repo) == "team/project"

@@ -4158,13 +4158,31 @@ auth, poll interval); it no longer carries an `enabled` key.
 - **Non-GitHub remotes:** `_parse_repo_slug` handles any
   `host:owner/repo` URL. GitLab nested groups (`group/sub/repo`) fail
   the two-part check and return `None` — correct, no single owner.
-- **Devin Git proxy:** `git remote get-url origin` expands `insteadOf`
-  rewrites. **Decision:** unwrap the known HTTPS proxy route for GitHub
+- **Devin Git proxy:** an expanded remote URL (`git remote get-url
+  origin`, the fallback below) can carry the proxy route.
+  **Decision:** unwrap the known HTTPS proxy route for GitHub
   before the two-part check. **Alternatives:** keep falling back to the
   checkout name (loses org discovery), or take the last two segments of
   any nested path (can misidentify the owner). **Outcome:** direct and
   proxied clones share an org and relay namespace; other nested paths
   are still rejected.
+- **Git `insteadOf` rewrites (agent containers):** an agent container
+  rewrites github remotes through the model gateway, so
+  `git remote get-url origin` returns
+  `http://<gateway>/github/owner/repo`; the extra route segment fails the
+  two-part check and the checkout name was used, putting container
+  sessions in a different repo namespace than host sessions.
+  **Decision:** `get_repo_slug` parses the raw first `remote.origin.url`
+  value (`git config --get-all`, first line, because git fetches from the
+  first URL) and falls back to the expanded `git remote get-url origin`
+  only when the raw value does not parse (a shorthand such as
+  `gh:owner/repo`). This supersedes the expand-first approach of the
+  Devin entry above. **Alternatives:** a gateway route-prefix parse
+  (hard-codes gateway knowledge; the raw value already holds the canonical
+  URL), or the raw value alone (loses shorthand aliases). **Outcome:**
+  container and host clones share a namespace. A clone made directly from
+  the gateway URL carries the gateway form in both values and still
+  resolves to `None`; no such clone has been observed.
 - **Multiple remotes:** only `origin` is read. `upstream` is ignored.
 
 ### Trust Assessment

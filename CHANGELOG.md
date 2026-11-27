@@ -74,8 +74,9 @@
   gateway form with an extra route segment. The repo slug failed to parse and
   fell back to the directory name, so container sessions sat in repo
   `punt-labs` while host sessions sat in `punt-labs/punt-labs`. The slug is now
-  read from the raw `remote.origin.url` config value, which holds the
-  canonical clone URL.
+  read from the raw first `remote.origin.url` value, which holds the
+  canonical clone URL; the expanded URL is the fallback for shorthand
+  aliases such as `gh:owner/repo`.
 
 ## [1.25.0] - 2026-11-25
 
