@@ -300,7 +300,7 @@ class Methods:
     async def _plan(ctx: CliContext, p: Params) -> CommandResult:
         message = p.text("message")
         p.done()
-        return await commands.plan(ctx, message)
+        return await commands.record_plan(ctx, message)
 
     @staticmethod
     async def _last(ctx: CliContext, p: Params) -> CommandResult:

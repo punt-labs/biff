@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -197,3 +198,18 @@ async def test_last_with_a_huge_count_is_clamped_and_fits_one_frame(
     result = cast("dict[str, object]", await client.request("last", count=10**9))
     assert len(_rows(result)) <= 100
     assert len(json.dumps(result).encode()) < MAX_FRAME_BYTES
+
+
+async def test_plan_leaves_the_plan_gate_marker_to_the_client(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The marker is keyed on the caller's repo and harness, which the daemon lacks."""
+    written: list[str] = []
+    monkeypatch.setattr(
+        sys.modules["biff.commands.plan"],
+        "sync_plan_marker",
+        lambda message, session_id=None: written.append(message),
+    )
+    client = await harness.connect("s-kai", "kai")
+    await client.request("plan", message="ship biffd")
+    assert written == []

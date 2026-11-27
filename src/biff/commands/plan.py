@@ -49,8 +49,12 @@ def sync_plan_marker(message: str, session_id: str | None = None) -> None:
         clear_plan_marker(root, identity)
 
 
-async def plan(ctx: CliContext, message: str) -> CommandResult:
-    """Set what you're currently working on."""
+async def record_plan(ctx: CliContext, message: str) -> CommandResult:
+    """Set the session's plan; the plan-gate marker is the caller's to write.
+
+    The marker is keyed on the caller's repository and harness session, which
+    only the calling process knows, so a daemon cannot write it.
+    """
     message = expand_bead_id(message)
     try:
         validate_plan(message)
@@ -58,10 +62,19 @@ async def plan(ctx: CliContext, message: str) -> CommandResult:
         error = f"Plan too long: {len(message)} characters (max {PLAN_MAX_LENGTH})"
         return CommandResult(text=error, json_data={"error": error}, error=True)
     await update_current_session(ctx, plan=message, plan_source="manual")
-    # The edit-gate hook keys on the harness session, so it wins whenever
-    # present, even with a CLI record attached (``-s``, pointer, auto-create).
-    sync_plan_marker(message, cli_session_id() or ctx.record_session_id)
     return CommandResult(
         text=format_talk_echo("Plan:", message),
         json_data={"plan": message},
     )
+
+
+async def plan(ctx: CliContext, message: str) -> CommandResult:
+    """Set what you're currently working on, and sync the plan-gate marker."""
+    result = await record_plan(ctx, message)
+    if isinstance(result.json_data, dict) and not result.error:
+        # The edit-gate hook keys on the harness session, so it wins whenever
+        # present, even with a CLI record attached (``-s``, pointer, auto-create).
+        sync_plan_marker(
+            str(result.json_data["plan"]), cli_session_id() or ctx.record_session_id
+        )
+    return result
