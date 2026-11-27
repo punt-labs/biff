@@ -23,17 +23,18 @@ from fastmcp.client.transports import FastMCPTransport
 from biff.models import BiffConfig, Message, RelayAuth
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
+from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import _reset_session
 from biff.testing import NotificationTracker, RecordingClient, Transcript
 from biff.testing.caller import StampedClient
 from tests._state import create_state
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Awaitable, Callable, Iterator
 
     from fastmcp import Client
 
-    from ._docker import RelayContainer
+    from ._docker import DockerRelay, RelayContainer
 
 pytestmark = pytest.mark.nats_docker
 
@@ -64,6 +65,29 @@ def transcript(request: pytest.FixtureRequest) -> Iterator[Transcript]:
         slug = node.name.replace("[", "_").replace("]", "")
         path = _TRANSCRIPT_DIR / f"{slug}.txt"
         path.write_text(t.render())
+
+
+def _late(
+    real: Callable[..., Awaitable[object]], delay: float
+) -> Callable[..., Awaitable[object]]:
+    async def late(*args: object) -> object:
+        await asyncio.sleep(delay)
+        return await real(*args)
+
+    return late
+
+
+def _delay_subscriptions(monkeypatch: pytest.MonkeyPatch, delay: float) -> None:
+    """Make the poller's talk and inbox-notify SUBs register ``delay`` s late.
+
+    They bind one after the other once the relay connection is up, so under
+    CPU load (or on a cold container network) the inbox-notify SUB lands well
+    after the first tool call returns.  This forces that ordering.
+    """
+    for name in ("subscribe_talk", "subscribe_inbox_notify"):
+        monkeypatch.setattr(
+            _descriptions, name, _late(getattr(_descriptions, name), delay)
+        )
 
 
 def _client_config(container: RelayContainer, user: str) -> BiffConfig:
@@ -122,13 +146,18 @@ class TestPushVsPollDemo:
     """The push demonstration against the real relay container."""
 
     @pytest.mark.transcript
+    @pytest.mark.parametrize("sub_delay", [0.0, 3.0], ids=["prompt", "late-sub"])
     async def test_push_beats_poll_against_real_relay(
         self,
         relay_container: RelayContainer,
+        relay_driver: DockerRelay,
         tmp_path: Path,
         transcript: Transcript,
+        monkeypatch: pytest.MonkeyPatch,
+        sub_delay: float,
     ) -> None:
         """Push detects a broadcast fast; with no poke, only a read finds it."""
+        _delay_subscriptions(monkeypatch, sub_delay)
         _reset_session()
         kai_config = _client_config(relay_container, "kai")
         kai_state = create_state(
@@ -151,7 +180,13 @@ class TestPushVsPollDemo:
             ) as kai_raw:
                 kai = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
                 await kai.call("read_messages")  # attach; baseline: "No new messages."
-                await asyncio.sleep(1.0)  # let the inbox-notify SUB get established
+                # Core NATS does not replay, so wait for the server to report the
+                # inbox-notify SUB rather than guess how long registration takes.
+                await asyncio.to_thread(
+                    relay_driver.wait_subscribed,
+                    relay_container.name,
+                    sender.inbox_notify_subject(_TEST_REPO, "kai"),
+                )
 
                 # -- push: real deliver(), JetStream + inbox-notify poke --
                 t_send = time.monotonic()
