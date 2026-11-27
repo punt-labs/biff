@@ -49,6 +49,9 @@ class TalkBus:
         self.subscribes = 0
         self.broken = False
         self.subscribe_delay = 0.0
+        self.subscribe_block: asyncio.Event | None = None
+        self.flush_gate: asyncio.Event | None = None
+        self._queued: list[tuple[str, Callback]] = []
         self.relays: list[TalkBusRelay] = []
 
     async def publish(self, subject: str, payload: bytes) -> None:
@@ -61,12 +64,26 @@ class TalkBus:
 
     async def subscribe(self, subject: str, cb: Callback) -> BusSubscription:
         await asyncio.sleep(self.subscribe_delay)
+        if self.subscribe_block is not None:
+            await self.subscribe_block.wait()
         self.subscribes += 1
-        self._subscribers.setdefault(subject, []).append(cb)
+        # As with NATS, the server acts on the subscription only once the client
+        # has flushed it: until then a frame for the subject is lost.
+        self._queued.append((subject, cb))
         return BusSubscription(self, subject, cb)
 
+    async def flush(self) -> None:
+        if self.flush_gate is not None:
+            await self.flush_gate.wait()
+        queued, self._queued = self._queued, []
+        for subject, cb in queued:
+            self._subscribers.setdefault(subject, []).append(cb)
+
     def drop(self, subject: str, callback: Callback) -> None:
-        self._subscribers[subject].remove(callback)
+        if (subject, callback) in self._queued:
+            self._queued.remove((subject, callback))
+        else:
+            self._subscribers[subject].remove(callback)
 
     def total_subscribers(self) -> int:
         return sum(len(callbacks) for callbacks in self._subscribers.values())

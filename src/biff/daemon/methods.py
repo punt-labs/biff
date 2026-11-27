@@ -120,6 +120,10 @@ class Methods:
         if method in self._sessions.names:
             result = await self._sessions.call(session, method, Params(method, raw))
             return self._outcome(result)
+        if method in TalkMethods.NAMES and not await session.talk.ready(
+            TalkMethods.READY_SECONDS
+        ):
+            return self._outcome(TalkMethods.NOT_READY)
         handler = self._table.get(method)
         if handler is None:
             msg = f"unknown method {method!r}; served: {', '.join(self.names)}"

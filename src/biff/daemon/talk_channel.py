@@ -71,17 +71,18 @@ class TalkChannel:
         if ctx.talk.phase is not TalkPhase.IDLE:
             await talk_commands.end_or_cancel(ctx)
 
-    async def ready(self, timeout: float) -> None:
-        """Return once frames for this session are being received.
+    async def ready(self, timeout: float) -> bool:
+        """Return whether frames for this session are being received.
 
-        A relay that is slow to subscribe must not fail an attach: after
-        *timeout* seconds this logs and returns, the feed keeps trying, and a
-        client that talks in the meantime is told so by the relay.
+        Waits up to *timeout* seconds for the server to confirm the
+        subscription.  Only talk calls wait: an attach, and every command that
+        does not talk, never depends on it.
         """
         try:
             await asyncio.wait_for(self._feed.ready(), timeout=timeout)
         except TimeoutError:
-            logger.warning("talk subscription not ready; the attach goes on")
+            return False
+        return True
 
     def start(self) -> None:
         """Subscribe while a client is attached; harmless when already running."""

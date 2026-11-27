@@ -254,11 +254,14 @@ async def end_or_cancel(ctx: TalkContext) -> CommandResult:
     partner, partner_key = talk_state.partner, talk_state.partner_key
     was_inviting = talk_state.phase is TalkPhase.INVITING
     talk_state.reset()
-    send = talk_state.send_withdraw if was_inviting else talk_state.send_end
     # The publish is a no-op on a non-NATS relay (``TalkState._publish`` guards
     # the transport), so it is issued unconditionally — no relay-type gate here.
     try:
-        await send(to_key=partner_key)
+        if was_inviting:
+            await talk_state.send_withdraw(to_key=partner_key)
+            # The peer may have accepted already, with its accept still unread
+            # here: it is connected then, and only an end frame frees it.
+        await talk_state.send_end(to_key=partner_key)
     except (NatsError, TimeoutError, OSError) as exc:
         # INFO, not WARNING: the CLI raises the stderr handler to WARNING,
         # so a WARNING here would dump this best-effort-publish traceback
@@ -309,6 +312,11 @@ async def publish_auto_accept(ctx: TalkContext, *, to_key: str) -> bool:
     return False
 
 
+def _names_of(invite: PendingInvite) -> tuple[str, str]:
+    """Return the two names an invite's session answers to: display tty and key tty."""
+    return invite.tty, invite.session_key.partition(":")[2]
+
+
 async def talk(ctx: TalkContext, to: str, message: str) -> CommandResult:
     """Accept an invite, send a message while connected, or start an invite.
 
@@ -326,6 +334,8 @@ async def talk(ctx: TalkContext, to: str, message: str) -> CommandResult:
     # tty), and consuming before resolution would strand an invite that could no
     # longer be accepted.  Consume only once resolution succeeds.
     pending = talk_state.pending_invites.get(user)
+    if pending is not None and tty and tty not in _names_of(pending):
+        pending = None  # the address names another session: invite it afresh
     resolve_user, resolve_tty = (user, tty)
     if pending is not None:
         resolve_user, _, resolve_tty = pending.session_key.partition(":")

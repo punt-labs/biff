@@ -11,6 +11,8 @@ from biff._formatting import HEADER_PREFIX
 from biff.cli_daemon import DaemonCommand
 from biff.cli_link import DaemonLink
 from biff.cli_talk import TalkConversation
+from biff.cli_talk_view import TalkView
+from biff.repl_display import ReplDisplay
 from biff.talk_reading import TalkReading
 from tests.test_daemon.terminal import Screen, Typist
 
@@ -204,3 +206,35 @@ async def test_a_hangup_that_arrives_with_the_accept_ends_the_wait(
 
     assert connected is False
     assert any("ended" in line for line in shown)
+
+
+async def test_the_wait_for_an_accept_reports_lines_the_queue_lost() -> None:
+    link = MagicMock()
+    link.pump.lost = ""
+    link.talk_read = AsyncMock(
+        return_value=TalkReading(
+            lines=(),
+            messages=(),
+            invites=(),
+            ended=False,
+            accept_published=True,
+            opening="",
+            opening_unsent=False,
+            dropped=2,
+            phase="inviting",
+            peer="eric:tty2",
+        )
+    )
+    console = MagicMock()
+    shown: list[str] = []
+    console.say = lambda text="", *, end="\n": shown.append(text)
+    conversation = TalkConversation(
+        link=cast("DaemonLink", link),
+        console=console,
+        view=TalkView(ReplDisplay()),
+        prompt="you> ",
+    )
+
+    await conversation._accepted("eric:tty2")
+
+    assert any("2 talk lines were lost" in line for line in shown)

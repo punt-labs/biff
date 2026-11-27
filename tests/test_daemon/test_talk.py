@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from biff._formatting import HEADER_PREFIX
+from biff.daemon.talk_methods import TalkMethods
 from biff.formatting import format_talk_end
 from biff.invite_expiry import InviteExpiry
 from biff.talk_state import MAX_TALK_QUEUE
@@ -218,17 +219,6 @@ async def test_the_subscription_lasts_as_long_as_a_client_is_attached(
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
     await pair.eric.close()
     await _eventually(lambda: bus.subscriber_count(subject) == 0)
-
-
-async def test_a_client_that_has_attached_can_be_reached_at_once(
-    harness: Harness, bus: TalkBus
-) -> None:
-    """Frames are ephemeral, so attach returns only once the subscription exists."""
-    await harness.connect("s-kai", "kai")
-    before = bus.total_subscribers()
-    bus.subscribe_delay = 0.1  # a slow relay: the subscription takes a moment
-    await harness.connect("s-eric", "eric")
-    assert bus.total_subscribers() == before + 1
 
 
 async def test_a_new_relay_client_gets_a_new_subscription(
@@ -515,3 +505,86 @@ async def test_a_bug_in_the_feed_does_not_end_talk_for_the_session(
     await pair.say(pair.kai, pair.eric_at, "")
     assert (await pair.read(pair.eric))["invites"] != []
     assert any(r.exc_info for r in caplog.records)
+
+
+async def test_slow_talk_setup_never_delays_commands_that_do_not_talk(
+    harness: Harness, bus: TalkBus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus.subscribe_block = asyncio.Event()  # the subscription never completes
+    monkeypatch.setattr(TalkMethods, "READY_SECONDS", 0.2)
+    started = asyncio.get_running_loop().time()
+    kai = await harness.connect("s-kai", "kai")
+    assert asyncio.get_running_loop().time() - started < 0.3  # attach is prompt
+    for method in ("who", "status", "read"):
+        await asyncio.wait_for(kai.request(method), timeout=1.0)
+    started = asyncio.get_running_loop().time()
+    reply = cast(
+        "dict[str, object]", await kai.request("talk", to="eric:tty1", message="")
+    )
+    assert asyncio.get_running_loop().time() - started < 1.0
+    assert reply["error"] is True
+    assert "not ready" in cast("str", reply["text"])
+
+
+async def test_talk_is_ready_only_once_the_server_has_the_subscription(
+    harness: Harness, bus: TalkBus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(TalkMethods, "READY_SECONDS", 0.2)
+    bus.flush_gate = asyncio.Event()  # the subscription is queued, not confirmed
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    eric_at = f"eric:{await _tty(eric)}"
+    early = cast("dict[str, object]", await eric.request("talk_read"))
+    assert (early["error"], "not ready" in cast("str", early["text"])) == (True, True)
+    bus.flush_gate.set()  # the server confirms
+    async with asyncio.timeout(5.0):
+        while True:
+            sent = cast(
+                "dict[str, object]",
+                await kai.request("talk", to=eric_at, message=""),
+            )
+            if sent["error"] is False:
+                break
+            await asyncio.sleep(0.01)
+    async with asyncio.timeout(5.0):
+        while not _data(await eric.request("talk_read"))["invites"]:
+            await asyncio.sleep(0.01)
+
+
+async def test_an_explicit_tty_is_not_redirected_to_another_ttys_invite(
+    harness: Harness, bus: TalkBus
+) -> None:
+    assert bus is not None
+    kai = await harness.connect("s-kai", "kai")
+    bob1 = await harness.connect("s-bob1", "bob")
+    bob2 = await harness.connect("s-bob2", "bob")
+    kai_at, bob1_at, bob2_at = (
+        f"kai:{await _tty(kai)}",
+        f"bob:{await _tty(bob1)}",
+        f"bob:{await _tty(bob2)}",
+    )
+    await bob1.request("talk", to=kai_at, message="")  # bob's first tty invites kai
+    await asyncio.sleep(0.1)  # the invite is queued at kai, unread
+    sent = cast(
+        "dict[str, object]", await kai.request("talk", to=bob2_at, message="hi")
+    )
+    assert _data(sent) == {"phase": "inviting", "peer": bob2_at}
+    seen = _data(await kai.request("talk_read"))
+    assert [i["accept"] for i in cast("list[dict[str, str]]", seen["invites"])] == [
+        f"talk {bob1_at}"
+    ]
+
+
+async def test_a_last_detach_with_the_accept_still_queued_ends_the_peer(
+    pair: _Pair,
+) -> None:
+    await pair.say(pair.kai, pair.eric_at, "")
+    await pair.read(pair.eric)
+    await pair.say(pair.eric, pair.kai_at, "")  # eric is connected; kai has not read
+    await pair.kai.close()
+    seen: dict[str, object] = {}
+    async with asyncio.timeout(5.0):
+        while not seen.get("ended"):
+            seen = await pair.read(pair.eric)
+            await asyncio.sleep(0.01)
+    assert seen["phase"] == "idle"

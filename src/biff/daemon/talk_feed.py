@@ -57,6 +57,10 @@ class TalkClient(Protocol):
         """Call *cb* for each message on *subject*."""
         ...
 
+    async def flush(self) -> None:
+        """Return once the server has processed everything sent so far."""
+        ...
+
 
 @runtime_checkable
 class TalkTransport(Protocol):
@@ -184,6 +188,9 @@ class TalkFeed:
             generation = relay.connection_generation
             subject = relay.talk_notify_subject(self._session_key)
             handle = await nc.subscribe(subject, cb=self._on_frame)
+            # The client only queues the subscription; the server acts on it once
+            # this round trip returns, and a frame sent before that is lost.
+            await nc.flush()
         except RELAY_ERRORS:
             # A dial in progress can make either call raise; the next tick retries.
             self._latch.record_failure()

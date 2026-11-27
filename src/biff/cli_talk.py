@@ -153,7 +153,7 @@ class TalkConversation:
         say = self._console.say
         self._link.pump.discard_talk()
         reading = await self._link.talk_read()
-        for banner in self._view.invites(reading):
+        for banner in [*self._view.dropped(reading), *self._view.invites(reading)]:
             say(f"{_CLEAR_LINE}{banner}")
         # The accepter's opening line renders once Connected prints.
         self._carried = (*self._carried, *reading.messages)

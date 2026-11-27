@@ -30,6 +30,19 @@ class TalkMethods:
     relay) is refused with one message rather than answered with an empty talk.
     """
 
+    NAMES: ClassVar[frozenset[str]] = frozenset({"talk", "talk_read", "talk_end"})
+    READY_SECONDS: ClassVar[float] = 2.0
+    """How long a talk call waits for the session's subscription, in seconds.
+
+    It is shorter than the client's request timeout, so a relay that is slow to
+    subscribe is answered as ``NOT_READY`` and never as a timeout.
+    """
+
+    NOT_READY: ClassVar[CommandResult] = CommandResult(
+        text="Talk is not ready yet: the relay has not confirmed this session's "
+        "subscription; try again in a moment.",
+        error=True,
+    )
     NEEDS_NATS: ClassVar[CommandResult] = CommandResult(
         text="Talk requires a NATS relay connection.", error=True
     )
