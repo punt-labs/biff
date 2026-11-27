@@ -508,24 +508,15 @@ def test_show_says_when_the_owner_key_is_recorded_on_this_machine(
     )
 
 
-def test_show_says_when_the_owner_key_is_only_published(tmp_path: Path) -> None:
-    rig = _Rig(tmp_path)
-    rig.commands.init("jfreeman")
-    rig.commands.agent("claude")
-    stranger = bytes([7]) * 32
-    rig.directory.publish(
-        "mallory", {"npub": Bech32Key.PUBLIC.encode(NostrCrypto().public_key(stranger))}
-    )
-    rig.directory.publish("claude", {"owner": "mallory"})
-    _forge(rig, "claude", stranger)
-    text = rig.commands.show("claude").text
-    assert "not pinned on this machine" in text
-    assert "npub1" in text
+def _unpinned_owner_rig(tmp_path: Path, *, pin_someone_else: bool = False) -> _Rig:
+    """An agent attested by an owner this machine holds no pin for.
 
-
-def _unpinned_owner_rig(tmp_path: Path) -> _Rig:
-    """An agent attested by an owner this machine holds no pin for."""
+    With *pin_someone_else* the machine pins a different owner first, so a test
+    can show that a pin for one owner does not vouch for another.
+    """
     rig = _Rig(tmp_path)
+    if pin_someone_else:
+        rig.commands.init("jfreeman")
     rig.commands.agent("claude")
     stranger = bytes([7]) * 32
     rig.directory.publish(
@@ -534,6 +525,13 @@ def _unpinned_owner_rig(tmp_path: Path) -> _Rig:
     rig.directory.publish("claude", {"owner": "mallory"})
     _forge(rig, "claude", stranger)
     return rig
+
+
+def test_show_says_when_the_owner_key_is_only_published(tmp_path: Path) -> None:
+    rig = _unpinned_owner_rig(tmp_path, pin_someone_else=True)
+    text = rig.commands.show("claude").text
+    assert "not pinned on this machine" in text
+    assert "npub1" in text
 
 
 def test_an_unpinned_owner_is_never_reported_valid(tmp_path: Path) -> None:
@@ -556,6 +554,20 @@ def test_an_unpinned_owner_with_an_expired_attestation_is_unpinned_expired(
     assert verdict["state"] == "unpinned-expired"
     assert "expired" in later.text
     assert "nothing local confirms that key" in later.text
+
+
+def test_a_pinned_expired_attestation_is_expired_in_json(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    later = rig.later(NOW + 7200).show("claude")
+    data = cast("dict[str, object]", later.json_data)
+    verdict = cast("dict[str, str]", data["attestation"])
+    assert verdict["state"] == "expired"
+    assert verdict["standing"].startswith(
+        "matches the owner key pinned on this machine"
+    )
+    assert "expired" in later.text
 
 
 def test_a_pinned_matching_owner_is_still_valid_in_json(tmp_path: Path) -> None:
