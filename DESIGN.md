@@ -4158,13 +4158,41 @@ auth, poll interval); it no longer carries an `enabled` key.
 - **Non-GitHub remotes:** `_parse_repo_slug` handles any
   `host:owner/repo` URL. GitLab nested groups (`group/sub/repo`) fail
   the two-part check and return `None` — correct, no single owner.
-- **Devin Git proxy:** `git remote get-url origin` expands `insteadOf`
-  rewrites. **Decision:** unwrap the known HTTPS proxy route for GitHub
+- **Devin Git proxy:** an expanded remote URL (`git remote get-url
+  origin`, the fallback below) can carry the proxy route.
+  **Decision:** unwrap the known HTTPS proxy route for GitHub
   before the two-part check. **Alternatives:** keep falling back to the
   checkout name (loses org discovery), or take the last two segments of
   any nested path (can misidentify the owner). **Outcome:** direct and
   proxied clones share an org and relay namespace; other nested paths
   are still rejected.
+- **Git `insteadOf` rewrites (agent containers):** an agent container
+  rewrites github remotes through the model gateway, so
+  `git remote get-url origin` returns
+  `http://<gateway>/github/owner/repo`; the extra route segment fails the
+  two-part check and the checkout name was used, putting container
+  sessions in a different repo namespace than host sessions.
+  **Decision:** `get_repo_slug` parses the raw fetch URL, the first
+  usable `remote.origin.url` value (`git config --get-all`), because git
+  fetches from the first URL. An empty entry differs by Git version:
+  Git 2.43.0 (okinos, the agent image) does not reset the list, so
+  `git remote get-url origin` returns the first entry; Git 2.56.1 (CI)
+  does, so it returns the first entry after the empty one. The rule lets
+  Git decide: with no empty line in the raw list the first line is the
+  answer (the versions cannot differ, no extra subprocess); otherwise
+  `n` is the entry count of `git remote get-url --all origin` (Git's own
+  effective list), the last `n` raw entries are kept, and the first
+  non-empty one is the URL. Tests use Git's effective list as the oracle
+  and simulate both versions. It runs and parses the expanded
+  `git remote get-url origin` only when the raw value does not parse (a
+  shorthand such as `gh:owner/repo`), so the common case costs one git
+  subprocess. This supersedes the expand-first approach of the
+  Devin entry above. **Alternatives:** a gateway route-prefix parse
+  (hard-codes gateway knowledge; the raw value already holds the canonical
+  URL), or the raw value alone (loses shorthand aliases). **Outcome:**
+  container and host clones share a namespace. A clone made directly from
+  the gateway URL carries the gateway form in both values and still
+  resolves to `None`; no such clone has been observed.
 - **Multiple remotes:** only `origin` is read. `upstream` is ignored.
 
 ### Trust Assessment

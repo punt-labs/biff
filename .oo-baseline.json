@@ -80,10 +80,10 @@
   "src/biff/_stdlib.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.86,
+    "avg_params": 0.88,
     "max_complexity": 9.0,
-    "avg_complexity": 3.18,
-    "module_size": 197.0,
+    "avg_complexity": 3.04,
+    "module_size": 208.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
     "init_violations": 0.0,
