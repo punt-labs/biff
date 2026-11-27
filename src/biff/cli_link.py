@@ -5,17 +5,16 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Self, final
 
-from biff.cli_daemon_wire import WireResult
+from pydantic import ValidationError
+
+from biff.cli_daemon_wire import UnreadableReplyError, WireResult
 from biff.cli_events import EventPump
-from biff.cli_talk_outcome import TalkOutcome
-from biff.cli_talk_reading import TalkReading
+from biff.cli_talk_outcome import TalkOutcome, TalkUnavailableError
 from biff.client.connection import DaemonError
 from biff.commands import CommandResult
-from biff.dispatch import Call
+from biff.talk_reading import TalkReading
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from pydantic import JsonValue
 
     from biff.cli_daemon import DaemonCommand
@@ -36,16 +35,14 @@ class DaemonLink:
     one-shot ``biff`` command does, so it behaves the same in both.
     """
 
-    __slots__ = ("_client", "_command", "_pump")
+    __slots__ = ("_client", "_pump")
 
-    _command: DaemonCommand
     _client: DaemonClient
     _pump: EventPump
 
-    def __new__(cls, command: DaemonCommand, client: DaemonClient) -> Self:
-        """Wrap *client*, a subscribed connection opened through *command*."""
+    def __new__(cls, client: DaemonClient) -> Self:
+        """Wrap *client*, a connection that has subscribed."""
         self = super().__new__(cls)
-        self._command = command
         self._client = client
         self._pump = EventPump(client)
         return self
@@ -65,7 +62,7 @@ class DaemonLink:
         except BaseException:
             await client.close()
             raise
-        link = cls(command, client)
+        link = cls(client)
         link._pump.start()
         return link
 
@@ -78,25 +75,6 @@ class DaemonLink:
         """Stop reading and close the connection; the session stays in biffd."""
         await self._pump.stop()
         await self._client.close()
-
-    async def run(self, call: Call, show: Callable[[CommandResult], None]) -> bool:
-        """Run a product command as this session, show its result, and confirm it.
-
-        Returns whether the command reported an error.
-
-        Raises:
-            ValueError: A named session cannot be used.
-            ConnectionError: biffd is absent or sent an unreadable reply.
-            DaemonError: biffd refused the request.
-        """
-        if call.method == "plan":
-            answer = await self._command.plan(str(call.params["message"]))
-        elif call.method == "tty":
-            answer = await self._command.tty(str(call.params["name"]))
-        else:
-            answer = await self._command.call(call.method, **call.params)
-        await answer.deliver(show)
-        return answer.result.error
 
     async def status(self) -> dict[str, JsonValue]:
         """Return the session's ``status`` data: user, tty name, unread, wall."""
@@ -113,7 +91,14 @@ class DaemonLink:
         Raises:
             TalkUnavailableError: The session's relay carries no talk.
         """
-        return TalkReading.of(await self._ask("talk_read"))
+        wire = await self._ask("talk_read")
+        if wire.error:
+            raise TalkUnavailableError(wire.text)
+        try:
+            return TalkReading.model_validate(wire.data)
+        except ValidationError as exc:
+            msg = "biffd sent a talk reading this biff cannot read"
+            raise UnreadableReplyError(msg) from exc
 
     async def talk_end(self) -> CommandResult:
         """End the talk, or withdraw the invite."""

@@ -148,7 +148,12 @@ class TalkFeed:
     async def _run(self) -> None:
         try:
             while True:
-                await self._reconcile()
+                try:
+                    await self._reconcile()
+                except Exception:
+                    # A bug here must not end talk for the session, nor go
+                    # unlogged: report it and try again on the next tick.
+                    logger.exception("talk subscription check failed")
                 await asyncio.sleep(self._interval)
         finally:
             await self._unsubscribe()

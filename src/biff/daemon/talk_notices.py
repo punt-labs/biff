@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
+from biff._formatting import terminal_safe
 from biff.talk_state import MAX_TALK_QUEUE
 
 if TYPE_CHECKING:
@@ -52,7 +53,12 @@ class TalkNotice:
         Raises:
             KeyError: *notif* is not noticed (see :meth:`is_noticed`).
         """
-        return cls(cls._KINDS[notif.ntype], notif.nfrom, notif.nfrom_tty, pending)
+        return cls(
+            cls._KINDS[notif.ntype],
+            terminal_safe(notif.nfrom),
+            terminal_safe(notif.nfrom_tty),
+            pending,
+        )
 
     @property
     def data(self) -> JsonValue:

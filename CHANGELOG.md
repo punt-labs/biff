@@ -139,7 +139,12 @@
   connection; a talk line costs one round trip after its notice. `biff talk` is
   now a real talk (invite, accept, lines, end) instead of durable mail, so the
   peer must accept; it exits 1 when the relay carries no talk. A hang-up is sent
-  however the shell or `biff talk` ends, because biffd keeps the conversation.
+  however the shell or `biff talk` ends, and biffd hangs up a talk whose last
+  client left without doing so: the peer gets the end frame and the session is
+  idle again. `biff talk` exits 1 when the connection to biffd is lost. An
+  invite's opening line is sent as a normal line once the invite is accepted;
+  `talk` to someone whose invite is unread accepts it; a queue that overflows
+  reports how many lines it lost.
   The MCP `talk_read` text is unchanged.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the

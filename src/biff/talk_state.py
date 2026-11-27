@@ -1,12 +1,13 @@
-"""Shared ephemeral talk state machine — one model, two front-ends.
+"""Shared ephemeral talk state machine — one model, one drain.
 
 Models ``docs/specs/talk.tex``: the two-phase handshake, the bounded
 notification queue, session-scoped delivery, and the mutual-invite
-tie-break.  Both the CLI REPL and the MCP server compose a single
-mutable :class:`TalkState` into their (frozen) session context, feed
-every NATS talk notification into :meth:`TalkState.receive`, and drain
-it in their own idiom — the REPL prints banners, the MCP server returns
-the drained state through a tool and fires a tool-list-changed push.
+tie-break.  The biffd daemon (for the CLI and the REPL) and the in-process MCP
+server each compose a single mutable :class:`TalkState` into their (frozen)
+session context and feed every NATS talk notification into
+:meth:`TalkState.receive`.  Both read it with :meth:`TalkState.drain_for_agent`:
+biffd returns the read to a client, the MCP server returns it through a tool and
+fires a tool-list-changed push.
 
 Talk is ephemeral (BSD ``talk``): notifications ride NATS core pub/sub
 with no durable inbox.  A dropped notification is simply lost, exactly
@@ -96,10 +97,12 @@ class TalkState:
     """
 
     __slots__ = (
+        "_dropped",
         "_my_key",
         "_my_tty",
         "_my_tty_name",
         "_my_user",
+        "_opening",
         "_partner",
         "_partner_key",
         "_partner_tty",
@@ -120,6 +123,8 @@ class TalkState:
     _partner_key: str
     _pending: dict[str, PendingInvite]
     _queue: deque[QueuedNotification]
+    _opening: str
+    _dropped: int
 
     def __new__(
         cls,
@@ -143,6 +148,8 @@ class TalkState:
         self._partner_key = session_key
         self._pending = {}
         self._queue = deque()
+        self._opening = ""
+        self._dropped = 0
         return self
 
     # -- Read-only state --
@@ -272,8 +279,16 @@ class TalkState:
             return self._withdraw(notif.nfrom, notif.nfrom_key)  # WithdrawArrive
         if len(self._queue) >= MAX_TALK_QUEUE:
             self._queue.popleft()  # ReceiveOverflow — drop-oldest
+            if not self._dropped:  # once per overflow, however long the flood
+                logger.warning("talk queue full: dropping the oldest frames")
+            self._dropped += 1
         self._queue.append(QueuedNotification(notif, time.monotonic()))
         return True
+
+    def take_dropped(self) -> int:
+        """Return how many frames overflow dropped since the last call, and reset."""
+        dropped, self._dropped = self._dropped, 0
+        return dropped
 
     def _withdraw(self, inviter: str, withdraw_key: str) -> bool:
         """Cancel an invite only when the frame's key matches (WithdrawArrive).
@@ -550,8 +565,15 @@ class TalkState:
 
     # -- Local transitions (talk.tex Send*/Respond/End operations) --
 
-    def begin_invite(self, *, partner: str, partner_tty: str, partner_key: str) -> None:
-        """Enter the inviting phase for a specific session (talk.tex SendInvite)."""
+    def begin_invite(
+        self, *, partner: str, partner_tty: str, partner_key: str, opening: str = ""
+    ) -> None:
+        """Enter the inviting phase for a specific session (talk.tex SendInvite).
+
+        *opening* is the line to send once the invite is accepted: an invite
+        carries no text, so it waits here until the partner is connected.
+        """
+        self._opening = opening[:MAX_BODY_LEN]
         self._phase = TalkPhase.INVITING
         self._partner = partner
         self._partner_tty = partner_tty
@@ -590,8 +612,37 @@ class TalkState:
         """
         self._pending.setdefault(invite.user, invite)
 
+    @property
+    def opening(self) -> str:
+        """The opening line still waiting for the invite to be accepted."""
+        return self._opening
+
+    def clear_opening(self) -> None:
+        """Forget the opening line: it was sent."""
+        self._opening = ""
+
+    def absorb_idle_invites(self) -> None:
+        """Move invites waiting in the queue into the pending set, while idle.
+
+        An invite is held in the queue until a read drains it, so a ``talk`` to
+        its sender, made before any read, must still find it: otherwise it would
+        send a counter-invite instead of accepting.  Other frames keep their
+        place.  A non-idle state leaves every frame for the drain, which knows
+        how to complete a mutual invite.
+        """
+        if self._phase is not TalkPhase.IDLE:
+            return
+        kept: deque[QueuedNotification] = deque()
+        for queued in self._queue:
+            if queued.notif.is_invite:
+                self._record_invite(queued.notif, arrived=queued.arrived)
+            else:
+                kept.append(queued)
+        self._queue = kept
+
     def reset(self) -> None:
         """Return to idle, clearing the partner sentinels (talk.tex LocalEnd)."""
+        self._opening = ""
         self._phase = TalkPhase.IDLE
         self._partner = self._my_user
         self._partner_tty = self._my_tty

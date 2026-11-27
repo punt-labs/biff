@@ -11,11 +11,11 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from biff.cli_talk_reading import TalkReading
 from biff.cli_talk_view import TalkView
-from biff.cli_talk_wire import WireInvite, WireMessage
 from biff.repl_display import ReplDisplay
+from biff.talk_reading import TalkReading
 from biff.talk_types import TalkNotification
+from biff.talk_wire import WireInvite, WireMessage
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -53,10 +53,14 @@ def _reading(
     messages: tuple[WireMessage, ...] = (), invites: tuple[WireInvite, ...] = ()
 ) -> TalkReading:
     return TalkReading(
+        lines=(),
         messages=messages,
         invites=invites,
         ended=False,
         accept_published=True,
+        opening="",
+        opening_unsent=False,
+        dropped=0,
         phase="idle",
         peer="",
     )
@@ -211,3 +215,14 @@ class TestInvites:
         lines = _view().invites(reading)
         assert len(lines) == 1
         assert "opening line" not in lines[0]
+
+
+class TestDropped:
+    def test_lost_lines_are_announced(self) -> None:
+        reading = _reading().model_copy(update={"dropped": 3})
+        lines = _view().banners(reading)
+        assert len(lines) == 1
+        assert "3 talk lines were lost" in lines[0]
+
+    def test_nothing_is_said_when_nothing_was_lost(self) -> None:
+        assert _view().dropped(_reading()) == []

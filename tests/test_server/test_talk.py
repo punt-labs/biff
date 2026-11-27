@@ -445,23 +445,24 @@ class TestDoTalk:
             "to_key": "kai:kaihex01",
         }
 
-    async def test_invite_hint_carries_bare_address(self) -> None:
-        """A fresh invite body suggests a runnable bare ``talk user:tty`` accept."""
+    async def test_invite_carries_no_text_and_names_its_sender(self) -> None:
+        """An invite carries no body: the opening line waits for the accept."""
         sessions = [
             UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
         ]
         state, nc = self._state(sessions)
-        await talk_commands.talk(cast("TalkContext", state), "@jfreeman:tty6", "")
-        body: str = json.loads(nc.publish.call_args[0][1])["body"]
-        assert "talk kai:tty1" in body
+        await talk_commands.talk(cast("TalkContext", state), "@jfreeman:tty6", "hi")
+        frame = json.loads(nc.publish.call_args[0][1])
+        assert (frame["body"], frame["from_tty"]) == ("", "tty1")
+        assert state.talk.opening == "hi"
 
-    async def test_invite_hint_reflects_renamed_tty(self) -> None:
-        """After a rename syncs state.talk, the invite hint carries the NEW tty.
+    async def test_invite_names_the_renamed_tty(self) -> None:
+        """After a rename syncs state.talk, an invite names the NEW tty.
 
-        The MCP ``tty`` rename tool syncs ``state.talk.set_tty_name``;
-        the invite reply hint reads ``state.talk.my_tty_name``, so a subsequent
-        invite must advertise the renamed address — never the stale one whose
-        reservation DES-035 has released.
+        The MCP ``tty`` rename tool syncs ``state.talk.set_tty_name``; the frame
+        reads ``state.talk.my_tty_name``, so a subsequent invite must name the
+        renamed address — never the stale one whose reservation DES-035 has
+        released.
         """
         sessions = [
             UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
@@ -469,8 +470,8 @@ class TestDoTalk:
         state, nc = self._state(sessions)
         state.talk.set_tty_name("renamed-tty")  # the rename tool's talk sync
         await talk_commands.talk(cast("TalkContext", state), "@jfreeman:tty6", "")
-        body: str = json.loads(nc.publish.call_args[0][1])["body"]
-        assert "talk kai:renamed-tty" in body  # new name, not the stale tty1
+        frame = json.loads(nc.publish.call_args[0][1])
+        assert frame["from_tty"] == "renamed-tty"  # new name, not the stale tty1
 
     async def test_accept_connected_hint_uses_display_tty_not_hex(self) -> None:
         """Accepting a pending invite names the partner by ``ttyN``, not the key hex."""

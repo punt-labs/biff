@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, ClassVar, final
 
 import biff.commands.talk as talk_commands
 from biff.commands import CommandResult
 from biff.commands._session import update_current_session
-from biff.commands.talk_read import TalkReadout, TalkStanding
+from biff.commands.talk_read import TalkReadout
 from biff.daemon.talk_feed import TalkTransport
+from biff.relay_errors import RELAY_ERRORS
 from biff.talk_types import TalkPhase
 
 if TYPE_CHECKING:
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
     from biff.daemon.params import Params
 
 __all__ = ["TalkMethods"]
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -41,7 +45,7 @@ class TalkMethods:
         done = await talk_commands.talk(ctx, to, message)
         return CommandResult(
             text=done.text,
-            json_data=TalkStanding.of(ctx.talk).data,
+            json_data=TalkReadout.standing_of(ctx.talk).model_dump(),
             error=done.error,
         )
 
@@ -58,8 +62,14 @@ class TalkMethods:
         """Hang up, or withdraw an outstanding invite."""
         p.done()
         was_talking = ctx.talk.phase is not TalkPhase.IDLE
-        await update_current_session(ctx)
+        # The kernel resets the local state before it publishes, so the talk is
+        # over whatever the relay does; stamping activity comes after, and an
+        # unreachable presence row must not undo that.
         ended = await talk_commands.end_or_cancel(ctx)
+        try:
+            await update_current_session(ctx)
+        except RELAY_ERRORS:
+            logger.info("could not stamp activity after ending a talk", exc_info=True)
         return CommandResult(
             text=ended.text, json_data={"ended": was_talking}, error=ended.error
         )

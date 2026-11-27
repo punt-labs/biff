@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from biff.daemon.talk_feed import TalkClient
+    from biff.models import UserSession
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,8 @@ class TalkBusRelay(LocalRelay):
         self._bus = bus
         self.generation = 1
         self.down = False
+        self.stale = False
+        self.crash: Exception | None = None
         bus.relays.append(self)
 
     @property
@@ -87,7 +90,22 @@ class TalkBusRelay(LocalRelay):
         return f"talk.notify.{session_key}"
 
     async def get_nc(self) -> TalkClient:
+        if self.crash is not None:
+            raise self.crash
         if self.down:
             msg = "no connection"
             raise TimeoutError(msg)
         return self._bus
+
+    async def get_session(self, session_key: str) -> UserSession | None:
+        self._check_presence()
+        return await super().get_session(session_key)
+
+    async def update_session(self, session: UserSession) -> None:
+        self._check_presence()
+        await super().update_session(session)
+
+    def _check_presence(self) -> None:
+        if self.stale:
+            msg = "presence is unreachable"
+            raise TimeoutError(msg)

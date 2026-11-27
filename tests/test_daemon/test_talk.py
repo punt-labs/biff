@@ -138,6 +138,8 @@ async def test_the_queue_keeps_the_newest_hundred_lines(pair: _Pair) -> None:
     seen = await pair.read(pair.eric)
     lines = cast("list[str]", seen["lines"])
     assert len(lines) == MAX_TALK_QUEUE
+    assert seen["dropped"] == 20  # the overflow is counted, not silent
+    assert (await pair.read(pair.eric))["dropped"] == 0  # and reported once
     assert lines[0].endswith(f"line {total - MAX_TALK_QUEUE}")
     assert lines[-1].endswith(f"line {total - 1}")
 
@@ -304,16 +306,90 @@ async def test_a_failing_resubscribe_warns_once_then_recovers(
     assert "recovered" in caplog.records[-1].getMessage()
 
 
-async def test_a_conversation_survives_the_clients_that_attached_it(
+async def test_when_the_last_client_leaves_mid_talk_the_peer_is_hung_up_on(
+    pair: _Pair,
+) -> None:
+    await pair.connect()
+    await pair.kai.close()  # no hang-up: the client died
+    ended: dict[str, object] = {}
+
+    async def peer_told() -> None:
+        while not ended.get("ended"):
+            ended.update(await pair.read(pair.eric))
+            await asyncio.sleep(0.01)
+
+    async with asyncio.timeout(5.0):
+        await peer_told()
+    assert ended["lines"] == [format_talk_end(pair.kai_at)]
+
+
+async def test_a_session_whose_last_client_left_mid_talk_is_idle_again(
     pair: _Pair, harness: Harness
 ) -> None:
     await pair.connect()
     await pair.kai.close()
     again = await harness.connect("s-kai", "kai")
-    await again.request("talk", to=pair.eric_at, message="back again")
+    async with asyncio.timeout(5.0):
+        while True:
+            standing = cast("dict[str, object]", await again.request("talk_read"))
+            if _data(standing)["phase"] == "idle":
+                break
+            await asyncio.sleep(0.01)
+    third = cast("dict[str, object]", await again.request("talk_end"))
+    assert _data(third) == {"ended": False}
+
+
+async def test_a_client_that_reattaches_at_once_keeps_its_talk(
+    pair: _Pair, harness: Harness
+) -> None:
+    await pair.connect()
+    held = await harness.connect("s-kai", "kai")  # a second client of the session
+    await pair.kai.close()  # not the last
+    await pair.say(held, pair.eric_at, "still here")
     assert (await pair.read(pair.eric))["lines"] == [
-        f"{HEADER_PREFIX}{pair.kai_at}: back again"
+        f"{HEADER_PREFIX}{pair.kai_at}: still here"
     ]
+
+
+async def test_ending_a_talk_resets_it_even_when_the_session_row_is_unreachable(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    await pair.connect()
+    bus.relays[0].stale = True  # presence reads and writes now time out
+    ended = cast("dict[str, object]", await pair.kai.request("talk_end"))
+    bus.relays[0].stale = False
+    assert _data(ended) == {"ended": True}
+    again = cast("dict[str, object]", await pair.kai.request("talk_end"))
+    assert _data(again) == {"ended": False}
+
+
+async def test_talking_to_someone_whose_invite_is_unread_accepts_it(
+    pair: _Pair,
+) -> None:
+    await pair.say(pair.kai, pair.eric_at, "")  # eric has not read it
+    accepted = cast(
+        "dict[str, object]",
+        await pair.eric.request("talk", to=pair.kai_at, message=""),
+    )
+    assert _data(accepted) == {"phase": "connected", "peer": pair.kai_at}
+
+
+async def test_the_opening_line_of_an_invite_reaches_the_peer_after_the_accept(
+    pair: _Pair,
+) -> None:
+    await pair.say(pair.kai, pair.eric_at, "opening line")
+    await pair.read(pair.eric)
+    await pair.say(pair.eric, pair.kai_at, "")
+    at_kai = await pair.read(pair.kai)  # learns of the accept, sends the opening
+    assert at_kai["opening"] == "opening line"
+    assert (await pair.read(pair.eric))["lines"] == [
+        f"{HEADER_PREFIX}{pair.kai_at}: opening line"
+    ]
+
+
+async def test_an_invite_without_an_opening_line_sends_none(pair: _Pair) -> None:
+    await pair.connect()
+    assert (await pair.read(pair.eric))["lines"] == []
 
 
 async def test_a_publish_failure_while_ending_resets_the_talk_and_says_so(
@@ -376,17 +452,55 @@ _HOSTILE_TTY = "tty1\x1b[2J\x1b]52;c;cHduZWQ=\x07\nPWN"
 async def test_a_hostile_invite_reaches_the_reader_without_controls(
     pair: _Pair, bus: TalkBus
 ) -> None:
+    subject = await _subject(pair.eric)
     frame = {
         "type": "invite",
         "from": "kai",
         "from_tty": _HOSTILE_TTY,
         "from_key": "kai:abc123",
-        "to_key": pair.eric_at,
+        "to_key": subject.removeprefix("talk.notify."),
         "body": "",
     }
-    await bus.publish(f"talk.notify.{pair.eric_at}", json.dumps(frame).encode())
+    await bus.publish(subject, json.dumps(frame).encode())
     seen = _data(await pair.eric.request("talk_read"))
+    assert len(cast("list[object]", seen["invites"])) == 1  # the frame arrived
     shown = json.dumps(seen["invites"]) + "".join(cast("list[str]", seen["lines"]))
     assert "\\u001b" not in shown
     assert "\\n" not in shown
     assert "\\u0007" not in shown
+
+
+async def test_a_notice_names_a_hostile_sender_without_controls(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    await pair.eric.subscribe()
+    subject = await _subject(pair.eric)
+    frame = {
+        "type": "message",
+        "from": "ka\x1b[2Ji",
+        "from_tty": _HOSTILE_TTY,
+        "from_key": "kai:abc123",
+        "to_key": subject.removeprefix("talk.notify."),
+        "body": "x",
+    }
+    await bus.publish(subject, json.dumps(frame).encode())
+    shown = (await _notice(pair.eric)).model_dump_json()
+    assert "\\u001b" not in shown
+    assert "\\u0007" not in shown
+    assert "\\n" not in shown
+
+
+async def test_a_bug_in_the_feed_does_not_end_talk_for_the_session(
+    pair: _Pair, bus: TalkBus, caplog: pytest.LogCaptureFixture
+) -> None:
+    subject = await _subject(pair.eric)
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    relay = bus.relays[0]
+    relay.crash = RuntimeError("a bug, not a relay outage")
+    relay.generation += 1
+    await asyncio.sleep(0.2)  # several ticks hit the bug
+    relay.crash = None
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    await pair.say(pair.kai, pair.eric_at, "")
+    assert (await pair.read(pair.eric))["invites"] != []
+    assert any(r.exc_info for r in caplog.records)

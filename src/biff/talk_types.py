@@ -336,11 +336,11 @@ class QueuedNotification:
 
 @dataclass(frozen=True, slots=True)
 class AgentDrain:
-    """Result of an MCP agent-mode drain (non-modal front-end).
+    """Result of a drain of the whole talk queue, as biffd and the MCP read it.
 
-    The MCP server is not modal like the REPL, so it drains the whole
-    queue in one pass: invites are recorded, an accept from the invited
-    session connects us, messages are surfaced, and an end resets to idle.
+    A read is not modal: it drains the whole queue in one pass.  Invites are
+    recorded, an accept from the invited session connects us, messages are
+    surfaced, and an end resets to idle.
     The connect and reset happen as side effects on the ``TalkState`` during
     the pass; this snapshot carries only what the front-end renders — the
     pending invites and the surfaced messages.

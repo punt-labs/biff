@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
 import biff.commands.talk as talk_commands
@@ -13,35 +13,16 @@ from biff.formatting import (
     terminal_safe,
     visible_text,
 )
+from biff.talk_reading import TalkReading, TalkStanding
 from biff.talk_types import TalkPhase
+from biff.talk_wire import WireInvite, WireMessage
 
 if TYPE_CHECKING:
     from biff.commands.talk import TalkContext
     from biff.talk_state import TalkState
     from biff.talk_types import AgentDrain, PendingInvite, TalkNotification
 
-__all__ = ["TalkReadout", "TalkStanding"]
-
-
-@final
-@dataclass(frozen=True)
-class TalkStanding:
-    """Where a conversation stands: its phase, and with whom unless idle."""
-
-    phase: str
-    peer: str
-
-    @classmethod
-    def of(cls, talk: TalkState) -> Self:
-        """Return the standing of *talk* now."""
-        if talk.phase is TalkPhase.IDLE:
-            return cls("idle", "")
-        return cls(talk.phase.name.lower(), talk.partner_display)
-
-    @property
-    def data(self) -> dict[str, str]:
-        """The standing as wire fields."""
-        return {"phase": self.phase, "peer": self.peer}
+__all__ = ["TalkReadout"]
 
 
 @final
@@ -59,18 +40,37 @@ class TalkReadout:
 
     drain: AgentDrain
     accept_published: bool = True
-    standing: TalkStanding = TalkStanding("idle", "")
+    standing: TalkStanding = field(
+        default_factory=lambda: TalkStanding(phase="idle", peer="")
+    )
+    opening: str = ""
+    opening_unsent: bool = False
+    dropped: int = 0
 
     @classmethod
     async def take(cls, ctx: TalkContext) -> Self:
         """Drain *ctx*'s talk state, and send the accept a mutual glare owes."""
         talk = ctx.talk
         drain = talk.drain_for_agent()
+        published = await cls.publish_owed_accept(ctx, drain)
+        opening = await talk_commands.send_opening(ctx)
         return cls(
             drain,
-            accept_published=await cls.publish_owed_accept(ctx, drain),
-            standing=TalkStanding.of(talk),
+            accept_published=published,
+            standing=cls.standing_of(talk),
+            opening=opening,
+            opening_unsent=bool(talk.opening),
+            dropped=talk.take_dropped(),
         )
+
+    @staticmethod
+    def standing_of(talk: TalkState) -> TalkStanding:
+        """Return where *talk*'s conversation stands now."""
+        if talk.phase is TalkPhase.IDLE:
+            return TalkStanding(phase="idle", peer="")
+        if talk.phase is TalkPhase.INVITING:
+            return TalkStanding(phase="inviting", peer=talk.partner_display)
+        return TalkStanding(phase="connected", peer=talk.partner_display)
 
     @staticmethod
     async def publish_owed_accept(ctx: TalkContext, drain: AgentDrain) -> bool:
@@ -138,24 +138,34 @@ class TalkReadout:
         ``phase`` and ``peer`` say where the conversation stands afterwards.
         """
         shown = self.rendered()
-        messages = [self._message(n) for n in self.drain.messages]
-        data: dict[str, object] = {
-            "lines": shown.split("\n") if shown else [],
-            "messages": messages,
-            "invites": [
-                {
-                    "from": invite.user,
-                    "tty": invite.tty,
-                    "label": self._label(invite),
-                    "accept": invite.accept_command,
-                }
+        reading = TalkReading(
+            lines=tuple(shown.split("\n")) if shown else (),
+            messages=tuple(self._message(n) for n in self.drain.messages),
+            invites=tuple(
+                self._invite(invite)
                 for _user, invite in sorted(self.drain.pending.items())
-            ],
-            "ended": any(n.is_end for n in self.drain.messages),
-            "accept_published": self.accept_published,
-            **self.standing.data,
-        }
-        return CommandResult(text=self.text(), json_data=data)
+            ),
+            ended=any(n.is_end for n in self.drain.messages),
+            accept_published=self.accept_published,
+            opening=self.opening,
+            opening_unsent=self.opening_unsent,
+            dropped=self.dropped,
+            phase=self.standing.phase,
+            peer=self.standing.peer,
+        )
+        return CommandResult(
+            text=self.text(), json_data=reading.model_dump(mode="json", by_alias=True)
+        )
+
+    def _invite(self, invite: PendingInvite) -> WireInvite:
+        return WireInvite.model_validate(
+            {
+                "from": invite.user,
+                "tty": invite.tty,
+                "label": self._label(invite),
+                "accept": invite.accept_command,
+            }
+        )
 
     @staticmethod
     def _label(invite: PendingInvite) -> str:
@@ -163,9 +173,9 @@ class TalkReadout:
         return f"{user}:{tty}" if tty else user
 
     @staticmethod
-    def _message(notif: TalkNotification) -> dict[str, str]:
-        return {
-            "kind": "end" if notif.is_end else "message",
-            "label": notif.sender_label,
-            "body": notif.nbody,
-        }
+    def _message(notif: TalkNotification) -> WireMessage:
+        return WireMessage(
+            kind="end" if notif.is_end else "message",
+            label=notif.sender_label,
+            body=notif.nbody,
+        )

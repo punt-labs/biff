@@ -9708,8 +9708,12 @@ the PR that deletes the in-process path.
   talk is a modal loop over the same console. `biff talk` is now the ephemeral
   protocol (invite, accept, lines, end) and no longer writes durable mail, so
   the peer must accept; it exits 1 when biffd refuses, for instance on a relay
-  with no talk. A hang-up is sent however the loop ends, because biffd keeps the
-  conversation after the client goes.
+  with no talk. A hang-up is sent however the loop ends, and biffd hangs up a talk
+  whose last client left without doing so (the simpler of that and keeping the
+  subscription running: a session with no client has nobody to read its lines,
+  and its peer would wait for ever). An invite carries no text: its opening
+  line waits in the talk state and is sent as a normal line once the accept
+  arrives, so a notice, an invite and the pending list never hold text.
 - **A daemon session's context changes without losing its talk.**
   `dataclasses.replace` on `CliContext` built a new, empty `TalkState`; the
   session's heartbeat replaced its context on an org refresh and would have

@@ -339,13 +339,23 @@ class Session:
             del self._retired[next(iter(self._retired))]
 
     def detach(self, attachment: Attachment) -> None:
-        """Forget *attachment*; stop heartbeating when no connection remains."""
+        """Forget *attachment*; when no connection remains, stop heartbeating.
+
+        The last client to leave also ends a talk it left open: the session's
+        peer is told, and the session is idle for its next client.
+        """
         self._attachments.discard(attachment)
         if not self._attachments:
             self._talk.stop()
+            Supervised.spawn(self._hang_up(), f"talk hang-up {self._session_id}")
             if self._beat is not None:
                 self._beat.cancel()
                 self._beat = None
+
+    async def _hang_up(self) -> None:
+        """End the talk left open, unless a client attached in the meantime."""
+        if self.is_dormant:
+            await self._talk.hang_up(self._context)
 
     async def _heartbeat(self) -> None:
         """Send the session's one presence heartbeat for as long as it is attached."""

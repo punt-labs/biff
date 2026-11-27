@@ -9,11 +9,12 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from biff._formatting import HEADER_PREFIX
-from biff.cli_daemon import DaemonCommand
+from biff.cli_daemon import Answer, DaemonCommand
 from biff.cli_link import DaemonLink
 from biff.cli_repl import ReplSession
 from biff.client.connection import DaemonError
 from biff.frame_reply import ErrorCode
+from biff.talk_reading import TalkReading
 from tests.test_daemon.terminal import Screen, Typist, eventually
 
 if TYPE_CHECKING:
@@ -384,10 +385,10 @@ async def test_talk_the_daemon_held_before_the_repl_attached_is_shown_at_start(
 async def test_a_refused_request_is_a_message_and_the_repl_goes_on(
     repl: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def refuse(*_args: object, **_kwargs: object) -> bool:
+    async def refuse(*_args: object, **_kwargs: object) -> Answer:
         raise DaemonError(ErrorCode.INTERNAL, "who failed in biffd")
 
-    monkeypatch.setattr(DaemonLink, "run", refuse)
+    monkeypatch.setattr(DaemonCommand, "call", refuse)
     repl.typist.type("who")
     await eventually(lambda: "who failed in biffd" in _err(repl))
     monkeypatch.undo()
@@ -431,3 +432,36 @@ async def test_the_plan_names_the_peer_while_talking_and_clears_after(
     async with asyncio.timeout(5.0):
         while (await _plans(talkers.eric))["kai"] != "":
             await asyncio.sleep(0.01)
+
+
+async def test_a_cancelled_invite_whose_withdraw_is_lost_says_so(
+    talkers: Talkers,
+) -> None:
+    talkers.repl.typist.type(f"talk {talkers.eric_at}")
+    await talkers.repl.screen.shows("Waiting for")
+    talkers.bus.broken = True
+    talkers.repl.typist.type("end")
+    await talkers.repl.screen.shows("withdrawn locally")
+
+
+async def test_a_hangup_that_cannot_be_sent_says_so(talkers: Talkers) -> None:
+    await talkers.connect()
+    talkers.bus.broken = True
+    talkers.repl.typist.type("end")
+    await talkers.repl.screen.shows("ended locally")
+
+
+async def test_a_failed_talk_read_is_retried_so_the_invite_is_still_announced(
+    talkers: Talkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = DaemonLink.talk_read
+    failures = [OSError("the connection hiccupped")]
+
+    async def flaky(self: DaemonLink) -> TalkReading:
+        if failures:
+            raise failures.pop()
+        return await real(self)
+
+    monkeypatch.setattr(DaemonLink, "talk_read", flaky)
+    await talkers.eric.request("talk", to=talkers.kai_at, message="")
+    await talkers.repl.screen.shows("wants to talk")

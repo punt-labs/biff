@@ -223,12 +223,17 @@ request and reply. The daemon holds each session's `TalkState` and, while a
 client is attached, one NATS subscription that feeds it (`TalkFeed`); the
 subscription is released when the last client detaches and re-made when the
 relay dials a new client (`nats-relay.tex` `talkSubGen`). `talk.tex` bounds the
-queue at 100 frames with drop-oldest, and the daemon keeps that bound.
+queue at 100 frames with drop-oldest, and the daemon keeps that bound and counts
+what it drops. An invite carries no text; the opening line of `talk` waits in the
+talk state and goes out as a normal line once the accept arrives. When the last
+client of a session detaches mid-talk the daemon hangs up (end or withdraw, best
+effort) and resets, so a client that died leaves neither a peer waiting nor a
+session refused as already in a talk.
 
 | Method | Params | `data` |
 |--------|--------|--------|
 | `talk` | `to` (`user:tty`), `message` (may be empty) | the engine's result: invite sent, invite accepted, or line sent |
-| `talk_read` | none | `lines` (the rendered text, one entry per line), `messages` (`kind`, `label`, `body`), `invites` (`from`, `tty`, `accept`), `ended`, `accept_published`, `phase`, `peer` |
+| `talk_read` | none | `lines` (the rendered text, one entry per line), `messages` (`kind`, `label`, `body`), `invites` (`from`, `tty`, `accept`), `ended`, `accept_published`, `opening` (the line an accepted invite carried, sent by this read), `opening_unsent`, `dropped` (frames the full queue lost since the last read), `phase`, `peer` |
 | `talk_end` | none | `{"ended": bool}`: true when a talk or an outstanding invite was closed |
 
 A notice is `talk_invite`, `talk_accept`, `talk_line` or `talk_end`, each with

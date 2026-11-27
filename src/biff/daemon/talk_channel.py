@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
+import biff.commands.talk as talk_commands
 from biff.daemon.talk_feed import TalkFeed
 from biff.daemon.talk_notices import TalkNotices
+from biff.talk_types import TalkPhase
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from pydantic import JsonValue
 
+    from biff.commands.talk import TalkContext
     from biff.frames import EventKind
     from biff.relay import Relay
     from biff.talk_state import TalkState
@@ -51,6 +54,18 @@ class TalkChannel:
             interval=interval,
         )
         return self
+
+    @staticmethod
+    async def hang_up(ctx: TalkContext) -> None:
+        """End the talk, or withdraw the invite, that *ctx*'s session still holds.
+
+        A session whose last client left mid-talk would otherwise stay in the
+        conversation for ever: its peer's lines would go to a subject nobody
+        reads and its next talk would be refused.  The kernel resets the state
+        first and publishes best effort, so this never raises for a relay outage.
+        """
+        if ctx.talk.phase is not TalkPhase.IDLE:
+            await talk_commands.end_or_cancel(ctx)
 
     def start(self) -> None:
         """Subscribe while a client is attached; harmless when already running."""

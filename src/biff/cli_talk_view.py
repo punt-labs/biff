@@ -9,9 +9,9 @@ from biff._formatting import terminal_safe
 from biff.formatting import format_talk_end, format_talk_line
 
 if TYPE_CHECKING:
-    from biff.cli_talk_reading import TalkReading
-    from biff.cli_talk_wire import WireMessage
     from biff.repl_display import ReplDisplay
+    from biff.talk_reading import TalkReading
+    from biff.talk_wire import WireMessage
 
 __all__ = ["TalkView"]
 
@@ -54,6 +54,15 @@ class TalkView:
                 lines.extend(self._lines(message, _CYAN))
         return lines
 
+    @staticmethod
+    def dropped(reading: TalkReading) -> list[str]:
+        """Say how many lines the full queue lost, when it lost any."""
+        if not reading.dropped:
+            return []
+        return [
+            f"{_DIM}{reading.dropped} talk lines were lost: the queue was full{_RESET}"
+        ]
+
     def invites(self, reading: TalkReading) -> list[str]:
         """Render the invites not yet announced, one banner each."""
         self._announced &= {invite.accept for invite in reading.invites}
@@ -75,7 +84,7 @@ class TalkView:
             if message.kind == "message" and message.body
             for line in self._lines(message, _YELLOW)
         ]
-        return [*self.invites(reading), *stray]
+        return [*self.dropped(reading), *self.invites(reading), *stray]
 
     def _lines(self, message: WireMessage, colour: str) -> list[str]:
         shown = format_talk_line(message.label, message.body, stamp=self._stamp())

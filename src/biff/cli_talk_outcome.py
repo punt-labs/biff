@@ -1,21 +1,20 @@
-"""What ``talk`` did, and where a conversation stands."""
+"""What ``talk`` did on the client's side, and why a read was refused."""
 
 from __future__ import annotations
 
-from typing import Literal, Self, final
+from typing import Self, final
 
-from biff.cli_daemon_wire import WireResult
-from biff.cli_talk_wire import Wire
+from pydantic import ValidationError
 
-__all__ = ["TalkOutcome", "TalkStanding"]
+from biff.cli_daemon_wire import UnreadableReplyError, WireResult
+from biff.talk_reading import Phase, TalkStanding
+from biff.talk_wire import Wire
+
+__all__ = ["TalkOutcome", "TalkUnavailableError"]
 
 
-@final
-class TalkStanding(Wire):
-    """Where a conversation stands: its phase, and with whom unless idle."""
-
-    phase: Literal["idle", "inviting", "connected"]
-    peer: str
+class TalkUnavailableError(ConnectionError):
+    """biffd refused to read talk: the session's relay carries none."""
 
 
 @final
@@ -24,7 +23,7 @@ class TalkOutcome(Wire):
 
     text: str
     error: bool
-    phase: Literal["idle", "inviting", "connected"] = "idle"
+    phase: Phase = "idle"
     peer: str = ""
 
     @classmethod
@@ -35,7 +34,13 @@ class TalkOutcome(Wire):
             UnreadableReplyError: The standing the reply carries is not one.
         """
         standing = wire.data if isinstance(wire.data, dict) else {}
-        return cls.read({"text": wire.text, "error": wire.error, **standing})
+        try:
+            return cls.model_validate(
+                {"text": wire.text, "error": wire.error, **standing}
+            )
+        except ValidationError as exc:
+            msg = "biffd sent a talk reply this biff cannot read"
+            raise UnreadableReplyError(msg) from exc
 
     @property
     def standing(self) -> TalkStanding:

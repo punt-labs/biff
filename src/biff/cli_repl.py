@@ -10,7 +10,7 @@ from biff.cli_console import PromptedConsole, Tick
 from biff.cli_daemon import DaemonCommand
 from biff.cli_link import DaemonLink
 from biff.cli_talk import TalkConversation
-from biff.cli_talk_reading import TalkUnavailableError
+from biff.cli_talk_outcome import TalkUnavailableError
 from biff.cli_talk_view import TalkView
 from biff.commands import CommandResult
 from biff.dispatch import Call, available_commands, parse
@@ -46,15 +46,19 @@ class ReplSession:
 
     __slots__ = (
         "_console",
+        "_daemon",
         "_display",
         "_link",
         "_notify",
         "_prompt",
+        "_talk_unread",
+        "_told_no_talk",
         "_unread",
         "_view",
         "_wall",
     )
 
+    _daemon: DaemonCommand
     _link: DaemonLink
     _console: Console
     _prompt: str
@@ -62,11 +66,19 @@ class ReplSession:
     _view: TalkView
     _notify: NotifyState
     _unread: int
+    _talk_unread: bool
+    _told_no_talk: bool
     _wall: WallPost | None
 
-    def __new__(cls, *, link: DaemonLink, console: Console) -> Self:
-        """Create a session over *link* that reads and prompts through *console*."""
+    def __new__(
+        cls, *, command: DaemonCommand, link: DaemonLink, console: Console
+    ) -> Self:
+        """Create a session that runs commands as *command*, hears biffd on *link*.
+
+        It reads and prompts through *console*.
+        """
         self = super().__new__(cls)
+        self._daemon = command
         self._link = link
         self._console = console
         self._prompt = console.prompt
@@ -74,6 +86,8 @@ class ReplSession:
         self._view = TalkView(self._display)
         self._notify = NotifyState()
         self._unread = 0
+        self._talk_unread = False
+        self._told_no_talk = False
         self._wall = None
         return self
 
@@ -97,7 +111,7 @@ class ReplSession:
             status = await link.status()
             prompt = f"{status['user']}:{status['tty_name']} ▶ "
             console = PromptedConsole(prompt, read)
-            session = cls(link=link, console=console)
+            session = cls(command=command, link=link, console=console)
             console.say(
                 f"biff {pkg_version('punt-biff')} — {prompt.removesuffix(' ▶ ')}"
             )
@@ -167,10 +181,24 @@ class ReplSession:
 
     async def _command(self, call: Call) -> None:
         """Run *call* in biffd, show its result, and take it as seen."""
-        await self._link.run(call, lambda result: self._console.say(result.text))
+        await self._run(call, lambda result: self._console.say(result.text))
         # The user's own command moved the state: measure arrivals from here, so
         # a wall just posted is not announced back to its author.
         self._baseline(await self._link.status())
+
+    async def _run(self, call: Call, show: Callable[[CommandResult], None]) -> None:
+        """Run *call* as this session, show its result, and confirm it.
+
+        ``plan`` and ``tty`` keep the plan-gate marker and the stored session
+        record in step, so they go through their own :class:`DaemonCommand` verbs.
+        """
+        if call.method == "plan":
+            answer = await self._daemon.plan(str(call.params["message"]))
+        elif call.method == "tty":
+            answer = await self._daemon.tty(str(call.params["name"]))
+        else:
+            answer = await self._daemon.call(call.method, **call.params)
+        await answer.deliver(show)
 
     async def _talk(self, args: list[str]) -> None:
         if not args:
@@ -204,20 +232,38 @@ class ReplSession:
         self._notify.sync(self._unread, self._wall)
 
     async def _arrivals(self) -> None:
-        """Print what arrived since the last tick, above a fresh prompt."""
+        """Print what arrived since the last tick, above a fresh prompt.
+
+        A talk notice is taken off the pump before its text is read, so it is
+        remembered until ``talk_read`` succeeds: a failed read is retried on the
+        next tick instead of leaving the held talk unread until another frame
+        arrives.
+        """
         notes: list[str] = []
-        talked = False
         for event in self._link.pump.take():
             if event.kind.startswith("talk_"):
-                talked = True
+                self._talk_unread = True
             else:
                 notes.extend(self._note(event))
-        if talked:
-            try:
-                notes.extend(await self._talk_banners())
-            except TalkUnavailableError:
-                logger.debug("talk notice on a relay that carries no talk")
+        if self._talk_unread:
+            notes.extend(await self._pull_talk())
         await self._show(notes)
+
+    async def _pull_talk(self) -> list[str]:
+        """Return the banners ``talk_read`` yields; keep the debt if it fails."""
+        try:
+            banners = await self._talk_banners()
+        except TalkUnavailableError:
+            self._talk_unread = False
+            if self._told_no_talk:
+                return []
+            self._told_no_talk = True
+            return ["Talk is not available on this relay."]
+        except DaemonCommand.FAILURES as exc:
+            logger.warning("could not read talk, will retry: %s", exc)
+            return []
+        self._talk_unread = False
+        return banners
 
     def _note(self, event: Event) -> list[str]:
         """Return the banners a mail or wall event calls for."""

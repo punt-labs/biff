@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Self, final
 
 from biff._formatting import terminal_safe
@@ -17,10 +18,12 @@ if TYPE_CHECKING:
 
     from biff.cli_console import Console
     from biff.cli_daemon import DaemonCommand
-    from biff.cli_talk_reading import TalkReading
-    from biff.cli_talk_wire import WireMessage
+    from biff.talk_reading import TalkReading
+    from biff.talk_wire import WireMessage
 
 __all__ = ["TalkConversation"]
+
+logger = logging.getLogger(__name__)
 
 _CLEAR_LINE = "\r\033[K"
 _LEAVE_WORDS = frozenset({"end", "exit", "quit"})
@@ -36,13 +39,14 @@ class TalkConversation:
     ``biff talk`` runs it alone; both hand it the console they read from.
     """
 
-    __slots__ = ("_carried", "_console", "_link", "_prompt", "_view")
+    __slots__ = ("_carried", "_console", "_link", "_lost", "_prompt", "_view")
 
     _link: DaemonLink
     _console: Console
     _view: TalkView
     _prompt: str
     _carried: tuple[WireMessage, ...]
+    _lost: bool
 
     def __new__(
         cls, *, link: DaemonLink, console: Console, view: TalkView, prompt: str
@@ -54,6 +58,7 @@ class TalkConversation:
         self._view = view
         self._prompt = prompt
         self._carried = ()
+        self._lost = False
         return self
 
     @classmethod
@@ -91,7 +96,8 @@ class TalkConversation:
         An address that names someone with an invite to us accepts it; one that
         names the peer of a live talk sends *opening* as a line; any other
         invites.  Returns when the conversation is over: ``False`` if biffd
-        refused it, ``True`` otherwise, however it ended.
+        refused it or the connection to biffd was lost, ``True`` however else it
+        ended.
         """
         say = self._console.say
         outcome = await self._link.talk(to, opening)
@@ -103,15 +109,12 @@ class TalkConversation:
         peer = terminal_safe(outcome.peer)
         await self._link.set_plan(f"talking to {peer}")
         try:
-            if outcome.phase == "inviting":
-                if opening:
-                    say(f"you> {opening}")
-                if not await self._await_accept(peer):
-                    return True
+            if outcome.phase == "inviting" and not await self._await_accept(peer):
+                return not self._lost
             await self._converse(peer)
         finally:
             await self._link.set_plan("")
-        return True
+        return not self._lost
 
     async def _await_accept(self, peer: str) -> bool:
         """Wait for *peer* to accept; return whether the talk connected.
@@ -129,6 +132,7 @@ class TalkConversation:
                 got = await self._console.next(wake)
                 if self._link.pump.lost:
                     say(terminal_safe(f"biffd connection lost: {self._link.pump.lost}"))
+                    self._lost = True
                     return False
                 if got is Tick.IDLE:
                     wake.clear()
@@ -147,6 +151,7 @@ class TalkConversation:
     async def _accepted(self, peer: str) -> bool:
         """Read what arrived while waiting; return whether *peer* accepted."""
         say = self._console.say
+        self._link.pump.discard_talk()
         reading = await self._link.talk_read()
         for banner in self._view.invites(reading):
             say(f"{_CLEAR_LINE}{banner}")
@@ -154,6 +159,10 @@ class TalkConversation:
         self._carried = (*self._carried, *reading.messages)
         if reading.phase != "connected":
             return False
+        if reading.opening:
+            say(f"you> {terminal_safe(reading.opening)}")
+        if reading.opening_unsent:
+            say("Warning: your opening line was not sent; it goes with the next read.")
         if not reading.accept_published:
             say(
                 f"Warning: couldn't confirm {peer} joined — they may not have "
@@ -178,6 +187,7 @@ class TalkConversation:
                 if self._link.pump.lost:
                     lost = terminal_safe(self._link.pump.lost)
                     console.say(f"{_CLEAR_LINE}biffd connection lost: {lost}")
+                    self._lost = True
                     over = True
                 elif got is Tick.IDLE:
                     wake.clear()
@@ -190,13 +200,17 @@ class TalkConversation:
         finally:
             console.set_prompt(resting)
             if not over:
-                await self._withdraw(peer)
+                await self._withdraw()
         console.say(f"{_CLEAR_LINE}Talk with {peer} ended.")
 
     async def _show_arrivals(self) -> TalkReading:
         """Print what the peer sent, above a fresh prompt; return what was read."""
+        self._link.pump.discard_talk()
         reading = await self._link.talk_read()
-        shown = self._view.conversation((*self._carried, *reading.messages))
+        shown = [
+            *self._view.dropped(reading),
+            *self._view.conversation((*self._carried, *reading.messages)),
+        ]
         self._carried = ()
         if shown:
             say = self._console.say
@@ -215,15 +229,17 @@ class TalkConversation:
         if sent.error:
             self._console.say(f"{_CLEAR_LINE}{terminal_safe(sent.text)}")
 
-    async def _withdraw(self, peer: str = "") -> None:
+    async def _withdraw(self) -> None:
         """End the talk, or withdraw the invite; never raise out of a hangup.
 
         biffd resets its side whatever the relay does, so a failure here only
-        means the peer may not have been told.
+        means the peer may not have been told: biffd's text says which, and is
+        shown.  A connection that is already gone is logged.
         """
         try:
             ended = await self._link.talk_end()
         except (OSError, TimeoutError, DaemonError):
+            logger.warning("could not tell biffd the talk ended", exc_info=True)
             return
-        if ended.error and peer:
-            self._console.say(f"{_CLEAR_LINE}Could not reach {peer} — end not sent.")
+        if ended.error:
+            self._console.say(f"{_CLEAR_LINE}{terminal_safe(ended.text)}")
