@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_context import CliContext
+from biff.commands.inbox import Inbox
 from biff.daemon.attachment import Attachment
 from biff.daemon.orgs import OrgRepos
 from biff.daemon.outbox import Outbox
@@ -58,9 +59,11 @@ class Session:
     __slots__ = (
         "_attachments",
         "_beat",
+        "_busy",
         "_context",
         "_cwd",
         "_interval",
+        "_is_ended",
         "_log",
         "_orgs",
         "_outbox",
@@ -84,6 +87,8 @@ class Session:
     _interval: float
     _beat: asyncio.Task[None] | None
     _log: RelayLog
+    _busy: asyncio.Lock
+    _is_ended: bool
 
     def __new__(
         cls,
@@ -112,6 +117,8 @@ class Session:
         self._interval = heartbeat_interval
         self._beat = None
         self._log = RelayLog(logger)
+        self._busy = asyncio.Lock()
+        self._is_ended = False
         return self
 
     @classmethod
@@ -223,6 +230,37 @@ class Session:
     async def touch(self) -> None:
         """Count a command from a shell as activity on the session's presence row."""
         await self._presence.touch()
+
+    @asynccontextmanager
+    async def exclusive(self) -> AsyncGenerator[None]:
+        """Hold the session while mail moves in or out of its outbox.
+
+        A read holds it from the fetch to the merge into the outbox, and ending
+        or expiring the session holds it while it files the outbox back and drains
+        the relay, so neither can run between the other's steps.
+        """
+        async with self._busy:
+            yield
+
+    @property
+    def is_ended(self) -> bool:
+        """Whether the session was ended; it answers no more reads."""
+        return self._is_ended
+
+    def mark_ended(self) -> None:
+        """Record that the session was ended."""
+        self._is_ended = True
+
+    async def refile_held(self) -> None:
+        """Give the relay back every message the outbox holds, one by one.
+
+        A consuming relay removed that mail at fetch, so while it is held here
+        it is out of reach of the drain that ends or expires the session.
+        """
+        inbox = Inbox(self._context, (), ())
+        for message in self._outbox.held():
+            if await inbox.refile(message):
+                self._outbox.forget([message])
 
     def end_attachments(self) -> None:
         """Tell every connection attached that the session ended."""
@@ -351,26 +389,21 @@ class SessionTable:
                 await session.touch()
             return session.attach(hello.main_agent_id)
 
-    def is_attached(self, session_id: str) -> bool:
-        """Whether any connection is attached to a session with *session_id*."""
-        return any(
-            not session.is_dormant
-            for key, session in self._sessions.items()
-            if key.session_id == session_id
-        )
-
     def holding(self, session_id: str) -> Session | None:
         """Return the shell session *session_id* if the daemon holds it."""
         return self._sessions.get(SessionKey(session_id, CLI_ROLE))
 
-    def retire(self, session_id: str, *, spare: Session) -> None:
+    def retire(self, session_id: str, *, spare: Session | None = None) -> None:
         """Forget the shell session *session_id*, which was ended.
 
         Every connection attached to it is told, except those of *spare*, the
         session that asked: its connection ends with its command, after the
         reply.
         """
-        session = self._sessions.pop(SessionKey(session_id, CLI_ROLE), None)
+        key = SessionKey(session_id, CLI_ROLE)
+        session = self._sessions.pop(key, None)
+        if self._users[key] == 0:
+            self._locks.pop(key, None)  # _guard drops it only while no session
         if session is not None and session is not spare:
             session.end_attachments()
 

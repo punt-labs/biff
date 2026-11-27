@@ -139,6 +139,13 @@ class Methods:
         leaves: held mail and mail still on the relay behind a bounded fetch.
         """
         p.done()
+        async with session.exclusive():
+            return await self._read_locked(session)
+
+    async def _read_locked(self, session: Session) -> Outcome:
+        if session.is_ended:
+            msg = "session ended; start a new session"
+            raise RefusalError.of(ErrorCode.SESSION_ENDED, msg)
         inbox = await Inbox.unread(session.context)
         pending = session.outbox.merge(inbox.messages)
         fitted = ReadBatcher(self._read_budget).fit(pending)

@@ -115,7 +115,7 @@ Every frame is a JSON object with a protocol `version`.
 | `request` | client to daemon | `id`, `method`, `params`. One `method` per command object in `commands/` |
 | `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message). A command's `result` is `{"data": <the command's JSON payload>, "error": <bool>}` |
 | `ack` | client to daemon | `id` of a request. Sent after the client received that request's reply, when the reply set `needs_ack` (a `read` that carries mail). The daemon marks the mail read only on this frame |
-| `subscribe` | client to daemon | `id`. Starts the arrival subscription for the connection's session. The daemon replies to `id` with `{"subscribed": true}`, or with `already_subscribed` or `session_replaced` |
+| `subscribe` | client to daemon | `id`. Starts the arrival subscription for the connection's session. The daemon replies to `id` with `{"subscribed": true}`, or with `already_subscribed` or `session_replaced`. A `read` of an ended session is refused with `session_ended` |
 | `event` | daemon to client | One arrival summary, with a per-daemon `seq`. `kind` is `unread`, `mail`, `wall`, `degraded` (the relay stopped answering) or `recovered` |
 
 **The token never crosses the wire.** The client's port is a guess (8424

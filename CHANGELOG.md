@@ -119,6 +119,9 @@
   and closes the connections attached to it with `session ended`. A session verb
   runs as this repo's session; in a repo with none it makes one to run as and
   ends it before the verb runs.
+  Ending a session waits for a read of it that is in flight and refuses later
+  reads with `session_ended`. The session pointer moved to
+  `biff.daemon.session_pointer`; pi-tools must follow, tracked in PL-1756.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the
   same text as before. `plan` and `tty` still write the plan-gate

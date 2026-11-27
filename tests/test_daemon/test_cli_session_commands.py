@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from biff.cli_daemon import DaemonCommand
 from biff.config import load_cli_config
@@ -106,8 +106,8 @@ async def test_session_end_ends_the_named_session(harness: Harness, repo: Path) 
 async def test_a_session_new_in_another_repo_is_made_there(
     harness: Harness, repo: Path, tmp_path: Path
 ) -> None:
-    other = tmp_path / "work" / "other"
-    other.mkdir()
+    other = tmp_path / "elsewhere" / "test"
+    other.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(other)], check=True)  # noqa: S603, S607
     answer = await _command(harness, other).session_new("remote")
     await answer.deliver(lambda result: None)
@@ -139,3 +139,14 @@ async def test_session_ls_in_a_fresh_repo_lists_nothing(
     text = answer.result.text
     await answer.abandon()
     assert text == "No sessions."
+
+
+async def test_session_ls_all_does_not_list_the_session_a_verb_made_to_run_as(
+    harness: Harness, repo: Path
+) -> None:
+    made = await _command(harness).session_new("main")
+    await made.deliver(lambda result: None)
+    answer = await _command(harness).session_ls(include_ended=True)
+    rows = cast("list[dict[str, str]]", answer.data)
+    await answer.abandon()
+    assert [row["name"] for row in rows] == ["main"]

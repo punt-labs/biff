@@ -125,7 +125,7 @@ class BiffDaemon:
         )
         self._server = None
         self._started = 0.0
-        self._sweeper = SessionSweeper(sessions, resolver, pool, live.is_attached)
+        self._sweeper = SessionSweeper(sessions, resolver, pool, live)
         self._sweep_interval = session_sweep_interval
         self._sweep_task = None
         return self

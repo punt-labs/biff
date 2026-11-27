@@ -18,6 +18,7 @@ from biff.client.connection import (
 )
 from biff.daemon.server import BiffDaemon
 from biff.daemon.session_host import LEASE, RETENTION, SessionHost
+from biff.daemon.session_key import SessionKey
 from biff.daemon.session_pointer import CurrentPointer
 from biff.daemon.session_select import SessionSelector
 from biff.daemon.session_store import CliSessionRecord, CliSessionStore
@@ -411,3 +412,88 @@ async def test_each_session_verb_prints_through_biffd_what_it_prints_in_process(
         with pytest.raises(ValueError) as refused:
             await in_process
         assert (method, reply["text"]) == (method, f"Error: {refused.value}")
+
+
+class GatedRelay(ConsumingRelay):
+    """A consuming relay that stops a fetch after it consumed, until released."""
+
+    armed: asyncio.Event | None = None
+    fetched = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fetch(self, session_key: str) -> list[Message]:
+        unread = await super().fetch(session_key)
+        if unread and GatedRelay.armed is not None:
+            GatedRelay.fetched.set()
+            await GatedRelay.release.wait()
+        return unread
+
+
+async def test_ending_a_session_waits_for_a_read_that_has_fetched_its_mail(
+    harness: Harness,
+) -> None:
+    harness.factory.relay_type = GatedRelay
+    GatedRelay.fetched, GatedRelay.release = asyncio.Event(), asyncio.Event()
+    GatedRelay.armed = asyncio.Event()
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="alpha")
+    (record,) = (r for r in harness.sessions.list() if r.tty == "alpha")
+    holder = await harness.connect(record.session_id, "kai")
+    relay = ConsumingRelay(harness.factory.built[0])
+    await relay.deliver(
+        Message(from_user="eric", from_tty="t", to_user=_key(record), body="racing")
+    )
+    reading = asyncio.create_task(holder.request_held("read"))
+    await asyncio.wait_for(GatedRelay.fetched.wait(), timeout=_WAIT)
+    ending = asyncio.create_task(_call(kai, "session_end", ref="alpha"))
+    await asyncio.sleep(0.1)  # the end is blocked behind the read, not past it
+    assert not ending.done()
+    GatedRelay.release.set()
+    await asyncio.wait_for(ending, timeout=_WAIT)
+    GatedRelay.armed = None
+    await asyncio.gather(reading, return_exceptions=True)
+    assert await _bodies_a_new_session_reads(harness) == ["racing"]
+
+
+async def test_a_read_on_an_ended_session_is_refused(harness: Harness) -> None:
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="alpha")
+    (record,) = (r for r in harness.sessions.list() if r.tty == "alpha")
+    own = await harness.connect(record.session_id, "kai")
+    await _call(own, "session_end", ref="alpha")
+    with pytest.raises(DaemonError, match="session ended"):
+        await own.request("read")
+
+
+async def test_ending_a_session_leaves_no_lock_entry_behind(harness: Harness) -> None:
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="alpha")
+    (record,) = (r for r in harness.sessions.list() if r.tty == "alpha")
+    watcher = await harness.connect(record.session_id, "kai")
+    await watcher.request("who")
+    await _call(kai, "session_end", ref="alpha")
+    table = harness.daemon._core.sessions
+    assert SessionKey(record.session_id, CLI_ROLE) not in table._locks
+
+
+async def test_the_sweep_waits_for_a_session_with_a_read_in_flight(
+    sweeping: tuple[BiffDaemon, CliSessionStore, CountingFactory], run_dir: RunDir
+) -> None:
+    daemon, store, _ = sweeping
+    stale = _stored(store, "busy", "dormant", timedelta(minutes=1))
+    await daemon.start()
+    client = await DaemonClient.connect(
+        run_dir=run_dir,
+        port=daemon.port,
+        identity=ClientIdentity(
+            client="cli", session_id=stale.session_id, cwd="/work/repo", user="kai"
+        ),
+    )
+    held = daemon._core.sessions.holding(stale.session_id)
+    assert held is not None
+    async with held.exclusive():
+        sweep = asyncio.create_task(daemon.sweep_sessions())
+        await asyncio.sleep(0.1)
+        assert not sweep.done()
+    await asyncio.wait_for(sweep, timeout=_WAIT)
+    await client.close()

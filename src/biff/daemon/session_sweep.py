@@ -16,11 +16,10 @@ from biff.relay_errors import RELAY_ERRORS
 from biff.tty import get_hostname
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from biff.daemon.relays import RelayPool
     from biff.daemon.resolver import SessionResolver
     from biff.daemon.session_store import CliSessionRecord, CliSessionStore
+    from biff.daemon.sessions import SessionTable
 
 __all__ = ["SessionSweeper"]
 
@@ -41,31 +40,32 @@ class SessionSweeper:
     one sweep covers every repository the host has used.
     """
 
-    __slots__ = ("_attached", "_pool", "_resolver", "_store")
+    __slots__ = ("_live", "_pool", "_resolver", "_store")
 
     _store: CliSessionStore
     _resolver: SessionResolver
     _pool: RelayPool
-    _attached: Callable[[str], bool]
+    _live: SessionTable
 
     def __new__(
         cls,
         store: CliSessionStore,
         resolver: SessionResolver,
         pool: RelayPool,
-        attached: Callable[[str], bool],
+        live: SessionTable,
     ) -> Self:
         """Sweep the records in *store*, reaching relays through *pool*.
 
-        *attached* says whether a connection is attached to a session id.  Such
-        a session is in use however long ago a command last renewed it, so the
-        sweep renews it instead of judging it.
+        *live* holds the sessions connections are attached to.  A session with a
+        connection is in use however long ago a command last renewed it, so the
+        sweep renews it instead of judging it, and it waits for a read in flight
+        on a session before judging that one.
         """
         self = super().__new__(cls)
         self._store = store
         self._resolver = resolver
         self._pool = pool
-        self._attached = attached
+        self._live = live
         return self
 
     async def sweep(self) -> None:
@@ -84,16 +84,35 @@ class SessionSweeper:
             if record.hostname != hostname:
                 continue
             try:
-                if self._attached(record.session_id) and record.state != "ended":
-                    await self._renew(record)
-                else:
-                    await self._judge(record)
+                await self._sweep_one(record)
             except ResolveError as exc:
                 logger.info("session %s left alone: %s", record.session_id, exc)
             except (OSError, ValueError, *RELAY_ERRORS):
                 logger.warning(
                     "session sweep failed for %s", record.session_id, exc_info=True
                 )
+
+    async def _sweep_one(self, record: CliSessionRecord) -> None:
+        held = self._live.holding(record.session_id)
+        if held is None:
+            await self._judge(record)
+            return
+        async with held.exclusive():
+            if not held.is_dormant and record.state != "ended":
+                await self._renew(record)
+                return
+            await held.refile_held()
+            await self._judge(record)
+            if self._is_gone(record.session_id):
+                held.mark_ended()
+                self._live.retire(record.session_id)
+
+    def _is_gone(self, session_id: str) -> bool:
+        try:
+            self._store.read(session_id)
+        except FileNotFoundError:
+            return True
+        return False
 
     async def _renew(self, record: CliSessionRecord) -> None:
         async with self._store.lifecycle(record.session_id):

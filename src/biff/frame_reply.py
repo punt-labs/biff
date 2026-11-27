@@ -19,6 +19,7 @@ class ErrorCode(StrEnum):
     BAD_HELLO = "bad_hello"
     SESSION_CONFLICT = "session_conflict"
     SESSION_REPLACED = "session_replaced"
+    SESSION_ENDED = "session_ended"
     UNKNOWN_METHOD = "unknown_method"
     INVALID_PARAMS = "invalid_params"
     ALREADY_SUBSCRIBED = "already_subscribed"

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast, final
 
 from biff.commands import CommandResult
-from biff.commands.inbox import Inbox
 from biff.daemon.session_host import SessionHost
 from biff.daemon.session_pointer import CurrentPointer
 from biff.daemon.session_select import SessionSelector
@@ -131,17 +131,12 @@ class SessionMethods:
         ref = p.text("ref")
         p.done()
         held = self._live.holding(verbs.host.selector.lookup(ref).session_id)
-        if held is not None:
-            await self._refile(held)
-        result = await verbs.end(ref)
+        async with held.exclusive() if held is not None else nullcontext():
+            if held is not None:
+                await held.refile_held()
+            result = await verbs.end(ref)
+            if held is not None:
+                held.mark_ended()
         row = cast("dict[str, str]", result.json_data)
         self._live.retire(row["id"], spare=session)
         return result
-
-    @staticmethod
-    async def _refile(held: Session) -> None:
-        """Give the relay back every message *held* still holds, one by one."""
-        inbox = Inbox(held.context, (), ())
-        for message in held.outbox.held():
-            if await inbox.refile(message):
-                held.outbox.forget([message])

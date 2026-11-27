@@ -9653,6 +9653,18 @@ in the owner's mailbox, and every connection attached to it is closed with
 with its command. A `watch` on the session shows `biffd connection lost:
 session ended`. A watcher that shares the asking session is not told.
 
+A `read` and an end (or an expiry) of the same session exclude each other
+(`Session.exclusive`): the read holds the session from its fetch to the merge into
+the outbox, the end holds it while it files the outbox back and drains the relay,
+so a read cannot fetch mail between the end's snapshot and its drain. A `read` that
+runs after the end is refused with `session_ended`. The sweep takes the same hold,
+and files back the outbox of a session it expires. `session use` only names a
+record and moves no mail, so it needs no hold. Retiring a session drops its
+entry in the table's lock map. The temporary session a verb makes to run as is
+deleted, not left ended, so `session ls --all` shows only sessions the user made.
+The session pointer module moved to `biff.daemon.session_pointer`; pi-tools'
+bridge imports the old path and must follow (PL-1756); there is no alias.
+
 The session store and its helpers moved from `biff/cli_session_*.py` and
 `biff/commands/session.py` into `biff/daemon/` (`session_store`, `session_lock`,
 `session_drain`, `session_host`, `session_select`, `session_pointer`,

@@ -263,13 +263,19 @@ class DaemonCommand:
         """Run the session verb *method* as this repository's session.
 
         A session this call made only to run as (the repository had none) is
-        ended first: the verb then sees just the sessions the user made, and a
-        name the user asks for is not already taken by it.
+        ended and forgotten first: the verb then sees just the sessions the user made
+        (`ls --all` included), and a name the user asks for is not already taken.
         """
         client, record = await self.open()
         try:
             if self._bootstrapped:
-                await client.request("session_end", ref=record.session_id)
+                ended = WireResult.parse(
+                    await client.request("session_end", ref=record.session_id)
+                )
+                if ended.error:
+                    raise ValueError(ended.text)
+                async with self._selector.store.lifecycle(record.session_id):
+                    self._selector.store.expire(record.session_id)
         except BaseException:
             await client.close()
             raise
