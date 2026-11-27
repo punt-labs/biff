@@ -223,8 +223,12 @@ Widening a layer's `imports`, or removing a violation by relabeling, is a policy
 change. Widening fails `--check` unless the change lands alone with
 `--allow-config-change`. In CI, a reviewer adds the pull request label
 `layers-policy-change`; the ratchet step then passes that flag. The label is
-read from the event payload and never reaches the shell as text. The main-branch
-check never passes it. Locally, `LAYERS_BASE` (and the other `*_BASE` variables)
+read from the event payload and never reaches the shell as text. The
+main-branch check passes it only for the pull request whose merge commit is the
+pushed commit, so the change the pull-request job accepted does not fail again
+once it lands; `tools/layers_allowance.py` decides, and a label on any other pull
+request does not count. If the pull request cannot be read, the check stays
+strict. Locally, `LAYERS_BASE` (and the other `*_BASE` variables)
 set in the environment is ignored; pass `LAYERS_BASE=...` on the `make` command
 line to use it. `make check-layers` always scans `src/biff`, whatever `SRC` is.
 
