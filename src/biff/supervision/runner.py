@@ -55,27 +55,40 @@ class Supervisor:
         return result.returncode == 0
 
     @staticmethod
+    def top_level_fields(text: str) -> dict[str, str]:
+        """Return the ``key = value`` pairs one tab deep in *text*, first of each key.
+
+        ``launchctl print`` indents a job's own keys one tab and its nested blocks
+        (``endpoints``, ``coalition``) deeper, and the nested blocks repeat keys
+        such as ``state`` that mean something else.
+        """
+        found: dict[str, str] = {}
+        for line in text.splitlines():
+            if line.startswith("\t") and not line.startswith("\t\t"):
+                key, separator, value = line.strip().partition(" = ")
+                if separator:
+                    found.setdefault(key, value)
+        return found
+
+    @staticmethod
     def excerpt(*argv: str, keys: tuple[str, ...] = ()) -> str:
         """Run *argv* and return what it printed, cut to the part worth reading.
 
-        With *keys*, the ``key = value`` lines whose key is one of them, as a
-        report whose answer comes late needs; with none of them present, or no
-        *keys*, the first eight lines.  A supervisor reports "not running" with a
-        non-zero exit, so the exit status is not read; stderr stands in when
-        stdout is empty.
+        With *keys*, the top-level ``key = value`` lines for those keys, in that
+        order, as a report whose answer comes late needs; with none of them
+        present, or no *keys*, the first eight lines.  A supervisor reports "not
+        running" with a non-zero exit, so the exit status is not read; stderr
+        stands in when stdout is empty.
 
         Raises:
             OSError: The program is missing or cannot be run.
             subprocess.TimeoutExpired: The supervisor did not answer in 30 seconds.
         """
         result = Supervisor.run(*argv)
-        lines = (
-            result.stdout.strip() or result.stderr.strip() or "no output"
-        ).splitlines()
-        wanted = [
-            line.strip() for line in lines if line.strip().partition(" = ")[0] in keys
-        ]
-        return "\n".join(wanted or lines[:_EXCERPT_LINES])
+        text = result.stdout.strip() or result.stderr.strip() or "no output"
+        fields = Supervisor.top_level_fields(text)
+        wanted = [f"{key} = {fields[key]}" for key in keys if key in fields]
+        return "\n".join(wanted or text.splitlines()[:_EXCERPT_LINES])
 
     @staticmethod
     def require(spec: ServiceSpec, action: str, *argv: str) -> None:

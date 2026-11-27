@@ -66,7 +66,8 @@ class ServiceCommands:
         A manager that refused exits 1.
         """
         unmanaged = outcome.status in ("no_manager", "unreachable") and not idle_ok
+        starting = outcome.status == "starting"
         failed = outcome.status == "failed" or unmanaged
-        typer.echo(outcome.message, err=failed)
-        if failed:
-            raise typer.Exit(code=NO_MANAGER_EXIT if unmanaged else 1)
+        typer.echo(outcome.message, err=failed or starting)
+        if failed or starting:
+            raise typer.Exit(code=NO_MANAGER_EXIT if unmanaged or starting else 1)

@@ -13,6 +13,7 @@ from biff.supervision.errors import (
     PortConflictError,
     ServiceActionFailedError,
     ServiceNotInstalledError,
+    ServiceStillStartingError,
 )
 from biff.supervision.health import HealthProbe, HealthProbes, HealthUnavailableError
 from biff.supervision.host import Detection, ServiceHost
@@ -41,10 +42,11 @@ class Outcome:
     """What a lifecycle command did, for the command to print and exit on.
 
     ``no_manager`` is a host with none, such as a container; ``unreachable`` is a
-    host whose manager exists and did not answer, with the reason in the message.
+    host whose manager exists and did not answer, with the reason in the message;
+    ``starting`` is a service that is running and has not answered ``/health`` yet.
     """
 
-    status: Literal["done", "no_manager", "unreachable", "failed"]
+    status: Literal["done", "no_manager", "unreachable", "failed", "starting"]
     message: str
 
 
@@ -135,6 +137,8 @@ class BiffdService:
         lines.append("health: ok")
         lines.append(f"version: {health.version}")
         lines.append(f"uptime: {health.uptime_seconds:.0f}s")
+        if health.pid is not None:
+            lines.append(f"pid: {health.pid}")
         lines.append(f"relay connections: {NOT_REPORTED}")
         lines.append(f"attached clients: {NOT_REPORTED}")
         return Outcome("done", "\n".join(lines))
@@ -161,6 +165,8 @@ class BiffdService:
             return Outcome("no_manager", NO_MANAGER)
         try:
             return Outcome("done", action(self._manager))
+        except ServiceStillStartingError as exc:
+            return Outcome("starting", str(exc))
         except (
             BinaryNotFoundError,
             PortConflictError,

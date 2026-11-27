@@ -59,6 +59,12 @@
   from `launchctl print`; the first lines of `systemctl --user status`). The
   client nudge keeps its 5 seconds. A wait longer than 3 seconds prints one
   `still waiting for biffd to answer /health` line to stderr.
+- `biff daemon install`, `start` and `restart` exit 3 with `still starting after
+  N seconds (machine load average X); it is running, not crashed` when the
+  supervisor shows biffd running as a pid whose `biffd starting` line is in
+  `biff.log` but `/health` has not answered; `install` keeps the service then.
+  A service that is not running, or has no startup line, fails as before.
+- `/health` reports biffd's `pid`, and `biff daemon status` prints it.
 - biffd writes `biffd starting: version=... pid=... port=... run_dir=...
   python=...` to `~/.punt-labs/biff/logs/biff.log` before it loads the relay
   stack, and `biffd listening on 127.0.0.1:<port>` once it listens. `biff.daemon`
@@ -70,6 +76,12 @@
 
 ### Fixed
 
+- A connect-and-close on biffd's port (a port probe) no longer writes an ERROR
+  with a traceback to `biff.log`, and a real client's bad handshake is one
+  WARNING line, written once: biffd's stderr handler, which a LaunchAgent
+  redirects into the same file, duplicated every WARNING and above.
+- The supervisor report in a failed start no longer repeats `state` and
+  `active count` taken from launchd's nested blocks.
 - A service failure message no longer runs its last sentence into the pointer
   to the log (`... biff daemon serve See ~/.punt-labs/...`): the pointer is its
   own sentence.

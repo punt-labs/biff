@@ -37,7 +37,9 @@ class MachineScope:
             raise typer.Exit(code=1) from exc
         outcome = BiffdService.for_host(partial(typer.echo, err=True)).install()
         failed = outcome.status == "failed"
-        typer.echo(outcome.message, err=failed or outcome.status == "unreachable")
+        typer.echo(
+            outcome.message, err=failed or outcome.status in ("unreachable", "starting")
+        )
         return failed
 
     @staticmethod

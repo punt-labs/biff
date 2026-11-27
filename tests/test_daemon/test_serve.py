@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import stat
 from importlib.metadata import version as pkg_version
 from typing import TYPE_CHECKING, cast
@@ -51,8 +52,14 @@ async def daemon(run_dir: RunDir) -> AsyncIterator[BiffDaemon]:
     await daemon.stop()
 
 
-async def test_health_answers_with_version_and_uptime_only(daemon: BiffDaemon) -> None:
-    assert set(await health(daemon.port)) == {"version", "uptime_seconds"}
+async def test_health_answers_with_version_uptime_and_pid_only(
+    daemon: BiffDaemon,
+) -> None:
+    assert set(await health(daemon.port)) == {"version", "uptime_seconds", "pid"}
+
+
+async def test_health_reports_the_daemons_own_pid(daemon: BiffDaemon) -> None:
+    assert (await health(daemon.port))["pid"] == os.getpid()
 
 
 async def test_health_reports_the_package_version(daemon: BiffDaemon) -> None:

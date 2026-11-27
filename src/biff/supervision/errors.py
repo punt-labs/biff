@@ -7,6 +7,7 @@ __all__ = [
     "PortConflictError",
     "ServiceActionFailedError",
     "ServiceNotInstalledError",
+    "ServiceStillStartingError",
 ]
 
 
@@ -24,3 +25,7 @@ class ServiceActionFailedError(RuntimeError):
 
 class ServiceNotInstalledError(RuntimeError):
     """The service has no unit or plist to act on."""
+
+
+class ServiceStillStartingError(RuntimeError):
+    """The service is running, has not answered yet, and is not known to have failed."""

@@ -18,7 +18,11 @@ from biff.plugins.claude_code.claude_md import ClaudeMdImport
 from biff.run_dir import RunDir
 from biff.supervision.health import HealthProbe
 from biff.supervision.port import PortProbe
-from tests.test_supervision.fake_backend import FakeBackend, RaisingBackend
+from tests.test_supervision.fake_backend import (
+    FakeBackend,
+    PiddedBackend,
+    RaisingBackend,
+)
 from tests.test_supervision.patching import (
     host_has,
     host_unreachable,
@@ -68,7 +72,9 @@ def no_manager(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 class _Health(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        body = json.dumps({"version": "9.9.9", "uptime_seconds": 12.5}).encode()
+        body = json.dumps(
+            {"version": "9.9.9", "uptime_seconds": 12.5, "pid": 4321}
+        ).encode()
         self.send_response(200)
         self.end_headers()
         self.wfile.write(body)
@@ -191,6 +197,45 @@ class TestDaemonControl:
         assert result.exit_code == 3
 
 
+class TestAStillStartingDaemon:
+    """A slow start under load exits 3 with its own text, not 1 with a failure."""
+
+    @pytest.fixture
+    def starting(self, home: Path, monkeypatch: pytest.MonkeyPatch) -> PiddedBackend:
+        backend = PiddedBackend(home / "units" / "biffd.service", pid=4242)
+        host_has(monkeypatch, backend)
+        port_answers(monkeypatch, answers=False)
+        monkeypatch.setattr(PortProbe, "wait_until_answering", _REAL_WAIT)
+
+        def silent(self: HealthProbe, timeout: float) -> bool:
+            return False
+
+        monkeypatch.setattr(HealthProbe, "answers", silent)
+        monkeypatch.setenv("BIFF_DAEMON_HEALTH_WAIT", "0.5")
+        log = home / ".punt-labs" / "biff" / "logs" / "biff.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("biffd starting: version=1 pid=4242 port=8424\n")
+        return backend
+
+    def test_install_keeps_the_service_and_exits_3(
+        self, starting: PiddedBackend
+    ) -> None:
+        result = runner.invoke(app, ["daemon", "install"])
+        assert (result.exit_code, starting.config_path().exists()) == (3, True)
+
+    def test_install_says_it_is_running_not_crashed_on_stderr(
+        self, starting: PiddedBackend
+    ) -> None:
+        result = runner.invoke(app, ["daemon", "install"])
+        assert "it is running, not crashed" in result.stderr
+
+    @pytest.mark.parametrize("verb", ["start", "restart"])
+    def test_start_and_restart_exit_3(self, starting: PiddedBackend, verb: str) -> None:
+        starting.install()
+        result = runner.invoke(app, ["daemon", verb])
+        assert (result.exit_code, "still starting" in result.stderr) == (3, True)
+
+
 class TestDaemonStatus:
     def test_not_installed(self, backend: FakeBackend) -> None:
         result = runner.invoke(app, ["daemon", "status"])
@@ -206,6 +251,7 @@ class TestDaemonStatus:
         assert "running: yes" in result.output
         assert f"port: {live_biffd}" in result.output
         assert "version: 9.9.9" in result.output
+        assert "pid: 4321" in result.output
 
     def test_installed_but_not_answering_exits_1(
         self, backend: FakeBackend, home: Path
