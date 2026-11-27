@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Self, final
 
-from biff.key_vault import VaultError, VaultKey
+from biff.key_vault import CorruptKeyError, VaultError, VaultKey
 
 _SERVICE = "biff-owner-pub"
 
@@ -49,7 +49,10 @@ class OwnerRecords:
             return path.read_text(encoding="ascii").strip()
         except FileNotFoundError:
             return None
-        except (OSError, UnicodeDecodeError) as exc:
+        except UnicodeDecodeError as exc:
+            msg = f"the owner key record for {handle} is not text: {exc}"
+            raise CorruptKeyError(msg) from exc
+        except OSError as exc:
             msg = f"cannot read the owner key record for {handle}: {exc}"
             raise VaultError(msg) from exc
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -31,38 +30,40 @@ def _store(
     owner: MemoryVault | None = None,
     agents: MemoryVault | None = None,
     records: OwnerRecords | None = None,
+    *,
+    tmp_path: Path,
 ) -> KeyStore:
     return KeyStore(
         owner or MemoryVault(),
         agents or MemoryVault(),
         caller,
-        records or OwnerRecords(Path(tempfile.mkdtemp())),
+        records or OwnerRecords(tmp_path / "records"),
     )
 
 
-def test_agent_key_is_created_once_and_stable() -> None:
-    store = _store()
+def test_agent_key_is_created_once_and_stable(tmp_path: Path) -> None:
+    store = _store(tmp_path=tmp_path)
     assert store.agent_pubkey("claude") == store.agent_pubkey("claude")
 
 
-def test_each_agent_has_its_own_key() -> None:
-    store = _store()
+def test_each_agent_has_its_own_key(tmp_path: Path) -> None:
+    store = _store(tmp_path=tmp_path)
     assert store.agent_pubkey("claude") != store.agent_pubkey("rmh")
 
 
-def test_agent_pubkey_matches_the_stored_secret() -> None:
+def test_agent_pubkey_matches_the_stored_secret(tmp_path: Path) -> None:
     agents = MemoryVault()
-    store = _store(agents=agents)
+    store = _store(agents=agents, tmp_path=tmp_path)
     pubkey = store.agent_pubkey("claude")
     secret = bytes.fromhex(agents.items["biff-agent", "claude"])
     assert NostrCrypto().public_key(secret) == pubkey
 
 
 def test_agent_key_read_is_logged_without_the_secret(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
     agents = MemoryVault()
-    store = _store(agents=agents)
+    store = _store(agents=agents, tmp_path=tmp_path)
     store.agent_pubkey("claude")
     with caplog.at_level(logging.INFO, logger="biff.key_store"):
         secret = store.agent_secret("claude", purpose="sign message")
@@ -71,43 +72,47 @@ def test_agent_key_read_is_logged_without_the_secret(
     assert secret.hex() not in caplog.text
 
 
-def test_a_missing_agent_key_is_a_key_not_found_error() -> None:
+def test_a_missing_agent_key_is_a_key_not_found_error(tmp_path: Path) -> None:
     with pytest.raises(KeyNotFoundError, match="claude"):
-        _store().agent_secret("claude", purpose="test")
+        _store(tmp_path=tmp_path).agent_secret("claude", purpose="test")
 
 
 def test_key_not_found_is_a_lookup_error() -> None:
     assert issubclass(KeyNotFoundError, LookupError)
 
 
-def test_a_corrupt_stored_secret_is_a_vault_error_naming_the_item() -> None:
+def test_a_corrupt_stored_secret_is_a_vault_error_naming_the_item(
+    tmp_path: Path,
+) -> None:
     agents = MemoryVault()
     agents.items["biff-agent", "claude"] = "not hex at all"
     with pytest.raises(VaultError, match="biff-agent/claude"):
-        _store(agents=agents).agent_secret("claude", purpose="test")
+        _store(agents=agents, tmp_path=tmp_path).agent_secret("claude", purpose="test")
 
 
-def test_a_stored_secret_of_the_wrong_length_is_a_vault_error() -> None:
+def test_a_stored_secret_of_the_wrong_length_is_a_vault_error(tmp_path: Path) -> None:
     agents = MemoryVault()
     agents.items["biff-agent", "claude"] = "ab" * 31
     with pytest.raises(VaultError, match="biff-agent/claude"):
-        _store(agents=agents).agent_secret("claude", purpose="test")
+        _store(agents=agents, tmp_path=tmp_path).agent_secret("claude", purpose="test")
 
 
-def test_the_store_names_the_vault_holding_agent_keys() -> None:
-    assert _store().agent_vault_label == "memory"
+def test_the_store_names_the_vault_holding_agent_keys(tmp_path: Path) -> None:
+    assert _store(tmp_path=tmp_path).agent_vault_label == "memory"
 
 
-def test_owner_key_is_created_for_a_human() -> None:
+def test_owner_key_is_created_for_a_human(tmp_path: Path) -> None:
     owner = MemoryVault()
-    pubkey = _store(owner=owner).init_owner("jfreeman")
+    pubkey = _store(owner=owner, tmp_path=tmp_path).init_owner("jfreeman")
     secret = bytes.fromhex(owner.items["biff-owner", "jfreeman"])
     assert NostrCrypto().public_key(secret) == pubkey
 
 
-def test_the_owner_public_key_is_recorded_without_reading_the_secret() -> None:
+def test_the_owner_public_key_is_recorded_without_reading_the_secret(
+    tmp_path: Path,
+) -> None:
     owner = MemoryVault()
-    store = _store(owner=owner)
+    store = _store(owner=owner, tmp_path=tmp_path)
     pubkey = store.init_owner("jfreeman")
     owner.reads.clear()
     assert store.owner_pubkey("jfreeman") == pubkey
@@ -119,7 +124,7 @@ def test_init_owner_completes_after_the_public_record_write_failed(
 ) -> None:
     owner = MemoryVault()
     directory = tmp_path / "records"
-    store = _store(owner=owner, records=OwnerRecords(directory))
+    store = _store(owner=owner, records=OwnerRecords(directory), tmp_path=tmp_path)
     directory.write_text("in the way")
     with pytest.raises(VaultError):
         store.init_owner("jfreeman")
@@ -131,30 +136,34 @@ def test_init_owner_completes_after_the_public_record_write_failed(
     assert NostrCrypto().public_key(bytes.fromhex(secret)) == pubkey
 
 
-def test_an_owner_key_that_exists_is_not_replaced_by_a_second_init() -> None:
-    store = _store()
+def test_an_owner_key_that_exists_is_not_replaced_by_a_second_init(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path=tmp_path)
     store.init_owner("jfreeman")
     with pytest.raises(KeyExistsError, match="already"):
         store.init_owner("jfreeman")
 
 
-def test_no_recorded_owner_key_is_key_not_found() -> None:
+def test_no_recorded_owner_key_is_key_not_found(tmp_path: Path) -> None:
     with pytest.raises(KeyNotFoundError, match="jfreeman"):
-        _store().owner_pubkey("jfreeman")
+        _store(tmp_path=tmp_path).owner_pubkey("jfreeman")
 
 
-def test_agent_process_cannot_create_an_owner_key() -> None:
+def test_agent_process_cannot_create_an_owner_key(tmp_path: Path) -> None:
     owner = MemoryVault()
     with pytest.raises(OwnerKeyDeniedError):
-        _store(CallerKind.AGENT, owner=owner).init_owner("jfreeman")
+        _store(CallerKind.AGENT, owner=owner, tmp_path=tmp_path).init_owner("jfreeman")
     assert owner.items == {}
 
 
-def test_agent_process_cannot_sign_an_attestation_and_never_reads_the_owner() -> None:
+def test_agent_process_cannot_sign_an_attestation_and_never_reads_the_owner(
+    tmp_path: Path,
+) -> None:
     owner = MemoryVault()
-    _store(owner=owner).init_owner("jfreeman")
+    _store(owner=owner, tmp_path=tmp_path).init_owner("jfreeman")
     owner.reads.clear()
-    agent_store = _store(CallerKind.AGENT, owner=owner)
+    agent_store = _store(CallerKind.AGENT, owner=owner, tmp_path=tmp_path)
     with pytest.raises(OwnerKeyDeniedError):
         agent_store.attest("jfreeman", AGENT_KEY, lifetime_seconds=60, now=0)
     assert owner.reads == []
@@ -200,8 +209,8 @@ def test_owner_signing_fails_without_the_right_passphrase(tmp_path: Path) -> Non
         wrong.attest("jfreeman", AGENT_KEY, lifetime_seconds=60, now=0)
 
 
-def test_attestation_names_the_agents_public_key_and_expires() -> None:
-    store = _store()
+def test_attestation_names_the_agents_public_key_and_expires(tmp_path: Path) -> None:
+    store = _store(tmp_path=tmp_path)
     store.init_owner("jfreeman")
     agent = store.agent_pubkey("claude")
     attestation = store.attest("jfreeman", agent, lifetime_seconds=3600, now=1000)
@@ -209,23 +218,27 @@ def test_attestation_names_the_agents_public_key_and_expires() -> None:
     assert attestation.expires_at() == 4600
 
 
-def test_attest_refuses_a_released_secret_that_is_not_the_recorded_key() -> None:
+def test_attest_refuses_a_released_secret_that_is_not_the_recorded_key(
+    tmp_path: Path,
+) -> None:
     owner = MemoryVault()
-    store = _store(owner=owner)
+    store = _store(owner=owner, tmp_path=tmp_path)
     store.init_owner("jfreeman")
     owner.items["biff-owner", "jfreeman"] = NostrCrypto().generate_secret().hex()
     with pytest.raises(OwnerKeyMismatchError, match="jfreeman"):
         store.attest("jfreeman", AGENT_KEY, lifetime_seconds=60, now=0)
 
 
-def test_attest_without_an_owner_key_is_key_not_found() -> None:
+def test_attest_without_an_owner_key_is_key_not_found(tmp_path: Path) -> None:
     with pytest.raises(KeyNotFoundError, match="jfreeman"):
-        _store().attest("jfreeman", AGENT_KEY, lifetime_seconds=60, now=0)
+        _store(tmp_path=tmp_path).attest(
+            "jfreeman", AGENT_KEY, lifetime_seconds=60, now=0
+        )
 
 
-def test_agent_secret_is_not_the_owner_secret() -> None:
+def test_agent_secret_is_not_the_owner_secret(tmp_path: Path) -> None:
     owner, agents = MemoryVault(), MemoryVault()
-    store = _store(owner=owner, agents=agents)
+    store = _store(owner=owner, agents=agents, tmp_path=tmp_path)
     store.init_owner("jfreeman")
     store.agent_pubkey("claude")
     assert owner.items["biff-owner", "jfreeman"] != agents.items["biff-agent", "claude"]

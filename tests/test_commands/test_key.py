@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
+import pytest
 import yaml
 
 from biff.commands.key import KeyCommands
@@ -19,9 +21,6 @@ from biff.nostr_directory import NostrDirectory
 from biff.owner_records import OwnerRecords
 from biff.passphrase_vault import PassphraseFileVault
 from tests._memory_vault import MemoryVault
-
-if TYPE_CHECKING:
-    import pytest
 
 NOW = 1_800_000_000
 NPUB_RE = re.compile(r"npub1[a-z0-9]{58}")
@@ -622,3 +621,33 @@ def test_show_json_has_no_verdict_for_an_unattested_key(tmp_path: Path) -> None:
     rig = _Rig(tmp_path)
     rig.commands.agent("claude")
     assert "attestation" not in _show_json(rig)
+
+
+def test_show_calls_a_non_ascii_owner_record_invalid_not_unverified(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    (rig.records_dir / "jfreeman.pub").write_bytes(b"\xff\xfe\x80")
+    text = rig.commands.show("claude").text
+    assert "invalid" in text
+    assert "unverified" not in text
+
+
+def test_show_stays_unverified_when_the_owner_record_is_permission_denied(
+    tmp_path: Path,
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root reads a file whatever its mode")
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    record = rig.records_dir / "jfreeman.pub"
+    record.chmod(0)
+    try:
+        text = rig.commands.show("claude").text
+    finally:
+        record.chmod(0o600)
+    assert "unverified" in text
+    assert "valid until" not in text
