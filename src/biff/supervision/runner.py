@@ -26,19 +26,22 @@ class Supervisor:
     """Runs ``systemctl``, ``launchctl``, ``claude`` and a detached ``biffd``."""
 
     @staticmethod
-    def run(*argv: str) -> subprocess.CompletedProcess[str]:
+    def run(
+        *argv: str, timeout: float = _TIMEOUT_SECONDS
+    ) -> subprocess.CompletedProcess[str]:
         """Run *argv* and return its result; a non-zero exit is the caller's to read.
 
         Raises:
             OSError: The program is missing or cannot be run.
-            subprocess.TimeoutExpired: The supervisor did not answer in 30 seconds.
+            subprocess.TimeoutExpired: The program did not answer within *timeout*
+                seconds (30 by default).
         """
         return subprocess.run(
             argv,
             capture_output=True,
             text=True,
             check=False,
-            timeout=_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
 
     @staticmethod

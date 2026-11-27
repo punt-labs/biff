@@ -158,12 +158,18 @@ class BiffDaemon:
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, stop.set)
+            loop.add_signal_handler(sig, self._request_stop, sig, stop)
         await self.start()
         try:
             await stop.wait()
         finally:
             await self.stop()
+
+    @staticmethod
+    def _request_stop(sig: signal.Signals, stop: asyncio.Event) -> None:
+        """Say which signal asked biffd to stop, then let it shut down."""
+        logger.info("biffd stopping: signal=%s pid=%d", sig.name, os.getpid())
+        stop.set()
 
     def _process_request(
         self, connection: ServerConnection, request: Request

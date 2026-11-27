@@ -222,6 +222,7 @@
   "biff.supervision.evidence": "kernel",
   "biff.supervision.health": "kernel",
   "biff.supervision.health_wait": "kernel",
+  "biff.supervision.holder": "kernel",
   "biff.supervision.host": "kernel",
   "biff.supervision.launchd": "kernel",
   "biff.supervision.manager": "kernel",

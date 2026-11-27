@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, Self, final
+from typing import TYPE_CHECKING, NoReturn, Protocol, Self, final
 
 from biff.supervision.errors import (
     PortConflictError,
@@ -18,10 +19,13 @@ from biff.supervision.health_wait import HealthWait
 
 if TYPE_CHECKING:
     from biff.supervision.backend import ServiceBackend
+    from biff.supervision.holder import Holder
     from biff.supervision.port import PortState
     from biff.supervision.spec import ServiceSpec
 
 __all__ = ["PortWatcher", "ServiceManager"]
+
+logger = logging.getLogger(__name__)
 
 
 class PortWatcher(Protocol):
@@ -33,6 +37,10 @@ class PortWatcher(Protocol):
 
     def wait_until_answering(self, seconds: float) -> bool:
         """Return whether the service answers ``/health`` within *seconds*."""
+        ...
+
+    def holder(self) -> Holder | None:
+        """Name the program on the port, or return ``None`` when that is not known."""
         ...
 
 
@@ -137,11 +145,14 @@ class ServiceManager:
         state = self._port.state()
         lsof = f"lsof -nP -iTCP:{port} -sTCP:LISTEN"
         if state == "foreign":
-            msg = (
-                f"port {port} is held by another program; see what holds it "
-                f"with: {lsof}"
+            holder = self._port.holder()
+            by = (
+                "another program"
+                if holder is None
+                else f"{holder.describe()}, not biffd"
             )
-            raise PortConflictError(msg)
+            msg = f"port {port} is held by {by}; see what holds it with: {lsof}"
+            self._refuse(action, msg)
         if state == "ours" and not self._backend.is_active():
             msg = (
                 f"a biffd that this service does not supervise already answers on "
@@ -149,7 +160,25 @@ class ServiceManager:
                 f"{self._spec.cli_name} {self._spec.cli_verb} {action}. "
                 f"See what holds the port with: {lsof}"
             )
-            raise PortConflictError(msg)
+            self._refuse(action, msg)
+
+    def _refuse(self, action: str, msg: str) -> NoReturn:
+        """Log the refusal of *action* at WARNING, then raise it.
+
+        Every biff process writes biff.log, so a refusal that is only printed leaves
+        nothing behind for the next person to read.
+
+        Raises:
+            PortConflictError: Always, with *msg*.
+        """
+        logger.warning(
+            "refused `%s %s %s`: %s",
+            self._spec.cli_name,
+            self._spec.cli_verb,
+            action,
+            msg,
+        )
+        raise PortConflictError(msg)
 
     def _remove_after_failure(self) -> str:
         """Undo the registration of a service that does not answer; say how it went.

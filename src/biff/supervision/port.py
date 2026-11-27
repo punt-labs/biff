@@ -7,9 +7,12 @@ import time
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Self, final
 
 from biff.supervision.health import HealthProbe, HealthUnavailableError, NotBiffdError
+from biff.supervision.holder import PortHolder
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from biff.supervision.holder import Holder
 
 __all__ = ["PortProbe", "PortState"]
 
@@ -60,6 +63,10 @@ class PortProbe:
         except HealthUnavailableError:
             return "unresponsive"
         return "ours"
+
+    def holder(self) -> Holder | None:
+        """Name the program on the port when the host can say; ``None`` when not."""
+        return PortHolder.find(self._port)
 
     def wait_until_answering(self, seconds: float) -> bool:
         """Return whether biffd answers ``/health`` within *seconds*."""

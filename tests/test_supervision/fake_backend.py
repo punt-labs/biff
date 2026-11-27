@@ -9,6 +9,7 @@ from biff.supervision.errors import ServiceActionFailedError
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from biff.supervision.holder import Holder
     from biff.supervision.port import PortState
 
 
@@ -16,15 +17,20 @@ if TYPE_CHECKING:
 class FakePort:
     """Reports a fixed port state, and whether biffd ever answers ``/health``."""
 
-    __slots__ = ("_answers", "_state", "_waits")
+    __slots__ = ("_answers", "_holder", "_state", "_waits")
 
     _state: PortState
     _answers: bool
     _waits: list[float]
+    # None: the host could not name the holder.
+    _holder: Holder | None
 
-    def __new__(cls, state: PortState, *, answers: bool) -> Self:
+    def __new__(
+        cls, state: PortState, *, answers: bool, holder: Holder | None = None
+    ) -> Self:
         self = super().__new__(cls)
         self._state = state
+        self._holder = holder
         self._answers = answers
         self._waits = []
         return self
@@ -37,14 +43,19 @@ class FakePort:
     def state(self) -> PortState:
         return self._state
 
+    def holder(self) -> Holder | None:
+        return self._holder
+
     def wait_until_answering(self, seconds: float) -> bool:
         self._waits.append(seconds)
         return self._answers
 
 
-def port_probe(state: PortState, *, answers: bool = True) -> FakePort:
-    """Return a port watcher that reports *state* and answers ``/health`` or not."""
-    return FakePort(state, answers=answers)
+def port_probe(
+    state: PortState, *, answers: bool = True, holder: Holder | None = None
+) -> FakePort:
+    """Return a port watcher that reports *state*, answers ``/health`` or not."""
+    return FakePort(state, answers=answers, holder=holder)
 
 
 class RaisingBackend:
@@ -225,3 +236,21 @@ class PiddedBackend(DiagnosableBackend):
     def main_pid(self) -> int | None:
         """Return the scripted pid."""
         return self._pid
+
+
+class LoadedBackend(FakeBackend):
+    """A backend that also knows whether its supervisor has the job loaded."""
+
+    __slots__ = ("_loaded",)
+
+    _loaded: bool
+
+    def __new__(cls, config_path: Path, *, loaded: bool) -> Self:
+        """Report the job loaded or, with ``loaded=False``, not."""
+        self = super().__new__(cls, config_path)
+        self._loaded = loaded
+        return self
+
+    def is_loaded(self) -> bool:
+        """Return the scripted state."""
+        return self._loaded

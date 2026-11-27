@@ -98,3 +98,22 @@ def test_the_startup_line_comes_before_the_listening_line(run: Run) -> None:
     starting = next(i for i, x in enumerate(run.lines) if "biffd starting:" in x)
     listening = next(i for i, x in enumerate(run.lines) if "biffd listening" in x)
     assert starting < listening
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
+def test_a_stop_signal_is_logged_with_its_name_and_pid(
+    tmp_path: Path, log: Path, sig: signal.Signals
+) -> None:
+    proc = _foreground_biffd(tmp_path)
+    try:
+        _log_until_listening(log)
+        proc.send_signal(sig)
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    stopping = [x for x in log.read_text().splitlines() if "biffd stopping:" in x]
+    assert [x.split("biffd stopping: ")[1] for x in stopping] == [
+        f"signal={sig.name} pid={proc.pid}"
+    ]

@@ -75,3 +75,19 @@ def test_a_nested_block_does_not_repeat_the_state(
     script.answer("launchctl", out=RUNNING_JOB)
     report = LaunchdBackend(BIFFD_SPEC).diagnosis()
     assert (report.count("state ="), report.count("active count =")) == (1, 1)
+
+
+def test_a_job_launchd_has_not_loaded_is_not_loaded(
+    script: ScriptedSupervisor,
+) -> None:
+    script.answer("launchctl", rc=113, err="Could not find service")
+    assert LaunchdBackend(BIFFD_SPEC).is_loaded() is False
+
+
+def test_a_job_launchd_knows_is_loaded_even_when_it_is_not_running(
+    script: ScriptedSupervisor,
+) -> None:
+    script.answer(
+        "launchctl", out=RUNNING_JOB.replace("state = running", "state = waiting")
+    )
+    assert LaunchdBackend(BIFFD_SPEC).is_loaded() is True

@@ -165,7 +165,7 @@ class LaunchdBackend:
         Raises:
             ServiceActionFailedError: launchctl refused; the error carries its stderr.
         """
-        if not self._loaded():
+        if not self.is_loaded():
             self._require("start", "bootstrap", self._domain(), str(self._plist_path))
         self._require("start", "kickstart", self._target)
         return True
@@ -221,16 +221,17 @@ class LaunchdBackend:
     def _domain() -> str:
         return f"gui/{os.getuid()}"
 
-    def _loaded(self) -> bool:
+    def is_loaded(self) -> bool:
+        """Return whether launchd has the job loaded, running or not."""
         return Supervisor.run("launchctl", "print", self._target).returncode == 0
 
     def _unload(self) -> None:
         """Boot the job out if it is loaded, and wait until launchd has let it go."""
-        if not self._loaded():
+        if not self.is_loaded():
             return
         self._require("stop", "bootout", self._target)
         deadline = time.monotonic() + self.UNLOAD_WAIT_SECONDS
-        while self._loaded():
+        while self.is_loaded():
             if time.monotonic() >= deadline:
                 msg = self._spec.failure_message(
                     "stop", f"{self._target} is still loaded after bootout"
