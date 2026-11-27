@@ -9587,7 +9587,7 @@ the reply. The process holds no relay connection.
 - These claims are machine-checked. `docs/specs/presence-heartbeat.tex` models the
   heartbeat write; its frozen variant `presence-heartbeat-blindput.tex` (the blind
   put) loses a plan written between the read and the write, and the
-  compare-and-set model reaches no such state in 922 states.
+  compare-and-set model reaches no such state in 32,918 states.
   `docs/specs/mail-refile.tex` models the partial read, the refile and the
   confirmation; `mail-refile-drop.tex` (no refile),
   `mail-refile-confirm-early.tex` (confirm before print) and

@@ -1,0 +1,528 @@
+%
+% presence-heartbeat-stampback.tex  (FROZEN NEGATIVE CONTROL: do not edit)
+%
+% HeartbeatCommit sets the idle clock to the stamp, back or forward.  Expected: PresenceInv violated.
+%
+% Z Specification for the heartbeat write of a presence row (PL-1704, DES-097,
+% DES-100) and for the plan write that shares the row.
+%
+% Companion to nats-relay.tex: that specification models the sessions bucket
+% as SessionStore (sessions : SESSIONKEY \pinj KVVALUE) and says nothing about
+% two writers racing on one row.  This one models the race, the
+% compare-and-set that closes it, the activity stamp the heartbeat carries, and
+% the guard on an automatic plan.  It is kept apart because every component
+% added to the composed state of nats-relay.tex multiplies a state space that
+% already holds 831,363 states.
+%
+% Type-check: fuzz -t presence-heartbeat.tex
+% Model-check: see the end of this file.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff Presence Heartbeat: A Z Specification}
+\author{Punt Labs}
+\date{November 2026}
+\maketitle
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+A session's presence row lives in one key of the sessions bucket.  Two
+writers use it.  The heartbeat (\texttt{NatsRelay.heartbeat}) reads the row,
+moves \texttt{last\_active} forward, and writes the row back.  Everything
+else (\texttt{plan}, \texttt{mesg}, a tty rename) reads the row, changes one
+field, and writes it back.
+
+The heartbeat's read and its write are two round trips.  A plan saved
+between them is in the bucket when the heartbeat writes, and the heartbeat
+writes the row it read: the plan is gone.  The loss is silent, and it is
+the heartbeat's own tick that causes it.  PL-1704 is a report of exactly this.
+
+The bucket gives every write a revision, and \texttt{kv.update} writes only
+if the revision is the one the caller names.  The heartbeat now names the
+revision it read.  A write that finds the row changed fails, and the
+heartbeat reads again; after three failures it gives up until the next tick.
+One skipped tick is harmless: the row lives for three days.
+
+Two things ride on the same write.  The plugin hook touches a per-session
+\texttt{.active} file after every tool call, and the heartbeat passes that
+file's modification time as \texttt{at} (DES-097, DES-100): if a stamp exists,
+\texttt{last\_tool\_at} becomes the later of its old value and \texttt{at}; if
+none exists it is left alone; it never moves back.  Without it a session that
+never calls a biff tool reads idle for as long as its row is stale (a row ten
+minutes stale and a stamp one minute old read idle for 600 seconds).  And a
+plan written with \texttt{source = auto} never replaces a non-empty plan
+written with \texttt{source = manual}.
+
+This specification states the properties and checks each twice: against the
+shipped behaviour, exhaustively, and against the behaviour it replaced, where
+ProB finds the counterexample.
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  FIELD ::= fplan | fmesg
+\end{zed}
+
+\begin{zed}
+  SRC ::= srcManual | srcAuto
+\end{zed}
+
+$FIELD$ stands for every field of the row that a writer other than the
+heartbeat owns.  Two of them are enough to say that the heartbeat preserves
+\emph{every} such field and not one in particular.  $SRC$ is the
+\texttt{plan\_source} of a plan.
+
+\begin{axdef}
+  maxRev : \nat \\
+  maxBeat : \nat \\
+  maxTries : \nat \\
+  maxNow : \nat
+  \where
+  maxRev = 3 \\
+  maxBeat = 1 \\
+  maxTries = 2 \\
+  maxNow = 2
+\end{axdef}
+
+$maxRev$, $maxBeat$ and $maxNow$ bound the revision, the heartbeat counter and
+the clock so that ProB can enumerate them; $maxTries$ is the retry limit of
+\texttt{heartbeat}, here two where the code has three (the argument does not
+depend on the number).  Field values are the numbers $0$ (empty) and $1$.
+
+\begin{zed}
+  HbPhase ::= hbIdle | hbRead
+\end{zed}
+
+%%----------------------------------------------------------------------
+\section{State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Row}
+  fields : FIELD \fun (0 \upto 1) \\
+  planSource : SRC \\
+  lastTool : 0 \upto maxNow \\
+  beat : 0 \upto maxBeat \\
+  curRev : 0 \upto maxRev
+\end{schema}
+
+The row in the bucket: the fields the other writers own, the source of the
+plan, the idle clock ($last\_tool\_at$), the heartbeat counter
+($last\_active$), and the revision the bucket assigned to the last write.
+
+\begin{schema}{Env}
+  now : 0 \upto maxNow \\
+  stamp : 0 \upto maxNow \\
+  hasStamp : ZBOOL
+\end{schema}
+
+The world outside the bucket: the clock, and the \texttt{.active} file's
+modification time, which exists once a tool call has touched it.
+
+\begin{schema}{Heartbeat}
+  phase : HbPhase \\
+  seenFields : FIELD \fun (0 \upto 1) \\
+  seenSource : SRC \\
+  seenTool : 0 \upto maxNow \\
+  seenRev : 0 \upto maxRev \\
+  seenAt : 0 \upto maxNow \\
+  seenHas : ZBOOL \\
+  tries : 0 \upto maxTries
+\end{schema}
+
+The heartbeat in flight.  After its read, $seenFields$, $seenSource$,
+$seenTool$ and $seenRev$ are the row and the revision it holds, and $seenAt$
+and $seenHas$ the stamp it read at the start of its tick; $tries$ counts the
+failed writes of this tick.
+
+\begin{schema}{Intent}
+  intended : FIELD \fun (0 \upto 1) \\
+  intendedSource : SRC \\
+  peak : 0 \upto maxNow \\
+  manualLive : ZBOOL \\
+  manualPlan : 0 \upto 1 \\
+  beatHas : ZBOOL \\
+  beatAt : 0 \upto maxNow
+\end{schema}
+
+Ghosts.  $intended$ and $intendedSource$ are what the other writers last wrote,
+in the order they wrote it.  $peak$ is the greatest idle-clock value the row
+has held.  $manualLive$ says a non-empty manual plan was written and not since
+replaced by a manual write, and $manualPlan$ is its value.  $beatHas$ and
+$beatAt$ are the stamp the last committed heartbeat carried.  None of these is
+in the bucket and the code has no such variable; they exist so that a lost
+write, a clock that went back and a replaced manual plan are states and not
+arguments.
+
+\begin{schema}{PresenceState}
+  Row \\
+  Env \\
+  Heartbeat \\
+  Intent
+\end{schema}
+
+\begin{schema}{PresenceInv}
+  PresenceState
+  \where
+  fields = intended \\
+  planSource = intendedSource \\
+  lastTool = peak \\
+  beatHas = ztrue \implies lastTool \geq beatAt \\
+  manualLive = ztrue \implies
+    ( planSource = srcManual \land fields~fplan = manualPlan )
+\end{schema}
+
+The properties, in order.  (1) The row holds, for every field and for the
+plan's source, the last value a writer other than the heartbeat gave it: the
+heartbeat never overwrites a plan or any other field written after its read.
+(2) The idle clock never moves backwards: the row's $lastTool$ is its peak.
+(3) A committed heartbeat leaves the idle clock at least as fresh as the stamp
+it carried: idle is at most the age of the stamp.  (4) An automatic plan never
+replaces a non-empty manual one.
+
+\begin{schema}{Invariant}
+  PresenceInv
+\end{schema}
+
+\begin{schema}{Init}
+  PresenceState'
+  \where
+  fields' = \{ fplan \mapsto 0, fmesg \mapsto 0 \} \\
+  planSource' = srcManual \\
+  lastTool' = 0 \\
+  beat' = 0 \\
+  curRev' = 0 \\
+  now' = 0 \\
+  stamp' = 0 \\
+  hasStamp' = zfalse \\
+  phase' = hbIdle \\
+  seenFields' = \{ fplan \mapsto 0, fmesg \mapsto 0 \} \\
+  seenSource' = srcManual \\
+  seenTool' = 0 \\
+  seenRev' = 0 \\
+  seenAt' = 0 \\
+  seenHas' = zfalse \\
+  tries' = 0 \\
+  intended' = \{ fplan \mapsto 0, fmesg \mapsto 0 \} \\
+  intendedSource' = srcManual \\
+  peak' = 0 \\
+  manualLive' = zfalse \\
+  manualPlan' = 0 \\
+  beatHas' = zfalse \\
+  beatAt' = 0
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Operations}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Tick}
+  \Delta Env \\
+  \Xi Row \\
+  \Xi Heartbeat \\
+  \Xi Intent
+  \where
+  now < maxNow \\
+  now' = now + 1 \\
+  stamp' = stamp \\
+  hasStamp' = hasStamp
+\end{schema}
+
+Time passes.
+
+\begin{schema}{ToolCall}
+  \Delta Env \\
+  \Xi Row \\
+  \Xi Heartbeat \\
+  \Xi Intent
+  \where
+  now' = now \\
+  stamp' = now \\
+  hasStamp' = ztrue
+\end{schema}
+
+A tool call ends and the hook touches the stamp file: its modification time is
+now.
+
+\begin{schema}{HeartbeatRead}
+  \Xi Env \\
+  \Xi Row \\
+  \Delta Heartbeat \\
+  \Xi Intent
+  \where
+  phase = hbIdle \\
+  tries < maxTries \\
+  phase' = hbRead \\
+  seenFields' = fields \\
+  seenSource' = planSource \\
+  seenTool' = lastTool \\
+  seenRev' = curRev \\
+  seenAt' = stamp \\
+  seenHas' = hasStamp \\
+  tries' = tries
+\end{schema}
+
+\texttt{kv.get} of the row, with the stamp read at the start of the tick.
+Enabled while the tick has tries left.
+
+\begin{schema}{WriteMesg}
+  \Xi Env \\
+  \Delta Row \\
+  \Xi Heartbeat \\
+  \Delta Intent \\
+  v? : 0 \upto 1
+  \where
+  curRev < maxRev \\
+  fields' = fields \oplus \{ fmesg \mapsto v? \} \\
+  planSource' = planSource \\
+  lastTool' = lastTool \\
+  beat' = beat \\
+  curRev' = curRev + 1 \\
+  intended' = intended \oplus \{ fmesg \mapsto v? \} \\
+  intendedSource' = intendedSource \\
+  peak' = peak \\
+  manualLive' = manualLive \\
+  manualPlan' = manualPlan \\
+  beatHas' = beatHas \\
+  beatAt' = beatAt
+\end{schema}
+
+A writer other than the heartbeat sets the \texttt{mesg} field.  It runs
+whenever it likes, in particular while a heartbeat is in $hbRead$.
+
+\begin{schema}{BiffCall}
+  \Xi Env \\
+  \Delta Row \\
+  \Xi Heartbeat \\
+  \Delta Intent
+  \where
+  curRev < maxRev \\
+  fields' = fields \\
+  planSource' = planSource \\
+  lastTool' = now \\
+  beat' = beat \\
+  curRev' = curRev + 1 \\
+  intended' = intended \\
+  intendedSource' = intendedSource \\
+  peak' = ( \IF now > peak \THEN now \ELSE peak ) \\
+  manualLive' = manualLive \\
+  manualPlan' = manualPlan \\
+  beatHas' = beatHas \\
+  beatAt' = beatAt
+\end{schema}
+
+A biff tool handler runs (\texttt{update\_current\_session}): it writes the idle
+clock as now, through its own read-modify-write of the row, and takes a
+revision.  A heartbeat that read the row before it holds an older stamp than
+the call it must not undo.
+
+\begin{schema}{WritePlan}
+  \Xi Env \\
+  \Delta Row \\
+  \Xi Heartbeat \\
+  \Delta Intent \\
+  v? : 0 \upto 1 \\
+  src? : SRC
+  \where
+  curRev < maxRev \\
+  \lnot ( src? = srcAuto \land planSource = srcManual \land fields~fplan \neq 0 ) \\
+  fields' = fields \oplus \{ fplan \mapsto v? \} \\
+  planSource' = src? \\
+  lastTool' = lastTool \\
+  beat' = beat \\
+  curRev' = curRev + 1 \\
+  intended' = intended \oplus \{ fplan \mapsto v? \} \\
+  intendedSource' = src? \\
+  peak' = peak \\
+  manualLive' = ( \IF src? = srcManual \THEN
+    ( \IF v? \neq 0 \THEN ztrue \ELSE zfalse ) \ELSE manualLive ) \\
+  manualPlan' = ( \IF src? = srcManual \THEN v? \ELSE manualPlan ) \\
+  beatHas' = beatHas \\
+  beatAt' = beatAt
+\end{schema}
+
+A plan write.  The guard is the rule: a plan with $source = auto$ is refused
+when the stored $plan\_source$ is manual and the stored plan is not empty.  Any
+other write succeeds, replacing the plan and its source, and takes a revision.
+
+\begin{schema}{PlanRefused}
+  \Xi PresenceState \\
+  v? : 0 \upto 1 \\
+  src? : SRC
+  \where
+  src? = srcAuto \\
+  planSource = srcManual \\
+  fields~fplan \neq 0
+\end{schema}
+
+The refused write: nothing changes, not the plan, not its source, not the
+revision.  (The reply says ``unchanged''; the model has no reply.)
+
+\begin{schema}{HeartbeatCommit}
+  \Xi Env \\
+  \Delta Row \\
+  \Delta Heartbeat \\
+  \Delta Intent
+  \where
+  phase = hbRead \\
+  curRev = seenRev \\
+  curRev < maxRev \\
+  fields' = seenFields \\
+  planSource' = seenSource \\
+  lastTool' = ( \IF seenHas = ztrue \THEN seenAt \ELSE seenTool ) \\
+  beat' = (beat + 1) \mod (maxBeat + 1) \\
+  curRev' = curRev + 1 \\
+  phase' = hbIdle \\
+  seenFields' = seenFields \\
+  seenSource' = seenSource \\
+  seenTool' = seenTool \\
+  seenRev' = seenRev \\
+  seenAt' = seenAt \\
+  seenHas' = seenHas \\
+  tries' = 0 \\
+  intended' = intended \\
+  intendedSource' = intendedSource \\
+  peak' = ( \IF lastTool' > peak \THEN lastTool' \ELSE peak ) \\
+  manualLive' = manualLive \\
+  manualPlan' = manualPlan \\
+  beatHas' = seenHas \\
+  beatAt' = seenAt
+\end{schema}
+
+\texttt{kv.update(key, row, last=entry.revision)}.  The guard $curRev =
+seenRev$ is the compare: the bucket accepts the write only if no write has
+landed since the read.  The row written is the row read with two things
+moved: the heartbeat counter, and, when a stamp exists, the idle clock to the
+later of its value and the stamp.  The plan, its source and every other field
+are the ones read, $fields' = seenFields$ and $planSource' = seenSource$; the
+guard is what makes that equal to the row now in the bucket.  With no stamp the
+idle clock is $seenTool$, unchanged.  The counter wraps at $maxBeat$ only to
+keep ProB's state space finite.
+
+\begin{schema}{HeartbeatConflict}
+  \Xi Env \\
+  \Xi Row \\
+  \Delta Heartbeat \\
+  \Xi Intent
+  \where
+  phase = hbRead \\
+  curRev \neq seenRev \\
+  phase' = hbIdle \\
+  seenFields' = seenFields \\
+  seenSource' = seenSource \\
+  seenTool' = seenTool \\
+  seenRev' = seenRev \\
+  seenAt' = seenAt \\
+  seenHas' = seenHas \\
+  tries' = tries + 1 \\
+  tries < maxTries
+\end{schema}
+
+\texttt{KeyWrongLastSequenceError}: the row changed since the read.  Nothing
+is written; the loop goes round again, and $HeartbeatRead$ is no longer
+enabled once $tries = maxTries$ (``Session changed concurrently, skip
+heartbeat'').
+
+\begin{schema}{NextTick}
+  \Xi Env \\
+  \Xi Row \\
+  \Delta Heartbeat \\
+  \Xi Intent
+  \where
+  phase = hbIdle \\
+  tries > 0 \\
+  tries' = 0 \\
+  phase' = hbIdle \\
+  seenFields' = seenFields \\
+  seenSource' = seenSource \\
+  seenTool' = seenTool \\
+  seenRev' = seenRev \\
+  seenAt' = seenAt \\
+  seenHas' = seenHas
+\end{schema}
+
+The next heartbeat tick starts with a fresh budget.  The model lets a tick
+end after one conflict, which the code does not (it retries within the tick);
+the model has more behaviours than the code, and a safety invariant that holds
+in it holds for the code.
+
+\begin{schema}{Quiesce}
+  \Xi PresenceState
+\end{schema}
+
+The bounds on $curRev$ and $now$ end the history after a few steps.  $Quiesce$
+is the stutter that stands for ``nothing more happens''; without it ProB
+reports the end of the bounded history as a deadlock, which says something
+about the bound and nothing about the protocol.
+
+%%----------------------------------------------------------------------
+\section{Model Checking}
+%%----------------------------------------------------------------------
+
+\begin{enumerate}
+  \item \textbf{The properties}: $PresenceInv$ is a state invariant.  ProB checks
+    it over the whole bounded state space.
+  \item \textbf{Liveness of the tick}: $EF\; beat \neq 0$: a heartbeat can
+    land.  A guard that were never enabled would make the first property
+    vacuous.
+  \item \textbf{The race is real}: $EF\;(phase = hbRead \land curRev \neq
+    seenRev)$.
+  \item \textbf{The stamp moves the idle clock}: $EF\;(beatHas = ztrue \land
+    lastTool > 0)$, a committed heartbeat that carried a stamp and moved the
+    clock.
+  \item \textbf{The guard refuses}: $EF$ of an auto plan write that finds a
+    non-empty manual plan is the operation $PlanRefused$ enabled, stated as the
+    goal $planSource = srcManual \land fields~fplan \neq 0$.
+\end{enumerate}
+
+Four frozen variants are the negative controls, each the shipped file with one
+thing taken out, each reporting an invariant violation.
+\begin{itemize}
+  \item \texttt{presence-heartbeat-blindput.tex}: $HeartbeatCommit$ without the
+    $curRev = seenRev$ guard (the \texttt{kv.put} the code used to make).  The
+    plan written between the read and the write is overwritten: $HeartbeatRead
+    \to WritePlan \to HeartbeatCommit$.
+  \item \texttt{presence-heartbeat-nostamp.tex}: $HeartbeatCommit$ leaves the idle
+    clock alone whatever the stamp (DES-097's bug).  A tool call, time passing,
+    and a heartbeat leave $lastTool$ older than the stamp the heartbeat carried:
+    property 3.
+  \item \texttt{presence-heartbeat-stampback.tex}: $HeartbeatCommit$ sets the idle
+    clock to the stamp unconditionally.  A stale stamp read after a later
+    biff call moves $lastTool$ backwards: property 2.
+  \item \texttt{presence-heartbeat-noguard.tex}: $WritePlan$ without the guard.
+    An automatic plan replaces a non-empty manual one: property 4.
+\end{itemize}
+
+%%----------------------------------------------------------------------
+%% Reproducing the checks.  Run from the repo root; probcli is not assumed to
+%% be on PATH.  Bounded run (one probcli at a time):
+%%
+%%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
+%%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 6 -p MAX_INITIALISATIONS 20 \
+%%      -p MAX_OPERATIONS 500 -p TIME_OUT 600000"
+%%   ( ulimit -v 8000000; "$PROBCLI" docs/specs/presence-heartbeat.tex $P -model_check )
+%%   "$PROBCLI" docs/specs/presence-heartbeat.tex $P -model_check -goal "beat/=0"
+%%   "$PROBCLI" docs/specs/presence-heartbeat.tex $P -model_check \
+%%       -goal "beatHas=ztrue & lastTool>0"
+%%
+%% Negative controls, each of which must report an invariant violation:
+%%
+%%   for V in blindput nostamp stampback noguard; do
+%%     "$PROBCLI" docs/specs/presence-heartbeat-$V.tex $P -model_check
+%%   done
+%%----------------------------------------------------------------------
+
+\end{document}
