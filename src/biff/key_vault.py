@@ -15,6 +15,10 @@ class VaultError(Exception):
     """A vault could not store or release a secret."""
 
 
+class CorruptKeyError(VaultError):
+    """A vault released a value that is not a key: damaged or tampered with."""
+
+
 @final
 @dataclass(frozen=True, slots=True)
 class VaultKey:

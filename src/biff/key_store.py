@@ -9,7 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Self, final
 
-from biff.key_vault import SecretVault, VaultError, VaultKey
+from biff.key_vault import CorruptKeyError, SecretVault, VaultKey
 from biff.nostr_attest import OwnerAttestation
 from biff.nostr_crypto import NostrCrypto
 
@@ -218,7 +218,7 @@ class KeyStore:
                 f"the value stored for {key.where} in {vault.label} "
                 "is not a 32-byte hex key"
             )
-            raise VaultError(msg)
+            raise CorruptKeyError(msg)
         return raw
 
     def _require_human(self, action: str) -> None:

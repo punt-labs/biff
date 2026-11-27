@@ -15,7 +15,7 @@ from biff.key_store import (
     OwnerKeyDeniedError,
     OwnerKeyMismatchError,
 )
-from biff.key_vault import VaultError
+from biff.key_vault import CorruptKeyError, VaultError
 from biff.nostr_attest import OwnerAttestation
 from biff.nostr_bech32 import Bech32Key
 from biff.nostr_directory import NostrDirectory
@@ -27,6 +27,9 @@ _ALLOW_WARNING = (
     "When macOS asks to let `security` read this key, click Allow, never click "
     "Always Allow: that lets any program of yours read the key without asking."
 )
+
+
+_UNREADABLE = "recorded owner key unreadable in this session"
 
 
 class InvalidLifetimeError(ValueError):
@@ -233,16 +236,21 @@ class KeyCommands:
         """Say how the published owner key stands here; ``None`` if it contradicts.
 
         The key recorded on this machine is the anchor the agent cannot write.
-        An owner never set up here, or a vault this session cannot open, leaves
-        the published key unchecked and says so: ``show`` reads public data and
-        must work without the private vaults.
+        An owner never set up here is published under that name only.  A vault
+        this session cannot open leaves the attestation unverified, never
+        valid: ``show`` reads public data and must work without the private
+        vaults, but a pin it cannot read proves nothing.  A recorded value
+        that is not a key contradicts the published one, so it cannot be used
+        to downgrade the check.
         """
         try:
             recorded = self._store.owner_pubkey(owner)
         except KeyNotFoundError:
             return "not recorded on this machine: published under that name only"
+        except CorruptKeyError:
+            return None
         except VaultError:
-            return "recorded owner key unreadable in this session"
+            return _UNREADABLE
         return "recorded on this machine" if recorded == published else None
 
     def _published_pubkey(self, agent: str) -> bytes | None:
@@ -290,6 +298,8 @@ class KeyCommands:
                     f"authorized by @{owner}: invalid; the key published for "
                     f"@{owner} is not the owner key recorded on this machine"
                 )
+            if standing == _UNREADABLE:
+                return f"authorized by @{owner}: unverified, {_UNREADABLE}"
             who = f"@{owner} ({Bech32Key.abbreviate(owner_npub)}, {standing})"
             attestation = OwnerAttestation(
                 published_owner.hex(),

@@ -515,7 +515,7 @@ def test_show_names_the_owner_key_it_checked(tmp_path: Path) -> None:
     assert Bech32Key.abbreviate(owner_npub) in rig.commands.show("claude").text
 
 
-def test_show_still_reports_when_the_recorded_owner_key_cannot_be_read(
+def test_show_is_unverified_when_the_recorded_owner_key_is_unavailable(
     tmp_path: Path,
 ) -> None:
     rig = _Rig(tmp_path)
@@ -524,4 +524,21 @@ def test_show_still_reports_when_the_recorded_owner_key_cannot_be_read(
     rig.agent_vault.fail_get = True
     result = rig.commands.show("claude")
     assert not result.error
-    assert "unreadable in this session" in result.text
+    assert (
+        "authorized by @jfreeman: unverified, "
+        "recorded owner key unreadable in this session"
+    ) in result.text
+    assert "valid until" not in result.text
+
+
+def test_show_calls_a_corrupt_recorded_owner_key_invalid_not_unreadable(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    rig.agent_vault.items["biff-owner-pub", "jfreeman"] = "not hex at all"
+    text = rig.commands.show("claude").text
+    assert "invalid" in text
+    assert "unverified" not in text
+    assert "valid until" not in text
