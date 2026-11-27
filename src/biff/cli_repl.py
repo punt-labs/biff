@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from importlib.metadata import version as pkg_version
 from typing import TYPE_CHECKING, Self, final
 
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
 __all__ = ["ReplSession"]
 
 _CLEAR_LINE = "\r\033[K"
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -213,7 +216,7 @@ class ReplSession:
             try:
                 notes.extend(await self._talk_banners())
             except TalkUnavailableError:
-                return
+                logger.debug("talk notice on a relay that carries no talk")
         await self._show(notes)
 
     def _note(self, event: Event) -> list[str]:
