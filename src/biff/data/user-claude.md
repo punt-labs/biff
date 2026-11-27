@@ -21,6 +21,12 @@ by changing tool descriptions.
 - `/tty <name>` — name your session so teammates can address it.
 - `talk` — start a real-time, mutual conversation with a peer.
 
+The `biff` command line (outside Claude Code) runs through biffd, the per-user
+daemon: a command starts it when it is down, and exits 1 saying why when it
+cannot. The one exception is `biff wall` in a CI runner whose environment
+carries `BIFF_RELAY_*` settings: it posts, shows or clears the wall on that
+relay directly and exits 1 if the relay refuses.
+
 ## Receiving
 
 **Channel events (Claude Code, channels live).** An event is a one-line

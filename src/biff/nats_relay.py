@@ -1857,49 +1857,44 @@ class NatsRelay:
             logger.warning("Heartbeat found no session; skipping")
 
     async def heartbeat(self, session_key: str, at: datetime | None = None) -> None:
-        """Update ``last_active`` for an existing session.
+        """Update ``last_active`` for an existing session; skip a missing one.
 
-        If the session is missing from KV (expired, deleted, or not yet
-        created), the heartbeat is skipped.  Writing a bare
-        ``UserSession(user, tty)`` would destroy tty_name, plan,
-        hostname, and other fields that only the lifespan or tool
-        handlers know how to set.  The 3-day TTL means one skipped
-        heartbeat is harmless; overwriting with a bare session is not.
-
-        Deliberately touches only ``last_active`` (liveness) — never
-        ``last_tool_at``, the idle time ``/who``/``/finger`` display.
-        ``model_copy(update=...)`` below only overwrites the keys named
-        in its ``update`` mapping, so ``last_tool_at`` on the existing
-        session survives unchanged.
+        A missing row (expired, deleted, not yet created) is skipped: writing a
+        bare ``UserSession`` would destroy tty_name, plan and hostname.  Only
+        ``last_active`` moves, and ``last_tool_at`` only forward to *at*.  The
+        write fails if the row changed since the read and is retried, so a plan
+        saved in between survives; one skipped tick is harmless (3-day TTL).
         """
         kv_key = self._kv_key(session_key)
-        _, kv = await self._ensure_connected()
-        try:
-            entry = await self._tracked("kv.get", kv.get(kv_key))
-            if entry.value is None:
+        for _ in range(3):  # a later tick retries what these do not land
+            _, kv = await self._ensure_connected()
+            try:
+                entry = await self._tracked("kv.get", kv.get(kv_key))
+                if entry.value is None:
+                    self._warn_heartbeat_missing_once(session_key)
+                    return  # No session to heartbeat
+                existing = UserSession.model_validate_json(entry.value)
+            except (KeyNotFoundError, BucketNotFoundError):
                 self._warn_heartbeat_missing_once(session_key)
-                return  # No session to heartbeat
-            existing = UserSession.model_validate_json(entry.value)
-        except (KeyNotFoundError, BucketNotFoundError):
-            self._warn_heartbeat_missing_once(session_key)
-            return  # Session not found — nothing to heartbeat
-        except (ValidationError, ValueError):
-            # INFO: heartbeat runs in the background loop; a skipped tick is
-            # harmless (3-day TTL) and must not print into the interactive
-            # REPL.  biff.log records the anomaly.
-            logger.info("Corrupt session, skip heartbeat")
+                return  # Session not found — nothing to heartbeat
+            except (ValidationError, ValueError):
+                # INFO: runs in the background loop and must not print into the
+                # interactive REPL; biff.log records the anomaly.
+                logger.info("Corrupt session, skip heartbeat")
+                return
+            self._heartbeat_missing_warned.discard(session_key)
+            _, kv = await self._ensure_connected()  # re-anchor after the get
+            try:
+                updated = existing.beat(at).model_dump_json().encode()
+                await self._tracked(
+                    "kv.update", kv.update(kv_key, updated, last=entry.revision)
+                )
+                break
+            except KeyWrongLastSequenceError:
+                continue
+        else:
+            logger.info("Session changed concurrently, skip heartbeat")
             return
-        self._heartbeat_missing_warned.discard(session_key)
-        updated = existing.beat(at)
-        # Re-anchor to the current connection: the kv.get above may have let a
-        # concurrent loop rebuild self._nc, leaving `kv` stale.  Fast path
-        # returns cached handles, so `owner = self._nc` at _tracked entry
-        # matches the connection this awaitable runs on — and the put runs on a
-        # live handle.
-        _, kv = await self._ensure_connected()
-        await self._tracked(
-            "kv.put", kv.put(kv_key, updated.model_dump_json().encode())
-        )
         # Refresh TTY name reservation to prevent TTL expiry (DES-035).
         if existing.tty_name:
             try:
@@ -1907,9 +1902,8 @@ class NatsRelay:
                     existing.user, existing.tty_name, session_key
                 )
             except Exception:
-                # INFO: reservation refresh runs inside the background
-                # heartbeat; a transient failure retries next tick and must
-                # not print into the interactive REPL.
+                # INFO: runs inside the background heartbeat; a transient
+                # failure retries next tick.
                 logger.info("Failed to refresh TTY name reservation", exc_info=True)
 
     async def get_sessions(self) -> list[UserSession]:

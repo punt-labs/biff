@@ -10,6 +10,7 @@ All datetime fields are normalized to UTC; naive datetimes are rejected.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, tzinfo
 from typing import Annotated, Literal, cast
@@ -49,6 +50,10 @@ def _is_utc(tz: tzinfo) -> bool:
 
 PLAN_MAX_LENGTH = 512
 """Longest accepted plan; matches ``Message.body`` and ``WallPost.text``."""
+_USER_MAX_LENGTH = 128  # the longest user name a message names
+_ID_MAX_LENGTH = 128  # a session id's limit, so the longest tty a message names
+_ADDRESS_MAX_LENGTH = _USER_MAX_LENGTH + 1 + _ID_MAX_LENGTH  # ``user:tty``
+_ENVELOPE_MAX_LENGTH = 256  # one encryption-envelope field of a message
 
 _PLAN_TEXT: TypeAdapter[str] = TypeAdapter(
     Annotated[str, Field(max_length=PLAN_MAX_LENGTH)]
@@ -81,6 +86,9 @@ def truncate_plan(text: str) -> str:
     return text[: PLAN_MAX_LENGTH - 1] + "…"
 
 
+_REFILE_NS = uuid.UUID("b3a1c7d2-2e49-4c52-8d1a-6e0f9c5a4b72")
+
+
 class Message(BaseModel):
     """A single async message between two users.
 
@@ -92,9 +100,9 @@ class Message(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     id: uuid.UUID = Field(default_factory=_new_id)
-    from_user: str = Field(min_length=1)
-    from_tty: str = Field(default="", description="Sender's human-readable tty name")
-    to_user: str = Field(min_length=1)
+    from_user: str = Field(min_length=1, max_length=_USER_MAX_LENGTH)
+    from_tty: str = Field(default="", max_length=_ID_MAX_LENGTH)  # sender's tty name
+    to_user: str = Field(min_length=1, max_length=_ADDRESS_MAX_LENGTH)  # user[:tty]
     body: str = Field(min_length=1, max_length=512)
     timestamp: datetime = Field(default_factory=_utc_now)
     read: bool = False
@@ -102,14 +110,31 @@ class Message(BaseModel):
     # feature (DES-016).  All defaults are empty/false; populated when
     # E2E encryption is active.
     encrypted: bool = False
-    nonce: str = ""
-    sender_pubkey: str = ""
-    encryption_mode: str = ""
+    nonce: str = Field(default="", max_length=_ENVELOPE_MAX_LENGTH)
+    sender_pubkey: str = Field(default="", max_length=_ENVELOPE_MAX_LENGTH)
+    encryption_mode: str = Field(default="", max_length=_ENVELOPE_MAX_LENGTH)
 
     @field_validator("timestamp", mode="after")
     @classmethod
     def _normalize_timestamp(cls, v: datetime) -> datetime:
         return _ensure_utc(v)
+
+    def refiled(self) -> Message:
+        """Return this message as it is filed again where it came from.
+
+        The id is derived from this one's, so filing it twice cannot make two
+        copies; the address is kept, so it lands in the inbox it was fetched from.
+        """
+        return self.model_copy(update={"id": uuid.uuid5(_REFILE_NS, str(self.id))})
+
+    def original_in(self, held: Mapping[uuid.UUID, Message]) -> uuid.UUID:
+        """Return the id in *held* of the message this one is the refiled copy of.
+
+        A refile that landed but was reported failed leaves the original held and
+        its copy in the relay; the copy's id is derived from the original's, so
+        the two are one message.  A message that copies nothing held is its own.
+        """
+        return next((i for i, m in held.items() if m.refiled().id == self.id), self.id)
 
 
 class UserSession(BaseModel):

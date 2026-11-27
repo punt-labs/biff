@@ -1549,6 +1549,23 @@ $connState = connected$.
 Creates or refreshes a session.  Override ($\oplus$) ensures
 idempotent updates.
 
+$UpdateSession$ is a single atomic step, and the heartbeat is not: it reads
+the row and writes it back in two round trips, and a writer of another field
+(a plan, a name) can run between them.  The heartbeat therefore writes with a
+compare-and-set on the row's revision (\texttt{kv.update(\ldots,
+last=entry.revision)}), retried up to three times, and skips the tick when
+it still fails.  The race, the compare-and-set and the invariant that no
+write by another writer is overwritten are modelled in
+\texttt{presence-heartbeat.tex}, kept apart because the revision and the
+heartbeat in flight would multiply the state space of this specification.  In
+terms of $SessionStore$ the model refines $UpdateSession$ (which is the
+unconditional, upper-level write: its conditional refinement, $HeartbeatCommit$
+with its revision guard, and the conflict case, $HeartbeatConflict$ with the
+retry budget of $HeartbeatRead$ and $NextTick$, are in
+\texttt{presence-heartbeat.tex}): a successful
+heartbeat is an $UpdateSession$ whose $value?$ is the stored row with only
+\texttt{last\_active} moved.
+
 \subsection{Delete Session (Logout / TTL Expiry)}
 
 \begin{schema}{DeleteSession}
@@ -2170,6 +2187,17 @@ verified by model checking with probcli (\texttt{z-spec test}):
     that checks ``never subscribed'' instead of ``subscribed to a
     superseded generation'' --- would equally strand $inboxNotify$ or
     $kvWatch$ were the fix not applied uniformly across the family.
+
+  \item \textbf{No lost write (PL-1704)}: a heartbeat never overwrites a
+    plan, a name or any other field written after its read.  Checked in
+    \texttt{presence-heartbeat.tex}, where $fields = intended$ is a state
+    invariant: ProB visits all 922 states of the compare-and-set model with no
+    violation, and finds the lost plan, in five steps ($HeartbeatRead \to
+    WriteField \to HeartbeatCommit$), in the frozen variant
+    \texttt{presence-heartbeat-blindput.tex}, whose commit is the blind put the
+    code made before.  $EF\,(beat \neq 0)$ and $EF\,(phase = hbRead \land
+    curRev \neq seenRev)$ are both \textbf{TRUE}, so the invariant is not
+    vacuous: a heartbeat can land, and the race has something to refuse.
 
   \item \textbf{Snapshot survival}: $SnapshotDone$ transitions to
     $streaming$, never to $idle$ or $stopped$.  The watcher

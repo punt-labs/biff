@@ -272,7 +272,7 @@ Each command is also available with the plugin prefix, for example `/biff:read`.
 
 ### CLI
 
-Every slash command has a matching `biff` subcommand. The CLI works outside Claude Code: in any terminal, SSH session or CI job.
+Every slash command has a matching `biff` subcommand. The CLI works outside Claude Code, in any terminal or SSH session. The product commands (`who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`, `status`) run through biffd, the per-user daemon: a command starts it when it is down, and `biff install` installs it as a user service. A command that cannot start it exits 1 and says why. The one exception is `biff wall` in a CI runner whose environment carries `BIFF_RELAY_*` settings (no session, no daemon): it talks to that relay directly: posting and clearing reach the configured repository and every repository of the configured organizations, showing reads the configured repository's wall only, and it exits 1 when the relay refuses.
 
 | Command | What it does |
 |---------|--------------|
@@ -390,7 +390,7 @@ biff session end main           # End it; unread mail moves to your user mailbox
 biff -s main write kai "hi"     # Run one command as session "main" (or set BIFF_SESSION)
 ```
 
-Without `-s`, a command runs as the first of: `BIFF_SESSION`; the Claude Code session it is run from (`CLAUDE_CODE_SESSION_ID`, as a client of that session, creating nothing); this repo's default (`biff session use`, or the last `session new`); a fresh session. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
+Without `-s`, a command runs as the first of: `BIFF_SESSION`; this repo's default (`biff session use`, or the last `session new`); a fresh session. A shell is always a CLI session, even when run from Claude Code. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
 
 ### Keys and agent attestation
 

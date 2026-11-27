@@ -12,6 +12,7 @@ from pydantic_core import to_jsonable_python
 
 from biff import commands
 from biff.commands.inbox import Inbox
+from biff.daemon.read_batch import ReadBatcher
 from biff.daemon.refusal import RefusalError
 from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
@@ -35,16 +36,11 @@ type Handler = Callable[[CliContext, Params], Awaitable[CommandResult]]
 type Acknowledge = Callable[[], Awaitable[None]]
 
 READ_BUDGET_BYTES = MAX_FRAME_BYTES // 2
-"""The most mail one ``read`` reply carries, in bytes of JSON.
+"""The most one ``read`` reply carries, rows and rendered text together, in bytes.
 
-Half the frame limit leaves room for the reply's envelope and for the length
-of text the JSON escapes add, so a batch can never be refused by the client.
+Half the frame limit leaves the other half for the frame's own fields, so a
+batch can never be refused by the client.
 """
-
-_ENVELOPE_BYTES = 512
-"""What a reply adds around its messages: ids, keys, the ``more`` count."""
-
-_CLIPPED = "[clipped]"
 
 
 @dataclass(frozen=True)
@@ -176,9 +172,10 @@ class Methods:
     ) -> Outcome:
         """Run *method* for the session *ctx* and return its wire result.
 
-        The result is ``{"data": <the command's JSON payload>, "error": bool}``;
-        display text is the client's to render from the data.  A payload that
-        cannot be serialised raises, rather than being turned into a string.
+        The result is ``{"data": <the command's JSON payload>, "error": bool,
+        "text": <the command's display text>}``.  The engine renders the text once,
+        so every client prints the same words.  A payload that cannot be
+        serialised raises, rather than being turned into a string.
 
         Raises:
             RefusalError: The method is unknown or its params are invalid.
@@ -192,29 +189,34 @@ class Methods:
             raise RefusalError.of(ErrorCode.UNKNOWN_METHOD, msg)
         result = await handler(ctx, Params(method, raw))
         data = _JSON.validate_python(to_jsonable_python(result.json_data))
-        return Outcome({"data": data, "error": result.error})
+        return Outcome({"data": data, "error": result.error, "text": result.text})
 
     async def _read(self, session: Session, p: Params) -> Outcome:
         """Return the next batch of unread mail, acknowledged once delivered.
 
-        Fetched mail is held in the session's outbox, because some relays consume
-        mail at fetch: what a lost reply or a truncated batch leaves behind is
-        served by the next ``read``.  The batch is as much as fits the read
-        budget in bytes; a message larger than the budget alone is clipped, never
-        sent whole.  ``more`` counts what the batch leaves: held mail and mail
-        still on the relay behind a bounded fetch.
+        Fetched mail is held in the session's outbox until its reply is confirmed,
+        because some relays consume mail at fetch: a lost reply is served again by
+        the next ``read``.  What a truncated batch leaves behind goes back to such
+        a relay, so everything that drains the session finds it.  The batch is as
+        much as fits the read budget in bytes; a message larger than the budget
+        alone is clipped, never sent whole.  ``more`` counts what the batch
+        leaves: held mail and mail still on the relay behind a bounded fetch.
         """
         p.done()
         inbox = await Inbox.unread(session.context)
         pending = session.outbox.merge(inbox.messages)
-        batch = self._batch(pending)
-        data = _JSON.validate_python(
-            to_jsonable_python([m.model_dump(mode="json") for m in batch])
-        )
-        result: dict[str, JsonValue] = {"data": data, "error": False}
+        fitted = ReadBatcher(self._read_budget).fit(pending)
+        batch = fitted.messages
+        result: dict[str, JsonValue] = {
+            "data": fitted.data,
+            "error": False,
+            "text": fitted.text,
+        }
         # The backlog summary is a hint for ``more``; a relay that fails to report
         # it must not sink a batch that was already fetched and is deliverable.
+        # Mail given back to the relay is counted by the relay's own backlog.
         left = len(pending) - len(batch)
+        left -= await self._refile(session, inbox, pending, batch)
         try:
             left += await inbox.unfetched()
         except RELAY_ERRORS as exc:
@@ -225,33 +227,36 @@ class Methods:
             return Outcome(result)
         return Outcome(result, partial(self._delivered, session, inbox, batch))
 
-    def _batch(self, pending: list[Message]) -> list[Message]:
-        """Take messages from the front of *pending* while they fit the budget."""
-        batch: list[Message] = []
-        used = _ENVELOPE_BYTES
-        for message in pending:
-            size = len(message.model_dump_json().encode()) + 1  # the comma
-            if not batch and used + size > self._read_budget:
-                message = self._clip(message, self._read_budget - used)
-                size = len(message.model_dump_json().encode()) + 1
-            elif used + size > self._read_budget:
-                break
-            batch.append(message)
-            used += size
-        return batch
-
     @staticmethod
-    def _clip(message: Message, room: int) -> Message:
-        """Shorten *message*'s body until the message fits *room* bytes of JSON."""
-        bare = len(message.model_copy(update={"body": "x"}).model_dump_json().encode())
-        keep = max(1, room - bare - len(_CLIPPED.encode()))
-        body = message.body.encode()[:keep].decode(errors="ignore") or "x"
-        return message.model_copy(update={"body": body + _CLIPPED})
+    async def _refile(
+        session: Session, inbox: Inbox, pending: list[Message], batch: list[Message]
+    ) -> int:
+        """Give the relay back the mail this batch leaves, if the relay consumed it.
+
+        Return how many messages went back.
+
+        Held in the daemon alone, that mail would be out of reach of everything
+        else that drains or reads the session (ending it, another process), and
+        gone if the daemon died.  The batch itself stays held until confirmed.
+        """
+        sent = {m.id for m in batch}
+        left_behind = [m for m in pending if m.id not in sent]
+        filed = 0
+        for message in left_behind:
+            try:
+                if await inbox.refile(message):
+                    # Released as it is filed: a read cancelled before the next
+                    # refile must not leave this message in the relay and here.
+                    session.outbox.forget([message])
+                    filed += 1
+            except RELAY_ERRORS:
+                logger.warning("could not file message %s again", message.id)
+        return filed
 
     @staticmethod
     async def _delivered(session: Session, inbox: Inbox, batch: list[Message]) -> None:
         """Forget the batch and mark it read, once the reply that carried it left."""
-        session.outbox.delivered(batch)
+        session.outbox.forget(batch)
         await inbox.mark_read(batch)
 
     @staticmethod

@@ -48,14 +48,15 @@ class Outbox:
         return len(self._held)
 
     def merge(self, fetched: Sequence[Message]) -> list[Message]:
-        """Hold *fetched* alongside what is held; return all of it, oldest first."""
-        if not self._retains:
-            return sorted(fetched, key=lambda m: m.timestamp)
-        for message in fetched:
-            self._held.setdefault(message.id, message)
-        return sorted(self._held.values(), key=lambda m: m.timestamp)
+        """Hold *fetched*, replacing a held message its copy came back for; list all."""
+        if self._retains:
+            for message in fetched:
+                self._held.pop(message.original_in(self._held), None)
+                self._held[message.id] = message
+            fetched = list(self._held.values())
+        return sorted(fetched, key=lambda m: (m.timestamp, m.id))
 
-    def delivered(self, delivered: Sequence[Message]) -> None:
-        """Forget *delivered*: it reached the client."""
-        for message in delivered:
+    def forget(self, gone: Sequence[Message]) -> None:
+        """Forget *gone*: it reached the client, or went back to the relay."""
+        for message in gone:
             self._held.pop(message.id, None)

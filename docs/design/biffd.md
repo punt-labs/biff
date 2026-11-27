@@ -1,8 +1,11 @@
 # biffd: the Per-User Daemon
 
 Status: proposed design (DES-095). Migration step 1 is built: `biff daemon
-serve`, the frames and the session records below. Nothing routes through the
-daemon yet.
+serve`, the frames and the session records below. Step 2 is in progress
+(DES-099): the `biff` product commands (`who`, `finger`, `write`, `read`,
+`plan`, `last`, `wall`, `mesg`, `tty`, `status`) route through the daemon;
+`watch`, the `session` verbs, `talk` and the REPL, `biff mcp` and the hooks
+do not yet.
 
 `biffd` is one long-running process per operating-system user. It owns every
 connection and every piece of state that biff's clients would otherwise
@@ -48,7 +51,12 @@ connection per distinct target and the sessions of one repository share it.
 
 ## What stays in clients
 
-A client holds no relay connection and no private key. It sends requests,
+A client holds no relay connection and no private key, with one named exception:
+`biff wall` in a process whose environment carries `BIFF_RELAY_*` settings (a CI
+runner posting a build failure, with no session, inbox or daemon) posts, shows
+or clears the wall on the relay it was handed, on its configured repositories
+and those of its organizations, and closes it. No other command has a direct
+path (DES-099). It sends requests,
 receives replies and events, and renders them.
 
 | Client | Role |

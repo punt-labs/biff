@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from biff.client.connection import DaemonError
+from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
+from biff.plan_marker import PlanMarker
 
 if TYPE_CHECKING:
     from tests.test_daemon.conftest import Harness
@@ -113,10 +116,36 @@ async def test_a_command_error_is_data_not_a_protocol_error(harness: Harness) ->
     assert result["error"] is True
 
 
-async def test_results_are_wire_data_never_rendered_text(harness: Harness) -> None:
+async def test_a_result_carries_data_error_and_the_engines_text(
+    harness: Harness,
+) -> None:
     client = await harness.connect("s-kai", "kai")
     result = cast("dict[str, object]", await client.request("who"))
-    assert set(result) == {"data", "error"}
+    assert set(result) == {"data", "error", "text"}
+
+
+async def test_who_text_is_the_engines_rendering_of_the_rows(
+    harness: Harness,
+) -> None:
+    client = await harness.connect("s-kai", "kai")
+    result = cast("dict[str, object]", await client.request("who"))
+    assert "kai:tty1" in cast("str", result["text"])
+
+
+async def test_read_text_says_no_new_messages_when_the_inbox_is_empty(
+    harness: Harness,
+) -> None:
+    client = await harness.connect("s-kai", "kai")
+    result = cast("dict[str, object]", await client.request("read"))
+    assert result["text"] == "No new messages."
+
+
+async def test_read_text_renders_the_delivered_mail(harness: Harness) -> None:
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await kai.request("write", to="eric", message="ready for review")
+    result = cast("dict[str, object]", await eric.request("read"))
+    assert "ready for review" in cast("str", result["text"])
 
 
 async def test_repos_on_one_relay_server_get_one_relay_each_and_stay_apart(
@@ -157,3 +186,30 @@ async def test_a_proxy_in_the_environment_is_not_used_for_the_loopback_daemon(
     monkeypatch.setenv(variable, "http://127.0.0.1:1")  # nothing listens there
     kai = await harness.connect("s-kai", "kai")
     assert cast("dict[str, object]", await kai.request("who"))["error"] is False
+
+
+async def test_last_with_a_huge_count_is_clamped_and_fits_one_frame(
+    harness: Harness,
+) -> None:
+    """The engine clamps ``count`` to 100 entries, which bounds data and text."""
+    for n in range(3):
+        await harness.connect(f"s-{n}", "kai")
+    client = await harness.connect("s-eric", "eric")
+    result = cast("dict[str, object]", await client.request("last", count=10**9))
+    assert len(_rows(result)) <= 100
+    assert len(json.dumps(result).encode()) < MAX_FRAME_BYTES
+
+
+async def test_plan_leaves_the_plan_gate_marker_to_the_client(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The marker is keyed on the caller's repo and harness, which the daemon lacks."""
+    written: list[str] = []
+
+    def spy(message: str, session_id: str | None = None) -> None:
+        written.append(message)
+
+    monkeypatch.setattr(PlanMarker, "sync", staticmethod(spy))
+    client = await harness.connect("s-kai", "kai")
+    await client.request("plan", message="ship biffd")
+    assert written == []

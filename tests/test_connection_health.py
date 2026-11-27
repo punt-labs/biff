@@ -227,7 +227,7 @@ class TestWedgeOnsetRecovery:
         entry.value = UserSession(user="kai", tty="abc123").model_dump_json().encode()
         kv = MagicMock()
         kv.get = AsyncMock(return_value=entry)
-        kv.put = AsyncMock(side_effect=TimeoutError)
+        kv.update = AsyncMock(side_effect=TimeoutError)
         js = MagicMock()
         relay._ensure_connected = AsyncMock(return_value=(js, kv))  # type: ignore[method-assign]
 
