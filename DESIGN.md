@@ -9799,9 +9799,11 @@ second group of daemon additions for PL-1670. Model:
   and the record is dropped and marked ended only after all of them. A failure
   leaves the record, so there is no state in which a row outlives its record
   (`BadOrphan`), and the next `end` finishes (`rsEnding` reaches `rsNone`).
-- The name is released only if the session still owns it. The model releases by
-  name and so orders the old end before the new hello; the owner check makes the
-  release harmless when the order is not kept.
+- The name is released only if the session still owns it, and so is the model's
+  `ReleaseTty`. The model also keeps the old end before the new hello, and checks
+  that the owner check alone is enough when the order is not kept
+  (`claude-session-end-unordered-owned.tex` holds; releasing by name
+  (`-unordered.tex`) frees the new session's name).
 - A connection of a replaced run is refused by the daemon's existing run check
   before the method runs (`EndRefused`).
 - Retention: `ExpireClaude` runs in the session sweep for a session that is
@@ -9810,11 +9812,18 @@ second group of daemon additions for PL-1670. Model:
 - Held mail is refiled before the drop (requirement A2 of DES-099); with the
   relay unavailable the end fails and keeps the mail.
 
-**Divergence from the model.** The model keeps the record across a daemon
-restart. The daemon holds harness records in memory, so a restart forgets them:
-their rows age out by the relay's own lifetime and the unconfirmed batch is lost
-with the outbox, as `DaemonRestart` says for the outbox. Persisting the records is
-not in this change.
+**Divergence from the model.** The durable model keeps the record across a daemon
+restart (`DaemonRestart`). The daemon holds harness records in memory, so a
+restart forgets them, which the spec now states as `DaemonRestartForget`: the row
+and the tty name age out by the relay's own lifetime (`RowAgesOut`,
+`TtyAgesOut`), the unconfirmed batch is lost with the outbox (PL-1753), and the
+unread mail in the session's relay inbox is never drained to the user's mailbox
+(`strandedN`, kept in the relay until its own retention, and found again if the
+session resumes under the same id). That is not wholly safe: a forgotten session
+holds its name for the row lifetime and its unread mail is stranded. The spec keeps
+both restarts; the properties about the record hold unless the restart forgot it.
+Persisting the records, or scanning the relay's rows at start, would close it and
+is not in this change.
 
 **Rejected.**
 

@@ -1,105 +1,129 @@
 {
   "specification": "docs/specs/claude-session-end.tex",
   "testDirectory": "tests/",
-  "timestamp": "2026-11-27T20:00:00Z",
+  "branch": "pl-1670-m2-end (724a243)",
+  "timestamp": "2026-11-27T23:30:00Z",
   "summary": {
-    "covered": 3,
+    "covered": 13,
     "total": 13,
-    "percentage": 23,
-    "gaps": 10
+    "percentage": 100,
+    "gaps": 0
   },
   "constraints": [
     {
-      "text": "rowPresent => recState /= rsNone: no row outlives its record (no BadOrphan)",
+      "text": "rowPresent => recState /= rsNone (unless forgot): no row outlives its record (no BadOrphan)",
       "category": "invariant",
       "source": "EndInv",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_an_end_that_fails_keeps_the_record_and_the_next_one_finishes; tests/test_daemon/test_claude_end.py::test_a_logout_that_cannot_be_recorded_keeps_the_record_for_the_next_end; tests/test_daemon/test_claude_end.py::test_another_connection_of_an_ended_session_cannot_rebuild_its_row",
+      "confidence": "high",
+      "verifiedBy": "the first two make delete_session / append_wtmp fail once and assert the record (status().sessions) stays while the row is still readable, then the next end removes row and record; the third asserts a second connection cannot recreate the row after the end"
     },
     {
-      "text": "ttyOwner = tOld => recState /= rsNone",
+      "text": "ttyOwner = tOld => recState /= rsNone (unless forgot): the name does not outlive the record",
       "category": "invariant",
       "source": "EndInv",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_ending_a_session_removes_its_row_and_frees_its_name; tests/test_daemon/test_claude_expiry.py::test_a_session_nobody_is_attached_to_expires_at_retention",
+      "confidence": "high",
+      "verifiedBy": "both assert owner() is None after the end / the expiry"
     },
     {
-      "text": "newLive => ttyOwner = tNew: the old end's release never frees the new session's name",
+      "text": "newLive => ttyOwner = tNew: an end never frees a name another session took (owner-checked release)",
       "category": "invariant",
       "source": "EndInv",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_a_name_another_session_took_is_not_freed_by_the_end",
+      "confidence": "high",
+      "verifiedBy": "the test releases the old session's reservation, reserves the name for kai:someone-else, ends the session, and asserts the owner is still kai:someone-else"
     },
     {
-      "text": "outboxN + inboxN + shownN + lostN = issuedN: an end loses nothing; only a daemon restart loses the outbox (lostN)",
+      "text": "outboxN + inboxN + shownN + lostN + strandedN = issuedN: an end loses no mail; a restart loses the outbox",
       "category": "invariant",
       "source": "EndInv",
-      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_mail_a_batch_left_behind_moves_with_the_session_when_it_ends (the remainder only; the held batch is owed)",
-      "confidence": "medium"
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_an_end_files_back_the_mail_the_session_holds; tests/test_daemon/test_claude_end.py::test_an_end_loses_no_mail_still_in_the_inbox; tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail",
+      "confidence": "high",
+      "verifiedBy": "the first holds an unconfirmed batch (consuming relay) and asserts it is in the user mailbox after the end; the second asserts both inbox messages reach the user mailbox; the third asserts a restart loses the unconfirmed batch on a consuming relay and keeps it on one that retains. shownN is not asserted"
     },
     {
       "text": "recState = rsEnding => endRun = currentRun: a replaced run cannot end the session",
       "category": "invariant",
       "source": "EndInv",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_a_replaced_run_cannot_end_the_session; tests/test_daemon/test_run_ledger.py::test_a_replaced_run_is_refused_for_good",
+      "confidence": "high",
+      "verifiedBy": "the end test: a connection of run a1 after a2 replaced it gets session_replaced (or is closed), row and owner are unchanged and one session remains; then the current run ends it. The ledger test shows the refusal is permanent"
     },
     {
       "text": "EndOwnSession: a connection of the current run begins the end",
       "category": "precondition",
       "source": "EndOwnSession",
-      "coveredBy": "tests/test_daemon/test_session_store.py::TestEnd::test_end_live (CLI sessions)",
-      "confidence": "medium"
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_ending_a_session_removes_its_row_and_frees_its_name; tests/test_daemon/test_claude_end.py::test_a_replaced_run_cannot_end_the_session (the current run ends it); tests/test_daemon/test_claude_end.py::test_a_shells_session_is_not_ended_by_end",
+      "confidence": "high",
+      "verifiedBy": "end by the current-run connection removes row and name; a shell's session is refused invalid_params, which the model does not have (a stricter code)"
     },
     {
       "text": "EndRefused: a connection of a replaced run changes nothing",
       "category": "effect",
       "source": "EndRefused",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_a_replaced_run_cannot_end_the_session",
+      "confidence": "high",
+      "verifiedBy": "after the refused end the test asserts row present, owner unchanged, one session in status"
     },
     {
-      "text": "ExpireClaude: dormant, no connection, aged to retention begins the end",
+      "text": "ExpireClaude: a dormant record with no connection, aged to retention, begins the end",
       "category": "precondition",
       "source": "ExpireClaude",
-      "coveredBy": "tests/test_daemon/test_session_store.py::test_expire_dormant_removes_directory (CLI sessions)",
-      "confidence": "medium"
+      "coveredBy": "tests/test_daemon/test_claude_expiry.py::test_a_session_nobody_is_attached_to_expires_at_retention; tests/test_daemon/test_claude_expiry.py::test_a_session_with_a_connection_never_expires; tests/test_daemon/test_claude_expiry.py::test_a_reattach_restarts_the_retention",
+      "confidence": "high",
+      "verifiedBy": "the first closes the client (no connection, dormant), a sweep at retention 3600 leaves it, a sweep at 0 removes row, name and record and appends one logout; the second shows a connected session is never expired; the third shows a reattached session is not expired (it shows the reattach wins, not that the age restarts from zero)"
     },
     {
-      "text": "DeleteRow, ReleaseTty, AppendLogout, FileOutbox: each effect of an end, the record stays until all are done",
+      "text": "DeleteRow, ReleaseTty, AppendLogout, FileOutbox, FinishEnd: each effect of an end, and the record stays until all are done",
       "category": "effect",
       "source": "FinishEnd",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_ending_a_session_removes_its_row_and_frees_its_name; tests/test_daemon/test_claude_end.py::test_ending_a_session_appends_a_logout; tests/test_daemon/test_claude_end.py::test_an_end_files_back_the_mail_the_session_holds; tests/test_daemon/test_claude_end.py::test_ending_a_session_forgets_its_record; tests/test_daemon/test_claude_end.py::test_an_end_that_fails_keeps_the_record_and_the_next_one_finishes; tests/test_daemon/test_claude_end.py::test_a_logout_that_cannot_be_recorded_keeps_the_record_for_the_next_end; tests/test_daemon/test_claude_end.py::test_two_ends_at_once_end_the_session_once",
+      "confidence": "high",
+      "verifiedBy": "one test per effect; the failure tests make delete_session and append_wtmp fail once; the concurrency test parks the first end mid-effect and asserts one logout. A failure of the refile or the drain is not injected"
     },
     {
-      "text": "NewHello: only after the old end is complete and its tty name free",
+      "text": "NewHello: the new session of a clear takes the name only after the old end is complete",
       "category": "precondition",
       "source": "NewHello",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_a_clear_ends_the_old_session_before_the_new_hello",
+      "confidence": "medium",
+      "verifiedBy": "the new session's tty request for the old name errors while the old session holds it, succeeds after the old end, and the owner is then not the old key. The model's hello is the daemon-side name claim; the client's wait for the end's reply is not tested here"
     },
     {
-      "text": "AG(dormant & age = maxAge => enabled(ExpireClaude)); AG(rsEnding => EF rsNone)",
+      "text": "retention and end: enabled(ExpireClaude) at retention; every owed end step and the finish enabled; a failed end is finished by the next",
       "category": "invariant",
       "source": "retention",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_expiry.py::test_a_session_nobody_is_attached_to_expires_at_retention; tests/test_daemon/test_claude_expiry.py::test_an_expiry_the_relay_refuses_is_tried_again_by_the_next_sweep; tests/test_daemon/test_claude_end.py::test_an_end_that_fails_keeps_the_record_and_the_next_one_finishes",
+      "confidence": "high",
+      "verifiedBy": "expiry at retention happens; a refused expiry leaves the record and the next sweep removes it; a failed end is finished by the next end"
     },
     {
-      "text": "shownDormant = zfalse: held mail is shown only to a connected client",
+      "text": "shownDormant = zfalse: held mail is not consumed when nobody is connected",
       "category": "invariant",
       "source": "EndInv",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_expiry.py::test_a_reply_nobody_confirmed_is_not_shown_to_a_session_with_no_client",
+      "confidence": "medium",
+      "verifiedBy": "a reply is handed over (request_held), never confirmed, the client closes, a new connection reads and finds the message still unread. It shows no consumption without a confirming client, which is what the model's connected-client guard stands for"
     },
     {
-      "text": "DaemonRestart (of a live or a dormant record): the outbox is the daemon's memory and is lost from either state (PL-1753)",
+      "text": "DaemonRestart (live or dormant): the outbox is the daemon's memory and is lost; the relay's mail is not (PL-1753)",
       "category": "effect",
       "source": "DaemonRestart",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail",
+      "confidence": "medium",
+      "verifiedBy": "a connected session holds an unconfirmed batch; the daemon is stopped and a new one started; on a consuming relay the batch is gone, on one that keeps mail it is read again. A restart while dormant is not exercised; the code forgets the whole record on any restart"
     }
   ],
-  "notes": "Docs-only change ahead of the code PRs: the clauses marked GAP are the test obligations those PRs carry. The CLI-session store tests cover the analogous transitions for CLI sessions only."
+  "limitsWithoutTest": [
+    {
+      "text": "DaemonRestartForget, RowAgesOut, TtyAgesOut: the code keeps harness records in memory, so a restart forgets them; the row and the name age out by the relay's row lifetime, and the session's unread relay inbox is stranded (strandedN)",
+      "reason": "a divergence from the durable-record model, reported as a finding: not wholly safe (a name held up to the row lifetime, unread mail never drained to the user mailbox). No test asserts the forgotten record or the stranding; the closing fix is persisting the records or a scan of the relay's rows at start"
+    },
+    {
+      "text": "claude-session-end-unordered-owned.tex: the owner check alone keeps the new session's name",
+      "reason": "model result (2,351 states, invariant holds); the code's check is covered by test_a_name_another_session_took_is_not_freed_by_the_end"
+    }
+  ],
+  "notes": "The z-spec audit tool is not available to this agent; the audit was done by hand following /z-spec:audit: each row's tests were read, not matched by name (see verifiedBy)."
 }
