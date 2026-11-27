@@ -645,3 +645,19 @@ async def test_an_invite_is_accepted_after_the_inviter_renamed_its_tty(
         "dict[str, object]", await kai.request("talk", to="bob:bobby", message="")
     )
     assert _data(accepted)["phase"] == "connected"
+
+
+async def test_a_feed_whose_connection_cannot_be_acquired_retries_and_recovers(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    subject = await _subject(pair.eric)
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    relay = bus.relays[0]
+    relay.dial_fails = True  # get_nc itself raises
+    relay.generation += 1  # the relay dialled a fresh client; the feeds must follow
+    await _eventually(lambda: bus.subscriber_count(subject) == 0)
+    await _eventually(lambda: relay.failed_acquisitions >= 2)  # retried, not given up
+    relay.dial_fails = False
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    await pair.say(pair.kai, pair.eric_at, "")
+    assert (await pair.read(pair.eric))["invites"] != []

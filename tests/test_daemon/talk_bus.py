@@ -112,6 +112,8 @@ class TalkBusRelay(LocalRelay):
         self.stale = False
         self.failed_dials: Counter[str] = Counter()  # per session key
         self.crash: Exception | None = None
+        self.dial_fails = False
+        self.failed_acquisitions = 0
         bus.relays.append(self)
 
     @property
@@ -131,6 +133,10 @@ class TalkBusRelay(LocalRelay):
         return f"talk.notify.{session_key}"
 
     async def get_nc(self) -> TalkClient:
+        if self.dial_fails:  # acquiring the connection itself fails
+            self.failed_acquisitions += 1
+            msg = "cannot acquire a connection"
+            raise TimeoutError(msg)
         return self._bus
 
     async def get_session(self, session_key: str) -> UserSession | None:
