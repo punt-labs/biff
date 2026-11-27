@@ -390,6 +390,28 @@ biff -s main write kai "hi"     # Run one command as session "main" (or set BIFF
 
 Without `-s`, a command runs as the first of: `BIFF_SESSION`; the Claude Code session it is run from (`CLAUDE_CODE_SESSION_ID`, as a client of that session, creating nothing); this repo's default (`biff session use`, or the last `session new`); a fresh session. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
 
+### Keys and agent attestation
+
+Each person and each agent has one Nostr key. You sign each agent's public key, and the signature expires: 24 hours by default, 7 days with `--image` for an agent image, or set `BIFF_ATTESTATION_HOURS`. A receiver checks the expiry on its own clock.
+
+```bash
+biff key init                          # Create your owner key; prints your npub
+biff key agent claude                  # Create an agent's key; publishes its npub
+biff key attest claude --hours 24      # Sign the agent's key as its owner (you must be present)
+biff key attest claude --npub npub1... # Confirm a key read from the directory (an agent image's)
+biff key show claude                   # The agent's key and the state of its attestation
+```
+
+When this machine holds the agent's key, `attest` signs it. When only the shared directory has it (an agent image holds the key), `attest` prints the npub and refuses until you pass `--npub` with that same value: the directory is unauthenticated, so you confirm the key out of band first.
+
+`biff who` shows an NPUB column with each user's short published npub. It is the key published under that name, not proof that the session holds it. `biff key show` checks an attestation against the owner key recorded on this machine when there is one, and says so; for any other owner it says the key is only published.
+
+Keys are published and looked up under your GitHub login, the same name `biff who` shows; `--owner` overrides it. Public keys go in `~/.punt-labs/biff/nostr.yaml`. When the `ethos` command is installed they go in that name's ethos `nostr` ext namespace instead, and ethos refuses a name that no identity has. biff does not map a GitHub login to a different ethos handle.
+
+Private keys never enter the repository or an ethos ext file. Agent keys rest in the OS keyring when the machine has one, and in passphrase-sealed files under `~/.punt-labs/biff/keys/agent` when it has none. The first `biff key` command on a machine records which of the two it chose, in `~/.punt-labs/biff/keys/agent-backend` (`keyring` or `file`). That choice stays: a machine that chose files keeps using them after a keyring appears, and a later session that cannot reach a keyring the machine chose refuses to create or sign anything, with a message naming the keyring, rather than starting a second key store. `biff key show` reads only public data and opens no private vault, so it still works in that session. To move agent keys to another backend, edit that file after moving the keys yourself; biff does not migrate them. The public half of your owner key is recorded in the clear in `~/.punt-labs/biff/keys/owner/<handle>.pub` (directory 0700, file 0600), so `biff key show` verifies an attestation from that record without a passphrase, a keyring or any private vault. It reports "unverified" only when the record cannot be read (for example, permission denied), and "invalid" when the record is damaged. `biff --json key show` reports the verdict (`valid`, `expired`, `invalid`, `unverified`) and where the owner key stands. Your owner key rests in a macOS keychain item that trusts no application, or on Linux in a file sealed by a passphrase that biff reads only from `/dev/tty`. An agent process cannot create the owner key or sign with it.
+
+**When macOS asks to let `security` read the owner key, click Allow. Never click Always Allow.** Always Allow adds `/usr/bin/security` to the item's access list, and from then on any program you run, an agent included, reads the key with no prompt. biff checks the access list before every read and refuses an item that trusts an application; the fix is to delete the item, run `biff key init` again and re-attest your agents.
+
 ## Setup
 
 Biff needs a git repo and a GitHub identity. It reads your username and display name from `gh auth`.

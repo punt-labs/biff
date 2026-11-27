@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, cast
+from pathlib import Path
+from typing import cast
+
+import pytest
+import yaml
 
 from biff.cli_context import CliContext
 from biff.commands.who import who
 from biff.models import UserSession
 from biff.relay import LocalRelay
-
-if TYPE_CHECKING:
-    import pytest
 
 
 class TestWho:
@@ -143,3 +144,47 @@ class TestWho:
         assert result.text == "No sessions."
         assert result.json_data == []
         assert "1 session stopped responding (last seen 12h)" in caplog.text
+
+
+class TestWhoKeyColumn:
+    """``biff who`` shows each user's short npub when one is published."""
+
+    @pytest.fixture(autouse=True)
+    def _no_ethos(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PATH", str(tmp_path / "no-ethos"))
+
+    @staticmethod
+    def _publish(home: Path, handle: str, npub: str) -> None:
+        local = home / ".punt-labs" / "biff" / "nostr.yaml"
+        local.parent.mkdir(parents=True)
+        local.write_text(yaml.safe_dump({handle: {"nostr": {"npub": npub}}}))
+
+    async def test_key_column_shows_a_short_npub(
+        self,
+        ctx: CliContext,
+        relay: LocalRelay,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        npub = "npub180cvv07tjdrrgpa0j7j7tmnyl2yr6yr7l8j4s3evf6u64th6gkwsyjh6w6"
+        self._publish(home, "kai", npub)
+        await relay.update_session(UserSession(user="kai", tty="abc12345"))
+        result = await who(ctx)
+        assert "NPUB" in result.text
+        assert "KEY" not in result.text
+        assert "npub180cvv…jh6w6" in result.text
+        assert npub not in result.text
+
+    async def test_no_key_column_when_nobody_has_a_key(
+        self,
+        ctx: CliContext,
+        relay: LocalRelay,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+        await relay.update_session(UserSession(user="kai", tty="abc12345"))
+        result = await who(ctx)
+        assert "NPUB" not in result.text
