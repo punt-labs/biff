@@ -9365,15 +9365,32 @@ is a biff call, and a session that never calls a biff tool never refreshes it.
 A revived row restarts at the revival time, so it was not stale carry-over; the
 `last_tool_at` timestamp is normalized to UTC on read, so it was not clock skew.
 
-**Decision.** The PostToolUse and UserPromptSubmit hook already runs for every
-tool call (`plugin/hooks/unread-nudge.sh`). It now touches
-`<unread_dir>/<session_id>.active` first, a pure shell `touch` inside the hook's
-latency budget, and only for a session biff already serves (the unread file
-exists). `ServerState.heartbeat` runs on each heartbeat tick: after the relay
-heartbeat it reads that file's mtime and, when newer than the row's
-`last_tool_at`, writes it. The time moves forward only, so a stale stamp never
-undoes a later biff call. The server removes the file with the unread file on
-exit.
+**Decision.** The hook `plugin/hooks/unread-nudge.sh` already runs after every
+tool call. It now touches `<unread_dir>/<session_id>.active` first, a pure
+shell `touch` inside the hook's latency budget (before the `jq` check, so an
+install without `jq` still stamps), and only for a session biff already serves
+(the unread file exists). Three rules decide what counts as activity:
+
+- Only `PostToolUse` and `PostToolUseFailure` stamp. A prompt does not: it may
+  be a scheduled `/biff:read`, which is not work. A failed call is stamped and
+  never nudged.
+- biff's own inbox polls (`read_messages`, `talk_read`) do not stamp. An empty
+  poll must not move the activity clock that routes mail.
+- The stamp ignores the `mesg` and polling gates: activity is not a
+  notification.
+
+`HookActivity.heartbeat` runs on each heartbeat tick. It reads the stamp's
+mtime and passes it to `relay.heartbeat(session_key, at)`, and the relay
+advances `last_tool_at` inside its own read-modify-write of the row
+(`UserSession.beat`), forward only. There is no second whole-row write after
+the heartbeat, so the stamp cannot overwrite a concurrent `/plan`; a stale
+stamp never undoes a later biff call. The server removes the file with the
+unread file on exit.
+
+`LocalRelay` does this write under its lock. `NatsRelay.heartbeat` still reads
+and writes the row without a revision check, so a plan landing between the two
+can be lost; that window exists for `last_active` today and this change does not
+widen it. It is tracked as PL-1704.
 
 **Alternatives.**
 
