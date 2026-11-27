@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from biff.cli_context import CliContext
-from biff.commands.plan import plan
+from biff.dispatch import dispatch
 from biff.markers import has_plan_marker, write_plan_marker
 from biff.models import BiffConfig
 from biff.plugins.claude_code.hook import handle_pre_tool_use, handle_session_start
@@ -168,7 +168,7 @@ class TestCliOnlyPlanSatisfiesGate:
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
             patch("pathlib.Path.cwd", return_value=repo),
         ):
-            result = await plan(ctx, "biff-ar1: fix the plan gate")
+            result = await dispatch("plan biff-ar1: fix the plan gate", ctx)
             assert not result.error
 
             gate_result = handle_pre_tool_use(
@@ -197,8 +197,8 @@ class TestCliOnlyPlanSatisfiesGate:
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
             patch("pathlib.Path.cwd", return_value=repo),
         ):
-            await plan(ctx, "a plan")
-            await plan(ctx, "")  # clear
+            await dispatch("plan a plan", ctx)
+            await dispatch("plan clear", ctx)
 
             gate_result = handle_pre_tool_use(
                 {"session_id": "cli-session-id", "cwd": str(repo)}
@@ -266,12 +266,12 @@ class TestDeclaredSessionPlan:
     def test_marker_lands_under_the_declared_session_and_satisfies_its_gate(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from biff.commands.plan import sync_plan_marker
+        from biff.plan_marker import PlanMarker
 
         repo = _make_repo(tmp_path / "repo")
         monkeypatch.chdir(repo)
         with patch("pathlib.Path.home", return_value=tmp_path / "home"):
-            sync_plan_marker("declared plan", "declared-session")
+            PlanMarker.sync("declared plan", "declared-session")
             allowed = handle_pre_tool_use(
                 {"session_id": "declared-session", "cwd": str(repo)}
             )
@@ -314,7 +314,7 @@ class TestCliPlanIsScopedToTheEnvironmentSession:
     def test_cli_plan_writes_under_the_session_and_reset_clears_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from biff.commands.plan import sync_plan_marker
+        from biff.plan_marker import PlanMarker
 
         repo = _make_repo(tmp_path / "repo")
         monkeypatch.chdir(repo)
@@ -326,7 +326,7 @@ class TestCliPlanIsScopedToTheEnvironmentSession:
             from biff._stdlib import get_repo_common_root
 
             root = get_repo_common_root(str(repo))
-            sync_plan_marker("cli plan")
+            PlanMarker.sync("cli plan")
             assert has_plan_marker(root, "my-session")
             assert not has_plan_marker(root, None)
             assert handle_pre_tool_use({"session_id": "other", "cwd": str(repo)})
@@ -336,12 +336,12 @@ class TestCliPlanIsScopedToTheEnvironmentSession:
     def test_a_malformed_environment_session_falls_to_the_shared_bucket(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from biff.commands.plan import cli_session_id
+        from biff.plan_marker import PlanMarker
 
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "../evil")
-        assert cli_session_id() is None
+        assert PlanMarker.declared_session() is None
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
-        assert cli_session_id() is None
+        assert PlanMarker.declared_session() is None
 
 
 class TestSkippedSharedPlanIsDiagnosable:

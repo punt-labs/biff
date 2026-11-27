@@ -18,7 +18,7 @@ from biff.commands._result import CommandResult
 from biff.commands.finger import finger
 from biff.commands.last import last
 from biff.commands.mesg import mesg
-from biff.commands.plan import plan, record_plan
+from biff.commands.plan import plan
 from biff.commands.read import read
 from biff.commands.status import status
 from biff.commands.tty import tty
@@ -38,7 +38,6 @@ __all__ = [
     "last",
     "mesg",
     "plan",
-    "record_plan",
     "read",
     "status",
     "tty",

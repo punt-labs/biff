@@ -48,6 +48,12 @@ def _is_utc(tz: tzinfo) -> bool:
 
 
 PLAN_MAX_LENGTH = 512
+
+PARTY_MAX_LENGTH = 128
+"""The most characters a message's user or tty name holds (a session id's limit)."""
+
+ENVELOPE_MAX_LENGTH = 256
+"""The most characters one encryption-envelope field of a message holds."""
 """Longest accepted plan; matches ``Message.body`` and ``WallPost.text``."""
 
 _PLAN_TEXT: TypeAdapter[str] = TypeAdapter(
@@ -92,9 +98,13 @@ class Message(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     id: uuid.UUID = Field(default_factory=_new_id)
-    from_user: str = Field(min_length=1)
-    from_tty: str = Field(default="", description="Sender's human-readable tty name")
-    to_user: str = Field(min_length=1)
+    from_user: str = Field(min_length=1, max_length=PARTY_MAX_LENGTH)
+    from_tty: str = Field(
+        default="",
+        max_length=PARTY_MAX_LENGTH,
+        description="Sender's human-readable tty name",
+    )
+    to_user: str = Field(min_length=1, max_length=PARTY_MAX_LENGTH)
     body: str = Field(min_length=1, max_length=512)
     timestamp: datetime = Field(default_factory=_utc_now)
     read: bool = False
@@ -102,9 +112,9 @@ class Message(BaseModel):
     # feature (DES-016).  All defaults are empty/false; populated when
     # E2E encryption is active.
     encrypted: bool = False
-    nonce: str = ""
-    sender_pubkey: str = ""
-    encryption_mode: str = ""
+    nonce: str = Field(default="", max_length=ENVELOPE_MAX_LENGTH)
+    sender_pubkey: str = Field(default="", max_length=ENVELOPE_MAX_LENGTH)
+    encryption_mode: str = Field(default="", max_length=ENVELOPE_MAX_LENGTH)
 
     @field_validator("timestamp", mode="after")
     @classmethod

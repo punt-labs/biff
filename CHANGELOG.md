@@ -43,6 +43,17 @@
   punt-service replaces `biff.supervision.systemd`, `launchd`, `host` and
   `runner` with its backends; no other module changes.
 
+### Changed
+
+- biffd's replies carry the engine's display text (`text`) beside `data` and
+  `error`, so a client prints the words the engine rendered instead of
+  rebuilding them. A `read` reply's rows and text are fitted to one budget
+  (half the frame limit) with bounded work, so a full batch can no longer
+  exceed a frame and wedge the inbox. `plan` in biffd no longer writes the
+  plan-gate marker, which belongs to the calling process.
+- A message's `from_user`, `from_tty`, `to_user` (128 characters) and its
+  encryption-envelope fields (256) are bounded where a message is accepted.
+
 ## [1.26.0] - 2026-11-26
 
 ### Added

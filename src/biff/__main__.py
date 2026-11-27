@@ -43,6 +43,7 @@ from biff._cli_runtime import CliInvocation
 from biff.cli_app import CliApp
 from biff.cli_context import CliContext
 from biff.cli_key import KeyCli
+from biff.cli_plan import set_plan
 from biff.cli_session import cli_session, cli_session_host
 from biff.commands import CommandResult
 from biff.commands._session import update_current_session
@@ -1178,12 +1179,12 @@ def plan(
 ) -> None:
     """Set what you're currently working on."""
     if clear:
-        _run(lambda ctx: commands.plan(ctx, ""))
+        _run(lambda ctx: set_plan(ctx, ""))
     elif not message:
         print("Usage: biff plan <message> | biff plan --clear", file=sys.stderr)
         raise typer.Exit(code=1)
     else:
-        _run(lambda ctx: commands.plan(ctx, message))
+        _run(lambda ctx: set_plan(ctx, message))
 
 
 @app.command("last")

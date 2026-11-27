@@ -789,13 +789,14 @@ class TestFormatRead:
         assert "1 new messages" not in result
 
     def test_giant_sender_renders_bounded(self) -> None:
-        # Message.from_user/from_tty have no max_length on the wire. FROM
-        # is a fixed READ_SPECS column (widens for every row) and MESSAGE
-        # is the shared variable/wrap column (its budget shrinks toward its
-        # floor for every row) — mirrors the wall/talk giant-sender
-        # defense-in-depth tests for format_wall/format_wall_status_line.
+        # Message bounds from_user/from_tty at its boundary, and the renderer
+        # does not rely on that: built unvalidated, FROM is a fixed READ_SPECS
+        # column (widens for every row) and MESSAGE is the shared variable/wrap
+        # column (its budget shrinks toward its floor for every row) — mirrors
+        # the wall/talk giant-sender defense-in-depth tests for
+        # format_wall/format_wall_status_line.
         messages = [
-            Message(
+            Message.model_construct(
                 from_user="u" * 10_000,
                 from_tty="t" * 10_000,
                 to_user="eric",

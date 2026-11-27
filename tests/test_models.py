@@ -45,6 +45,23 @@ class TestMessage:
         assert msg.timestamp == ts
         assert msg.read is True
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "from_user",
+            "from_tty",
+            "to_user",
+            "nonce",
+            "sender_pubkey",
+            "encryption_mode",
+        ],
+    )
+    def test_text_fields_have_a_length_bound(self, field: str) -> None:
+        """A message crosses the wire, so no field is unbounded."""
+        fields = {"from_user": "kai", "to_user": "eric", "body": "hello"}
+        with pytest.raises(ValidationError):
+            Message.model_validate({**fields, field: "x" * 100_000})
+
     def test_frozen(self) -> None:
         msg = Message(from_user="kai", to_user="eric", body="hello")
         with pytest.raises(ValidationError):

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -11,6 +10,7 @@ import pytest
 from biff.client.connection import DaemonError
 from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
+from biff.plan_marker import PlanMarker
 
 if TYPE_CHECKING:
     from tests.test_daemon.conftest import Harness
@@ -205,11 +205,11 @@ async def test_plan_leaves_the_plan_gate_marker_to_the_client(
 ) -> None:
     """The marker is keyed on the caller's repo and harness, which the daemon lacks."""
     written: list[str] = []
-    monkeypatch.setattr(
-        sys.modules["biff.commands.plan"],
-        "sync_plan_marker",
-        lambda message, session_id=None: written.append(message),
-    )
+
+    def spy(message: str, session_id: str | None = None) -> None:
+        written.append(message)
+
+    monkeypatch.setattr(PlanMarker, "sync", staticmethod(spy))
     client = await harness.connect("s-kai", "kai")
     await client.request("plan", message="ship biffd")
     assert written == []
