@@ -120,9 +120,20 @@ lock, and, per reader, the reading in flight: its kind, the last-sent mark it
 found, the mark it took, and whether it found the kind newer.  $cover~(k, n)$ counts the events of kind $k$
 that announced arrival $n$ (a ghost).
 
+\begin{schema}{Ghost}
+  trig : 0 \upto maxMark
+\end{schema}
+
+A ghost, outside the relay and the emitter.  $trig$ is the arrival that made mail
+owed and has been neither announced nor withdrawn: set by the first $Arrive$ of mail
+while it is $0$, and cleared when a commit advances the last-sent mark to it or
+past it.  It freezes the triggering arrival, so that a check of coverage names the
+arrival that triggered it and not whichever is the latest at the end of a trace.
+
 \begin{schema}{MailEventState}
   Relay \\
-  Emitter
+  Emitter \\
+  Ghost
 \end{schema}
 
 \begin{schema}{MailEventInv}
@@ -164,7 +175,8 @@ announcement marks nothing read.  A reading in flight holds the lock.
   runread' = \{ rPush \mapsto 0, rPoll \mapsto 0 \} \\
   rowed' = \{ rPush \mapsto zfalse, rPoll \mapsto zfalse \} \\
   staleSent' = zfalse \\
-  cover' = \{ k : Kind; n : 1 \upto maxMark @ (k, n) \mapsto 0 \}
+  cover' = \{ k : Kind; n : 1 \upto maxMark @ (k, n) \mapsto 0 \} \\
+  trig' = 0
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -174,13 +186,15 @@ announcement marks nothing read.  A reading in flight holds the lock.
 \begin{schema}{Arrive}
   \Delta Relay \\
   \Xi Emitter \\
+  \Delta Ghost \\
   k? : Kind
   \where
   mark~k? < maxMark \\
   mark' = mark \oplus \{ k? \mapsto mark~k? + 1 \} \\
   arrivedN' = ( \IF k? = kMail \THEN arrivedN + 1 \ELSE arrivedN ) \\
   unreadN' = ( \IF k? = kMail \THEN unreadN + 1 \ELSE unreadN ) \\
-  readN' = readN
+  readN' = readN \\
+  trig' = ( \IF k? = kMail \land trig = 0 \THEN mark~k? + 1 \ELSE trig )
 \end{schema}
 
 A mail or a wall arrives at the relay and the mark of its kind rises.  A wall
@@ -189,6 +203,7 @@ changes no mail count.
 \begin{schema}{PushWake}
   \Xi Relay \\
   \Delta Emitter \\
+  \Xi Ghost \\
   k? : Kind
   \where
   mark~k? > sentMark~k? \\
@@ -213,7 +228,8 @@ that is lost is the absence of this step, and the next operation covers it.
 
 \begin{schema}{PollWake}
   \Xi Relay \\
-  \Delta Emitter
+  \Delta Emitter \\
+  \Xi Ghost
   \where
   mark~kMail > maxMark \\
   wake' = Kind \\
@@ -236,6 +252,7 @@ kind, with or without a push.
 \begin{schema}{ReadBegin}
   \Xi Relay \\
   \Delta Emitter \\
+  \Xi Ghost \\
   r? : Reader \\
   k? : Kind
   \where
@@ -269,6 +286,7 @@ mail count ($\Xi Relay$).
 \begin{schema}{ReadCommit}
   \Xi Relay \\
   \Delta Emitter \\
+  \Delta Ghost \\
   r? : Reader
   \where
   busy~r? = ztrue \\
@@ -292,7 +310,8 @@ mail count ($\Xi Relay$).
         \{ n : 1 \upto maxMark | rbase~r? < n \land
              n \leq rsnap~r? @
              (rkind~r?, n) \mapsto cover~(rkind~r?, n) + 1 \}
-      \ELSE \emptyset )
+      \ELSE \emptyset ) \\
+  trig' = ( \IF sentMark'~kMail \geq trig \THEN 0 \ELSE trig )
 \end{schema}
 
 The commit: if the reading found the kind newer, the record advances to the mark it
@@ -304,7 +323,8 @@ released.
 
 \begin{schema}{ClientRead}
   \Delta Relay \\
-  \Xi Emitter
+  \Xi Emitter \\
+  \Xi Ghost
   \where
   unreadN > 0 \\
   mark' = mark \\
@@ -336,12 +356,13 @@ progress.  The formulas are:
   enabled(ReadBegin)\,)$ and $AG\,(\,locked = ztrue \Rightarrow
   enabled(ReadCommit)\,)$ for each reader: a wake is read and a reading is
   committed; \\
-  $AG\,(\,unreadN > 0 \land sentMark~kMail < mark~kMail \Rightarrow
-  EF\;\exists n @ n = mark~kMail \land cover~(kMail, n) = 1\,)$, a
-  \emph{reachability} check on \emph{coverage}: a mail still owed can reach a
-  state in which an event covering the latest arrival has gone out.  It does not
-  ask that the mark advance, because a silent catch-up (a newer reading that is not
-  owed) advances the mark with no event and would satisfy that.
+  $AG\,(\,trig = n \land readN < n \Rightarrow EF\;cover~(kMail, n) = 1\,)$ for
+  $n = 1, 2$, a \emph{reachability} check on \emph{coverage} of the arrival that
+  triggered it, frozen in $trig$: while that arrival is still unread ($readN < n$,
+  mail is read in order; $unreadN > 0$ alone would count a later arrival) it can
+  reach a state in which an event covering it has gone out.  It does not ask that the mark advance,
+  because a silent catch-up advances the mark with no event, and it does not read
+  the mark at the end of the trace, which may be a later arrival.
 \end{quote}
 
 The fairness assumption is stated \emph{per kind}.  For each kind $k$ the poll wake
@@ -396,7 +417,7 @@ The goal that the properties are not vacuous: an event goes out
 %%      -p MAX_OPERATIONS 500 -p TIME_OUT 600000"
 %%   ( ulimit -v 8000000; "$PROBCLI" docs/specs/notification-mail-event.tex $P -model_check )
 %%   "$PROBCLI" docs/specs/notification-mail-event.tex $P -model_check -ctlformula \
-%%       "AG({unreadN>0 & sentMark(kMail)<mark(kMail)} => EF {#n.(n:1..2 & n=mark(kMail) & cover(kMail,n)=1)})"   (reachability of coverage)
+%%       "AG({trig=1 & readN<1} => EF {cover(kMail,1)=1})"   (reachability of coverage of the frozen arrival, and n=2 with readN<2)
 %%   goals: "arrivedN=1 & readN=1 & sentMark(kMail)=1 & cover(kMail,1)=0"
 %%   "$PROBCLI" docs/specs/notification-mail-event.tex $P -model_check -ctlformula \
 %%       "AG({sentMark(kMail)<mark(kMail) & card(wake)=0} => e(PollWake))"

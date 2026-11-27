@@ -4,9 +4,9 @@
   "timestamp": "2026-11-27T20:00:00Z",
   "summary": {
     "covered": 5,
-    "total": 9,
-    "percentage": 56,
-    "gaps": 4
+    "total": 10,
+    "percentage": 50,
+    "gaps": 5
   },
   "constraints": [
     {
@@ -59,10 +59,10 @@
       "confidence": "high"
     },
     {
-      "text": "enabled(PollWake) with no wake; enabled(ReadBegin), enabled(ReadCommit); EF the event covering the latest owed arrival has gone out (coverage, not the mark); fairness per kind stated in the text",
+      "text": "enabled(PollWake) with no wake; enabled(ReadBegin), enabled(ReadCommit); EF the event covering the arrival that triggered owed mail (trig) has gone out (coverage, not the mark)",
       "category": "invariant",
       "source": "delivery",
-      "coveredBy": "tests/test_channel_emitter.py::test_a_reconnect_announces_mail_that_arrived_while_disconnected",
+      "coveredBy": "tests/test_channel_emitter.py::test_a_reconnect_announces_mail_that_arrived_while_disconnected (reachability of an announcement only)",
       "confidence": "medium"
     },
     {
@@ -71,6 +71,13 @@
       "source": "MailEventInv",
       "coveredBy": "tests/test_channel_emitter.py::TestNeverStale::test_mail_read_before_the_send_is_not_announced",
       "confidence": "medium"
+    },
+    {
+      "text": "per-kind fairness: mail is not starved by wall work (ReadBegin strongly fair per kind; PollWake re-enables every kind)",
+      "category": "invariant",
+      "source": "fairness assumption",
+      "coveredBy": "GAP: owed by the code PR (a test with competing wall work and mail pending)",
+      "confidence": "high"
     }
   ],
   "notes": "The daemon push for mail and wall is owed by the code PR; the emitter's own tests cover the existing poll path."
