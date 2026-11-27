@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import subprocess
 from importlib.metadata import PackageNotFoundError, version as package_version
-from typing import TYPE_CHECKING, Final, Protocol, Self, final
+from typing import TYPE_CHECKING, Final, Self, final
 
-from biff.cli_daemon_relay import RelayStatus
 from biff.doctor import Diagnostics
 from biff.log_hint import LOG_PATH
 from biff.plugins.contract import CheckResult
@@ -26,24 +25,12 @@ if TYPE_CHECKING:
 
     from biff.supervision.spec import ServiceSpec
 
-__all__ = ["DaemonChecks", "DaemonDiagnostics", "RelayProbe"]
+__all__ = ["DaemonChecks", "DaemonDiagnostics"]
 
 _HEALTH_SECONDS: Final = 1.0
 _START: Final = "run: biff daemon start"
 _RESTART: Final = "run: biff daemon restart"
 _UNKNOWN_VERSION: Final = "unknown"
-
-
-class RelayProbe(Protocol):
-    """Reports the relay biffd is connected to; ``RelayStatus`` is the real one."""
-
-    def status(self, port: int) -> str:
-        """Return a one-line relay report.
-
-        Raises:
-            ConnectionError: The relay cannot be reached; the message says why.
-        """
-        ...
 
 
 @final
@@ -67,11 +54,10 @@ class DaemonChecks:
     and does not have the right one.
     """
 
-    __slots__ = ("_client_version", "_host", "_relay", "_run_dir", "_spec")
+    __slots__ = ("_client_version", "_host", "_run_dir", "_spec")
 
     _host: Detection
     _run_dir: RunDir
-    _relay: RelayProbe
     _client_version: str
     _spec: ServiceSpec
 
@@ -79,7 +65,6 @@ class DaemonChecks:
         cls,
         host: Detection,
         run_dir: RunDir,
-        relay: RelayProbe,
         client_version: str,
         *,
         spec: ServiceSpec = BIFFD_SPEC,
@@ -88,7 +73,6 @@ class DaemonChecks:
         self = super().__new__(cls)
         self._host = host
         self._run_dir = run_dir
-        self._relay = relay
         self._client_version = client_version
         self._spec = spec
         return self
@@ -100,9 +84,7 @@ class DaemonChecks:
             client = package_version("punt-biff")
         except PackageNotFoundError:
             client = _UNKNOWN_VERSION
-        return cls(
-            ServiceHost.detect(BIFFD_SPEC), RunDir.default(), RelayStatus(), client
-        )
+        return cls(ServiceHost.detect(BIFFD_SPEC), RunDir.default(), client)
 
     def checks(self) -> Iterator[CheckResult]:
         """Run the checks, yielding each as it finishes; none raises."""
@@ -129,7 +111,7 @@ class DaemonChecks:
         yield self._guard(
             "biffd version", lambda: self._version(health, installed=installed)
         )
-        yield self._guard("biffd relay", lambda: self._relay_result(port, health))
+        yield self._guard("biffd relay", lambda: self._relay_result(health))
 
     def _is_installed(self) -> bool:
         backend = self._host.backend
@@ -269,15 +251,19 @@ class DaemonChecks:
             required=comparable,
         )
 
-    def _relay_result(
-        self, port: int, health: Health | HealthUnavailableError
-    ) -> CheckResult:
+    def _relay_result(self, health: Health | HealthUnavailableError) -> CheckResult:
+        """Say the relay is not reported yet; asking would register a session.
+
+        biffd has no method that returns its relay connections without opening a
+        session, and a session opened by doctor would take part in mail routing.
+        """
         name = "biffd relay"
         if not isinstance(health, Health):
             return self._fail(
                 name, f"cannot check the relay: biffd is not answering ({_START})"
             )
-        try:
-            return self._pass(name, self._relay.status(port))
-        except ConnectionError as exc:
-            return self._fail(name, f"relay is down: {exc}; {_RESTART}; see {LOG_PATH}")
+        return self._pass(
+            name,
+            "not reported by biffd yet: no daemon method returns the relay "
+            "connections without registering a session",
+        )

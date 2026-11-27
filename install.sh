@@ -158,6 +158,15 @@ for dir in "" active current logs sessions unread; do
   chmod 700 "$path"
 done
 
+# --- biffd service (biff install does the same) ---
+
+info "Installing the biffd service..."
+if "$BINARY" daemon install < /dev/null; then
+  ok "biffd service installed"
+else
+  warn "biffd service not installed; biff starts it on demand (see: biff daemon status)"
+fi
+
 # --- Steps 4-6: Claude Code plugin (skipped in CLI-only mode) ---
 
 if [ "$SKIP_PLUGIN" = "0" ]; then

@@ -249,7 +249,7 @@ Commands:
 4. `/health` answers within one second.
 5. The token file exists at mode 0600.
 6. The daemon version equals the client version.
-7. Each relay connection is up, or names why it is not.
+7. Each relay connection is up, or names why it is not. Until biffd has a method that returns its relay connections without opening a session (an opened session takes part in mail routing), this line says the relay is not reported and only checks that biffd answers.
 
 Each failing check names the command that repairs it.
 

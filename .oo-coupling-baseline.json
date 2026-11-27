@@ -133,18 +133,11 @@
     "avg_lcom": 1.0
   },
   "src/biff/cli_daemon_doctor.py": {
-    "efferent_coupling": 9.0,
-    "public_names": 3.0,
+    "efferent_coupling": 8.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.833,
-    "avg_lcom": 0.833
-  },
-  "src/biff/cli_daemon_relay.py": {
-    "efferent_coupling": 2.0,
-    "public_names": 1.0,
-    "circular_imports": 0.0,
-    "max_lcom": 1.0,
-    "avg_lcom": 1.0
+    "max_lcom": 0.848,
+    "avg_lcom": 0.848
   },
   "src/biff/cli_install.py": {
     "efferent_coupling": 2.0,
@@ -451,8 +444,8 @@
     "efferent_coupling": 7.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.889,
-    "avg_lcom": 0.889
+    "max_lcom": 0.8,
+    "avg_lcom": 0.8
   },
   "src/biff/daemon/methods.py": {
     "efferent_coupling": 3.0,
@@ -1533,7 +1526,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/supervision/detached.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.667,
@@ -1571,8 +1564,8 @@
     "efferent_coupling": 1.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.028,
-    "avg_lcom": 0.028
+    "max_lcom": 0.022,
+    "avg_lcom": 0.022
   },
   "src/biff/supervision/port.py": {
     "efferent_coupling": 1.0,

@@ -18,7 +18,6 @@
   "biff.cli_app": "cli",
   "biff.cli_context": "commands",
   "biff.cli_daemon_doctor": "cli",
-  "biff.cli_daemon_relay": "cli",
   "biff.cli_install": "cli",
   "biff.cli_key": "cli",
   "biff.cli_session": "cli",

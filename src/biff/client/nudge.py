@@ -1,10 +1,12 @@
 """Start biffd when a client finds it down, and say why when it cannot.
 
 A caller runs ``DaemonNudge.for_host(run_dir).ensure_running()`` before it
-connects.  The call is blocking and takes at most about six seconds: one to see
-that biffd is down and five to wait for it.  From async code, run it with
-``await asyncio.to_thread(nudge.ensure_running)``.  Every failure is a
-``ConnectionError``.
+connects.  The call is blocking.  It spends one second to see that biffd is down,
+then the supervisor's answer to "start" (a hung ``systemctl`` is cut off after
+30 seconds), then five seconds waiting for ``/health``: about six seconds when
+the supervisor answers at once, 36 at the worst.  A caller with a tighter limit,
+such as a hook, runs it in a thread it can abandon: ``await
+asyncio.to_thread(nudge.ensure_running)``.  Every failure is a ``ConnectionError``.
 """
 
 from __future__ import annotations

@@ -76,7 +76,22 @@ class BiffdService:
         return self._act(lambda manager: manager.install())
 
     def uninstall(self) -> Outcome:
-        """Remove biffd's service."""
+        """Remove biffd's service.
+
+        Without a usable manager, a unit or plist an earlier login registered is
+        still there and would start biffd again at the next login; that is a
+        failure with the command to run where the manager answers.
+        """
+        if self._manager is None:
+            left = ServiceHost.leftover_files(BIFFD_SPEC)
+            if left:
+                why = self._host.reason or "there is no service manager here"
+                return Outcome(
+                    "failed",
+                    f"biffd's service file {left[0]} is still installed and cannot "
+                    f"be removed from here ({why}). Run, from a session that "
+                    f"reaches the service manager: biff daemon uninstall",
+                )
         return self._act(lambda manager: manager.uninstall())
 
     def start(self) -> Outcome:

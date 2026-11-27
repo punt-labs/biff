@@ -331,7 +331,6 @@ prefixes = [
     "_cli_runtime",
     "cli_app",
     "cli_daemon_doctor",
-    "cli_daemon_relay",
     "cli_install",
     "cli_key",
     "cli_session",

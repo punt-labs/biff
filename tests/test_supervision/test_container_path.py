@@ -32,7 +32,9 @@ _NUDGE: Final = textwrap.dedent("""\
     from biff.run_dir import RunDir
     from biff.supervision.biffd import BIFFD_SPEC
 
-    spec = dataclasses.replace(BIFFD_SPEC, health_port=int(sys.argv[1]))
+    spec = dataclasses.replace(
+        BIFFD_SPEC, health_port=int(sys.argv[1]), beside_interpreter=False
+    )
     try:
         DaemonNudge.for_host(RunDir.default(), spec).ensure_running()
     except ConnectionError as exc:

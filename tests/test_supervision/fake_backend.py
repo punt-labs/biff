@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
+from biff.supervision.errors import ServiceActionFailedError
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -155,3 +157,12 @@ class FakeBackend:
     def linger_warning(self) -> str:
         """Return no warning."""
         return ""
+
+
+class FailingUninstall(FakeBackend):
+    """A backend whose uninstall is refused by its supervisor."""
+
+    __slots__ = ()
+
+    def uninstall(self) -> None:
+        raise ServiceActionFailedError("systemctl refused to disable the unit")

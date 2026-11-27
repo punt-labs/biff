@@ -573,8 +573,8 @@ outcomes: done, failed, or no service manager.
   `restart` exit 1.
 - **Install proves itself.** After registering the unit, install waits up to five
   seconds for `/health` and fails if biffd does not answer, so `Type=simple`
-  "active" is never taken for "working". A step that fails removes the unit
-  and disables it again; `uninstall` deletes the unit only after systemd reports
+  "active" is never taken for "working". A step that fails, or a daemon that
+  never answers, removes the unit and disables it again; `uninstall` deletes the unit only after systemd reports
   the service stopped, and a supervisor failure is an error, never ignored.
 - **A failed service install** does not skip the plugin step, because nothing
   routes through biffd yet, but it fails the command with exit 1.
@@ -587,10 +587,14 @@ manager, "installed" means the unit file exists, whatever else is on `PATH`;
 without one it means a `biffd` executable on `PATH` or in `~/.local/bin`.
 
 `biff doctor` gains seven biffd lines (unit, running, port, health, token,
-version, relay), each naming its repair command. They are informational
-(`required=False`) until the daemon is the default path, so a machine that has
-not run `biff install` since upgrading still passes `biff doctor`. They live in
-the `cli` layer because the relay line asks the daemon over its protocol.
+version, relay), each naming its repair command. While the unit is not
+installed they are informational (`required=False`) and a line says so, so a
+machine that has not run `biff install` since upgrading still passes. Once the
+unit is installed, a version mismatch and a port held by another program fail
+`biff doctor`. The relay line only says relay connections are not reported yet:
+the one way to ask biffd opens a session, and a session opened by doctor takes
+part in mail routing. A supervisor that hangs or a file that cannot be read is a
+failed line, never a traceback.
 
 ### Why a stand-in library
 

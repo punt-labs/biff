@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING
@@ -18,6 +19,7 @@ from tests.test_supervision.fake_backend import FakeBackend, RaisingBackend
 from tests.test_supervision.patching import (
     host_has,
     host_unreachable,
+    leftover_is,
     no_claude,
     port_answers,
     port_is,
@@ -40,6 +42,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))
     # biffd is only in the home above, not in the venv's bin on PATH.
     monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "py" / "python"))
     port_is(monkeypatch, "free")
     port_answers(monkeypatch, answers=True)
     return tmp_path
@@ -297,3 +300,31 @@ class TestAnUnreachableManagerIsNotAbsent:
     def test_an_absent_manager_carries_no_reason(self, no_manager: None) -> None:
         result = runner.invoke(app, ["daemon", "install"])
         assert "show-environment" not in result.output
+
+
+class TestUninstallWhereTheManagerCannotBeReached:
+    def test_a_leftover_unit_is_a_failure_that_names_the_command(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unit = home / ".config" / "systemd" / "user" / "biffd.service"
+        host_unreachable(monkeypatch, "Failed to connect to bus")
+        leftover_is(monkeypatch, unit)
+        result = runner.invoke(app, ["daemon", "uninstall"])
+        assert result.exit_code == 1
+        assert str(unit) in result.output
+        assert "Failed to connect to bus" in result.output
+        assert "biff daemon uninstall" in result.output
+
+    def test_biff_uninstall_fails_too(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        no_claude(monkeypatch)
+        host_unreachable(monkeypatch, "bus is down")
+        leftover_is(monkeypatch, home / "biffd.service")
+        assert runner.invoke(app, ["uninstall"]).exit_code == 1
+
+    def test_nothing_installed_is_success(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        host_unreachable(monkeypatch, "bus is down")
+        assert runner.invoke(app, ["daemon", "uninstall"]).exit_code == 0

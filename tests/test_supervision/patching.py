@@ -8,6 +8,8 @@ from biff.supervision.host import Detection, ServiceHost
 from biff.supervision.port import PortProbe
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pytest
 
     from biff.supervision.backend import ServiceBackend
@@ -21,7 +23,11 @@ def host_is(monkeypatch: pytest.MonkeyPatch, found: Detection) -> None:
     def detect(spec: ServiceSpec) -> Detection:
         return found
 
+    def leftover(spec: ServiceSpec) -> tuple[Path, ...]:
+        return ()
+
     monkeypatch.setattr(ServiceHost, "detect", staticmethod(detect))
+    monkeypatch.setattr(ServiceHost, "leftover_files", staticmethod(leftover))
 
 
 def host_has(monkeypatch: pytest.MonkeyPatch, backend: ServiceBackend | None) -> None:
@@ -62,3 +68,12 @@ def no_claude(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr("shutil.which", find)
+
+
+def leftover_is(monkeypatch: pytest.MonkeyPatch, *paths: Path) -> None:
+    """Make ``ServiceHost.leftover_files`` report *paths* as installed."""
+
+    def leftover(spec: ServiceSpec) -> tuple[Path, ...]:
+        return paths
+
+    monkeypatch.setattr(ServiceHost, "leftover_files", staticmethod(leftover))

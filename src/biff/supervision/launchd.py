@@ -45,13 +45,33 @@ class LaunchdBackend:
         self._target = f"{cls._domain()}/{spec.launchd_label}"
         return self
 
-    @staticmethod
-    def available() -> bool:
-        """Return whether ``launchctl`` is on this host."""
+    @classmethod
+    def unavailable_reason(cls) -> str:
+        """Return why launchd cannot run a LaunchAgent here, or ``""`` when it can.
+
+        A LaunchAgent loads into the user's GUI domain, which does not exist for
+        a login over SSH with no one at the console.
+        """
+        domain = cls._domain()
         try:
-            return Supervisor.run("launchctl", "version").returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            return False
+            probe = Supervisor.run("launchctl", "print", domain)
+        except FileNotFoundError:
+            return "launchctl is not installed"
+        except subprocess.TimeoutExpired:
+            return f"`launchctl print {domain}` timed out"
+        except OSError as exc:
+            return f"cannot run launchctl: {exc}"
+        if probe.returncode == 0:
+            return ""
+        said = probe.stderr.strip() or f"exited {probe.returncode}"
+        return (
+            f"`launchctl print {domain}` failed (no GUI session for this user?): {said}"
+        )
+
+    @classmethod
+    def available(cls) -> bool:
+        """Return whether launchd can run a LaunchAgent for this user."""
+        return not cls.unavailable_reason()
 
     def config_path(self) -> Path:
         """Return the plist path."""

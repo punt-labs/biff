@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import TYPE_CHECKING, Final, Protocol, Self, final
 
 from biff.supervision.errors import (
@@ -73,10 +74,20 @@ class ServiceManager:
                 registered and does not answer ``/health`` within five seconds.
         """
         port = self._spec.health_port
-        if self._port.state() == "foreign":
+        state = self._port.state()
+        lsof = f"lsof -nP -iTCP:{port} -sTCP:LISTEN"
+        if state == "foreign":
             msg = (
                 f"port {port} is held by another program; see what holds it "
-                f"with: lsof -nP -iTCP:{port} -sTCP:LISTEN"
+                f"with: {lsof}"
+            )
+            raise PortConflictError(msg)
+        if state == "ours" and not self._backend.is_active():
+            msg = (
+                f"a biffd that this service does not supervise already answers on "
+                f"port {port} (perhaps `biff daemon serve`); stop it, then run: "
+                f"{self._spec.cli_name} {self._spec.cli_verb} install. "
+                f"See what holds the port with: {lsof}"
             )
             raise PortConflictError(msg)
         exec_display = " ".join(self._spec.resolve_exec_args())
@@ -84,8 +95,9 @@ class ServiceManager:
         if not self._port.wait_until_answering(_HEALTH_WAIT_SECONDS):
             detail = (
                 f"registered, but it does not answer /health on port {port} within "
-                f"{_HEALTH_WAIT_SECONDS:g} seconds. Run: {self._spec.cli_name} "
-                f"{self._spec.cli_verb} status, then {self._spec.cli_name} doctor"
+                f"{_HEALTH_WAIT_SECONDS:g} seconds. {self._remove_after_failure()} "
+                f"To see why, run it in the foreground: {self._spec.cli_name} "
+                f"{self._spec.cli_verb} serve"
             )
             raise ServiceActionFailedError(
                 self._spec.failure_message("install", detail)
@@ -99,6 +111,21 @@ class ServiceManager:
         if warning := self._backend.linger_warning():
             lines.append(warning)
         return os.linesep.join(lines)
+
+    def _remove_after_failure(self) -> str:
+        """Undo the registration of a service that does not answer; say how it went.
+
+        A service that is registered and dead would be started again at every
+        login, so a failed install leaves nothing behind.
+        """
+        try:
+            self._backend.uninstall()
+        except (ServiceActionFailedError, OSError, subprocess.TimeoutExpired) as exc:
+            return (
+                f"Removing it failed too ({exc}); run: {self._spec.cli_name} "
+                f"{self._spec.cli_verb} uninstall."
+            )
+        return "It was removed."
 
     def uninstall(self) -> str:
         """Remove the service, whether or not it was installed."""

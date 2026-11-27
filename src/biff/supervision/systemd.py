@@ -36,8 +36,9 @@ class SystemdBackend:
         self = super().__new__(cls)
         self._spec = spec
         self._unit = spec.systemd_unit
+        config_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
         self._unit_path = (
-            Path.home() / ".config" / "systemd" / "user" / f"{self._unit}.service"
+            Path(config_home) / "systemd" / "user" / f"{self._unit}.service"
         )
         return self
 
@@ -68,7 +69,10 @@ class SystemdBackend:
 
     def unit_text(self) -> str:
         """Return the unit file for the service."""
-        exec_start = " ".join(map(self._quote, self._spec.resolve_exec_args()))
+        # The ":" prefix turns off $VARIABLE substitution, so a "$" in the path or in
+        # an argument stays literal; "%" specifiers are still expanded, so _quote
+        # doubles them.
+        exec_start = ":" + " ".join(map(self._quote, self._spec.resolve_exec_args()))
         restart = "on-failure" if self._spec.restart_on_crash_only else "always"
         return textwrap.dedent(f"""\
             [Unit]
@@ -212,13 +216,9 @@ class SystemdBackend:
     def _quote(arg: str) -> str:
         """Quote *arg* for ExecStart, which has its own parser and is not a shell.
 
-        Besides quotes and backslashes, systemd expands ``%`` specifiers and ``$``
-        variables inside ExecStart, so each is doubled to stay literal.
+        Besides quotes and backslashes, systemd expands ``%`` specifiers inside
+        ExecStart, so each is doubled to stay literal.  ``$`` needs no escape: the
+        command line opens with ``:``, which turns variable substitution off.
         """
-        escaped = (
-            arg.replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("%", "%%")
-            .replace("$", "$$")
-        )
+        escaped = arg.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
         return f'"{escaped}"'

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self, final
 
+from biff.supervision.errors import BinaryNotFoundError
 from biff.supervision.runner import Supervisor
 
 if TYPE_CHECKING:
@@ -41,11 +41,10 @@ class DetachedDaemon:
 
         ``None`` means biffd is not installed on this host.
         """
-        found = shutil.which(self._spec.binary_name)
-        if found is not None:
-            return Path(found)
-        installed = self._spec.binary_path
-        return installed if installed.exists() else None
+        try:
+            return self._spec.resolve_binary()
+        except BinaryNotFoundError:
+            return None
 
     def launch(self, binary: Path, port: int) -> Child:
         """Start *binary* on *port*, detached from this process and its terminal.
