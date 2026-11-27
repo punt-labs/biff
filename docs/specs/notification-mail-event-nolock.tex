@@ -1,0 +1,432 @@
+%
+% notification-mail-event-nolock.tex  (FROZEN NEGATIVE CONTROL: do not edit)
+%
+% ReadBegin does not take the lock: two readings can both find an arrival newer.
+%
+% Z Specification for the mail and wall channel events as the final switch makes
+% them: each event carries the arrival's high-water mark, the mark ordering what
+% was announced; the arrivals reading is read-only; and the daemon's NATS push
+% for mail and wall feeds the same poll path the poller already runs.
+%
+% Auxiliary to notification.tex (Channel Delivery, NotifyBelt, the pendingNotify
+% mutex) in the manner of notification-race.tex: notification.tex carries thirty
+% components and its checks do not terminate in reasonable time, so this file lifts
+% out the few components the claims depend on.  It does not extend it.
+%
+% Type-check: fuzz -t notification-mail-event.tex
+% Model-check: see the end of this file.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff Mail and Wall Channel Events: A Z Specification}
+\author{Punt Labs}
+\date{November 2026}
+\maketitle
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+The channel emitter announces an arrival to a Claude Code session with one
+event per kind (mail, wall), carrying a count for the text.  What it compares is
+not the count but the relay's \emph{high-water mark} for the kind: mail is newer
+when the mark passes the last-sent one, and the record advances to the mark the
+reading took before the send (\texttt{Arrivals}).  Three claims hold of it, and
+the final switch relies on them:
+
+\begin{enumerate}
+  \item \textbf{At most one event per arrival.}  Each announced arrival leads to
+    at most one channel event of its kind, however often the poll path runs and
+    however many times the daemon pushes.
+  \item \textbf{The arrivals reading is read-only.}  Reading the mark and the count
+    marks no mail read; only the user's \texttt{read} does.
+  \item \textbf{Push and poll are one path.}  With biffd the daemon pushes a
+    notice of a mail or wall arrival to the client over its subscription, and the
+    client answers by waking the poller, which runs the same read, decide and
+    commit; the periodic poll runs it too.  An arrival is announced by push or by
+    poll, at least once, and a duplicated or lost push changes nothing.
+\end{enumerate}
+
+The serialisation is \texttt{ChannelEmitter}'s lock: a reading is taken, decided
+and committed with the lock held, so two wakes cannot both find the same arrival
+newer.  The rate window is outside the model: it only delays an event, and the
+property is about the events that do go out.
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  Kind ::= kMail | kWall
+\end{zed}
+
+\begin{zed}
+  Reader ::= rPush | rPoll
+\end{zed}
+
+\begin{axdef}
+  maxMark : \nat
+  \where
+  maxMark = 2
+\end{axdef}
+
+$Reader$ names the two ways a wake reaches the emitter, so that a reading
+started by each can be in flight at once.  For a wall the mark counts the keys
+that were never announced.
+
+%%----------------------------------------------------------------------
+\section{State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Relay}
+  mark : Kind \fun (0 \upto maxMark) \\
+  arrivedN : 0 \upto maxMark \\
+  readN : 0 \upto maxMark \\
+  unreadN : 0 \upto maxMark
+\end{schema}
+
+The relay: the high-water mark of each kind, which rises on an arrival and never
+falls, and the mail counts.  $unreadN$ is what the relay holds unread; the model
+keeps it apart from $arrivedN - readN$ so that a step that marks mail read
+without a read is a state.
+
+\begin{schema}{Emitter}
+  sentMark : Kind \fun (0 \upto maxMark) \\
+  wake : \power Kind \\
+  locked : ZBOOL \\
+  busy : Reader \fun ZBOOL \\
+  rkind : Reader \fun Kind \\
+  rsnap : Reader \fun (0 \upto maxMark) \\
+  rnewer : Reader \fun ZBOOL \\
+  rbase : Reader \fun (0 \upto maxMark) \\
+  runread : Reader \fun (0 \upto maxMark) \\
+  rowed : Reader \fun ZBOOL \\
+  staleSent : ZBOOL \\
+  cover : (Kind \cross (1 \upto maxMark)) \fun (0 \upto 2)
+\end{schema}
+
+The emitter: the last-sent mark per kind, the kinds a wake asked it to read, the
+lock, and, per reader, the reading in flight: its kind, the last-sent mark it
+found, the mark it took, and whether it found the kind newer.  $cover~(k, n)$ counts the events of kind $k$
+that announced arrival $n$ (a ghost).
+
+\begin{schema}{Ghost}
+  trig : 0 \upto maxMark
+\end{schema}
+
+A ghost, outside the relay and the emitter.  $trig$ is the arrival that made mail
+owed and has been neither announced nor withdrawn: set by the first $Arrive$ of mail
+while it is $0$, and cleared when a commit advances the last-sent mark to it or
+past it.  It freezes the triggering arrival, so that a check of coverage names the
+arrival that triggered it and not whichever is the latest at the end of a trace.
+
+\begin{schema}{MailEventState}
+  Relay \\
+  Emitter \\
+  Ghost
+\end{schema}
+
+\begin{schema}{MailEventInv}
+  MailEventState
+  \where
+  \forall k : Kind @ sentMark~k \leq mark~k \\
+  \forall k : Kind; n : 1 \upto maxMark @ cover~(k, n) \leq 1 \\
+  \forall k : Kind; n : 1 \upto maxMark @
+    ( cover~(k, n) = 1 \implies n \leq sentMark~k ) \\
+  unreadN + readN = arrivedN \\
+  staleSent = zfalse
+\end{schema}
+
+The properties.  Nothing is announced beyond the relay's mark.  No arrival is
+announced twice, and the arrivals announced are exactly those up to the last-sent
+mark.  The mail the relay holds unread is what has arrived and was not read: an
+announcement marks nothing read.  A reading in flight holds the lock.
+
+\begin{schema}{Invariant}
+  MailEventInv
+\end{schema}
+
+\begin{schema}{Init}
+  MailEventState'
+  \where
+  mark' = \{ kMail \mapsto 0, kWall \mapsto 0 \} \\
+  arrivedN' = 0 \\
+  readN' = 0 \\
+  unreadN' = 0 \\
+  sentMark' = \{ kMail \mapsto 0, kWall \mapsto 0 \} \\
+  wake' = \emptyset \\
+  locked' = zfalse \\
+  busy' = \{ rPush \mapsto zfalse, rPoll \mapsto zfalse \} \\
+  rkind' = \{ rPush \mapsto kMail, rPoll \mapsto kMail \} \\
+  rsnap' = \{ rPush \mapsto 0, rPoll \mapsto 0 \} \\
+  rnewer' = \{ rPush \mapsto zfalse, rPoll \mapsto zfalse \} \\
+  rbase' = \{ rPush \mapsto 0, rPoll \mapsto 0 \} \\
+  runread' = \{ rPush \mapsto 0, rPoll \mapsto 0 \} \\
+  rowed' = \{ rPush \mapsto zfalse, rPoll \mapsto zfalse \} \\
+  staleSent' = zfalse \\
+  cover' = \{ k : Kind; n : 1 \upto maxMark @ (k, n) \mapsto 0 \} \\
+  trig' = 0
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Operations}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Arrive}
+  \Delta Relay \\
+  \Xi Emitter \\
+  \Delta Ghost \\
+  k? : Kind
+  \where
+  mark~k? < maxMark \\
+  mark' = mark \oplus \{ k? \mapsto mark~k? + 1 \} \\
+  arrivedN' = ( \IF k? = kMail \THEN arrivedN + 1 \ELSE arrivedN ) \\
+  unreadN' = ( \IF k? = kMail \THEN unreadN + 1 \ELSE unreadN ) \\
+  readN' = readN \\
+  trig' = ( \IF k? = kMail \land trig = 0 \THEN mark~k? + 1 \ELSE trig )
+\end{schema}
+
+A mail or a wall arrives at the relay and the mark of its kind rises.  A wall
+changes no mail count.
+
+\begin{schema}{PushWake}
+  \Xi Relay \\
+  \Delta Emitter \\
+  \Xi Ghost \\
+  k? : Kind
+  \where
+  mark~k? > sentMark~k? \\
+  wake' = wake \cup \{ k? \} \\
+  sentMark' = sentMark \\
+  locked' = locked \\
+  busy' = busy \\
+  rkind' = rkind \\
+  rsnap' = rsnap \\
+  rnewer' = rnewer \\
+  rbase' = rbase \\
+  runread' = runread \\
+  rowed' = rowed \\
+  staleSent' = staleSent \\
+  cover' = cover
+\end{schema}
+
+The daemon's push of an arrival notice reaches the client, which asks the poller
+for a pass of that kind.  It is enabled again and again for the same arrival: a
+push is at least once, and a wake is a set, so a repeat changes nothing.  A push
+that is lost is the absence of this step, and the next operation covers it.
+
+\begin{schema}{PollWake}
+  \Xi Relay \\
+  \Delta Emitter \\
+  \Xi Ghost
+  \where
+  wake' = Kind \\
+  sentMark' = sentMark \\
+  locked' = locked \\
+  busy' = busy \\
+  rkind' = rkind \\
+  rsnap' = rsnap \\
+  rnewer' = rnewer \\
+  rbase' = rbase \\
+  runread' = runread \\
+  rowed' = rowed \\
+  staleSent' = staleSent \\
+  cover' = cover
+\end{schema}
+
+The periodic wake of the poller (the five-second liveness check) asks for every
+kind, with or without a push.
+
+\begin{schema}{ReadBegin}
+  \Xi Relay \\
+  \Delta Emitter \\
+  \Xi Ghost \\
+  r? : Reader \\
+  k? : Kind
+  \where
+  k? \in wake \\
+  busy~r? = zfalse \\
+  wake' = wake \setminus \{ k? \} \\
+  locked' = ztrue \\
+  busy' = busy \oplus \{ r? \mapsto ztrue \} \\
+  rkind' = rkind \oplus \{ r? \mapsto k? \} \\
+  rsnap' = rsnap \oplus \{ r? \mapsto mark~k? \} \\
+  rnewer' = rnewer \oplus
+    \{ r? \mapsto ( \IF mark~k? > sentMark~k? \THEN ztrue \ELSE zfalse ) \} \\
+  rbase' = rbase \oplus \{ r? \mapsto sentMark~k? \} \\
+  runread' = runread \oplus \{ r? \mapsto unreadN \} \\
+  rowed' = rowed \oplus
+    \{ r? \mapsto ( \IF mark~k? > sentMark~k? \land
+         ( k? = kWall \lor unreadN > 0 ) \THEN ztrue \ELSE zfalse ) \} \\
+  staleSent' = staleSent \\
+  sentMark' = sentMark \\
+  cover' = cover
+\end{schema}
+
+The read and decide step, with the lock: the reading takes the mark, and decides
+the kind newer when the mark passes the last-sent one.  It also samples the unread
+count, as the code reads the count after the mark, and the reading is \emph{owed}
+an event only if the kind is newer and, for mail, something is still unread:
+mail read before the poll has nothing left to announce.  It reads and changes no
+mail count ($\Xi Relay$).
+
+\begin{schema}{ReadCommit}
+  \Xi Relay \\
+  \Delta Emitter \\
+  \Delta Ghost \\
+  r? : Reader
+  \where
+  busy~r? = ztrue \\
+  wake' = wake \\
+  locked' = zfalse \\
+  busy' = busy \oplus \{ r? \mapsto zfalse \} \\
+  rkind' = rkind \\
+  rsnap' = rsnap \\
+  rnewer' = rnewer \\
+  rbase' = rbase \\
+  runread' = runread \\
+  rowed' = rowed \\
+  staleSent' = ( \IF rowed~r? = ztrue \land rkind~r? = kMail \land
+    runread~r? = 0 \THEN ztrue \ELSE staleSent ) \\
+  sentMark' = sentMark \oplus
+    \{ rkind~r? \mapsto ( \IF rnewer~r? = ztrue \land
+         rsnap~r? > sentMark~(rkind~r?)
+       \THEN rsnap~r? \ELSE sentMark~(rkind~r?) ) \} \\
+  cover' = cover \oplus
+    ( \IF rowed~r? = ztrue \THEN
+        \{ n : 1 \upto maxMark | rbase~r? < n \land
+             n \leq rsnap~r? @
+             (rkind~r?, n) \mapsto cover~(rkind~r?, n) + 1 \}
+      \ELSE \emptyset ) \\
+  trig' = ( \IF sentMark'~kMail \geq trig \THEN 0 \ELSE trig )
+\end{schema}
+
+The commit: if the reading found the kind newer, the record advances to the mark it
+took; if it was also owed, one event goes out that announces the arrivals past the
+last-sent mark it found, up to that mark.  A reading that is newer and not owed
+(the mail was read first) advances the record and makes no event: the code's
+``nothing is owed: read, expired or withdrawn'' commit.  Either way the lock is
+released.
+
+\begin{schema}{ClientRead}
+  \Delta Relay \\
+  \Xi Emitter \\
+  \Xi Ghost
+  \where
+  unreadN > 0 \\
+  mark' = mark \\
+  arrivedN' = arrivedN \\
+  readN' = readN + 1 \\
+  unreadN' = unreadN - 1
+\end{schema}
+
+The user's own \texttt{read} marks mail read.  It is the only step that does.
+
+\begin{schema}{Quiesce}
+  \Xi MailEventState
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Model Checking}
+%%----------------------------------------------------------------------
+
+$MailEventInv$ is the state invariant.  Delivery is stated as enabledness and as
+reachability, and not as liveness: $AF$ cannot hold of a machine whose $Quiesce$
+may be taken forever, and an $EF$ formula is satisfied if one continuation makes
+progress.  The formulas are:
+
+\begin{quote}
+  $AG\,(\,sentMark~k < mark~k \land wake = \emptyset \Rightarrow
+  enabled(PollWake)\,)$: the poll wake needs nothing, so a lost push strands
+  nothing; \\
+  $AG\,(\,wake \neq \emptyset \land locked = zfalse \Rightarrow
+  enabled(ReadBegin)\,)$ and $AG\,(\,locked = ztrue \Rightarrow
+  enabled(ReadCommit)\,)$ for each reader: a wake is read and a reading is
+  committed; \\
+  $AG\,(\,trig = n \land readN < n \Rightarrow EF\;cover~(kMail, n) = 1\,)$ for
+  $n = 1, 2$, a \emph{reachability} check on \emph{coverage} of the arrival that
+  triggered it, frozen in $trig$: while that arrival is still unread ($readN < n$,
+  mail is read in order; $unreadN > 0$ alone would count a later arrival) it can
+  reach a state in which an event covering it has gone out.  It does not ask that the mark advance,
+  because a silent catch-up advances the mark with no event, and it does not read
+  the mark at the end of the trace, which may be a later arrival.
+\end{quote}
+
+The fairness assumption is stated \emph{per kind}.  For each kind $k$ the poll wake
+is weakly fair (a wake that stays enabled is eventually taken) and $ReadBegin$ at
+$k$, for each reader, is \emph{strongly} fair: if it is enabled infinitely often it
+is taken infinitely often.  Weak fairness of one $ReadBegin$ for all kinds would not
+do: $PollWake$ re-enables every kind, the lock is released between readings, and a
+scheduler could grant every lock to the wall and starve mail, each grant leaving
+mail enabled but never continuously.  The commit is weakly fair, and $Quiesce$
+stands for the absence of work, so it is taken only when nothing else is enabled.
+Under these assumptions the enabledness formulas give: an owed arrival of a kind is
+announced by push or by poll, at least once.  The model does not state fairness,
+the starvation trace is excluded by the assumption and not by the model, and none of
+the formulas is a liveness theorem.
+
+Arrivals owed are those still unread.  An arrival read before the poll has nothing
+left to announce: the trace check is the goal $arrivedN = 1 \land readN = 1 \land
+sentMark~kMail = 1 \land cover~(kMail, 1) = 0$, reached by $Arrive$, $ClientRead$,
+$PollWake$, $ReadBegin$, $ReadCommit$.  The poll leaves the coverage unchanged and
+the record advances to the mark, as the code's withdrawn commit does; the ghost
+$staleSent$, an event for mail read before the sample, is never set
+($staleSent = zfalse$ is an invariant).
+A read between the sample and the commit still lets the event out in this model
+(the sample is the decision, goal $cover~(kMail, 1) = 1$ is reached that way); any
+final check of the same reading before the send is not modelled, so the model
+allows more than the code does.
+
+The goal that the properties are not vacuous: an event goes out
+($cover~(kMail, 1) = 1$).  Four frozen variants are the negative controls:
+
+\begin{itemize}
+  \item \texttt{notification-mail-event-nolock.tex}: $ReadBegin$ does not take the
+    lock.  Two readings take the same mark, both find it newer, and $cover$
+    reaches $2$: one arrival, two events.
+  \item \texttt{notification-mail-event-markread.tex}: $ReadCommit$ marks the mail
+    read when it announces it ($unreadN' = 0$ with no read): the invariant
+    $unreadN + readN = arrivedN$ is violated.
+  \item \texttt{notification-mail-event-nopoll.tex}: $PollWake$ is never enabled:
+    the first enabledness formula is \textbf{FALSE}, a lost push strands the
+    arrival.
+  \item \texttt{notification-mail-event-nosample.tex}: the reading is owed whenever
+    the kind is newer, without the unread sample.  An event goes out for mail that
+    was read first: $staleSent = zfalse$ is violated by $Arrive$, $ClientRead$,
+    $PollWake$, $ReadBegin$, $ReadCommit$.
+\end{itemize}
+
+%%----------------------------------------------------------------------
+%% Reproducing the checks.  Run from the repo root; one probcli at a time.
+%%
+%%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
+%%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 6 -p MAX_INITIALISATIONS 20 \
+%%      -p MAX_OPERATIONS 500 -p TIME_OUT 600000"
+%%   ( ulimit -v 8000000; "$PROBCLI" docs/specs/notification-mail-event.tex $P -model_check )
+%%   "$PROBCLI" docs/specs/notification-mail-event.tex $P -model_check -ctlformula \
+%%       "AG({trig=1 & readN<1} => EF {cover(kMail,1)=1})"   (reachability of coverage of the frozen arrival, and n=2 with readN<2)
+%%   goals: "arrivedN=1 & readN=1 & sentMark(kMail)=1 & cover(kMail,1)=0"
+%%   "$PROBCLI" docs/specs/notification-mail-event.tex $P -model_check -ctlformula \
+%%       "AG({sentMark(kMail)<mark(kMail) & card(wake)=0} => e(PollWake))"
+%%   goals: "cover(kMail,1)=1"
+%%
+%% Negative controls:
+%%
+%%   for V in nolock markread nosample; do
+%%     "$PROBCLI" docs/specs/notification-mail-event-$V.tex $P -model_check
+%%   done
+%%   "$PROBCLI" docs/specs/notification-mail-event-nopoll.tex $P -model_check -ctlformula \
+%%       "AG({sentMark(kMail)<mark(kMail) & card(wake)=0} => e(PollWake))"
+%%----------------------------------------------------------------------
+
+\end{document}

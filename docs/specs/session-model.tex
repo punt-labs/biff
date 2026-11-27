@@ -1736,6 +1736,14 @@ A dropped connection.  $known'$, $runOf'$ and $durable'$ are unchanged:
 detaching ends no session, loses no mail and forgets no run.  The record
 simply becomes dormant when its last connection goes.
 
+How a Claude session's record ends once biffd owns it, and what the end does to
+the relay row, the tty name, the logout event and the held mail, is specified in
+\texttt{claude-session-end.tex}: $EndOwnSession$ (refused for a connection of a
+replaced run), $ExpireClaude$ (retention), the order of a clear (the old end
+completes before the new hello) and the obligation that no row outlives its
+record.  It is a companion and not a part of this machine, because it needs
+components, the row and the reservation, that this one does not carry.
+
 \begin{schema}{SessionEnd}
   \Delta DaemonSide \\
   \Xi RouteWorld \\

@@ -4417,6 +4417,13 @@ could never complete.
 
 %%----------------------------------------------------------------------
 \section{Channel Delivery}
+
+The mail and wall events as the final switch makes them, each carrying the
+arrival's high-water mark, with the daemon's NATS push and the periodic poll as
+one path into the same read, decide and commit under the emitter's lock, are
+checked in \texttt{notification-mail-event.tex}, an auxiliary file in the manner
+of \texttt{notification-race.tex}: at most one event per announced arrival, a
+read-only arrivals reading, and delivery by push or by poll.
 \label{sec:channel}
 %%----------------------------------------------------------------------
 

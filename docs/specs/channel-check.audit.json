@@ -1,0 +1,77 @@
+{
+  "specification": "docs/specs/channel-check.tex",
+  "testDirectory": "tests/",
+  "timestamp": "2026-11-27T20:00:00Z",
+  "summary": {
+    "covered": 3,
+    "total": 9,
+    "percentage": 33,
+    "gaps": 6
+  },
+  "constraints": [
+    {
+      "text": "Request: a fresh token, once a minute, only for an inbox reply",
+      "category": "effect",
+      "source": "Request",
+      "coveredBy": "tests/test_channel_check.py::test_the_first_request_makes_a_128_bit_hex_token; ::test_a_second_request_inside_a_minute_is_refused; ::test_every_token_is_fresh",
+      "confidence": "high"
+    },
+    {
+      "text": "Acknowledge: the right token returns the reply subject and is spent",
+      "category": "effect",
+      "source": "Acknowledge",
+      "coveredBy": "tests/test_channel_check.py::test_the_right_token_returns_the_reply_subject; ::test_a_repeated_token_is_refused",
+      "confidence": "high"
+    },
+    {
+      "text": "RejectAck: a wrong or repeated token changes nothing",
+      "category": "effect",
+      "source": "RejectAck",
+      "coveredBy": "tests/test_channel_check.py::test_a_wrong_token_changes_nothing",
+      "confidence": "high"
+    },
+    {
+      "text": "emitted t <= 1: one channel event per request however often it is delivered",
+      "category": "invariant",
+      "source": "HopInv",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "relayed t <= 1: the acknowledgement is relayed to the doctor once however often it arrives",
+      "category": "invariant",
+      "source": "HopInv",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "sent t => emitted t = 1",
+      "category": "invariant",
+      "source": "HopInv",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "DeliverRequest: at-least-once delivery of the request frame to the session client",
+      "category": "effect",
+      "source": "DeliverRequest",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "SendEvent: needs the request to have reached the client",
+      "category": "precondition",
+      "source": "SendEvent",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "DeliverRequest: a request frame replayed after the acknowledgement (afterAck >= 1) makes no second event and no second relayed ack",
+      "category": "effect",
+      "source": "DeliverRequest",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    }
+  ],
+  "notes": "The daemon hop does not exist on main; its clauses are owed by the code PR."
+}

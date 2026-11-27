@@ -68,7 +68,11 @@ recorded to state the once-a-minute bound as an invariant.
   unsent : \power TOKEN \\
   sent : \power TOKEN \\
   spent : \power TOKEN \\
-  replyOf : TOKEN \pfun SUBJECT
+  replyOf : TOKEN \pfun SUBJECT \\
+  delivered : TOKEN \pfun (0 \upto 2) \\
+  emitted : TOKEN \pfun (0 \upto 2) \\
+  relayed : TOKEN \pfun (0 \upto 2) \\
+  afterAck : TOKEN \pfun (0 \upto 2)
 \where
   clock \leq maxClock \\
   \# pending \leq 1 \\
@@ -81,6 +85,39 @@ recorded to state the once-a-minute bound as an invariant.
     checkSeconds \leq a
 \end{schema}
 
+The predicates of $CheckState$ are, to ProZ, guards of every operation: a step
+that would break one is not enabled, and the model checker cannot report it.  The
+properties of the daemon hop are therefore stated in a schema of their own, which
+$Invariant$ installs as the checked state invariant, so that a step breaking one
+is enabled, reaches the bad state, and is reported.
+
+\begin{schema}{HopInv}
+  CheckState
+\where
+  \dom emitted = \dom delivered \\
+  \dom relayed = \dom delivered \\
+  \dom afterAck = \dom delivered \\
+  \forall t : \dom afterAck @ afterAck~t \leq delivered~t \\
+  \forall t : \dom emitted @ emitted~t \leq 1 \\
+  \forall t : \dom relayed @ relayed~t \leq 1 \\
+  \forall t : sent @ emitted~t = 1
+\end{schema}
+
+The token is single-use across the daemon hop: a request is turned into at most
+one channel event whatever the number of deliveries ($emitted~t \leq 1$), the
+acknowledgement is relayed to the doctor at most once ($relayed~t \leq 1$), and a
+token that was sent was emitted exactly once.
+
+The replay case is a reachability goal on the ghost $afterAck~t$, the deliveries
+of $t$ made while it was already spent: $\exists t @ t \in spent \land
+afterAck~t \geq 1 \land emitted~t = 1$, a request frame delivered again after
+its token was acknowledged, with still exactly one event made.  (Two deliveries
+before the acknowledgement would not be this case, and do not satisfy it.)
+
+\begin{schema}{Invariant}
+  HopInv
+\end{schema}
+
 \begin{schema}{Init}
   CheckState~'
 \where
@@ -90,7 +127,11 @@ recorded to state the once-a-minute bound as an invariant.
   unsent' = \emptyset \\
   sent' = \emptyset \\
   spent' = \emptyset \\
-  replyOf' = \emptyset
+  replyOf' = \emptyset \\
+  delivered' = \emptyset \\
+  emitted' = \emptyset \\
+  relayed' = \emptyset \\
+  afterAck' = \emptyset
 \end{schema}
 
 \section{Operations}
@@ -107,7 +148,11 @@ recorded to state the once-a-minute bound as an invariant.
   unsent' = unsent \\
   sent' = sent \\
   spent' = spent \\
-  replyOf' = replyOf
+  replyOf' = replyOf \\
+  delivered' = delivered \\
+  emitted' = emitted \\
+  relayed' = relayed \\
+  afterAck' = afterAck
 \end{schema}
 
 A session that is asked nothing is not stuck: it stays as it is.
@@ -136,7 +181,11 @@ before.  It retires the older pending token.
   unsent' = \{ token? \} \\
   sent' = sent \\
   spent' = spent \\
-  replyOf' = \{ token? \mapsto reply? \}
+  replyOf' = \{ token? \mapsto reply? \} \\
+  delivered' = delivered \oplus \{ token? \mapsto 0 \} \\
+  emitted' = emitted \oplus \{ token? \mapsto 0 \} \\
+  relayed' = relayed \oplus \{ token? \mapsto 0 \} \\
+  afterAck' = afterAck \oplus \{ token? \mapsto 0 \}
 \end{schema}
 
 A request that names a foreign subject, or arrives inside the window, changes
@@ -150,6 +199,48 @@ nothing and does not extend the window.
     (\exists a : acceptedAt @ clock < a + checkSeconds)
 \end{schema}
 
+\subsection{The daemon hop}
+
+With biffd the request does not reach the session's server directly.  The
+daemon publishes it, carrying the token, to the session's check subject, and the
+session's client receives it as an event frame.  Delivery is at least once: a
+reconnect redelivers a frame the client may already have seen.  $delivered~t$
+counts how many times the request for $t$ reached the client, and at most two are
+modelled.
+
+\begin{schema}{DeliverRequest}
+  \Delta CheckState \\
+  token? : TOKEN
+\where
+  token? \in \dom delivered \\
+  delivered~token? < 2 \\
+  clock' = clock \\
+  acceptedAt' = acceptedAt \\
+  pending' = pending \\
+  unsent' = unsent \\
+  sent' = sent \\
+  spent' = spent \\
+  replyOf' = replyOf \\
+  delivered' = delivered \oplus \{ token? \mapsto delivered~token? + 1 \} \\
+  emitted' = emitted \\
+  relayed' = relayed \\
+  afterAck' = afterAck \oplus \{ token? \mapsto afterAck~token? +
+    ( \IF token? \in spent \THEN 1 \ELSE 0 ) \}
+\end{schema}
+
+The replay does not depend on the token being pending: the transport may redeliver
+a request frame after the acknowledgement closed the token, or after a newer
+request retired it, so $DeliverRequest$ is enabled for any token that was ever
+requested, up to the two deliveries modelled.
+
+A request that reaches the client again does not make a second event: $SendEvent$
+needs the token in $unsent$ and takes it out, so $emitted~t \leq 1$ however
+often the frame is delivered.  The acknowledgement the model returns
+(\texttt{channel\_ack}) travels the other way, through the client to the daemon;
+the daemon relays it once, to the doctor's reply subject $replyOf~t$, and the
+token is spent: $relayed~t \leq 1$ however often the acknowledgement frame
+arrives.  The three counters, $delivered$, $emitted$ and $relayed$, are ghosts.
+
 \subsection{The one event}
 
 \begin{schema}{SendEvent}
@@ -157,13 +248,18 @@ nothing and does not extend the window.
   token? : TOKEN
 \where
   token? \in unsent \\
+  delivered~token? \geq 1 \\
   clock' = clock \\
   acceptedAt' = acceptedAt \\
   pending' = pending \\
   unsent' = unsent \setminus \{ token? \} \\
   sent' = sent \cup \{ token? \} \\
   spent' = spent \\
-  replyOf' = replyOf
+  replyOf' = replyOf \\
+  delivered' = delivered \\
+  emitted' = emitted \oplus \{ token? \mapsto emitted~token? + 1 \} \\
+  relayed' = relayed \\
+  afterAck' = afterAck
 \end{schema}
 
 \subsection{Acknowledgement}
@@ -183,7 +279,11 @@ nothing and does not extend the window.
   unsent' = unsent \\
   sent' = sent \\
   spent' = spent \cup \{ token? \} \\
-  replyOf' = replyOf
+  replyOf' = replyOf \\
+  delivered' = delivered \\
+  emitted' = emitted \\
+  relayed' = relayed \oplus \{ token? \mapsto relayed~token? + 1 \} \\
+  afterAck' = afterAck
 \end{schema}
 
 A wrong or repeated token changes nothing and says so.

@@ -1,0 +1,646 @@
+%
+% claude-session-end-nofile.tex  (FROZEN NEGATIVE CONTROL: do not edit)
+%
+% FileOutbox drops the held mail instead of filing it back.
+%
+% Z Specification for how a Claude session ends when biffd owns its record:
+% EndOwnSession (a connection of the current run ends its own session),
+% ExpireClaude (retention removes a session nobody is attached to), the
+% ordering of a clear (/clear ends the old session before the new hello), and the
+% obligation that no row outlives an end plus retention.
+%
+% Companion to session-model.tex (SessionEnd, RetentionExpire for CLI sessions,
+% the daemon's records and runs) and to sentinel-reap.tex (BadOrphan, findings G1
+% and G2 of the sentinel mechanism).  It is kept apart because those two
+% specifications already have large state spaces, and this one needs the effects
+% of an end (the relay row, the tty-name reservation, the logout event, the held
+% mail), which neither carries.
+%
+% Type-check: fuzz -t claude-session-end.tex
+% Model-check: see the end of this file.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff Claude Session End: A Z Specification}
+\author{Punt Labs}
+\date{November 2026}
+\maketitle
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+Until biffd owned the session record, a Claude session ended in its own process.
+The process wrote a sentinel, tried to delete its row and release its tty name,
+and a reaper in some other process finished what the first left.
+\texttt{sentinel-reap.tex} models that mechanism and finds that a row can be left
+with no process and no sentinel behind it ($BadOrphan$): a crash in one step (G1),
+and the fallback sentinel racing its own reaper in five (G2).
+
+With the record in the daemon the question changes.  The record is durable and
+the daemon, not a process that is going away, performs the end.  Two transitions
+end a Claude session:
+
+\begin{itemize}
+  \item $EndOwnSession$: a connection of the \emph{current} run of the session
+    ends its own session.  The daemon releases the tty name, deletes the row,
+    appends a logout event and files the mail it holds for the session back into
+    the user's inbox.  A connection of a run that a newer run has replaced is
+    refused and changes nothing.
+  \item $ExpireClaude$: a session with no connection that has been dormant for the
+    retention period is removed with the same four effects.
+\end{itemize}
+
+Each of the four effects is its own step, and the record stays until all four are
+done.  The obligations are:
+
+\begin{enumerate}
+  \item \textbf{No row outlives its record.}  The relay row and the tty name are
+    held only while the record exists or is being ended, so there is no
+    $BadOrphan$: the daemon has no state in which a row has nothing behind it.
+  \item \textbf{No row outlives an end plus retention.}  A session nobody is
+    attached to is eventually removed, once its retention is spent.
+  \item \textbf{No mail is lost by an end.}  Mail issued is held by the session,
+    still in the user's inbox, or shown; an end moves what it holds back to the
+    inbox.
+  \item \textbf{A clear ends the old session before the new hello.}  The new
+    session's tty reservation is never released by the old session's end.
+  \item \textbf{A replaced run cannot end the session.}
+\end{enumerate}
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  RecState ::= rsNone | rsLive | rsDormant | rsEnding
+\end{zed}
+
+\begin{zed}
+  TtyOwner ::= tNone | tOld | tNew
+\end{zed}
+
+\begin{axdef}
+  maxAge : \nat \\
+  maxMail : \nat
+  \where
+  maxAge = 2 \\
+  maxMail = 2
+\end{axdef}
+
+$rsNone$ is no record (never started, or ended), $rsLive$ a record with a
+connection, $rsDormant$ a record without one, and $rsEnding$ a record whose end
+has begun and not finished.  $maxAge$ is the retention, in sweep ticks.
+$tOld$ and $tNew$ are the old and the new session of a clear; both use the same
+tty name, which is the reason the order matters.  Runs are $0$ and $1$.
+
+%%----------------------------------------------------------------------
+\section{State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Record}
+  recState : RecState \\
+  currentRun : 0 \upto 1 \\
+  conns : \power (0 \upto 1) \\
+  age : 0 \upto maxAge \\
+  endRun : 0 \upto 1
+\end{schema}
+
+The daemon's record: its state, the current run of the session, the runs that
+have a connection open (the connection of a replaced run is still open, and
+refused), and the sweep ticks since the last connection left, and (a ghost) the run whose
+connection began the end in progress.
+
+\begin{schema}{Effects}
+  rowPresent : ZBOOL \\
+  ttyOwner : TtyOwner \\
+  logged : ZBOOL \\
+  rowTodo : ZBOOL \\
+  ttyTodo : ZBOOL \\
+  logTodo : ZBOOL \\
+  mailTodo : ZBOOL \\
+  newLive : ZBOOL
+\end{schema}
+
+What an end touches: the relay row, the tty-name reservation, the logout event,
+and the four obligations an end in progress still owes.  $newLive$ is the new
+session of a clear, after its hello.
+
+\begin{schema}{Mail}
+  outboxN : 0 \upto maxMail \\
+  inboxN : 0 \upto maxMail \\
+  shownN : 0 \upto maxMail \\
+  issuedN : 0 \upto maxMail \\
+  lostN : 0 \upto maxMail \\
+  shownDormant : ZBOOL
+\end{schema}
+
+Mail counts: held by the session ($outboxN$), in the user's inbox ($inboxN$),
+shown to the client ($shownN$), lost with a daemon that restarted ($lostN$, a
+ghost), and issued in all ($issuedN$, a ghost).  $shownDormant$ is a ghost that
+records a print made while nobody was connected.
+
+\begin{schema}{EndState}
+  Record \\
+  Effects \\
+  Mail
+\end{schema}
+
+\begin{schema}{EndInv}
+  EndState
+  \where
+  rowPresent = ztrue \implies recState \neq rsNone \\
+  ttyOwner = tOld \implies recState \neq rsNone \\
+  newLive = ztrue \implies ttyOwner = tNew \\
+  recState = rsDormant \implies conns = \emptyset \\
+  recState = rsLive \implies conns \neq \emptyset \\
+  recState = rsEnding \implies endRun = currentRun \\
+  recState \neq rsEnding \implies
+    ( rowTodo = zfalse \land ttyTodo = zfalse \land logTodo = zfalse \land
+      mailTodo = zfalse ) \\
+  outboxN + inboxN + shownN + lostN = issuedN \\
+  shownDormant = zfalse
+\end{schema}
+
+The invariants, in the order of the obligations.  A row, or the old session's tty
+name, exists only while the record does ($BadOrphan$ is not a state).  The new
+session of a clear always holds its tty name.  A live record has a connection and
+a dormant one has none.  An end that is not in progress owes nothing.  And mail
+is conserved: issued is held, in the inbox, shown, or lost with a restart of the
+daemon (the outbox is its memory).  An end loses nothing: $FileOutbox$ moves what
+is held to the inbox, and only $DaemonRestart$ adds to $lostN$.
+
+\begin{schema}{Invariant}
+  EndInv
+\end{schema}
+
+\begin{schema}{Init}
+  EndState'
+  \where
+  recState' = rsLive \\
+  currentRun' = 0 \\
+  conns' = \{ 0 \} \\
+  age' = 0 \\
+  endRun' = 0 \\
+  rowPresent' = ztrue \\
+  ttyOwner' = tOld \\
+  logged' = zfalse \\
+  rowTodo' = zfalse \\
+  ttyTodo' = zfalse \\
+  logTodo' = zfalse \\
+  mailTodo' = zfalse \\
+  newLive' = zfalse \\
+  outboxN' = 0 \\
+  inboxN' = 0 \\
+  shownN' = 0 \\
+  issuedN' = 0 \\
+  lostN' = 0 \\
+  shownDormant' = zfalse
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Operations on the record}
+%%----------------------------------------------------------------------
+
+\begin{schema}{ReplaceRun}
+  \Delta Record \\
+  \Xi Effects \\
+  \Xi Mail
+  \where
+  recState = rsLive \\
+  currentRun = 0 \\
+  recState' = rsLive \\
+  currentRun' = 1 \\
+  conns' = conns \cup \{ 1 \} \\
+  age' = age \\
+  endRun' = endRun
+\end{schema}
+
+A resume with a fresh agent opens run $1$.  The connection of run $0$ stays open;
+it belongs to a replaced run.
+
+\begin{schema}{Detach}
+  \Delta Record \\
+  \Xi Effects \\
+  \Xi Mail \\
+  run? : 0 \upto 1
+  \where
+  recState = rsLive \\
+  run? \in conns \\
+  conns' = conns \setminus \{ run? \} \\
+  recState' = ( \IF conns' = \emptyset \THEN rsDormant \ELSE rsLive ) \\
+  currentRun' = currentRun \\
+  age' = 0 \\
+  endRun' = endRun
+\end{schema}
+
+A connection goes.  Detaching ends nothing: the record becomes dormant when its
+last connection goes.
+
+\begin{schema}{Reattach}
+  \Delta Record \\
+  \Xi Effects \\
+  \Xi Mail
+  \where
+  recState = rsDormant \\
+  recState' = rsLive \\
+  currentRun' = currentRun \\
+  conns' = \{ currentRun \} \\
+  age' = 0 \\
+  endRun' = endRun
+\end{schema}
+
+\begin{schema}{SweepTick}
+  \Delta Record \\
+  \Xi Effects \\
+  \Xi Mail
+  \where
+  recState = rsDormant \\
+  age < maxAge \\
+  recState' = recState \\
+  currentRun' = currentRun \\
+  conns' = conns \\
+  age' = age + 1 \\
+  endRun' = endRun
+\end{schema}
+
+The daemon's sweep counts a dormant record's age.
+
+\begin{schema}{DaemonRestart}
+  \Delta Record \\
+  \Xi Effects \\
+  \Delta Mail
+  \where
+  recState \in \{ rsLive, rsDormant \} \\
+  recState' = rsDormant \\
+  currentRun' = currentRun \\
+  conns' = \emptyset \\
+  age' = ( \IF recState = rsLive \THEN 0 \ELSE age ) \\
+  endRun' = endRun \\
+  outboxN' = 0 \\
+  lostN' = lostN + outboxN \\
+  shownDormant' = shownDormant \\
+  inboxN' = inboxN \\
+  shownN' = shownN \\
+  issuedN' = issuedN
+\end{schema}
+
+A restart, of a live record or of a dormant one (a detach leaves the outbox held
+with nobody connected, and the daemon may die then): the record is durable and
+returns dormant, with its age kept if it was already dormant; every connection
+is gone.  The outbox is the daemon's memory, so what it held is lost from either
+state (the window the unconfirmed batch has in DES-099, PL-1753); the mail the
+relay holds is not.  A restart in the middle of an end ($rsEnding$) is not
+modelled.
+
+%%----------------------------------------------------------------------
+\section{Ending a session}
+%%----------------------------------------------------------------------
+
+\begin{schema}{EndOwnSession}
+  \Delta Record \\
+  \Delta Effects \\
+  \Xi Mail \\
+  run? : 0 \upto 1
+  \where
+  recState = rsLive \\
+  run? \in conns \\
+  run? = currentRun \\
+  recState' = rsEnding \\
+  currentRun' = currentRun \\
+  conns' = conns \\
+  age' = age \\
+  endRun' = run? \\
+  rowPresent' = rowPresent \\
+  ttyOwner' = ttyOwner \\
+  logged' = logged \\
+  rowTodo' = ztrue \\
+  ttyTodo' = ztrue \\
+  logTodo' = ztrue \\
+  mailTodo' = ztrue \\
+  newLive' = newLive
+\end{schema}
+
+A connection of the current run ends its own session: the end begins and owes
+its four effects.
+
+\begin{schema}{EndRefused}
+  \Xi EndState \\
+  run? : 0 \upto 1
+  \where
+  recState = rsLive \\
+  run? \in conns \\
+  run? \neq currentRun
+\end{schema}
+
+A connection of a replaced run is refused and nothing changes.
+
+\begin{schema}{ExpireClaude}
+  \Delta Record \\
+  \Delta Effects \\
+  \Xi Mail
+  \where
+  recState = rsDormant \\
+  conns = \emptyset \\
+  age = maxAge \\
+  recState' = rsEnding \\
+  currentRun' = currentRun \\
+  conns' = conns \\
+  age' = age \\
+  endRun' = currentRun \\
+  rowPresent' = rowPresent \\
+  ttyOwner' = ttyOwner \\
+  logged' = logged \\
+  rowTodo' = ztrue \\
+  ttyTodo' = ztrue \\
+  logTodo' = ztrue \\
+  mailTodo' = ztrue \\
+  newLive' = newLive
+\end{schema}
+
+Retention: a dormant record with no connection, aged to the retention, begins the
+same end.
+
+\begin{schema}{DeleteRow}
+  \Xi Record \\
+  \Delta Effects \\
+  \Xi Mail
+  \where
+  recState = rsEnding \\
+  rowTodo = ztrue \\
+  rowPresent' = zfalse \\
+  rowTodo' = zfalse \\
+  ttyOwner' = ttyOwner \\
+  logged' = logged \\
+  ttyTodo' = ttyTodo \\
+  logTodo' = logTodo \\
+  mailTodo' = mailTodo \\
+  newLive' = newLive
+\end{schema}
+
+\begin{schema}{ReleaseTty}
+  \Xi Record \\
+  \Delta Effects \\
+  \Xi Mail
+  \where
+  recState = rsEnding \\
+  ttyTodo = ztrue \\
+  ttyOwner' = tNone \\
+  ttyTodo' = zfalse \\
+  rowPresent' = rowPresent \\
+  logged' = logged \\
+  rowTodo' = rowTodo \\
+  logTodo' = logTodo \\
+  mailTodo' = mailTodo \\
+  newLive' = newLive
+\end{schema}
+
+The release is by name: it frees the name whoever holds it.  That is why an end
+that runs after a new hello is wrong.
+
+\begin{schema}{AppendLogout}
+  \Xi Record \\
+  \Delta Effects \\
+  \Xi Mail
+  \where
+  recState = rsEnding \\
+  logTodo = ztrue \\
+  logged' = ztrue \\
+  logTodo' = zfalse \\
+  rowPresent' = rowPresent \\
+  ttyOwner' = ttyOwner \\
+  rowTodo' = rowTodo \\
+  ttyTodo' = ttyTodo \\
+  mailTodo' = mailTodo \\
+  newLive' = newLive
+\end{schema}
+
+\begin{schema}{FileOutbox}
+  \Xi Record \\
+  \Delta Effects \\
+  \Delta Mail
+  \where
+  recState = rsEnding \\
+  mailTodo = ztrue \\
+  inboxN' = inboxN \\
+  outboxN' = 0 \\
+  shownN' = shownN \\
+  issuedN' = issuedN \\
+  lostN' = lostN \\
+  shownDormant' = shownDormant \\
+  mailTodo' = zfalse \\
+  rowPresent' = rowPresent \\
+  ttyOwner' = ttyOwner \\
+  logged' = logged \\
+  rowTodo' = rowTodo \\
+  ttyTodo' = ttyTodo \\
+  logTodo' = logTodo \\
+  newLive' = newLive
+\end{schema}
+
+The mail the session holds goes back to the user's inbox, where any reader finds
+it, and the end no longer owes it.
+
+\begin{schema}{FinishEnd}
+  \Delta Record \\
+  \Xi Effects \\
+  \Xi Mail
+  \where
+  recState = rsEnding \\
+  rowTodo = zfalse \\
+  ttyTodo = zfalse \\
+  logTodo = zfalse \\
+  mailTodo = zfalse \\
+  recState' = rsNone \\
+  currentRun' = currentRun \\
+  conns' = \emptyset \\
+  age' = age \\
+  endRun' = endRun
+\end{schema}
+
+The record goes only when every effect is done.
+
+%%----------------------------------------------------------------------
+\section{A clear}
+%%----------------------------------------------------------------------
+
+\begin{schema}{NewHello}
+  \Xi Record \\
+  \Delta Effects \\
+  \Xi Mail
+  \where
+  recState = rsNone \\
+  newLive = zfalse \\
+  ttyOwner = tNone \\
+  newLive' = ztrue \\
+  ttyOwner' = tNew \\
+  rowPresent' = rowPresent \\
+  logged' = logged \\
+  rowTodo' = rowTodo \\
+  ttyTodo' = ttyTodo \\
+  logTodo' = logTodo \\
+  mailTodo' = mailTodo
+\end{schema}
+
+The new session's hello after a clear.  It is enabled only when the old session's
+end is complete (no record, so no end in progress) and its tty name is free, and it
+takes the name.  This is the ordering the client keeps by waiting for the end's
+reply before it sends the hello.
+
+%%----------------------------------------------------------------------
+\section{Mail}
+%%----------------------------------------------------------------------
+
+\begin{schema}{MailArrive}
+  \Xi Record \\
+  \Xi Effects \\
+  \Delta Mail
+  \where
+  issuedN < maxMail \\
+  inboxN' = inboxN + 1 \\
+  issuedN' = issuedN + 1 \\
+  outboxN' = outboxN \\
+  shownN' = shownN \\
+  lostN' = lostN \\
+  shownDormant' = shownDormant
+\end{schema}
+
+\begin{schema}{MailFetch}
+  \Xi Record \\
+  \Xi Effects \\
+  \Delta Mail
+  \where
+  recState = rsLive \\
+  inboxN > 0 \\
+  inboxN' = inboxN - 1 \\
+  outboxN' = outboxN + 1 \\
+  shownN' = shownN \\
+  issuedN' = issuedN \\
+  lostN' = lostN \\
+  shownDormant' = shownDormant
+\end{schema}
+
+The client prints a message it was handed.  It needs a connected client: with the
+session dormant (a daemon restart left no connection) the held mail cannot be
+shown, and a reply already in flight when the daemon died counts as shown, which
+is the count $shownN$ took when it was handed over.
+
+\begin{schema}{MailShow}
+  \Xi Record \\
+  \Xi Effects \\
+  \Delta Mail
+  \where
+  recState = rsLive \\
+  outboxN > 0 \\
+  outboxN' = outboxN - 1 \\
+  shownN' = shownN + 1 \\
+  inboxN' = inboxN \\
+  issuedN' = issuedN \\
+  lostN' = lostN \\
+  shownDormant' = ( \IF recState = rsDormant \THEN ztrue \ELSE shownDormant )
+\end{schema}
+
+\begin{schema}{Quiesce}
+  \Xi EndState
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Model Checking}
+%%----------------------------------------------------------------------
+
+$EndInv$ is the state invariant.  The retention obligation is stated as
+\emph{enabledness}, plus one reachability check, and not as liveness.  $EF$
+alone would be satisfied by a client that reattaches and ends the session, which
+is not retention, and $AF$ cannot hold of a machine whose $Quiesce$ may be taken
+forever.  So:
+
+\begin{quote}
+  $AG\,(\,recState = rsDormant \land age = maxAge \Rightarrow
+  enabled(ExpireClaude)\,)$ \\
+  $AG\,(\,recState = rsEnding \land rowTodo = ztrue \Rightarrow
+  enabled(DeleteRow)\,)$, and the same for $ReleaseTty$, $AppendLogout$ and
+  $FileOutbox$ with their flags \\
+  $AG\,(\,recState = rsEnding \land rowTodo = ttyTodo = logTodo = mailTodo =
+  zfalse \Rightarrow enabled(FinishEnd)\,)$ \\
+  $AG\,(\,recState = rsEnding \Rightarrow EF\;recState = rsNone\,)$, a
+  \emph{reachability} check: from an end in progress the record can be removed
+\end{quote}
+
+Under the assumption that the daemon's sweep and the end's steps are scheduled
+fairly (a step that stays enabled is eventually taken, and $Quiesce$ stands for the
+absence of work, so it is taken only when nothing else is enabled), the
+enabledness formulas give: a dormant session at its retention is removed, and an
+end in progress finishes.  The model does not state fairness, and none of the
+formulas is a liveness theorem.
+
+and the non-vacuity goals are that both transitions are reachable:
+$recState = rsEnding$ after $EndOwnSession$ and after $ExpireClaude$, that
+$EndRefused$ is enabled ($currentRun = 1 \land 0 \in conns$), and that a clear
+completes ($newLive = ztrue$).
+
+Six frozen variants are the negative controls, each the shipped file with one
+thing taken out:
+\begin{itemize}
+  \item \texttt{claude-session-end-nofile.tex}: $FileOutbox$ drops what the session
+    holds (the end that does not file mail back, the requirement A2 of DES-099
+    states): the conservation invariant is violated.
+  \item \texttt{claude-session-end-unordered.tex}: $NewHello$ is enabled while the
+    old end is still in progress: the old end's by-name $ReleaseTty$ frees the new
+    session's name, and $newLive = ztrue \Rightarrow ttyOwner = tNew$ is violated.
+  \item \texttt{claude-session-end-orphan.tex}: $ExpireClaude$ owes no row deletion
+    (the retention path forgets the row): the record goes with the row still
+    present, and $rowPresent = ztrue \Rightarrow recState \neq rsNone$ is violated:
+    $BadOrphan$.
+  \item \texttt{claude-session-end-noexpire.tex}: the guard of $ExpireClaude$ is
+    $age > maxAge$, which the saturating sweep never reaches: the first retention
+    formula is \textbf{FALSE}, a dormant record at its retention is never
+    removed.
+  \item \texttt{claude-session-end-showanywhere.tex}: $MailShow$ needs no
+    connection.  Held mail is consumed by a print with nobody connected:
+    $shownDormant = zfalse$ is violated, by $MailArrive$, $MailFetch$, $Detach$,
+    $MailShow$.  (A restart is not the route: it loses the outbox in this control
+    as in the shipped model, so the held mail has nothing left to show.)
+  \item \texttt{claude-session-end-anyrun.tex}: $EndOwnSession$ accepts a
+    connection of a replaced run: the replaced connection ends the session the
+    newer run owns (checked by the goal $recState = rsEnding$ reached with
+    $run? \neq currentRun$, as the history of the operation).
+\end{itemize}
+
+%%----------------------------------------------------------------------
+%% Reproducing the checks.  Run from the repo root; one probcli at a time.
+%%
+%%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
+%%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 6 -p MAX_INITIALISATIONS 20 \
+%%      -p MAX_OPERATIONS 500 -p TIME_OUT 600000"
+%%   ( ulimit -v 8000000; "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check )
+%%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
+%%       "AG({recState=rsDormant & age=2} => e(ExpireClaude))"
+%%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
+%%       "AG({recState=rsEnding & rowTodo=ztrue} => e(DeleteRow))"
+%%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
+%%       "AG({recState=rsEnding & rowTodo=zfalse & ttyTodo=zfalse & logTodo=zfalse & mailTodo=zfalse} => e(FinishEnd))"
+%%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
+%%       "AG({recState=rsEnding} => EF {recState=rsNone})"   (reachability)
+%%   goals: "recState=rsEnding & age=2", "newLive=ztrue", "recState=rsLive & conns/={} & currentRun=1"
+%%
+%% Negative controls (each reports an invariant violation, the noexpire one a
+%% FALSE CTL formula):
+%%
+%%   for V in nofile unordered orphan; do
+%%     "$PROBCLI" docs/specs/claude-session-end-$V.tex $P -model_check
+%%   done
+%%   "$PROBCLI" docs/specs/claude-session-end-noexpire.tex $P -model_check -ctlformula \
+%%       "AG({recState=rsDormant & age=2} => e(ExpireClaude))"
+%%----------------------------------------------------------------------
+
+\end{document}
