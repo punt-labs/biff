@@ -331,6 +331,21 @@ class TestDaemonStatus:
         result = runner.invoke(app, ["daemon", "status"])
         assert "not loaded" not in result.output
 
+    def test_a_loaded_unit_that_is_not_running_has_no_such_note(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A job launchd holds but is not running (waiting for its next start) is
+        # installed and loaded; only a job launchd has dropped is "not loaded".
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=True)
+        host_has(monkeypatch, unit)
+        unit.install()
+        unit.stop()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert ("running: no" in result.output, "not loaded" in result.output) == (
+            True,
+            False,
+        )
+
     def test_a_backend_with_no_notion_of_loading_has_no_such_note(
         self, backend: FakeBackend
     ) -> None:
