@@ -269,5 +269,12 @@
   "biff.cli_talk_view": "cli",
   "biff.cli_talk_outcome": "cli",
   "biff.talk_reading": "wire",
-  "biff.talk_wire": "wire"
+  "biff.talk_wire": "wire",
+  "biff.daemon.activity_stamp": "daemon",
+  "biff.daemon.heartbeat": "daemon",
+  "biff.daemon.plan_method": "daemon",
+  "biff.daemon.read_steps": "daemon",
+  "biff.commands._relay_counters": "commands",
+  "biff.commands._status_report": "commands",
+  "biff.commands.plan_source": "commands"
 }

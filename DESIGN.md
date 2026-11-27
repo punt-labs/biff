@@ -9738,3 +9738,40 @@ the PR that deletes the in-process path.
 `__main__.py` no longer imports `cli_session`. The in-process path itself is
 deleted in the last PR of the migration (`biff wall` keeps its direct CI path). `_suppress_nats_noise` stays: `biff daemon serve` and
 `biff mcp` run NATS in the process the same callback configures.
+
+## DES-100: biffd Gains What `biff mcp` Needs to Become a Thin Client
+
+**Date:** 2026-11-27
+**Status:** SETTLED
+**Topic:** The first group of daemon additions for the final switch of
+PL-1670: `plan` `source`, the heartbeat's activity stamp, relay counters on
+`status`. Detail: `docs/design/biffd.md` "Methods the `biff mcp` client needs".
+
+**Decision.**
+
+- `plan` takes `source` (`manual` default, `auto`). The engine owns the rule
+  that an auto plan never replaces a non-empty manual one, and says so with the
+  text the in-process tool returns (`Plan unchanged (manual):`) and
+  `"unchanged": true`. The in-process MCP text is the oracle (ruling F5).
+- The daemon's per-session heartbeat reads `<unread_dir>/<session_id>.active`
+  and passes its mtime to `relay.heartbeat(key, at)`, as `HookActivity` does in
+  process (DES-097). The daemon derives the path from the hello's session id and
+  its own unread directory; no client supplies a path (ruling F2). Moving the
+  heartbeat to the daemon without this would have brought DES-097's bug back:
+  the failing test is the DES-097 scenario (row ten minutes stale, stamp one
+  minute old, idle must read about one minute).
+- `status` reports `relay_counters` (`attempts`, `timeouts`) for relays that
+  count requests, replacing `get_poll_status`'s in-process read. The counters
+  are those of the daemon's relay for the repository, shared by its sessions.
+
+**Rejected.**
+
+- *A path param on the heartbeat or hello.* It would let a client make the daemon
+  `stat` an arbitrary file.
+- *Importing `HookActivity`.* It lives in `biff.server`, which the daemon layer
+  may not import; it is deleted with the in-process path, and `ActivityStamp`
+  replaces it.
+
+**Model obligations.** The stamp transition (heartbeat advances `last_tool_at`
+from an external clock, forward only) is not in `presence-heartbeat.tex`; the
+DES-097 note already records that gap.

@@ -4,6 +4,13 @@
 
 ### Added
 
+- The biffd `plan` method takes `source`, `manual` (the default) or `auto`. An
+  auto plan from a hook never replaces a non-empty manual one: the reply reads
+  `Plan unchanged (manual):` and carries `"unchanged": true`, so the client
+  rewrites its plan-gate marker. Any other source is refused.
+- The biffd `status` method (and `biff status --json`) reports `relay_counters`,
+  the relay's request and timeout counts for a NATS relay and `null` for the
+  local relay. The status text does not change.
 - `biff watch` subscribes to biffd and prints one JSON line per arrival
   summary: `{"seq": 4, "kind": "mail", "data": {...}}`, with `kind` one of
   `unread`, `mail`, `wall`, `degraded` and `recovered`. Lines carry counts and
@@ -92,6 +99,11 @@
 
 ### Fixed
 
+- biffd's heartbeat carries the plugin hook's per-session activity stamp
+  (`~/.punt-labs/biff/unread/<session_id>.active`) into `last_tool_at`, as the
+  in-process server does. Without it, a session working through Bash and Edit
+  read as hours idle on other hosts once its client was a thin biffd client
+  (DES-097).
 - A refused `biff daemon install`, `start` or `restart` (another program holds
   biffd's port) names the program, `held by python3 (pid 4930), not biffd`, when
   `lsof` or `ss` can say, and writes one WARNING line to `biff.log`.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -12,6 +11,7 @@ from typing import TYPE_CHECKING, Self, final
 from biff.cli_context import CliContext
 from biff.commands.inbox import Inbox
 from biff.daemon.attachment import Attachment
+from biff.daemon.heartbeat import Heartbeat
 from biff.daemon.orgs import OrgRepos
 from biff.daemon.outbox import Outbox
 from biff.daemon.presence import PresenceRow
@@ -20,7 +20,6 @@ from biff.daemon.session_key import SessionKey
 from biff.daemon.talk_channel import TalkChannel
 from biff.daemon.tasks import Supervised
 from biff.frame_reply import ErrorCode
-from biff.relay_errors import RELAY_ERRORS, RelayLog
 from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
 
@@ -32,8 +31,6 @@ if TYPE_CHECKING:
     from biff.relay import Relay
 
 __all__ = ["Session", "SessionStatus", "SessionTable"]
-
-logger = logging.getLogger(__name__)
 
 _MAX_RETIRED_RUNS = 64
 _TALK_CHECK_SECONDS = 2.0
@@ -64,12 +61,11 @@ class Session:
         "_busy",
         "_context",
         "_cwd",
-        "_interval",
         "_is_ended",
-        "_log",
         "_orgs",
         "_outbox",
         "_presence",
+        "_pulse",
         "_queued",
         "_retired",
         "_run",
@@ -89,9 +85,8 @@ class Session:
     _run: str
     _retired: dict[str, None]
     _attachments: set[Attachment]
-    _interval: float
+    _pulse: Heartbeat
     _beat: asyncio.Task[None] | None
-    _log: RelayLog
     _busy: asyncio.Lock
     _queued: int
     _is_ended: bool
@@ -126,9 +121,10 @@ class Session:
         self._run = run
         self._retired = {}
         self._attachments = set()
-        self._interval = heartbeat_interval
+        self._pulse = Heartbeat(
+            context.relay, context.session_key, session_id, heartbeat_interval
+        )
         self._beat = None
-        self._log = RelayLog(logger)
         self._busy = asyncio.Lock()
         self._queued = 0
         self._is_ended = False
@@ -328,7 +324,7 @@ class Session:
         self._talk.start()
         if self._beat is None or self._beat.done():
             self._beat = Supervised.spawn(
-                self._heartbeat(), f"heartbeat {self._session_id}"
+                self._pulse.run(self._refresh_orgs), f"heartbeat {self._session_id}"
             )
         return attachment
 
@@ -357,19 +353,10 @@ class Session:
         if self.is_dormant:
             await self._talk.hang_up(self._context)
 
-    async def _heartbeat(self) -> None:
-        """Send the session's one presence heartbeat for as long as it is attached."""
-        while True:
-            await asyncio.sleep(self._interval)
-            ctx = self._context
-            try:
-                await ctx.relay.heartbeat(ctx.session_key)
-            except RELAY_ERRORS as exc:
-                self._log.failed("heartbeat", exc)
-            else:
-                self._log.recovered("heartbeat")
-            if await self._orgs.refresh():
-                self._context = self._context.with_org_repos(self._orgs.current)
+    async def _refresh_orgs(self) -> None:
+        """Follow the organization's repositories as the heartbeat finds them."""
+        if await self._orgs.refresh():
+            self._context = self._context.with_org_repos(self._orgs.current)
 
 
 @final
