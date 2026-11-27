@@ -92,6 +92,10 @@
 
 ### Fixed
 
+- `biff talk` and the shell no longer end with a traceback when biffd dies while a
+  request to it is in flight. The talk ends as lost (exit 1, "biffd connection
+  lost" on stderr) however the loss is noticed; the shell prints it and keeps its
+  prompt.
 - A refused `biff daemon install`, `start` or `restart` (another program holds
   biffd's port) names the program, `held by python3 (pid 4930), not biffd`, when
   `lsof` or `ss` can say, and writes one WARNING line to `biff.log`.

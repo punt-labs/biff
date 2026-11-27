@@ -10,7 +10,7 @@ from biff._formatting import terminal_safe
 from biff.cli_console import PromptedConsole, Tick
 from biff.cli_link import DaemonLink
 from biff.cli_talk_view import TalkView
-from biff.client.connection import DaemonError
+from biff.client.connection import ConnectionLostError, DaemonError
 from biff.repl_display import ReplDisplay
 from biff.talk_state import PENDING_INVITE_TTL
 
@@ -113,6 +113,17 @@ class TalkConversation:
         refused it, nobody answered the invite, or the connection to biffd was
         lost; ``True`` however else it ended.
         """
+        try:
+            return await self._talk(to, opening)
+        except ConnectionLostError as exc:
+            # The daemon went away inside a request, not while the loop waited on
+            # the event pump: it ends the talk the same way, in one place.
+            self._console.complain(terminal_safe(f"biffd connection lost: {exc}"))
+            self._lost = True
+            return False
+
+    async def _talk(self, to: str, opening: str) -> bool:
+        """Run the talk; a connection lost in a request propagates to :meth:`run`."""
         say = self._console.say
         outcome = await self._link.talk(to, opening)
         if outcome.error or outcome.phase == "idle":
@@ -157,7 +168,9 @@ class TalkConversation:
                     await self._withdraw()
                     return False
                 if self._link.pump.lost:
-                    say(terminal_safe(f"biffd connection lost: {self._link.pump.lost}"))
+                    self._console.complain(
+                        terminal_safe(f"biffd connection lost: {self._link.pump.lost}")
+                    )
                     self._lost = True
                     return False
                 if got is Tick.IDLE:
@@ -217,7 +230,7 @@ class TalkConversation:
                 got = await console.next(wake)
                 if self._link.pump.lost:
                     lost = terminal_safe(self._link.pump.lost)
-                    console.say(f"{_CLEAR_LINE}biffd connection lost: {lost}")
+                    console.complain(f"biffd connection lost: {lost}")
                     self._lost = True
                     over = True
                 elif got is Tick.IDLE:
