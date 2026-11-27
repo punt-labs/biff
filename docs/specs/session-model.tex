@@ -1669,7 +1669,8 @@ once.  A pending arrival is one with $shown~c < durable(\ldots)$.
   \Xi RouteWorld \\
   c? : CONN
   \where
-  c? \in subscribed \\
+  c? \in \dom hello \\
+  second(hello~c?) = runOf(first(hello~c?)) \\
   durable' = durable \oplus \{ first(hello~c?) \mapsto 0 \} \\
   shown' =
     \{ c : subscribed | first(hello~c) = first(hello~c?) @ c \mapsto 0 \}
@@ -1687,7 +1688,9 @@ once.  A pending arrival is one with $shown~c < durable(\ldots)$.
 
 Reading consumes the session's unread mail --- read-once, one writer ---
 and every subscribed connection of that session is told the new, empty
-summary.
+summary.  The reader need not be subscribed: a one-shot read is a request
+from a bound connection of the current run, as a call from a replaced run
+is refused ($RequestReplacedRun$).
 
 %%--------------------------------------------------------------------
 \subsection{Detach and the end of a session}
@@ -1717,11 +1720,13 @@ simply becomes dormant when its last connection goes.
 \begin{schema}{SessionEnd}
   \Delta DaemonSide \\
   \Xi RouteWorld \\
+  c? : CONN \\
   s? : SESSION
   \where
   s? \in known \\
-  ( \exists c : \dom hello @
-      first(hello~c) = s? \land second(hello~c) = runOf~s? ) \\
+  c? \in \dom hello \\
+  first(hello~c?) = s? \\
+  second(hello~c?) = runOf~s? \\
   known' = known \setminus \{ s? \} \\
   runOf' = \{ s? \} \ndres runOf \\
   opened' = opened \setminus
@@ -1735,9 +1740,11 @@ simply becomes dormant when its last connection goes.
   durable' = durable
 \end{schema}
 
-The \texttt{SessionEnd} hook, which arrives over a connection of the
-session's current run, ends the session: the record goes and so do its
-connections.  The unread count of the identity-keyed inbox stays.  This is
+The \texttt{SessionEnd} hook, which arrives over the connection $c?$,
+ends the session only if $c?$ is bound to the session's \emph{current} run:
+a stale hook from a replaced run, whose connection is still open, is refused
+and leaves the session and the current connection intact.  The record goes
+and so do its connections.  The unread count of the identity-keyed inbox stays.  This is
 one of the two operations that remove a record.
 
 \begin{schema}{RetentionExpire}

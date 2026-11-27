@@ -1,10 +1,10 @@
 # biffd: tests owed by the Z specifications
 
-This file records what `/z-spec:partition` and `/z-spec:audit` found when run
-against `docs/specs/nats-relay.tex` (daemon layer) and
-`docs/specs/session-model.tex` (daemon side), with `tests/` as the test
-directory. It replaces an earlier hand-derived list, written before z-spec was
-enabled in this repository.
+This file records the partition and audit of `docs/specs/nats-relay.tex`
+(daemon layer) and `docs/specs/session-model.tex` (daemon side), with `tests/`
+as the test directory. The reports were authored by hand in the shape that
+`z-spec partition` and `z-spec audit` validate and persist. The file replaces
+an earlier hand-derived list.
 
 The machine-readable reports sit beside the specifications:
 
@@ -32,7 +32,7 @@ biffd (PL-1670). Until then the GAPs below are documented, not blocking.
 
 | Specification | Constraints audited | Covered | GAP |
 |---------------|--------------------:|--------:|----:|
-| `nats-relay.tex` | 31 | 20 | 11 |
+| `nats-relay.tex` | 32 | 20 | 12 |
 | `session-model.tex` | 26 | 17 | 9 |
 
 The daemon exists (`src/biff/daemon`, `tests/test_daemon/`), and its handshake,
@@ -80,7 +80,7 @@ Run with `probcli -model_check -strict -p DEFAULT_SETSIZE 1 -p MAXINT 4`
 | Spec and scope | Result |
 |----------------|--------|
 | `session-model.tex`, gate scope (1 session, 1 run, 1 connection) | 2,342 states, all visited, 0 invariant violations; `HelloNewRun` and `RequestReplacedRun` not reached at this scope |
-| `session-model.tex`, `-card RUN 2 -card CONN 2` | 15,098 states, 162,519 transitions, all visited, 0 invariant violations; every daemon operation covered |
+| `session-model.tex`, `-card RUN 2 -card CONN 2` | 15,098 states, 170,079 transitions (after `ReadUnread` and `SessionEnd` were corrected to guard on the calling connection), all visited, 0 invariant violations; every daemon operation covered |
 | `nats-relay.tex`, `-card CLIENT 1`, full counters (`maxGeneration 3`, `maxEpoch 2`, `maxRestarts 2`) | 1,610,778 states, 20,314,058 transitions, all visited, 0 invariant violations, all 30 operations covered (`-mc 2000000`, about 8 minutes, 7.4 GB) |
 | `nats-relay.tex`, `-card CLIENT 1`, `maxGeneration 2`, `maxEpoch 1`, `maxRestarts 1` | 177,118 states, 1,959,126 transitions, all visited, 0 invariant violations; CTL `AG(attached /= {} => EF(attached /= {} & connState = connected & every subGen(k) = generation))` TRUE |
 
@@ -105,6 +105,17 @@ model run at `-card CLIENT 1` with the reduced counters):
 
 The third row is the open finding recorded in `nats-relay.tex`, Reset
 Infrastructure: the code's `reset_infrastructure` reaches that state.
+
+## Known divergences between model and code
+
+Each needs an owner ruling or a code change; none is closed by this PR.
+
+| Divergence | Model | Code |
+|------------|-------|------|
+| A retired run reconnects | `HelloNewRun` reinstates any run id other than the current one, so `r1` can reclaim a session from `r2` | `Session.attach` refuses it, and `test_a_replaced_run_that_reconnects_is_refused_for_good` requires the refusal. Closing this needs a retired-runs component in `DaemonSide` |
+| First hello dials | `ClientAttach` is `Xi Connection`: attaching causes no dial | `PresenceRow.ensure` reads the relay during the first hello |
+| Fetched mail in memory | `durable` is the relay's unread count and survives `DaemonExit` | With NATS, `Methods._read` holds fetched, unacknowledged mail in process memory, outside that count, so the restart result does not cover it |
+| Recovery claims | `DaemonExit` is enabled in every transport state, so the generic deadlock check cannot report a wedge and the subscription-liveness formula holds trivially through an exit | The in-process recovery claims are evidenced by the frozen daemon-free variants, not by the extended model (see `nats-relay.tex`, Daemon Exit and Start) |
 
 ## Spec scope note
 

@@ -1982,6 +1982,22 @@ Every client detaches, and the connection, the generation counter, the
 subscriptions and the watcher return to their initial values.  The
 $SessionStore$ is the KV bucket and survives.
 
+A consequence for the checks of \S\ref{sec:modelcheck}.  Because $DaemonExit$
+is enabled in every transport state, the generic deadlock check can no longer
+report a wedge whose recovery transitions have been removed, and the
+subscription-liveness formula holds trivially on any path through an exit
+(both $subGen(k)$ and $generation$ become $0$).  The in-process recovery
+claims are therefore evidenced by the frozen variants, which carry no daemon
+layer (\texttt{nats-relay-passA-nowedge.tex},
+\texttt{nats-relay-xko-isconnected.tex},
+\texttt{nats-relay-kvwatch-noreconcile.tex}), not by the extended model.
+Restart recovery is the separate claim of invariant~5 of DES-095.  Mail that
+the daemon has fetched but not yet acknowledged is held in process memory and
+is outside the relay's unread count that the model keeps.  The first hello of a
+session reads the presence row through the relay before the client is
+attached, so the code dials at hello time where $ClientAttach$ defers the dial
+to the first request; the model is the authority and the code is to conform.
+
 \begin{schema}{DaemonStart}
   \Delta DaemonLayer \\
   \Xi Connection \\

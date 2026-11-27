@@ -193,11 +193,11 @@
       "testPattern": "assert session not in daemon.records and unread == before"
     },
     {
-      "text": "SessionEnd precondition: a connection of the current run exists",
+      "text": "SessionEnd precondition: the calling connection c? is bound to the session's current run",
       "category": "precondition",
       "source": "SessionEnd",
-      "suggestion": "SessionEnd from a replaced run is refused",
-      "testPattern": "assert session in daemon.records after stale-run end"
+      "suggestion": "With a replaced connection still open and the current one attached, a SessionEnd from the replaced one is refused and the session and current connection stay",
+      "testPattern": "assert session in daemon.records and current_conn.open after stale-run end"
     },
     {
       "text": "RetentionExpire: only a record with no connection expires",

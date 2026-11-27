@@ -999,7 +999,8 @@
           "name": "c",
           "type": "CONN",
           "constraints": [
-            "c in subscribed"
+            "c in dom hello",
+            "second(hello(c)) = runOf(first(hello(c)))"
           ]
         }
       ],
@@ -1010,8 +1011,8 @@
       "branches": [
         {
           "id": 1,
-          "description": "Read-once: unread consumed; every subscribed connection of the session sees the empty summary",
-          "condition": "c in subscribed"
+          "description": "Read-once from a bound connection of the current run (subscribed or not): unread consumed; every subscribed connection of the session sees the empty summary",
+          "condition": "c in dom hello & second(hello(c)) = runOf(first(hello(c)))"
         }
       ],
       "partitions": [
@@ -1083,21 +1084,71 @@
         },
         {
           "id": 3,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r1"
+            },
+            "subscribed": [],
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "one-shot read by an unsubscribed connection",
+          "branch": 1,
+          "postState": {
+            "durable": {
+              "s1": 0
+            }
+          }
+        },
+        {
+          "id": 4,
           "class": "rejected",
           "status": "rejected",
           "inputs": {
             "c": "c1"
           },
           "preState": {
-            "subscribed": []
+            "hello": {},
+            "durable": {
+              "s1": 1
+            }
           },
-          "notes": "not subscribed"
+          "notes": "unbound connection: precondition c in dom hello fails"
+        },
+        {
+          "id": 5,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r2"
+            },
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "replaced run: see RequestReplacedRun"
         }
       ],
       "summary": {
-        "total": 3,
-        "accepted": 2,
-        "rejected": 1,
+        "total": 5,
+        "accepted": 3,
+        "rejected": 2,
         "pruned": 0
       }
     },
@@ -1212,6 +1263,13 @@
       "kind": "delta",
       "inputs": [
         {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in dom hello"
+          ]
+        },
+        {
           "name": "s",
           "type": "SESSION",
           "constraints": [
@@ -1232,7 +1290,7 @@
         {
           "id": 1,
           "description": "The SessionEnd hook of the current run removes the record and its connections; unread mail stays",
-          "condition": "s in known & exists c in dom hello with hello(c) = (s, runOf(s))"
+          "condition": "s in known & c in dom hello & hello(c) = (s, runOf(s))"
         }
       ],
       "partitions": [
@@ -1306,12 +1364,34 @@
             "hello": {}
           },
           "notes": "dormant record: no connection can send the hook"
+        },
+        {
+          "id": 4,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1",
+            "s": "s1"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "runOf": {
+              "s1": "r2"
+            },
+            "hello": {
+              "c1": "(s1,r1)",
+              "c2": "(s1,r2)"
+            }
+          },
+          "notes": "stale hook from replaced connection c1 while current c2 is attached: session and c2 intact"
         }
       ],
       "summary": {
-        "total": 3,
+        "total": 4,
         "accepted": 1,
-        "rejected": 2,
+        "rejected": 3,
         "pruned": 0
       }
     },
