@@ -17,6 +17,7 @@ from biff.daemon.session_store import CliSessionStore
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
+from tests.test_daemon.talk_bus import TalkBus, TalkBusRelay
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -129,6 +130,18 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     subprocess.run(["git", "init", "-q", str(path)], check=True)  # noqa: S603, S607
     monkeypatch.chdir(path)
     return path
+
+
+@pytest.fixture
+def bus(harness: Harness) -> TalkBus:
+    """Make every relay the daemon builds carry talk over one shared bus."""
+    shared = TalkBus()
+
+    def build(path: Path) -> Relay:
+        return TalkBusRelay(path, shared)
+
+    harness.factory.relay_type = build
+    return shared
 
 
 @pytest.fixture

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -11,28 +12,14 @@ from biff._formatting import HEADER_PREFIX
 from biff.formatting import format_talk_end
 from biff.invite_expiry import InviteExpiry
 from biff.talk_state import MAX_TALK_QUEUE
-from tests.test_daemon.talk_bus import TalkBus, TalkBusRelay
+from tests.test_daemon.talk_bus import TalkBus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from biff.client.connection import DaemonClient
     from biff.frames import Event
-    from biff.relay import Relay
     from tests.test_daemon.conftest import Harness
-
-
-@pytest.fixture
-def bus(harness: Harness) -> TalkBus:
-    """Make every relay the daemon builds carry talk over one shared bus."""
-    shared = TalkBus()
-
-    def build(path: Path) -> Relay:
-        return TalkBusRelay(path, shared)
-
-    harness.factory.relay_type = build
-    return shared
 
 
 def _data(result: object) -> dict[str, object]:
@@ -262,3 +249,121 @@ async def test_every_listening_connection_of_a_session_is_told(
     await pair.say(pair.kai, pair.eric_at, "")
     assert (await _notice(pair.eric)).kind == "talk_invite"
     assert (await _notice(second)).kind == "talk_invite"
+
+
+async def test_a_failed_resubscribe_is_retried_and_the_feed_survives(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    subject = await _subject(pair.eric)
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    relay = bus.relays[0]
+    relay.down = True
+    relay.generation += 1  # the client was replaced and the next dial fails
+    await asyncio.sleep(0.2)  # several ticks fail
+    relay.down = False
+    # Frames are ephemeral: one sent before the feed subscribes again is lost.
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    await pair.say(pair.kai, pair.eric_at, "")
+    assert (await pair.read(pair.eric))["invites"] != []
+
+
+async def test_a_session_attached_while_the_relay_is_down_subscribes_when_it_returns(
+    harness: Harness, bus: TalkBus
+) -> None:
+    kai = await harness.connect("s-kai", "kai")
+    await _tty(kai)  # the relay is built and answering
+    bus.relays[0].down = True
+    third = await harness.connect("s-third", "third")
+    await asyncio.sleep(0.2)
+    bus.relays[0].down = False
+    third_subject = await _subject(third)
+    await _eventually(lambda: bus.subscriber_count(third_subject) == 1)
+    third_at = third_subject.removeprefix("talk.notify.")
+    await kai.request("talk", to=third_at, message="")
+    seen = _data(await third.request("talk_read"))
+    invites = cast("list[dict[str, str]]", seen["invites"])
+    assert [i["from"] for i in invites] == ["kai"]
+
+
+async def test_a_failing_resubscribe_warns_once_then_recovers(
+    pair: _Pair, bus: TalkBus, caplog: pytest.LogCaptureFixture
+) -> None:
+    subject = await _subject(pair.eric)
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    relay = bus.relays[0]
+    with caplog.at_level(logging.INFO, logger="biff.daemon.talk_feed"):
+        relay.down = True
+        relay.generation += 1
+        await asyncio.sleep(0.3)  # many ticks fail
+        relay.down = False
+        before = bus.subscribes
+        await _eventually(lambda: bus.subscribes > before)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2  # once per session, however many ticks failed
+    assert "recovered" in caplog.records[-1].getMessage()
+
+
+async def test_a_conversation_survives_the_clients_that_attached_it(
+    pair: _Pair, harness: Harness
+) -> None:
+    await pair.connect()
+    await pair.kai.close()
+    again = await harness.connect("s-kai", "kai")
+    await again.request("talk", to=pair.eric_at, message="back again")
+    assert (await pair.read(pair.eric))["lines"] == [
+        f"{HEADER_PREFIX}{pair.kai_at}: back again"
+    ]
+
+
+async def test_a_publish_failure_while_ending_resets_the_talk_and_says_so(
+    pair: _Pair, bus: TalkBus, caplog: pytest.LogCaptureFixture
+) -> None:
+    await pair.connect()
+    bus.broken = True
+    with caplog.at_level(logging.INFO, logger="biff.commands.talk"):
+        ended = cast("dict[str, object]", await pair.kai.request("talk_end"))
+    bus.broken = False
+    assert (ended["error"], _data(ended)) == (True, {"ended": True})
+    again = cast("dict[str, object]", await pair.kai.request("talk_end"))
+    assert _data(again) == {"ended": False}  # kai is idle however eric fared
+    assert all(r.levelno == logging.INFO for r in caplog.records)
+    assert "wedged" not in caplog.text
+
+
+async def test_an_invite_that_cannot_be_published_leaves_the_session_idle(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    bus.broken = True
+    reply = cast(
+        "dict[str, object]",
+        await pair.kai.request("talk", to=pair.eric_at, message=""),
+    )
+    bus.broken = False
+    assert (reply["error"], _data(reply)["phase"]) == (True, "idle")
+
+
+async def test_an_accept_that_cannot_be_published_keeps_the_invite_acceptable(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    await pair.say(pair.kai, pair.eric_at, "")
+    await pair.read(pair.eric)
+    bus.broken = True
+    failed = cast(
+        "dict[str, object]",
+        await pair.eric.request("talk", to=pair.kai_at, message=""),
+    )
+    bus.broken = False
+    assert (failed["error"], _data(failed)["phase"]) == (True, "idle")
+    retried = cast(
+        "dict[str, object]",
+        await pair.eric.request("talk", to=pair.kai_at, message=""),
+    )
+    assert (retried["error"], _data(retried)["phase"]) == (False, "connected")
+
+
+async def test_talk_reports_where_the_conversation_stands(pair: _Pair) -> None:
+    invited = cast(
+        "dict[str, object]",
+        await pair.kai.request("talk", to=pair.eric_at, message=""),
+    )
+    assert _data(invited) == {"phase": "inviting", "peer": pair.eric_at}

@@ -17,9 +17,31 @@ from biff.talk_types import TalkPhase
 
 if TYPE_CHECKING:
     from biff.commands.talk import TalkContext
-    from biff.talk_types import AgentDrain, TalkNotification
+    from biff.talk_state import TalkState
+    from biff.talk_types import AgentDrain, PendingInvite, TalkNotification
 
-__all__ = ["TalkReadout"]
+__all__ = ["TalkReadout", "TalkStanding"]
+
+
+@final
+@dataclass(frozen=True)
+class TalkStanding:
+    """Where a conversation stands: its phase, and with whom unless idle."""
+
+    phase: str
+    peer: str
+
+    @classmethod
+    def of(cls, talk: TalkState) -> Self:
+        """Return the standing of *talk* now."""
+        if talk.phase is TalkPhase.IDLE:
+            return cls("idle", "")
+        return cls(talk.phase.name.lower(), talk.partner_display)
+
+    @property
+    def data(self) -> dict[str, str]:
+        """The standing as wire fields."""
+        return {"phase": self.phase, "peer": self.peer}
 
 
 @final
@@ -37,8 +59,7 @@ class TalkReadout:
 
     drain: AgentDrain
     accept_published: bool = True
-    phase: str = "idle"
-    peer: str = ""
+    standing: TalkStanding = TalkStanding("idle", "")
 
     @classmethod
     async def take(cls, ctx: TalkContext) -> Self:
@@ -48,8 +69,7 @@ class TalkReadout:
         return cls(
             drain,
             accept_published=await cls.publish_owed_accept(ctx, drain),
-            phase=talk.phase.name.lower(),
-            peer=talk.partner_display if talk.phase is not TalkPhase.IDLE else "",
+            standing=TalkStanding.of(talk),
         )
 
     @staticmethod
@@ -126,16 +146,21 @@ class TalkReadout:
                 {
                     "from": invite.user,
                     "tty": invite.tty,
+                    "label": self._label(invite),
                     "accept": invite.accept_command,
                 }
                 for _user, invite in sorted(self.drain.pending.items())
             ],
             "ended": any(n.is_end for n in self.drain.messages),
             "accept_published": self.accept_published,
-            "phase": self.phase,
-            "peer": self.peer,
+            **self.standing.data,
         }
         return CommandResult(text=self.text(), json_data=data)
+
+    @staticmethod
+    def _label(invite: PendingInvite) -> str:
+        user, tty = terminal_safe(invite.user), terminal_safe(invite.tty)
+        return f"{user}:{tty}" if tty else user
 
     @staticmethod
     def _message(notif: TalkNotification) -> dict[str, str]:

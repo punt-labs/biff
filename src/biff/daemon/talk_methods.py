@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING, ClassVar, final
 import biff.commands.talk as talk_commands
 from biff.commands import CommandResult
 from biff.commands._session import update_current_session
-from biff.commands.talk_read import TalkReadout
+from biff.commands.talk_read import TalkReadout, TalkStanding
 from biff.daemon.talk_feed import TalkTransport
 from biff.talk_types import TalkPhase
 
 if TYPE_CHECKING:
     from biff.cli_context import CliContext
-    from biff.daemon.methods import Params
+    from biff.daemon.params import Params
 
 __all__ = ["TalkMethods"]
 
@@ -38,7 +38,12 @@ class TalkMethods:
         if not isinstance(ctx.relay, TalkTransport):
             return TalkMethods.NEEDS_NATS
         await update_current_session(ctx)
-        return await talk_commands.talk(ctx, to, message)
+        done = await talk_commands.talk(ctx, to, message)
+        return CommandResult(
+            text=done.text,
+            json_data=TalkStanding.of(ctx.talk).data,
+            error=done.error,
+        )
 
     @staticmethod
     async def talk_read(ctx: CliContext, p: Params) -> CommandResult:

@@ -134,6 +134,13 @@
   `session new --tty` and a rename of a CLI session refuse a name shaped like a
   generated session id (`cli-` and 16 hex digits), and a session looked up by
   id is never confused with one named like it.
+- `biff` (the interactive shell) and `biff talk` run as clients of biffd and hold
+  no relay connection. Mail, walls and talk arrive as events on one standing
+  connection; a talk line costs one round trip after its notice. `biff talk` is
+  now a real talk (invite, accept, lines, end) instead of durable mail, so the
+  peer must accept; it exits 1 when the relay carries no talk. A hang-up is sent
+  however the shell or `biff talk` ends, because biffd keeps the conversation.
+  The MCP `talk_read` text is unchanged.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the
   same text as before. `plan` and `tty` still write the plan-gate

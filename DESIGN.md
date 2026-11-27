@@ -9596,12 +9596,6 @@ the reply. The process holds no relay connection.
 - Talk and the REPL attach to a Claude Code session through `cli_session_host`
   as they did before this change; they move in A3.
 
-**Consequence.** The REPL and `talk` still open an in-process session through
-`cli_session` in `__main__.py`, as do `watch` and the `session` verbs; the REPL
-and `talk` leave it in the PR that routes them through biffd (A3), and `watch`
-and the `session` verbs in the one before it (A2). The in-process path itself is
-deleted in the last PR of the migration.
-
 **`watch` (A2).** `biff watch` opens the same CLI session the other commands
 use (`DaemonCommand.open()`), subscribes, and prints each event as one JSON
 line `{"seq", "kind", "data"}` on stdout, flushed per line, and nothing else on
@@ -9688,3 +9682,41 @@ store (`attach`, `rename`, the draft it stores once biffd names it), so two
 writers remain, serialised by the store's per-session file lock. Removing the
 client's access needs the hello to carry the session name; that belongs with
 the PR that deletes the in-process path.
+
+**Talk and the REPL.**
+
+- **Talk is three methods and four notices, and text is pulled.** `talk`,
+  `talk_read` and `talk_end` run the engine's talk kernel in the daemon, which
+  holds each session's `TalkState` and, while a client is attached, the NATS
+  subscription that feeds it (`TalkFeed`, re-subscribing when the relay dials a
+  new client, per `nats-relay.tex` `talkSubGen`). The queue keeps the bound of
+  `talk.tex`: 100 frames, oldest dropped. A subscribed client receives
+  `talk_invite`, `talk_accept`, `talk_line` or `talk_end` as the frame arrives,
+  each `{"from", "tty", "pending"}`: who, and how many frames wait. **No event
+  carries text.** biff pulls bodies and pushes notice (DES-087), so the client
+  calls `talk_read` on each notice and latency is one round trip. Rejected: a
+  `talk_line` event with the line in its body, which would make the daemon push
+  what the channel rule says is pulled and put message text in every
+  subscriber's frame. `talk_accept` is a fourth notice, not in the first
+  sketch: the inviting client waits for it and an accept has no text to hide.
+  Notices are not replayed; a client that subscribes with a backlog calls
+  `talk_read` once.
+- **The REPL and `biff talk` are one conversation class on two consoles.**
+  `ReplSession` (`cli_repl.py`) and `TalkConversation` (`cli_talk.py`) hold no
+  relay and no `TalkState`: a command line is parsed by `dispatch.parse` into a
+  `Call` and run by name in biffd, arrivals come from the subscription, and a
+  talk is a modal loop over the same console. `biff talk` is now the ephemeral
+  protocol (invite, accept, lines, end) and no longer writes durable mail, so
+  the peer must accept; it exits 1 when biffd refuses, for instance on a relay
+  with no talk. A hang-up is sent however the loop ends, because biffd keeps the
+  conversation after the client goes.
+- **A daemon session's context changes without losing its talk.**
+  `dataclasses.replace` on `CliContext` built a new, empty `TalkState`; the
+  session's heartbeat replaced its context on an org refresh and would have
+  dropped a conversation in progress. `with_tty_name` and `with_org_repos`
+  keep the held state.
+
+**Consequence.** The REPL and `talk` no longer open an in-process session, so
+`__main__.py` no longer imports `cli_session`. The in-process path itself is
+deleted in the last PR of the migration (`biff wall` keeps its direct CI path). `_suppress_nats_noise` stays: `biff daemon serve` and
+`biff mcp` run NATS in the process the same callback configures.

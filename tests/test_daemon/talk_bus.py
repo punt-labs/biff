@@ -45,9 +45,13 @@ class TalkBus:
         self._subscribers: dict[str, list[Callback]] = {}
         self.published: list[tuple[str, bytes]] = []
         self.subscribes = 0
+        self.broken = False
         self.relays: list[TalkBusRelay] = []
 
     async def publish(self, subject: str, payload: bytes) -> None:
+        if self.broken:
+            msg = "the relay is wedged"
+            raise TimeoutError(msg)
         self.published.append((subject, payload))
         for callback in list(self._subscribers.get(subject, [])):
             await callback(BusMessage(payload))
@@ -72,6 +76,7 @@ class TalkBusRelay(LocalRelay):
         super().__init__(data_dir)
         self._bus = bus
         self.generation = 1
+        self.down = False
         bus.relays.append(self)
 
     @property
@@ -82,4 +87,7 @@ class TalkBusRelay(LocalRelay):
         return f"talk.notify.{session_key}"
 
     async def get_nc(self) -> TalkClient:
+        if self.down:
+            msg = "no connection"
+            raise TimeoutError(msg)
         return self._bus

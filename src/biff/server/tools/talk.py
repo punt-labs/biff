@@ -28,8 +28,6 @@ from typing import TYPE_CHECKING
 
 import biff.commands.talk as talk_commands
 from biff.commands.talk_read import TalkReadout
-from biff.formatting import format_talk_line
-from biff.models import Message
 from biff.nats_relay import NatsRelay
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import (
@@ -44,30 +42,6 @@ if TYPE_CHECKING:
     from biff.server.state import ServerState
 
 logger = logging.getLogger(__name__)
-
-
-def format_talk_messages(messages: list[Message]) -> str:
-    """Format messages in the shared who/read/wall ``▶`` idiom for talk output.
-
-    Reuses :func:`format_talk_line`'s wrap/hang-indent treatment instead of
-    embedding each up-to-512-char, potentially CJK/emoji-heavy body on one
-    unbounded line so terminal output stays within its wrap budget.
-    """
-    lines: list[str] = []
-    for m in messages:
-        stamp = f"[{m.timestamp.strftime('%H:%M:%S')}] "
-        sender = f"{m.from_user}:{m.from_tty}" if m.from_tty else m.from_user
-        lines.extend(format_talk_line(sender, m.body, stamp=stamp))
-    return "\n".join(lines)
-
-
-async def fetch_all_unread(
-    relay: NatsRelay, session_key: str, user: str
-) -> list[Message]:
-    """Fetch and merge unread messages from both inboxes, sorted by time."""
-    tty_unread = await relay.fetch(session_key)
-    user_unread = await relay.fetch_user_inbox(user)
-    return sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:

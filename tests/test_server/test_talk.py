@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -21,7 +20,6 @@ from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.tools._descriptions import _talk_description
 from biff.server.tools._session import resolve_talk_target
-from biff.server.tools.talk import format_talk_messages
 from biff.talk_state import TalkState
 from biff.talk_types import AgentDrain, PendingInvite, TalkNotification, TalkPhase
 from tests._state import create_state
@@ -31,58 +29,6 @@ if TYPE_CHECKING:
     from biff.commands.talk import TalkContext
     from biff.relay import Relay
     from biff.server.state import ServerState
-
-
-class TestFormatTalkMessages:
-    def test_single_message(self) -> None:
-        msg = Message(
-            from_user="kai",
-            to_user="eric",
-            body="check PR #42",
-            timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
-        )
-        result = format_talk_messages([msg])
-        assert result == "▶  [10:30:45] kai  check PR #42"
-
-    def test_multiple_messages(self) -> None:
-        msgs = [
-            Message(
-                from_user="kai",
-                to_user="eric",
-                body="first",
-                timestamp=datetime(2026, 1, 15, 10, 0, 0, tzinfo=UTC),
-            ),
-            Message(
-                from_user="eric",
-                to_user="kai",
-                body="second",
-                timestamp=datetime(2026, 1, 15, 10, 0, 5, tzinfo=UTC),
-            ),
-        ]
-        result = format_talk_messages(msgs)
-        lines = result.split("\n")
-        assert len(lines) == 2
-        assert "kai" in lines[0] and "first" in lines[0]
-        assert "eric" in lines[1] and "second" in lines[1]
-
-    def test_empty_list(self) -> None:
-        assert format_talk_messages([]) == ""
-
-    def test_cjk_body_wraps_within_the_table_width(self) -> None:
-        """A CJK-heavy backlog message must wrap, not overflow."""
-        from biff._formatting import TABLE_WIDTH, visible_width
-
-        msg = Message(
-            from_user="kai",
-            to_user="eric",
-            body="这是一段很长的中文文本用来测试自动换行是否正常工作" * 2,
-            timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
-        )
-        result = format_talk_messages([msg])
-        lines = result.splitlines()
-        assert len(lines) > 1
-        for line in lines:
-            assert visible_width(line) <= TABLE_WIDTH
 
 
 class TestFormatAgentDrain:
@@ -109,19 +55,6 @@ class TestFormatAgentDrain:
         assert "75abc665" not in rendered
         assert "jfreeman wants to talk — talk jfreeman:tty6 to accept" in rendered
         assert_no_trust_phrase(rendered)
-
-    def test_escapes_neutralized(self) -> None:
-        """Remote body/sender can't inject terminal escapes."""
-        msg = Message(
-            from_user="ev\x1b[2Kil",
-            to_user="kai",
-            body="hi\x1b[2Jthere",
-            timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
-        )
-        result = format_talk_messages([msg])
-        assert "\x1b[2J" not in result
-        assert "\x1b[2K" not in result
-        assert "hi[2Jthere" in result
 
     def test_control_only_tty_and_body_collapse(self) -> None:
         """A control-only tty renders bare user; a control-only body renders a
