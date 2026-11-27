@@ -9587,7 +9587,7 @@ the reply. The process holds no relay connection.
 - These claims are machine-checked. `docs/specs/presence-heartbeat.tex` models the
   heartbeat write; its frozen variant `presence-heartbeat-blindput.tex` (the blind
   put) loses a plan written between the read and the write, and the
-  compare-and-set model reaches no such state in 922 states.
+  compare-and-set model reaches no such state in 32,918 states.
   `docs/specs/mail-refile.tex` models the partial read, the refile and the
   confirmation; `mail-refile-drop.tex` (no refile),
   `mail-refile-confirm-early.tex` (confirm before print) and
@@ -9738,3 +9738,47 @@ the PR that deletes the in-process path.
 `__main__.py` no longer imports `cli_session`. The in-process path itself is
 deleted in the last PR of the migration (`biff wall` keeps its direct CI path). `_suppress_nats_noise` stays: `biff daemon serve` and
 `biff mcp` run NATS in the process the same callback configures.
+
+## DES-100: biffd Gains What `biff mcp` Needs to Become a Thin Client
+
+**Date:** 2026-11-27
+**Status:** SETTLED
+**Topic:** The first group of daemon additions for the final switch of
+PL-1670: `plan` `source`, the heartbeat's activity stamp, relay counters on
+`status`. Detail: `docs/design/biffd.md` "Methods the `biff mcp` client needs".
+
+**Decision.**
+
+- `plan` takes `source` (`manual` default, `auto`). The engine owns the rule
+  that an auto plan never replaces a non-empty manual one, and says so with the
+  text the in-process tool returns (`Plan unchanged (manual):`) and
+  `"unchanged": true`. The in-process MCP text is the oracle (ruling F5).
+- The daemon's per-session heartbeat reads `<unread_dir>/<session_id>.active`
+  and passes its mtime to `relay.heartbeat(key, at)`, as `HookActivity` does in
+  process (DES-097). The daemon derives the path from the hello's session id and
+  its own unread directory; no client supplies a path (ruling F2). Moving the
+  heartbeat to the daemon without this would have brought DES-097's bug back:
+  the failing test is the DES-097 scenario (row ten minutes stale, stamp one
+  minute old, idle must read about one minute).
+- `status` reports `relay_counters` (`attempts`, `timeouts`) for relays that
+  count requests, replacing `get_poll_status`'s in-process read. The counters
+  are those of the daemon's relay for the repository, shared by its sessions.
+
+**Rejected.**
+
+- *A path param on the heartbeat or hello.* It would let a client make the daemon
+  `stat` an arbitrary file.
+- *Importing `HookActivity`.* It lives in `biff.server`, which the daemon layer
+  may not import; it is deleted with the in-process path, and `ActivityStamp`
+  replaces it.
+
+**Model.** `docs/specs/presence-heartbeat.tex` models both transitions.
+`HeartbeatCommit` is the compare-and-set that moves `last_tool_at` forward to
+the stamp only; `PlanWrite` and `PlanRefused` are the plan rule. Each is one
+compare-and-set on the row's revision, in the code as in the model:
+`Relay.update_session_if` reads the row, applies the change and writes it, and
+a manual plan that lands after an auto write read the row fails the write; the
+retry (three tries, then `SessionChangedError`) reads the manual plan and keeps
+it. The model's goal for the stamp is a heartbeat that moved the clock past the
+value it read (`beatAt > seenTool`), which no biff call can have caused, since
+a call between the read and the commit makes the commit fail.

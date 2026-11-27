@@ -354,6 +354,26 @@ A second client attaching must not disturb the first: its `hello` neither
 changes another session's record nor interrupts another connection's
 subscription. This is an acceptance test (see Migration).
 
+### Methods the `biff mcp` client needs
+
+These additions let `biff mcp` carry the in-process tools' behaviour through the
+daemon. The in-process MCP text is the oracle for every text a method returns.
+
+| Method | Param or field | Meaning |
+|--------|----------------|---------|
+| `plan` | `source` (`manual`, the default, or `auto`) | A hook sets `auto`. The engine refuses to replace a non-empty manual plan with an auto one and replies `Plan unchanged (manual):` with `data` `{"plan": <the kept plan>, "unchanged": true}`; the client then rewrites the plan-gate marker, which a new session clears. Bead-id expansion and the marker stay in the client. Any other `source` is refused as `invalid_params`. |
+| `status` | `relay_counters` | `{"attempts": int, "timeouts": int}` for a relay that counts its requests (NATS), `null` for the local relay. The counters are the daemon's relay for the session's repository, shared by every session on it, so they count since the relay was opened, not since one client started. The status text is unchanged. |
+
+**The heartbeat carries the activity stamp.** The PostToolUse hook touches
+`<unread_dir>/<session_id>.active` after every tool call, and DES-097 has the
+heartbeat pass that time to `relay.heartbeat(key, at)` so `/who` idle follows
+every tool call. The daemon's heartbeat (`Heartbeat`, reading `ActivityStamp`) does the same: the
+daemon derives the path from the hello's session id and its own unread directory
+(`~/.punt-labs/biff/unread`), and never takes a path from a client, so a client
+cannot make the daemon read any other file. The session id has passed the id
+charset, so it cannot climb out of that directory. A missing stamp means no
+activity is claimed; a stamp older than the row's `last_tool_at` moves nothing.
+
 ## Z specification obligations
 
 The daemon adds states the current specs do not have. Per the repository's

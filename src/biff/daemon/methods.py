@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Self, final
@@ -11,14 +10,14 @@ from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from biff import commands
-from biff.commands.inbox import Inbox
 from biff.daemon.params import Params
+from biff.daemon.plan_method import PlanMethod
 from biff.daemon.read_batch import ReadBatcher
+from biff.daemon.read_steps import ReadSteps
 from biff.daemon.refusal import RefusalError
 from biff.daemon.talk_methods import TalkMethods
 from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
-from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -27,11 +26,8 @@ if TYPE_CHECKING:
     from biff.commands import CommandResult
     from biff.daemon.session_methods import SessionMethods
     from biff.daemon.sessions import Session
-    from biff.models import Message
 
 __all__ = ["READ_BUDGET_BYTES", "Acknowledge", "Methods", "Outcome"]
-
-logger = logging.getLogger(__name__)
 
 _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
@@ -84,7 +80,7 @@ class Methods:
             "who": Methods._who,
             "finger": Methods._finger,
             "write": Methods._write,
-            "plan": Methods._plan,
+            "plan": PlanMethod.plan,
             "last": Methods._last,
             "wall": Methods._wall,
             "mesg": Methods._mesg,
@@ -154,7 +150,7 @@ class Methods:
         if session.is_ended:
             msg = "session ended; start a new session"
             raise RefusalError.of(ErrorCode.SESSION_ENDED, msg)
-        inbox = await Inbox.unread(session.context)
+        inbox = await ReadSteps.unread(session)
         pending = session.outbox.merge(inbox.messages)
         fitted = ReadBatcher(self._read_budget).fit(pending)
         batch = fitted.messages
@@ -167,48 +163,13 @@ class Methods:
         # it must not sink a batch that was already fetched and is deliverable.
         # Mail given back to the relay is counted by the relay's own backlog.
         left = len(pending) - len(batch)
-        left -= await self._refile(session, inbox, pending, batch)
-        try:
-            left += await inbox.unfetched()
-        except RELAY_ERRORS as exc:
-            logger.warning("read backlog summary unavailable: %s", exc)
+        left -= await ReadSteps.refile(session, inbox, pending, batch)
+        left += await ReadSteps.backlog(inbox)
         if left > 0:
             result["more"] = left
         if not batch:
             return Outcome(result)
-        return Outcome(result, partial(self._delivered, session, inbox, batch))
-
-    @staticmethod
-    async def _refile(
-        session: Session, inbox: Inbox, pending: list[Message], batch: list[Message]
-    ) -> int:
-        """Give the relay back the mail this batch leaves, if the relay consumed it.
-
-        Return how many messages went back.
-
-        Held in the daemon alone, that mail would be out of reach of everything
-        else that drains or reads the session (ending it, another process), and
-        gone if the daemon died.  The batch itself stays held until confirmed.
-        """
-        sent = {m.id for m in batch}
-        left_behind = [m for m in pending if m.id not in sent]
-        filed = 0
-        for message in left_behind:
-            try:
-                if await inbox.refile(message):
-                    # Released as it is filed: a read cancelled before the next
-                    # refile must not leave this message in the relay and here.
-                    session.outbox.forget([message])
-                    filed += 1
-            except RELAY_ERRORS:
-                logger.warning("could not file message %s again", message.id)
-        return filed
-
-    @staticmethod
-    async def _delivered(session: Session, inbox: Inbox, batch: list[Message]) -> None:
-        """Forget the batch and mark it read, once the reply that carried it left."""
-        session.outbox.forget(batch)
-        await inbox.mark_read(batch)
+        return Outcome(result, partial(ReadSteps.delivered, session, inbox, batch))
 
     @staticmethod
     async def _who(ctx: CliContext, p: Params) -> CommandResult:
@@ -226,12 +187,6 @@ class Methods:
         to, message = p.text("to"), p.text("message")
         p.done()
         return await commands.write(ctx, to, message)
-
-    @staticmethod
-    async def _plan(ctx: CliContext, p: Params) -> CommandResult:
-        message = p.text("message")
-        p.done()
-        return await commands.plan(ctx, message)
 
     @staticmethod
     async def _last(ctx: CliContext, p: Params) -> CommandResult:
