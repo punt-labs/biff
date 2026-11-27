@@ -534,7 +534,9 @@ async def test_talk_is_ready_only_once_the_server_has_the_subscription(
     kai = await harness.connect("s-kai", "kai")
     eric = await harness.connect("s-eric", "eric")
     eric_at = f"eric:{await _tty(eric)}"
-    early = cast("dict[str, object]", await eric.request("talk_read"))
+    early = cast(
+        "dict[str, object]", await eric.request("talk", to="kai:tty1", message="")
+    )
     assert (early["error"], "not ready" in cast("str", early["text"])) == (True, True)
     bus.flush_gate.set()  # the server confirms
     async with asyncio.timeout(5.0):
@@ -588,3 +590,54 @@ async def test_a_last_detach_with_the_accept_still_queued_ends_the_peer(
             seen = await pair.read(pair.eric)
             await asyncio.sleep(0.01)
     assert seen["phase"] == "idle"
+
+
+async def test_a_failed_confirmation_does_not_leave_a_second_subscription_behind(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    await pair.connect()
+    subject = await _subject(pair.eric)
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    relay = bus.relays[0]
+    bus.flush_fails = True
+    relay.generation += 1  # resubscribe; the confirmation times out each tick
+    await asyncio.sleep(0.2)
+    bus.flush_fails = False
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    await pair.say(pair.kai, pair.eric_at, "once")
+    seen = await pair.read(pair.eric)
+    assert seen["lines"] == [f"{HEADER_PREFIX}{pair.kai_at}: once"]  # not twice
+
+
+async def test_held_invites_are_read_while_the_subscription_is_unconfirmed(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    subject = await _subject(pair.eric)
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    await pair.say(pair.kai, pair.eric_at, "")  # held at eric, unread
+    await asyncio.sleep(0.1)
+    bus.flush_gate = asyncio.Event()
+    bus.relays[0].generation += 1  # eric resubscribes; the server has not confirmed
+    await _eventually(lambda: bus.subscriber_count(subject) == 0)
+    seen = await pair.read(pair.eric)
+    assert [i["from"] for i in cast("list[dict[str, str]]", seen["invites"])] == ["kai"]
+    assert seen["ready"] is False
+    bus.flush_gate.set()
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    assert (await pair.read(pair.eric))["ready"] is True
+
+
+async def test_an_invite_is_accepted_after_the_inviter_renamed_its_tty(
+    harness: Harness, bus: TalkBus
+) -> None:
+    assert bus is not None
+    kai = await harness.connect("s-kai", "kai")
+    bob = await harness.connect("s-bob", "bob")
+    kai_at = f"kai:{await _tty(kai)}"
+    await bob.request("talk", to=kai_at, message="")
+    await asyncio.sleep(0.1)
+    await bob.request("tty", name="bobby")  # renamed while the invite is pending
+    accepted = cast(
+        "dict[str, object]", await kai.request("talk", to="bob:bobby", message="")
+    )
+    assert _data(accepted)["phase"] == "connected"

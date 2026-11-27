@@ -110,6 +110,7 @@ class TalkState:
         "_phase",
         "_queue",
         "_relay",
+        "_subscribed",
     )
 
     _relay: Relay
@@ -125,6 +126,7 @@ class TalkState:
     _queue: deque[QueuedNotification]
     _opening: str
     _dropped: int
+    _subscribed: bool
 
     def __new__(
         cls,
@@ -150,6 +152,7 @@ class TalkState:
         self._queue = deque()
         self._opening = ""
         self._dropped = 0
+        self._subscribed = False
         return self
 
     # -- Read-only state --
@@ -284,6 +287,15 @@ class TalkState:
             self._dropped += 1
         self._queue.append(QueuedNotification(notif, time.monotonic()))
         return True
+
+    @property
+    def subscribed(self) -> bool:
+        """Whether the server holds the subscription that feeds this state."""
+        return self._subscribed
+
+    def set_subscribed(self, *, confirmed: bool) -> None:
+        """Record whether the feed's subscription is confirmed by the server."""
+        self._subscribed = confirmed
 
     def take_dropped(self) -> int:
         """Return how many frames overflow dropped since the last call, and reset."""

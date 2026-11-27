@@ -28,7 +28,8 @@ class TalkReading(Wire):
     fields.  ``ended`` is true when the partner hung up during the read.
     ``opening`` is the line an accepted invite carried, sent by this read, and
     ``opening_unsent`` says one is still owed.  ``dropped`` counts the frames
-    the full queue lost since the last read.
+    the full queue lost since the last read.  ``ready`` says the server has confirmed
+    the subscription that delivers new frames; what is already held needs none.
     """
 
     lines: tuple[str, ...]
@@ -39,6 +40,7 @@ class TalkReading(Wire):
     opening: str
     opening_unsent: bool
     dropped: int
+    ready: bool
     phase: Phase
     peer: str
 

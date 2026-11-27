@@ -476,3 +476,49 @@ async def test_a_failed_talk_read_is_retried_so_the_invite_is_still_announced(
     monkeypatch.setattr(DaemonLink, "talk_read", flaky)
     await talkers.eric.request("talk", to=talkers.kai_at, message="")
     await talkers.repl.screen.shows("wants to talk")
+
+
+async def test_the_startup_read_is_retried_until_the_subscription_is_confirmed(
+    harness: Harness,
+    repo: Path,
+    bus: TalkBus,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = _command(harness)
+    holder = await DaemonLink.open(command)  # keeps kai's session attached
+    status = await holder.status()
+    eric = await _eric(harness, repo)
+    await eric.request("talk", to=f"kai:{status['tty_name']}", message="")
+    await asyncio.sleep(0.1)  # the invite is held at kai
+    bus.flush_gate = asyncio.Event()
+    bus.relays[0].generation += 1  # kai resubscribes; the server has not confirmed
+    await asyncio.sleep(0.2)
+    readiness: list[bool] = []
+    real = DaemonLink.talk_read
+
+    async def watched(self: DaemonLink) -> TalkReading:
+        reading = await real(self)
+        readiness.append(reading.ready)
+        return reading
+
+    monkeypatch.setattr(DaemonLink, "talk_read", watched)
+    typist, screen = Typist(), Screen(capsys)
+    task = asyncio.create_task(ReplSession.interactive(command, read=typist))
+    await screen.shows("wants to talk")  # held state needs no subscription
+    bus.flush_gate.set()
+    await eventually(lambda: bool(readiness) and readiness[-1] and len(readiness) > 1)
+    assert readiness[0] is False
+    typist.end_input()
+    await asyncio.gather(task, return_exceptions=True)
+    await holder.close()
+
+
+async def test_an_invite_nobody_answers_times_out_and_is_withdrawn(
+    talkers: Talkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("biff.cli_talk.INVITE_WAIT_SECONDS", 0.3)
+    monkeypatch.setattr("biff.cli_console._WAKE_SECONDS", 0.1)
+    talkers.repl.typist.type(f"talk {talkers.eric_at}")
+    await talkers.repl.screen.shows("timed out: no one answered")
+    await eventually(lambda: _withdrawn(talkers.bus))

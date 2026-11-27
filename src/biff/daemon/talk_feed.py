@@ -157,7 +157,7 @@ class TalkFeed:
 
     def stop(self) -> None:
         """Stop feeding and release the subscription."""
-        self._subscribed.clear()
+        self._confirmed(yes=False)
         if self._task is not None:
             self._task.cancel()
             self._task = None
@@ -187,20 +187,32 @@ class TalkFeed:
             nc = await relay.get_nc()
             generation = relay.connection_generation
             subject = relay.talk_notify_subject(self._session_key)
-            handle = await nc.subscribe(subject, cb=self._on_frame)
+            # Held from the moment it exists, so a failure or a cancellation in the
+            # confirmation below releases it: a leaked subscription would queue
+            # every later frame twice.
+            self._handle = await nc.subscribe(subject, cb=self._on_frame)
+            self._generation = generation
             # The client only queues the subscription; the server acts on it once
             # this round trip returns, and a frame sent before that is lost.
             await nc.flush()
         except RELAY_ERRORS:
             # A dial in progress can make either call raise; the next tick retries.
+            await self._unsubscribe()
             self._latch.record_failure()
             return
-        self._handle = handle
-        self._generation = generation
-        self._subscribed.set()
+        self._confirmed(yes=True)
         self._latch.record_success()
 
+    def _confirmed(self, *, yes: bool) -> None:
+        """Record whether the server holds the subscription; talk reads report it."""
+        if yes:
+            self._subscribed.set()
+        else:
+            self._subscribed.clear()
+        self._talk.set_subscribed(confirmed=yes)
+
     async def _unsubscribe(self) -> None:
+        self._confirmed(yes=False)
         handle, self._handle = self._handle, None
         if handle is None:
             return

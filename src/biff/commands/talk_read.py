@@ -46,6 +46,7 @@ class TalkReadout:
     opening: str = ""
     opening_unsent: bool = False
     dropped: int = 0
+    ready: bool = False
 
     @classmethod
     async def take(cls, ctx: TalkContext) -> Self:
@@ -61,6 +62,7 @@ class TalkReadout:
             opening=opening,
             opening_unsent=bool(talk.opening),
             dropped=talk.take_dropped(),
+            ready=talk.subscribed,
         )
 
     @staticmethod
@@ -150,6 +152,7 @@ class TalkReadout:
             opening=self.opening,
             opening_unsent=self.opening_unsent,
             dropped=self.dropped,
+            ready=self.ready,
             phase=self.standing.phase,
             peer=self.standing.peer,
         )

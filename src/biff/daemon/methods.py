@@ -120,7 +120,7 @@ class Methods:
         if method in self._sessions.names:
             result = await self._sessions.call(session, method, Params(method, raw))
             return self._outcome(result)
-        if method in TalkMethods.NAMES and not await session.talk.ready(
+        if method in TalkMethods.GATED and not await session.talk.ready(
             TalkMethods.READY_SECONDS
         ):
             return self._outcome(TalkMethods.NOT_READY)

@@ -206,8 +206,8 @@
     "efferent_coupling": 12.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.514,
-    "avg_lcom": 0.514
+    "max_lcom": 0.44,
+    "avg_lcom": 0.44
   },
   "src/biff/cli_session.py": {
     "efferent_coupling": 7.0,
@@ -217,7 +217,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/cli_talk.py": {
-    "efferent_coupling": 6.0,
+    "efferent_coupling": 7.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -689,8 +689,8 @@
     "efferent_coupling": 5.0,
     "public_names": 5.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.5,
-    "avg_lcom": 0.5
+    "max_lcom": 0.556,
+    "avg_lcom": 0.556
   },
   "src/biff/daemon/talk_methods.py": {
     "efferent_coupling": 7.0,
@@ -1837,8 +1837,8 @@
     "efferent_coupling": 2.0,
     "public_names": 5.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.736,
-    "avg_lcom": 0.736
+    "max_lcom": 0.757,
+    "avg_lcom": 0.757
   },
   "src/biff/talk_types.py": {
     "efferent_coupling": 2.0,

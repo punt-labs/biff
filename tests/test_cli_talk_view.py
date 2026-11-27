@@ -61,6 +61,7 @@ def _reading(
         opening="",
         opening_unsent=False,
         dropped=0,
+        ready=True,
         phase="idle",
         peer="",
     )

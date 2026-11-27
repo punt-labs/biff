@@ -51,6 +51,7 @@ class TalkBus:
         self.subscribe_delay = 0.0
         self.subscribe_block: asyncio.Event | None = None
         self.flush_gate: asyncio.Event | None = None
+        self.flush_fails = False
         self._queued: list[tuple[str, Callback]] = []
         self.relays: list[TalkBusRelay] = []
 
@@ -73,6 +74,9 @@ class TalkBus:
         return BusSubscription(self, subject, cb)
 
     async def flush(self) -> None:
+        if self.flush_fails:
+            msg = "the flush timed out"
+            raise TimeoutError(msg)
         if self.flush_gate is not None:
             await self.flush_gate.wait()
         queued, self._queued = self._queued, []

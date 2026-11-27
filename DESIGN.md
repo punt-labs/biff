@@ -9714,6 +9714,20 @@ the PR that deletes the in-process path.
   and its peer would wait for ever). An invite carries no text: its opening
   line waits in the talk state and is sent as a normal line once the accept
   arrives, so a notice, an invite and the pending list never hold text.
+- **Talk frames are ephemeral, and the limits follow.** An invite to a session
+  that attached less than a couple of seconds ago can be lost: core NATS has no
+  replay and the session's subscription is confirmed by the server a moment after
+  attach. The sender waits for the length of the invite's life (five minutes),
+  is told `timed out: no one answered`, withdraws the invite, and may invite
+  again. An accept matches an invite by the inviter's session key, which a tty
+  rename does not change, so `talk bob:newname` still accepts it. A cancelled
+  invite sends the withdrawal and then an `end`: the `end` is dropped by a peer
+  that never accepted (`DrainForeignEnd` and the `DrainEnd` guard on
+  `phase = tpConnected` in `talk.tex`) and frees a peer that accepted before the
+  withdrawal arrived (`DrainEnd`, whose consent guard the inviter's key meets).
+  `talk.tex` is unchanged: its `LocalEnd` is emitted from the connected phase only,
+  so ending an invite that may have been accepted is behaviour the model does not
+  yet state, and extending the spec with a local cancel is a follow-up.
 - **A daemon session's context changes without losing its talk.**
   `dataclasses.replace` on `CliContext` built a new, empty `TalkState`; the
   session's heartbeat replaced its context on an org refresh and would have

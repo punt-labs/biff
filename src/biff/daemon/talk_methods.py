@@ -31,6 +31,13 @@ class TalkMethods:
     """
 
     NAMES: ClassVar[frozenset[str]] = frozenset({"talk", "talk_read", "talk_end"})
+    GATED: ClassVar[frozenset[str]] = frozenset({"talk"})
+    """The calls that wait for the subscription: only ``talk`` needs replies.
+
+    ``talk_read`` returns what is held, which needs no subscription, and says in
+    ``ready`` whether new frames are being received; ``talk_end`` resets the local
+    state first and publishes best effort.
+    """
     READY_SECONDS: ClassVar[float] = 2.0
     """How long a talk call waits for the session's subscription, in seconds.
 

@@ -12,6 +12,7 @@ from biff.cli_link import DaemonLink
 from biff.cli_talk_view import TalkView
 from biff.client.connection import DaemonError
 from biff.repl_display import ReplDisplay
+from biff.talk_state import PENDING_INVITE_TTL
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -24,6 +25,9 @@ if TYPE_CHECKING:
 __all__ = ["TalkConversation"]
 
 logger = logging.getLogger(__name__)
+
+INVITE_WAIT_SECONDS = PENDING_INVITE_TTL
+"""How long an invite is waited for: as long as the invitee holds it."""
 
 _CLEAR_LINE = "\r\033[K"
 _LEAVE_WORDS = frozenset({"end", "exit", "quit"})
@@ -127,9 +131,15 @@ class TalkConversation:
         say(_CLEAR_LINE, end="")
         say(f"Waiting for {peer} to respond... (type 'end' to cancel)")
         self._console.release()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + INVITE_WAIT_SECONDS
         try:
             while True:
                 got = await self._console.next(wake)
+                if loop.time() >= deadline:
+                    say(f"Talk with {peer} timed out: no one answered.")
+                    await self._withdraw()
+                    return False
                 if self._link.pump.lost:
                     say(terminal_safe(f"biffd connection lost: {self._link.pump.lost}"))
                     self._lost = True

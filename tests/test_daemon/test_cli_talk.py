@@ -123,6 +123,7 @@ async def test_a_warning_is_shown_when_the_owed_accept_never_reached_the_partner
             opening="",
             opening_unsent=False,
             dropped=0,
+            ready=True,
             phase="connected",
             peer="eric:tty2",
         )
@@ -186,6 +187,7 @@ async def test_a_hangup_that_arrives_with_the_accept_ends_the_wait(
             opening="",
             opening_unsent=False,
             dropped=0,
+            ready=True,
             phase="idle",
             peer="",
         )
@@ -221,6 +223,7 @@ async def test_the_wait_for_an_accept_reports_lines_the_queue_lost() -> None:
             opening="",
             opening_unsent=False,
             dropped=2,
+            ready=True,
             phase="inviting",
             peer="eric:tty2",
         )

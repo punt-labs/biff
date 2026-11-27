@@ -129,10 +129,13 @@ class ReplSession:
     async def collect_held_talk(self) -> None:
         """Show talk biffd held before this REPL attached; notices are not replayed."""
         try:
-            banners = await self._talk_banners()
+            reading = await self._link.talk_read()
         except TalkUnavailableError:
             return  # this relay carries no talk, so nothing can be held
-        for banner in banners:
+        # Held state is read at once; until the server confirms the subscription
+        # the tick reads again, so nothing delivered meanwhile is missed.
+        self._talk_unread = not reading.ready
+        for banner in self._view.banners(reading):
             self._console.say(banner)
 
     async def run(self, status: dict[str, JsonValue]) -> None:
@@ -252,7 +255,7 @@ class ReplSession:
     async def _pull_talk(self) -> list[str]:
         """Return the banners ``talk_read`` yields; keep the debt if it fails."""
         try:
-            banners = await self._talk_banners()
+            reading = await self._link.talk_read()
         except TalkUnavailableError:
             self._talk_unread = False
             if self._told_no_talk:
@@ -262,8 +265,8 @@ class ReplSession:
         except DaemonCommand.FAILURES as exc:
             logger.warning("could not read talk, will retry: %s", exc)
             return []
-        self._talk_unread = False
-        return banners
+        self._talk_unread = not reading.ready
+        return self._view.banners(reading)
 
     def _note(self, event: Event) -> list[str]:
         """Return the banners a mail or wall event calls for."""
@@ -275,9 +278,6 @@ class ReplSession:
         else:
             return []
         return self._notify.check(self._unread, self._wall)
-
-    async def _talk_banners(self) -> list[str]:
-        return self._view.banners(await self._link.talk_read())
 
     async def _show(self, notes: list[str]) -> None:
         """Print *notes* over the prompt line, then show the prompt again."""

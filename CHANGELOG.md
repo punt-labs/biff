@@ -148,7 +148,9 @@
   subscription and answers "not ready" if it has not; attaching and every
   command that does not talk never wait on it. `talk bob:tty2` invites tty2 even when
   tty1 has an unread invite, and a hang-up sends `end` as well as the withdrawal so
-  a peer that already accepted is freed. Ctrl-D during a talk ends the shell instead of leaving it waiting.
+  a peer that already accepted is freed. `talk_read` returns what biffd holds even while the subscription is unconfirmed and
+  says so in `ready`, and the shell reads again until it is; an invite nobody answers
+  times out after five minutes and is withdrawn; Ctrl-D during a talk ends the shell instead of leaving it waiting.
   The MCP `talk_read` text is unchanged.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the

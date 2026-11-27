@@ -312,11 +312,6 @@ async def publish_auto_accept(ctx: TalkContext, *, to_key: str) -> bool:
     return False
 
 
-def _names_of(invite: PendingInvite) -> tuple[str, str]:
-    """Return the two names an invite's session answers to: display tty and key tty."""
-    return invite.tty, invite.session_key.partition(":")[2]
-
-
 async def talk(ctx: TalkContext, to: str, message: str) -> CommandResult:
     """Accept an invite, send a message while connected, or start an invite.
 
@@ -334,16 +329,18 @@ async def talk(ctx: TalkContext, to: str, message: str) -> CommandResult:
     # tty), and consuming before resolution would strand an invite that could no
     # longer be accepted.  Consume only once resolution succeeds.
     pending = talk_state.pending_invites.get(user)
-    if pending is not None and tty and tty not in _names_of(pending):
-        pending = None  # the address names another session: invite it afresh
     resolve_user, resolve_tty = (user, tty)
-    if pending is not None:
+    if pending is not None and not tty:
         resolve_user, _, resolve_tty = pending.session_key.partition(":")
     try:
         relay_key, display = await resolve_target(ctx, resolve_user, resolve_tty)
     except ValueError as exc:
         return CommandResult(text=str(exc), error=True)
 
+    if pending is not None and relay_key != pending.session_key:
+        # The address names another session than the one that invited, by its
+        # current name, so a rename of the inviter does not hide its invite.
+        pending = None
     if pending is not None:
         # Re-peek after the resolve await (which yields to the loop): the
         # always-on talk subscription or the TTL sweep can supersede or withdraw
