@@ -56,24 +56,34 @@ def _parse_repo_slug(url: str) -> str | None:
 def get_repo_slug(repo_root: Path) -> str | None:
     """Resolve ``owner/repo`` from the origin remote.
 
-    The raw first ``remote.origin.url`` value is parsed first: git fetches
-    from the first URL, and the raw value is the canonical clone URL even
-    when ``url.<base>.insteadOf`` rewrites it (an agent container rewrites
+    The raw fetch URL is parsed first: it is the first ``remote.origin.url``
+    value after the last empty one (git treats an empty value as a reset of
+    the list), and it is the canonical clone URL even when
+    ``url.<base>.insteadOf`` rewrites it (an agent container rewrites
     github remotes through a gateway whose URL carries an extra route
-    segment that would hide the slug).  When the raw value does not parse
-    (a shorthand such as ``gh:owner/repo``), the expanded
-    ``git remote get-url origin`` is parsed instead.
+    segment that would hide the slug).  Only when the raw value does not
+    parse (a shorthand such as ``gh:owner/repo``) is the expanded
+    ``git remote get-url origin`` run and parsed.
 
     Returns ``None`` when git is unavailable, no remote exists (git exits
     non-zero with empty stdout), or neither URL parses to a two-part slug.
     """
-    raw = _git_stdout(repo_root, "config", "--get-all", "remote.origin.url")
-    expanded = _git_stdout(repo_root, "remote", "get-url", "origin")
-    return _parse_repo_slug(raw.partition("\n")[0]) or _parse_repo_slug(expanded)
+    raw = _fetch_url(_git_lines(repo_root, "config", "--get-all", "remote.origin.url"))
+    return _parse_repo_slug(raw) or _parse_repo_slug(
+        _fetch_url(_git_lines(repo_root, "remote", "get-url", "origin"))
+    )
 
 
-def _git_stdout(repo_root: Path, *args: str) -> str:
-    """Return stripped stdout of ``git -C repo_root *args``; ``""`` on any failure."""
+def _fetch_url(lines: list[str]) -> str:
+    """Return the first URL after the last empty line, or ``""`` when none remain."""
+    urls: list[str] = []
+    for line in lines:
+        urls = [*urls, line] if line else []
+    return urls[0] if urls else ""
+
+
+def _git_lines(repo_root: Path, *args: str) -> list[str]:
+    """Return the stdout lines of ``git -C repo_root *args``; ``[]`` on any failure."""
     try:
         result = subprocess.run(  # noqa: S603
             ["git", "-C", str(repo_root), *args],  # noqa: S607
@@ -82,8 +92,8 @@ def _git_stdout(repo_root: Path, *args: str) -> str:
             check=False,
         )
     except FileNotFoundError:
-        return ""
-    return result.stdout.strip()
+        return []
+    return result.stdout.splitlines()
 
 
 def display_repo_name(name: str) -> str:

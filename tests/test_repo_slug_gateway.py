@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from biff import _stdlib
 from biff._stdlib import get_repo_slug
 
 if TYPE_CHECKING:
@@ -35,6 +36,15 @@ def gateway_rewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "")
     monkeypatch.setenv("GIT_CONFIG_COUNT", "0")
+
+
+def _git_stdout(path: Path, *args: str) -> str:
+    return subprocess.run(  # noqa: S603
+        ["git", "-C", str(path), *args],  # noqa: S607
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _git(path: Path, *args: str) -> None:
@@ -93,7 +103,40 @@ def test_raw_value_that_parses_wins_over_a_different_expansion(
     tmp_path: Path, gateway_rewrite: None
 ) -> None:
     _add_rewrite(
-        tmp_path / "gitconfig", "https://github.com/other/", "https://example.org/"
+        tmp_path / "gitconfig", "https://github.com/other/", "https://example.org/team/"
     )
     repo = _repo_with_origin(tmp_path / "repo", "https://example.org/team/project.git")
+    # The expansion is the valid slug other/project; the raw one must still win.
+    assert _git_stdout(repo, "remote", "get-url", "origin").endswith(
+        "other/project.git"
+    )
     assert get_repo_slug(repo) == "team/project"
+
+
+def test_empty_url_entry_resets_the_list(tmp_path: Path, gateway_rewrite: None) -> None:
+    repo = _repo_with_origin(tmp_path / "repo", "https://github.com/old/discarded.git")
+    _git(repo, "config", "--add", "remote.origin.url", "")
+    _git(
+        repo,
+        "config",
+        "--add",
+        "remote.origin.url",
+        "https://github.com/team/project.git",
+    )
+    assert get_repo_slug(repo) == "team/project"
+
+
+def test_expansion_is_not_computed_when_the_raw_url_parses(
+    tmp_path: Path, gateway_rewrite: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo_with_origin(tmp_path / "repo", "https://github.com/team/project.git")
+    calls: list[tuple[str, ...]] = []
+
+    def counting(root: Path, *args: str) -> list[str]:
+        calls.append(args)
+        return real(root, *args)
+
+    real = _stdlib._git_lines  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(_stdlib, "_git_lines", counting)
+    assert get_repo_slug(repo) == "team/project"
+    assert len(calls) == 1

@@ -4172,11 +4172,13 @@ auth, poll interval); it no longer carries an `enabled` key.
   `http://<gateway>/github/owner/repo`; the extra route segment fails the
   two-part check and the checkout name was used, putting container
   sessions in a different repo namespace than host sessions.
-  **Decision:** `get_repo_slug` parses the raw first `remote.origin.url`
-  value (`git config --get-all`, first line, because git fetches from the
-  first URL) and falls back to the expanded `git remote get-url origin`
-  only when the raw value does not parse (a shorthand such as
-  `gh:owner/repo`). This supersedes the expand-first approach of the
+  **Decision:** `get_repo_slug` parses the raw fetch URL: the first
+  `remote.origin.url` value (`git config --get-all`) after the last empty
+  one, because git fetches from the first URL and treats an empty value
+  as a reset of the list. It runs and parses the expanded
+  `git remote get-url origin` only when the raw value does not parse (a
+  shorthand such as `gh:owner/repo`), so the common case costs one git
+  subprocess. This supersedes the expand-first approach of the
   Devin entry above. **Alternatives:** a gateway route-prefix parse
   (hard-codes gateway knowledge; the raw value already holds the canonical
   URL), or the raw value alone (loses shorthand aliases). **Outcome:**
