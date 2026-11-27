@@ -255,5 +255,10 @@
   "biff.usage": "kernel",
   "biff.user_scope": "kernel",
   "biff.who_columns": "render",
-  "biff.wtmp_reader": "engine"
+  "biff.wtmp_reader": "engine",
+  "biff.commands.talk_read": "commands",
+  "biff.daemon.talk_feed": "daemon",
+  "biff.daemon.talk_notices": "daemon",
+  "biff.daemon.talk_channel": "daemon",
+  "biff.daemon.talk_methods": "daemon"
 }

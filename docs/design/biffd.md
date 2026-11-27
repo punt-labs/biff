@@ -116,7 +116,7 @@ Every frame is a JSON object with a protocol `version`.
 | `reply` | daemon to client | `id` and either `result` (plain `wire` data) or `error` (a code and an actionable message). A command's `result` is `{"data": <the command's JSON payload>, "error": <bool>}` |
 | `ack` | client to daemon | `id` of a request. Sent after the client received that request's reply, when the reply set `needs_ack` (a `read` that carries mail). The daemon marks the mail read only on this frame |
 | `subscribe` | client to daemon | `id`. Starts the arrival subscription for the connection's session. The daemon replies to `id` with `{"subscribed": true}`, or with `already_subscribed` or `session_replaced`. A `read` of an ended session is refused with `session_ended` |
-| `event` | daemon to client | One arrival summary, with a per-daemon `seq`. `kind` is `unread`, `mail`, `wall`, `degraded` (the relay stopped answering) or `recovered` |
+| `event` | daemon to client | One arrival summary, with a per-daemon `seq`. `kind` is `unread`, `mail`, `wall`, `degraded` (the relay stopped answering), `recovered`, or a talk notice: `talk_invite`, `talk_accept`, `talk_line`, `talk_end`. A talk notice carries `from`, `tty` and `pending` (frames waiting), never text; the client pulls the text with `talk_read` |
 
 **The token never crosses the wire.** The client's port is a guess (8424
 when no port file exists), and any local process can bind a port biffd is not
@@ -215,6 +215,31 @@ durable, so a client that never polls loses none of it across a disconnect
 the client recovers the active wall, and a wall that a newer one replaced
 during the disconnect is not recovered. Talk frames are ephemeral: a frame that arrives while
 the daemon is down is not recovered, as with today's relay reconnect.
+
+### Talk
+
+A talk is a conversation, so it is three methods and four notices, not one
+request and reply. The daemon holds each session's `TalkState` and, while a
+client is attached, one NATS subscription that feeds it (`TalkFeed`); the
+subscription is released when the last client detaches and re-made when the
+relay dials a new client (`nats-relay.tex` `talkSubGen`). `talk.tex` bounds the
+queue at 100 frames with drop-oldest, and the daemon keeps that bound.
+
+| Method | Params | `data` |
+|--------|--------|--------|
+| `talk` | `to` (`user:tty`), `message` (may be empty) | the engine's result: invite sent, invite accepted, or line sent |
+| `talk_read` | none | `lines` (the rendered text, one entry per line), `messages` (`kind`, `label`, `body`), `invites` (`from`, `tty`, `accept`), `ended`, `accept_published`, `phase`, `peer` |
+| `talk_end` | none | `{"ended": bool}`: true when a talk or an outstanding invite was closed |
+
+A notice is `talk_invite`, `talk_accept`, `talk_line` or `talk_end`, each with
+`data` `{"from": str, "tty": str, "pending": int}`. Text never travels in an
+event: biff pulls bodies and pushes notice. A client that wants the text calls
+`talk_read`, which drains the held state, so latency is one round trip after the
+notice. A notice is pushed as the frame arrives; mail and wall arrivals are still
+found by polling. A client that subscribes with a backlog calls `talk_read` once
+to collect it, because notices are not replayed. A relay that carries no talk (the
+local relay) answers `talk` and `talk_read` with `Talk requires a NATS relay
+connection.`
 
 ## Supervision
 
@@ -441,7 +466,7 @@ R-P ids are covered by [trust-model.md](trust-model.md).
 | R-D.7 | When the daemon is absent | |
 | R-D.8 | Migration | |
 | R-CC.1 | What stays in clients; Migration | `biff mcp` keeps tool descriptions, `tools/list_changed`, the status line and the display pipeline; parity is the acceptance test |
-| R-CC.2 | Dropped | Stale: Claude Code channels shipped (DES-087) and the ruling is that channel events carry message bodies; trust display is in trust-model.md |
+| R-CC.2 | Dropped | Stale: Claude Code channels shipped (DES-087) and the ruling is that channel events are arrival notices and bodies are pulled by a tool call; trust display is in trust-model.md |
 | R-CC.3 | Dropped | Done: channels are adopted as a delivery change (DES-087) |
 | R-CC.4 | Supervision | biffd ships inside `punt-biff`, so the two release channels are unchanged |
 | R-OC.1 | Harness adapters | |

@@ -1,0 +1,264 @@
+"""Two sessions hold a conversation through biffd: invite, accept, lines, end."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING, cast
+
+import pytest
+
+from biff._formatting import HEADER_PREFIX
+from biff.formatting import format_talk_end
+from biff.invite_expiry import InviteExpiry
+from biff.talk_state import MAX_TALK_QUEUE
+from tests.test_daemon.talk_bus import TalkBus, TalkBusRelay
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from biff.client.connection import DaemonClient
+    from biff.frames import Event
+    from biff.relay import Relay
+    from tests.test_daemon.conftest import Harness
+
+
+@pytest.fixture
+def bus(harness: Harness) -> TalkBus:
+    """Make every relay the daemon builds carry talk over one shared bus."""
+    shared = TalkBus()
+
+    def build(path: Path) -> Relay:
+        return TalkBusRelay(path, shared)
+
+    harness.factory.relay_type = build
+    return shared
+
+
+def _data(result: object) -> dict[str, object]:
+    return cast("dict[str, dict[str, object]]", result)["data"]
+
+
+async def _tty(client: DaemonClient) -> str:
+    return cast("str", _data(await client.request("status"))["tty_name"])
+
+
+class _Pair:
+    """Kai and eric attached to one daemon, each knowing the other's address."""
+
+    def __init__(self, kai: DaemonClient, eric: DaemonClient) -> None:
+        self.kai = kai
+        self.eric = eric
+        self.kai_at = ""
+        self.eric_at = ""
+
+    async def introduce(self) -> None:
+        self.kai_at = f"kai:{await _tty(self.kai)}"
+        self.eric_at = f"eric:{await _tty(self.eric)}"
+
+    async def say(self, who: DaemonClient, to: str, text: str) -> None:
+        reply = cast(
+            "dict[str, object]", await who.request("talk", to=to, message=text)
+        )
+        assert reply["error"] is False, reply["text"]
+
+    async def read(self, who: DaemonClient) -> dict[str, object]:
+        return _data(await who.request("talk_read"))
+
+    async def connect(self) -> None:
+        """Kai invites, eric accepts, kai learns of the accept."""
+        await self.say(self.kai, self.eric_at, "")
+        await self.read(self.eric)
+        await self.say(self.eric, self.kai_at, "")
+        await self.read(self.kai)
+
+
+@pytest.fixture
+async def pair(harness: Harness, bus: TalkBus) -> _Pair:
+    assert bus is not None
+    both = _Pair(
+        await harness.connect("s-kai", "kai"), await harness.connect("s-eric", "eric")
+    )
+    await both.introduce()
+    return both
+
+
+async def test_an_invite_is_pending_for_the_invitee(pair: _Pair) -> None:
+    await pair.say(pair.kai, pair.eric_at, "")
+    seen = await pair.read(pair.eric)
+    invites = cast("list[dict[str, str]]", seen["invites"])
+    assert [(i["from"], i["tty"]) for i in invites] == [
+        ("kai", pair.kai_at.split(":")[1])
+    ]
+
+
+async def test_three_lines_each_way_arrive_exactly(pair: _Pair) -> None:
+    await pair.connect()
+    for n in (1, 2, 3):
+        await pair.say(pair.kai, pair.eric_at, f"kai says {n}")
+    for n in (1, 2, 3):
+        await pair.say(pair.eric, pair.kai_at, f"eric says {n}")
+    at_eric = await pair.read(pair.eric)
+    at_kai = await pair.read(pair.kai)
+    assert at_eric["lines"] == [
+        f"{HEADER_PREFIX}{pair.kai_at}: kai says {n}" for n in (1, 2, 3)
+    ]
+    assert at_kai["lines"] == [
+        f"{HEADER_PREFIX}{pair.eric_at}: eric says {n}" for n in (1, 2, 3)
+    ]
+
+
+async def test_a_line_is_drained_once(pair: _Pair) -> None:
+    await pair.connect()
+    await pair.say(pair.kai, pair.eric_at, "once")
+    await pair.read(pair.eric)
+    assert (await pair.read(pair.eric))["lines"] == []
+
+
+@pytest.mark.parametrize("hangs_up", ["kai", "eric"])
+async def test_either_side_can_end_the_talk(pair: _Pair, hangs_up: str) -> None:
+    await pair.connect()
+    leaver, stayer = (
+        (pair.kai, pair.eric) if hangs_up == "kai" else (pair.eric, pair.kai)
+    )
+    label = pair.kai_at if hangs_up == "kai" else pair.eric_at
+    ended = cast("dict[str, object]", await leaver.request("talk_end"))
+    assert _data(ended) == {"ended": True}
+    seen = await pair.read(stayer)
+    assert (seen["ended"], seen["lines"]) == (True, [format_talk_end(label)])
+
+
+async def test_ending_with_no_talk_says_so(pair: _Pair) -> None:
+    ended = cast("dict[str, object]", await pair.kai.request("talk_end"))
+    assert _data(ended) == {"ended": False}
+
+
+async def test_an_unanswered_invite_expires(
+    pair: _Pair, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await pair.say(pair.kai, pair.eric_at, "")
+    monkeypatch.setattr("biff.talk_state._EXPIRY", InviteExpiry(0.0))
+    seen = await pair.read(pair.eric)
+    assert seen["invites"] == []
+
+
+async def test_the_queue_keeps_the_newest_hundred_lines(pair: _Pair) -> None:
+    await pair.connect()
+    total = MAX_TALK_QUEUE + 20
+    for n in range(total):
+        await pair.say(pair.kai, pair.eric_at, f"line {n}")
+    seen = await pair.read(pair.eric)
+    lines = cast("list[str]", seen["lines"])
+    assert len(lines) == MAX_TALK_QUEUE
+    assert lines[0].endswith(f"line {total - MAX_TALK_QUEUE}")
+    assert lines[-1].endswith(f"line {total - 1}")
+
+
+async def test_talk_needs_a_relay_that_carries_it(harness: Harness) -> None:
+    client = await harness.connect("s-kai", "kai")
+    reply = cast(
+        "dict[str, object]", await client.request("talk", to="eric:tty1", message="")
+    )
+    assert reply["error"] is True
+    assert reply["text"] == "Talk requires a NATS relay connection."
+
+
+async def _notice(client: DaemonClient) -> Event:
+    """Return the next talk event, skipping the mail and wall summaries."""
+    while True:
+        event = await asyncio.wait_for(client.next_event(), timeout=5.0)
+        if event.kind.startswith("talk_"):
+            return event
+
+
+async def test_an_invite_is_announced_with_who_and_not_what(pair: _Pair) -> None:
+    await pair.eric.subscribe()
+    await pair.say(pair.kai, pair.eric_at, "secret opening")
+    event = await _notice(pair.eric)
+    assert (event.kind, event.data) == (
+        "talk_invite",
+        {"from": "kai", "tty": pair.kai_at.split(":")[1], "pending": 1},
+    )
+    assert "secret opening" not in event.model_dump_json()
+
+
+async def test_an_accept_wakes_the_inviter(pair: _Pair) -> None:
+    await pair.say(pair.kai, pair.eric_at, "")
+    await pair.read(pair.eric)
+    await pair.kai.subscribe()
+    await pair.say(pair.eric, pair.kai_at, "")
+    assert (await _notice(pair.kai)).kind == "talk_accept"
+
+
+async def test_a_line_is_announced_with_the_count_waiting(pair: _Pair) -> None:
+    await pair.connect()
+    await pair.eric.subscribe()
+    await pair.say(pair.kai, pair.eric_at, "one")
+    await pair.say(pair.kai, pair.eric_at, "two")
+    events = [await _notice(pair.eric), await _notice(pair.eric)]
+    counts = [cast("dict[str, int]", e.data)["pending"] for e in events]
+    assert [(e.kind, n) for e, n in zip(events, counts, strict=True)] == [
+        ("talk_line", 1),
+        ("talk_line", 2),
+    ]
+
+
+async def test_a_hangup_is_announced(pair: _Pair) -> None:
+    await pair.connect()
+    await pair.eric.subscribe()
+    await pair.kai.request("talk_end")
+    assert (await _notice(pair.eric)).kind == "talk_end"
+
+
+async def _eventually(check: Callable[[], bool]) -> None:
+    async with asyncio.timeout(5.0):
+        while not check():
+            await asyncio.sleep(0.01)
+
+
+async def _subject(client: DaemonClient) -> str:
+    key = cast("str", _data(await client.request("status"))["session_key"])
+    return f"talk.notify.{key}"
+
+
+async def test_the_subscription_lasts_as_long_as_a_client_is_attached(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    subject = await _subject(pair.eric)
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    await pair.eric.close()
+    await _eventually(lambda: bus.subscriber_count(subject) == 0)
+
+
+async def test_a_new_relay_client_gets_a_new_subscription(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    subject = await _subject(pair.eric)
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
+    before = bus.subscribes
+    bus.relays[0].generation += 1  # the relay dialled a fresh client
+    await _eventually(lambda: bus.subscribes > before)
+    await pair.say(pair.kai, pair.eric_at, "")
+    assert (await pair.read(pair.eric))["invites"] != []
+    assert bus.subscriber_count(subject) == 1
+
+
+async def test_a_session_holds_its_conversation_while_a_client_reconnects(
+    pair: _Pair, harness: Harness
+) -> None:
+    await pair.connect()
+    await pair.say(pair.kai, pair.eric_at, "while you were away")
+    again = await harness.connect("s-eric", "eric")
+    seen = _data(await again.request("talk_read"))
+    assert seen["lines"] == [f"{HEADER_PREFIX}{pair.kai_at}: while you were away"]
+
+
+async def test_every_listening_connection_of_a_session_is_told(
+    pair: _Pair, harness: Harness
+) -> None:
+    second = await harness.connect("s-eric", "eric")
+    await pair.eric.subscribe()
+    await second.subscribe()
+    await pair.say(pair.kai, pair.eric_at, "")
+    assert (await _notice(pair.eric)).kind == "talk_invite"
+    assert (await _notice(second)).kind == "talk_invite"

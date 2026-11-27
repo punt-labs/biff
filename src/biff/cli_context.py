@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Self
 
 from biff.models import BiffConfig
 from biff.relay import Relay
@@ -50,6 +51,25 @@ class CliContext:
                 tty_name=self.tty_name,
             ),
         )
+
+    def with_tty_name(self, tty_name: str) -> Self:
+        """Return this context under a new display tty name, with the same talk state.
+
+        ``dataclasses.replace`` builds a fresh context, whose ``__post_init__``
+        would seat a new, empty ``TalkState`` and lose a conversation in
+        progress.  A context that outlives its first change (a daemon session)
+        changes through these methods instead.
+        """
+        self.talk.set_tty_name(tty_name)
+        return self._carrying_talk(replace(self, tty_name=tty_name))
+
+    def with_org_repos(self, org_repos: frozenset[str]) -> Self:
+        """Return this context seeing *org_repos*, with the same talk state."""
+        return self._carrying_talk(replace(self, org_repos=org_repos))
+
+    def _carrying_talk(self, evolved: Self) -> Self:
+        object.__setattr__(evolved, "talk", self.talk)
+        return evolved
 
     @property
     def visible_repos(self) -> frozenset[str]:

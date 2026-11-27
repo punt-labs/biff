@@ -11,6 +11,15 @@
   SIGTERM or a closed pipe, and with exit 1 when the connection to biffd is
   lost. It also ends when its reader leaves, within half a second, even when
   no event is waiting (`biff watch | head -n 1`).
+- biffd runs talk. The methods `talk`, `talk_read` and `talk_end` accept an
+  invite, send a line or invite, read what arrived, and end the conversation.
+  The daemon holds each session's talk queue (bounded at 100 frames, oldest
+  dropped) and one NATS subscription that feeds it while a client is attached,
+  and re-subscribes when the relay dials a new client. A subscribed client gets
+  a `talk_invite`, `talk_accept`, `talk_line` or `talk_end` event as the frame
+  arrives; the event names the sender and how many frames wait and never carries
+  the text, which the client pulls with `talk_read`.
+
 - `biff install` installs biffd as a user service (systemd user unit `biffd`,
   macOS LaunchAgent `com.punt-labs.biffd`) and `biff uninstall` removes it.
   `biff daemon install`, `uninstall`, `start`, `stop`, `restart` and `status`

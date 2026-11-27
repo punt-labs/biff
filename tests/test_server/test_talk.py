@@ -14,17 +14,14 @@ from fastmcp.tools.function_tool import FunctionTool
 
 import biff.commands.talk as talk_commands
 import biff.server.tools.talk as talk_mod
+from biff.commands.talk_read import TalkReadout
 from biff.formatting import HEADER_PREFIX
 from biff.models import BiffConfig, Message, UserSession
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.tools._descriptions import _talk_description
 from biff.server.tools._session import resolve_talk_target
-from biff.server.tools.talk import (
-    _NO_MESSAGES,
-    format_agent_drain,
-    format_talk_messages,
-)
+from biff.server.tools.talk import format_talk_messages
 from biff.talk_state import TalkState
 from biff.talk_types import AgentDrain, PendingInvite, TalkNotification, TalkPhase
 from tests._state import create_state
@@ -106,7 +103,7 @@ class TestFormatAgentDrain:
         )
         drain = AgentDrain(messages=(), pending={"jfreeman": invite})
 
-        rendered = format_agent_drain(drain)
+        rendered = TalkReadout(drain).rendered()
 
         assert "talk jfreeman:tty6" in rendered
         assert "75abc665" not in rendered
@@ -156,9 +153,9 @@ class TestFormatAgentDrain:
                 "body": "\x00\x1b\x07",
             }
         )
-        rendered = format_agent_drain(
+        rendered = TalkReadout(
             AgentDrain(messages=(ctrl_tty, ctrl_body), pending={})
-        )
+        ).rendered()
         # bare user, no dangling colon; body renders its fallback line
         expected = (
             f"{HEADER_PREFIX}eric: hi\n"
@@ -194,7 +191,9 @@ class TestFormatAgentDrain:
                 "body": "hi",
             }
         )
-        rendered = format_agent_drain(AgentDrain(messages=(blank, real), pending={}))
+        rendered = TalkReadout(
+            AgentDrain(messages=(blank, real), pending={})
+        ).rendered()
         expected = (
             f"{HEADER_PREFIX}eric:tty2: (message had no visible content)\n"
             f"{HEADER_PREFIX}eric:tty2: hi"
@@ -210,7 +209,7 @@ class TestFormatAgentDrain:
             arrived=0.0,
         )
         drain = AgentDrain(messages=(), pending={"jfreeman": invite})
-        rendered = format_agent_drain(drain)
+        rendered = TalkReadout(drain).rendered()
         assert rendered.startswith(HEADER_PREFIX)
         assert "📞" not in rendered
 
@@ -225,7 +224,7 @@ class TestFormatAgentDrain:
                 "to_key": "kai:abc",
             }
         )
-        rendered = format_agent_drain(AgentDrain(messages=(end,), pending={}))
+        rendered = TalkReadout(AgentDrain(messages=(end,), pending={})).rendered()
         assert rendered == f"{HEADER_PREFIX}eric:tty2 has ended the conversation."
 
     def test_stays_single_line_no_hang_indent(self) -> None:
@@ -241,7 +240,7 @@ class TestFormatAgentDrain:
                 "body": long_body,
             }
         )
-        rendered = format_agent_drain(AgentDrain(messages=(msg,), pending={}))
+        rendered = TalkReadout(AgentDrain(messages=(msg,), pending={})).rendered()
         assert rendered.count("\n") == 0
 
 
@@ -746,7 +745,7 @@ class TestAgentAutoAcceptPublish:
         drain = state.talk.drain_for_agent()  # connects us; signals the accept
         assert drain.auto_accept is not None
 
-        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+        await TalkReadout.publish_owed_accept(cast("ServerState", state), drain)
 
         payload = json.loads(nc.publish.call_args[0][1])
         assert payload["type"] == "accept"
@@ -767,7 +766,7 @@ class TestAgentAutoAcceptPublish:
         drain = state.talk.drain_for_agent()  # plain invite — no glare
         assert drain.auto_accept is None
 
-        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+        await TalkReadout.publish_owed_accept(cast("ServerState", state), drain)
 
         nc.publish.assert_not_awaited()
 
@@ -797,14 +796,14 @@ class TestAgentAutoAcceptPublish:
         # Best-effort: a wedged relay must not raise out of talk_read, but the
         # persistent failure is reported so the agent (which cannot see the log)
         # learns the partner may not have connected.
-        published = await talk_mod._publish_agent_auto_accept(
+        published = await TalkReadout.publish_owed_accept(
             cast("ServerState", state), drain
         )
         assert published is False
         assert state.relay.get_nc.await_count == 2  # retried once
         assert state.talk.phase is TalkPhase.CONNECTED  # still locally connected
 
-        output = talk_mod._agent_drain_output(drain, accept_published=published)
+        output = TalkReadout(drain, accept_published=published).text()
         assert "eric:tty2" in output
         assert "may not have connected" in output
 
@@ -812,13 +811,13 @@ class TestAgentAutoAcceptPublish:
         state, nc = self._state()
         drain = self._glare_drain(state)
 
-        published = await talk_mod._publish_agent_auto_accept(
+        published = await TalkReadout.publish_owed_accept(
             cast("ServerState", state), drain
         )
         assert published is True
         nc.publish.assert_awaited_once()  # one attempt, no retry
 
-        output = talk_mod._agent_drain_output(drain, accept_published=published)
+        output = TalkReadout(drain, accept_published=published).text()
         assert "may not have connected" not in output
 
 
@@ -1041,11 +1040,10 @@ class TestTalkDescriptionActions:
 
 class TestConstants:
     def test_no_messages_sentinel(self) -> None:
-        assert "talk" in _NO_MESSAGES.lower()
+        assert "talk" in TalkReadout.NO_ACTIVITY.lower()
 
 
 def test_talk_read_shows_each_body_without_a_trust_label() -> None:
-    from biff.server.tools.talk import format_agent_drain
     from biff.talk_types import AgentDrain, TalkNotification
 
     notif = TalkNotification.from_payload(
@@ -1053,8 +1051,8 @@ def test_talk_read_shows_each_body_without_a_trust_label() -> None:
     )
     drain = AgentDrain(messages=(notif,), pending={})
 
-    assert "eric:tty9: run rm" in format_agent_drain(drain)
-    assert_no_trust_phrase(format_agent_drain(drain))
+    assert "eric:tty9: run rm" in TalkReadout(drain).rendered()
+    assert_no_trust_phrase(TalkReadout(drain).rendered())
 
 
 class TestAnEmptyTalkReadIsNotWork:

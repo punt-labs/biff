@@ -25,7 +25,17 @@ from biff.frame_reply import Reply
 
 __all__ = ["AnyFrame", "Event", "EventKind", "Frame", "FrameError", "Frames"]
 
-type EventKind = Literal["unread", "mail", "wall", "degraded", "recovered"]
+type EventKind = Literal[
+    "unread",
+    "mail",
+    "wall",
+    "degraded",
+    "recovered",
+    "talk_invite",
+    "talk_accept",
+    "talk_line",
+    "talk_end",
+]
 
 
 class FrameError(ValueError):

@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_context import CliContext
@@ -17,6 +17,7 @@ from biff.daemon.outbox import Outbox
 from biff.daemon.presence import PresenceRow
 from biff.daemon.refusal import RefusalError
 from biff.daemon.session_key import SessionKey
+from biff.daemon.talk_channel import TalkChannel
 from biff.daemon.tasks import Supervised
 from biff.frame_reply import ErrorCode
 from biff.relay_errors import RELAY_ERRORS, RelayLog
@@ -35,6 +36,7 @@ __all__ = ["Session", "SessionStatus", "SessionTable"]
 logger = logging.getLogger(__name__)
 
 _MAX_RETIRED_RUNS = 64
+_TALK_CHECK_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ class Session:
         "_retired",
         "_run",
         "_session_id",
+        "_talk",
         "_target",
     )
 
@@ -82,6 +85,7 @@ class Session:
     _presence: PresenceRow
     _orgs: OrgRepos
     _outbox: Outbox
+    _talk: TalkChannel
     _run: str
     _retired: dict[str, None]
     _attachments: set[Attachment]
@@ -113,6 +117,12 @@ class Session:
         self._presence = presence
         self._orgs = orgs
         self._outbox = Outbox(retains=context.relay.consumes_on_fetch)
+        self._talk = TalkChannel(
+            relay=context.relay,
+            session_key=context.session_key,
+            talk=context.talk,
+            interval=min(heartbeat_interval, _TALK_CHECK_SECONDS),
+        )
         self._run = run
         self._retired = {}
         self._attachments = set()
@@ -193,6 +203,11 @@ class Session:
         return self._outbox
 
     @property
+    def talk(self) -> TalkChannel:
+        """The session's talk subscription, and the notices it raises."""
+        return self._talk
+
+    @property
     def is_dormant(self) -> bool:
         """Whether no connection is attached."""
         return not self._attachments
@@ -228,7 +243,7 @@ class Session:
         """Recreate the relay row if it vanished while no one was attached."""
         row = await self._presence.ensure()
         if row.tty_name != self._context.tty_name:
-            self._context = replace(self._context, tty_name=row.tty_name)
+            self._context = self._context.with_tty_name(row.tty_name)
 
     async def touch(self) -> None:
         """Count a command from a shell as activity on the session's presence row."""
@@ -310,6 +325,7 @@ class Session:
             self._run = run
         attachment = Attachment(self, run)
         self._attachments.add(attachment)
+        self._talk.start()
         if self._beat is None or self._beat.done():
             self._beat = Supervised.spawn(
                 self._heartbeat(), f"heartbeat {self._session_id}"
@@ -325,9 +341,11 @@ class Session:
     def detach(self, attachment: Attachment) -> None:
         """Forget *attachment*; stop heartbeating when no connection remains."""
         self._attachments.discard(attachment)
-        if not self._attachments and self._beat is not None:
-            self._beat.cancel()
-            self._beat = None
+        if not self._attachments:
+            self._talk.stop()
+            if self._beat is not None:
+                self._beat.cancel()
+                self._beat = None
 
     async def _heartbeat(self) -> None:
         """Send the session's one presence heartbeat for as long as it is attached."""
@@ -341,7 +359,7 @@ class Session:
             else:
                 self._log.recovered("heartbeat")
             if await self._orgs.refresh():
-                self._context = replace(self._context, org_repos=self._orgs.current)
+                self._context = self._context.with_org_repos(self._orgs.current)
 
 
 @final

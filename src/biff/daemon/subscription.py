@@ -32,7 +32,8 @@ class Subscription:
 
     On start it sends the session's current unread summary and, when the
     repository has an active wall, the wall.  Then it sends one event per later
-    arrival.  An event carries counts and the wall, never a message body.
+    arrival.  An event carries counts, the wall, or who a talk frame came from,
+    never a message body or a line of talk.
     There is no replay log: a client that reconnects starts from the summary,
     which counts the mail the daemon holds for the session as well as the
     relay's: a consuming relay no longer lists mail the daemon fetched and could
@@ -80,7 +81,18 @@ class Subscription:
         return self._session.context
 
     async def run(self) -> None:
-        """Send the current summary, then each arrival, until cancelled."""
+        """Send the current summary, then each arrival, until cancelled.
+
+        Mail and wall arrivals are found by polling the relay; talk arrivals are
+        pushed by the session's talk feed, so a conversation is not paced by the
+        poll interval.
+        """
+        async with asyncio.TaskGroup() as group:
+            group.create_task(self._poll())
+            group.create_task(self._session.talk.announce(self._emit))
+
+    async def _poll(self) -> None:
+        """Send the current summary, then each mail and wall arrival."""
         mark, wall, count = await self._baseline()
         await self._emit("unread", {"count": count})
         if wall is not None:
