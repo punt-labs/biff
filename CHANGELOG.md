@@ -2,18 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- `biff key show` refuses a malformed published npub and neutralises every
-  string it prints or returns from the shared directory (npub, owner, handles,
-  ethos error text), so a published entry cannot write control sequences into
-  your terminal; the `biff who` NPUB column shows the canonical npub or `?`.
-- npubs must be all-lowercase or all-uppercase ASCII (BIP-173), so a mixed-case
-  or lookalike spelling is refused by `show`, `attest` and `who`; `show`
-  refuses a directory entry whose field names collide once neutralised.
-- `biff key show` says what the owner pin proves: the pin is a file your user
-  can write, so a match is not proof against code running as you.
-
 ### Added
 
 - A `read` reply that carries mail asks the client to confirm it (`ack` frame,
@@ -132,6 +120,15 @@
 
 ### Fixed
 
+- `biff key show` refuses a malformed published npub and neutralises every
+  string it prints or returns from the shared directory (npub, owner, handles,
+  ethos error text), so a published entry cannot write control sequences into
+  your terminal; the `biff who` NPUB column shows the canonical npub or `?`.
+- npubs must be all-lowercase or all-uppercase ASCII (BIP-173), so a mixed-case
+  or lookalike spelling is refused by `show`, `attest` and `who`; `show`
+  refuses a directory entry whose field names collide once neutralised.
+- `biff key show` says what the owner pin proves: the pin is a file your user
+  can write, so a match is not proof against code running as you.
 - In an agent container, git rewrites github remotes through the model gateway
   (`url.<gateway>.insteadOf`), and `git remote get-url origin` returns the
   gateway form with an extra route segment. The repo slug failed to parse and
