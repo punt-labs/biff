@@ -289,12 +289,14 @@ class DockerRelay:
             f"stdout:\n{logs.stdout}\nstderr:\n{logs.stderr}"
         )
 
-    def subscribed_subjects(self, name: str) -> frozenset[str]:
-        """Return the subjects ``name``'s server currently has subscribers on.
+    def deliveries_by_subject(self, name: str) -> dict[str, int]:
+        """Return how many messages ``name``'s server has delivered per subject.
 
         Asks the server's own loopback monitor (``/subsz?subs=1``) from inside
         the container with the image's BusyBox ``wget``, because the monitor
-        port is deliberately not published to the host.
+        port is deliberately not published to the host. A subject appears
+        here once something subscribes to it; a subject several clients
+        subscribe to reports the last one listed.
         """
         result = subprocess.run(  # noqa: S603
             [
@@ -311,8 +313,11 @@ class DockerRelay:
             check=True,
             timeout=_DOCKER_TIMEOUT_S,
         )
-        listing: dict[str, list[dict[str, str]]] = json.loads(result.stdout)
-        return frozenset(sub["subject"] for sub in listing["subscriptions_list"])
+        listing: dict[str, list[dict[str, str | int]]] = json.loads(result.stdout)
+        return {
+            str(sub["subject"]): int(sub["msgs"])
+            for sub in listing["subscriptions_list"]
+        }
 
     def wait_subscribed(
         self, name: str, subject: str, timeout: float = _SUBSCRIBED_TIMEOUT_S
@@ -325,7 +330,7 @@ class DockerRelay:
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if subject in self.subscribed_subjects(name):
+            if subject in self.deliveries_by_subject(name):
                 return
             time.sleep(0.05)
         pytest.fail(f"{name} had no subscriber on {subject!r} within {timeout}s")

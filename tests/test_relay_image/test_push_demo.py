@@ -182,10 +182,9 @@ class TestPushVsPollDemo:
                 await kai.call("read_messages")  # attach; baseline: "No new messages."
                 # Core NATS does not replay, so wait for the server to report the
                 # inbox-notify SUB rather than guess how long registration takes.
+                notify_subject = sender.inbox_notify_subject(_TEST_REPO, "kai")
                 await asyncio.to_thread(
-                    relay_driver.wait_subscribed,
-                    relay_container.name,
-                    sender.inbox_notify_subject(_TEST_REPO, "kai"),
+                    relay_driver.wait_subscribed, relay_container.name, notify_subject
                 )
 
                 # -- push: real deliver(), JetStream + inbox-notify poke --
@@ -199,6 +198,12 @@ class TestPushVsPollDemo:
                     kai_raw, timeout=_TRIAL_TIMEOUT
                 )
                 assert t_recv is not None, "push: read_messages never showed 1 unread"
+                # Prove the poke itself reached the SUB, not only that something
+                # (such as the poller's startup refresh) showed the unread count.
+                delivered = await asyncio.to_thread(
+                    relay_driver.deliveries_by_subject, relay_container.name
+                )
+                assert delivered[notify_subject] >= 1, "push: no poke reached the SUB"
                 push_latency = t_recv - t_send
                 await kai.call("read_messages")  # drains, records the delivered text
 
