@@ -22,6 +22,7 @@ from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from pathlib import Path
 
     from tests.test_daemon.conftest import Harness
@@ -57,11 +58,11 @@ class FlakyRelay(LocalRelay):
         self._check()
         return await super().get_unread_summary(session_key)
 
-    async def heartbeat(self, session_key: str) -> None:
+    async def heartbeat(self, session_key: str, at: datetime | None = None) -> None:
         if self.heartbeat_bug:
             msg = "heartbeat bug"
             raise RuntimeError(msg)
-        await super().heartbeat(session_key)
+        await super().heartbeat(session_key, at)
 
     async def get_session(self, session_key: str) -> UserSession | None:
         await asyncio.sleep(self.slow_session)

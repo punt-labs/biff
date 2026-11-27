@@ -17,6 +17,7 @@ from biff.relay import Relay
 from biff.server.channel_check import ChannelCheck
 from biff.server.channel_emitter import ChannelEmitter
 from biff.server.display_queue import DisplayQueue
+from biff.server.hook_activity import HookActivity
 from biff.server.wake import WakeSignal
 from biff.session_routing import SessionRouting
 from biff.talk_state import TalkState
@@ -115,6 +116,11 @@ class ServerState:
     def session_key(self) -> str:
         """Composite key ``{user}:{tty}`` for this server instance."""
         return build_session_key(self.config.user, self.tty)
+
+    async def heartbeat(self) -> None:
+        """Keep this session alive in the relay, carrying the hook's tool stamp."""
+        activity = HookActivity(self.relay, self.session_key, self.unread_path)
+        await activity.heartbeat()
 
     @property
     def is_bound(self) -> bool:

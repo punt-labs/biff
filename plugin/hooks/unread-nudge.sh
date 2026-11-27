@@ -35,10 +35,37 @@
 
 _stdin=$(cat)
 
+# Stamp the session as active on every finished tool call, biff's own or not.
+# The server's heartbeat carries this file's mtime into the shared presence
+# row's last_tool_at, so other hosts see the session's real idle time instead
+# of the time since its last biff tool call. Three rules:
+#   - Only PostToolUse and PostToolUseFailure count. A prompt may be a
+#     scheduled /biff:read, which is not work.
+#   - biff's inbox polls (read_messages, talk_read) do not count: an empty
+#     poll must not move this session's activity clock, which routes mail.
+#   - Pure bash, before the jq check, so an install without jq still stamps.
+# The stamp is made only for a session biff already serves (the unread file
+# exists), and it ignores the mesg and polling gates below: activity is not a
+# notification.
+_re_session='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]+)"'
+_re_event='"hook_event_name"[[:space:]]*:[[:space:]]*"(PostToolUse|PostToolUseFailure)"'
+_re_tool='"tool_name"[[:space:]]*:[[:space:]]*"[^"]*(read_messages|talk_read)"'
+if [[ "$_stdin" =~ $_re_session ]]; then
+  _stamp_key="${BASH_REMATCH[1]}"
+  _stamp_dir="$HOME/.punt-labs/biff/unread"
+  if [[ "$_stdin" =~ $_re_event && ! "$_stdin" =~ $_re_tool ]]; then
+    [[ -f "$_stamp_dir/${_stamp_key}.json" ]] \
+      && touch "$_stamp_dir/${_stamp_key}.active" 2>/dev/null
+  fi
+fi
+
 command -v jq >/dev/null 2>&1 || exit 0
 
 _event=$(printf '%s' "$_stdin" | jq -r '.hook_event_name // empty' 2>/dev/null)
 [[ -n "$_event" ]] || exit 0
+# A failed call is stamped above and never nudged: additionalContext is not
+# offered for this event.
+[[ "$_event" == "PostToolUseFailure" ]] && exit 0
 
 # --- This session's unread-file key is the payload's session_id, the same
 # value the server and the statusline key on (SessionRouting.unread_path).
