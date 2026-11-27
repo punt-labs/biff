@@ -110,7 +110,7 @@ class Methods:
         Raises:
             RefusalError: The method is unknown or its params are invalid.
         """
-        ctx = session.context
+        session.require_live()
         if method == "read":
             return await self._read(session, Params(method, raw))
         if method in self._sessions.names:
@@ -124,7 +124,7 @@ class Methods:
         if handler is None:
             msg = f"unknown method {method!r}; served: {', '.join(self.names)}"
             raise RefusalError.of(ErrorCode.UNKNOWN_METHOD, msg)
-        return self._outcome(await handler(ctx, Params(method, raw)))
+        return self._outcome(await handler(session.context, Params(method, raw)))
 
     @staticmethod
     def _outcome(result: CommandResult) -> Outcome:

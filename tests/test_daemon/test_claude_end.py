@@ -8,20 +8,25 @@ session (``EndRefused``), and a clear ends the old session before the new hello.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from biff.client.connection import ConnectionLostError, DaemonError
+from biff.daemon.session_key import SessionKey
 from biff.frame_reply import ErrorCode
+from biff.session_id import CLAUDE_CODE_ROLE
 from tests.test_daemon.claude_seats import (
     ConsumingLogging,
     LoggingRelay,
     logging_relay,
     seat,
+    until,
 )
 
 if TYPE_CHECKING:
+    from biff.models import SessionEvent
     from tests.test_daemon.conftest import Harness
 
 _ = logging_relay  # the autouse fixture, imported so pytest finds it here
@@ -145,3 +150,64 @@ async def test_an_end_loses_no_mail_still_in_the_inbox(harness: Harness) -> None
     await s.client.request("end")
     mailbox = {m.body for m in await s.viewer.fetch_user_inbox("kai")}
     assert mailbox == {"first", "second"}
+
+
+async def test_two_ends_at_once_end_the_session_once(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = await seat(harness, "s-twice")
+    second = await harness.connect("s-twice", "kai", client="mcp", main_agent_id="a1")
+    parked, release = asyncio.Event(), asyncio.Event()
+    real = LoggingRelay.delete_session
+
+    async def parks_once(self: LoggingRelay, session_key: str) -> None:
+        if not parked.is_set():
+            parked.set()
+            await release.wait()  # the first end stops mid-effect, holding the session
+        await real(self, session_key)
+
+    monkeypatch.setattr(LoggingRelay, "delete_session", parks_once)
+    one = asyncio.ensure_future(first.client.request("end"))
+    await parked.wait()
+    two = asyncio.ensure_future(second.request("end"))
+    key = SessionKey("s-twice", CLAUDE_CODE_ROLE)
+    table = harness.daemon._core.sessions
+    await until(lambda: table._users[key] == 2)  # queued behind the first end
+    release.set()
+    await asyncio.gather(one, two, return_exceptions=True)
+    logouts = [e for e in LoggingRelay.events if e.event == "logout"]
+    assert len(logouts) == 1
+    assert await first.row_present() is False
+
+
+async def test_another_connection_of_an_ended_session_cannot_rebuild_its_row(
+    harness: Harness,
+) -> None:
+    ender = await seat(harness, "s-shared")
+    other = await harness.connect("s-shared", "kai", client="mcp", main_agent_id="a1")
+    await ender.client.request("end")
+    with pytest.raises((DaemonError, ConnectionLostError)):
+        await other.request("tty", name="revived")
+    assert await ender.row_present() is False
+
+
+async def test_a_logout_that_cannot_be_recorded_keeps_the_record_for_the_next_end(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = await seat(harness, "s-history")
+    failures = iter([ConnectionError("history down")])
+    real = LoggingRelay.append_wtmp
+
+    async def flaky(self: LoggingRelay, event: SessionEvent) -> None:
+        if (exc := next(failures, None)) is not None:
+            raise exc
+        await real(self, event)
+
+    monkeypatch.setattr(LoggingRelay, "append_wtmp", flaky)
+    with pytest.raises(DaemonError):
+        await s.client.request("end")
+    assert len(harness.daemon.status().sessions) == 1
+    await s.client.request("end")
+    logouts = [e for e in LoggingRelay.events if e.event == "logout"]
+    assert [e.session_key for e in logouts] == [s.key]
+    assert harness.daemon.status().sessions == ()

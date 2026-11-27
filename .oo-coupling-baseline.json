@@ -668,8 +668,8 @@
     "efferent_coupling": 14.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.732,
-    "avg_lcom": 0.491
+    "max_lcom": 0.708,
+    "avg_lcom": 0.479
   },
   "src/biff/daemon/subscription.py": {
     "efferent_coupling": 2.0,

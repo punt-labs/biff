@@ -57,7 +57,8 @@ class SessionEnd:
     ) -> CommandResult:
         """End *session* at the request of one of its connections.
 
-        The caller has already been checked to be of the current run.
+        The caller has already been checked to be of the current run.  Ending a
+        session that is already ended succeeds and does nothing more.
 
         Raises:
             RefusalError: *session* is a shell's session, which ends with
@@ -65,12 +66,13 @@ class SessionEnd:
         """
         p.done()
         key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
-        if self._live.snapshot().get(key) is not session:
+        if not session.is_ended and self._live.snapshot().get(key) is not session:
             msg = "end applies to a harness session; shell sessions use session_end"
             raise RefusalError.of(ErrorCode.INVALID_PARAMS, msg)
         async with self._live.guard(key):
-            await self._finish(session)
-            self._live.forget(key, spare=session)
+            if not session.is_ended:  # another end may have finished while this waited
+                await self._finish(session)
+                self._live.forget(key, spare=session)
         return CommandResult(text="Session ended.", json_data={"ended": True})
 
     async def expire(self, retention: float) -> None:
@@ -130,25 +132,20 @@ class SessionEnd:
 
     @staticmethod
     async def _logout(session: Session) -> None:
-        """Record the logout; history must not stop an end."""
+        """Record the logout; a failure keeps the session for the next end."""
         ctx = session.context
-        try:
-            await ctx.relay.append_wtmp(
-                SessionEvent(
-                    session_key=ctx.session_key,
-                    event="logout",
-                    user=ctx.user,
-                    tty=ctx.tty,
-                    tty_name=ctx.tty_name,
-                    hostname=get_hostname(),
-                    pwd=session.cwd,
-                    repo=ctx.config.repo_name,
-                )
+        await ctx.relay.append_wtmp(
+            SessionEvent(
+                session_key=ctx.session_key,
+                event="logout",
+                user=ctx.user,
+                tty=ctx.tty,
+                tty_name=ctx.tty_name,
+                hostname=get_hostname(),
+                pwd=session.cwd,
+                repo=ctx.config.repo_name,
             )
-        except RELAY_ERRORS:
-            logger.warning(
-                "could not record a logout for %s", ctx.session_key, exc_info=True
-            )
+        )
 
     async def end_shell(
         self, session: Session, verbs: SessionVerbs, p: Params

@@ -21,7 +21,7 @@ from biff.daemon.session_key import SessionKey
 from biff.daemon.talk_channel import TalkChannel
 from biff.daemon.tasks import Supervised
 from biff.frame_reply import ErrorCode
-from biff.session_id import CLI_ROLE
+from biff.session_id import CLAUDE_CODE_ROLE, CLI_ROLE, derive_routing_id
 from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
@@ -207,6 +207,17 @@ class Session:
     def is_dormant(self) -> bool:
         """Whether no connection is attached."""
         return not self._attachments
+
+    def require_live(self) -> None:
+        """Refuse a request for an agent's session that was ended.
+
+        An end deleted the row, which nothing may rebuild.  A shell's session is
+        let through: its end is the shell's own command, which goes on.
+        """
+        agent = derive_routing_id(self._session_id, CLAUDE_CODE_ROLE)
+        if self._is_ended and self._context.tty == agent:
+            msg = "session ended; start a new session"
+            raise RefusalError.of(ErrorCode.SESSION_ENDED, msg)
 
     def idle_for(self) -> float:
         """Return the seconds since the last connection left, or since the start."""
