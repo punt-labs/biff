@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
+import sys
 import uuid
 from contextlib import suppress
 from typing import TYPE_CHECKING
@@ -342,15 +344,28 @@ class TestADebtInsideTheHandshakeWindowWakesOnce:
         assert len(at_end) == 1  # one wake, when the window ends
 
 
+@pytest.fixture
+def dead_pid() -> int:
+    """The pid of a process that has just exited, so no process holds it.
+
+    A literal such as 4194303 is a valid pid (``pid_max`` is 4194304 on a host that
+    raises it), and on a host whose pid space has wrapped, a long-lived process can
+    own it; the probe of that pid is then rightly kept.
+    """
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    return child.pid
+
+
 class TestAbandonedProbeDirectories:
     async def test_a_dead_sessions_probe_is_reclaimed_and_a_live_ones_is_not(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dead_pid: int
     ) -> None:
         import os
 
         root = tmp_path / "canaries"
         monkeypatch.setattr(LocalWatch, "CANARY_ROOT", root)
-        dead = root / "4194303-abc"  # no such process
+        dead = root / f"{dead_pid}-abc"
         live = root / f"{os.getpid()}-other"
         for d in (dead, live):
             d.mkdir(parents=True)
@@ -672,13 +687,13 @@ class TestStoppingANeverStartedWatchTouchesNothing:
 
 class TestReclaimSurvivesAnotherSessionsCleanup:
     def test_an_entry_gone_between_listing_and_lstat_is_skipped(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dead_pid: int
     ) -> None:
         from biff.abandoned_canaries import AbandonedCanaries
 
         root = tmp_path / "canaries"
         root.mkdir(mode=0o700)
-        dead = root / "4194303-abc"
+        dead = root / f"{dead_pid}-abc"
         dead.mkdir()
         gone = root / "4194302-def"  # listed, then removed by another session
         real_iterdir = type(root).iterdir
@@ -696,12 +711,13 @@ class TestReclaimSurvivesAnotherSessionsCleanup:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        dead_pid: int,
     ) -> None:
         from biff.abandoned_canaries import AbandonedCanaries
 
         root = tmp_path / "canaries"
         root.mkdir(mode=0o700)
-        dead = root / "4194303-abc"
+        dead = root / f"{dead_pid}-abc"
         dead.mkdir()
         odd = root / "4194302-def"
         odd.mkdir()
