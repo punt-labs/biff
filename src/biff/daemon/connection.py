@@ -202,7 +202,9 @@ class ConnectionHandler:
         try:
             async with asyncio.timeout(core.attach_timeout):
                 resolved = await core.resolver.resolve(hello)
-                return await core.sessions.open(hello, resolved, core.pool)
+                attachment = await core.sessions.open(hello, resolved, core.pool)
+            await attachment.session.talk.ready(core.attach_timeout)
+            return attachment
         except RefusalError:
             raise
         except ResolveError as exc:

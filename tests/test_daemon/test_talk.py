@@ -220,6 +220,17 @@ async def test_the_subscription_lasts_as_long_as_a_client_is_attached(
     await _eventually(lambda: bus.subscriber_count(subject) == 0)
 
 
+async def test_a_client_that_has_attached_can_be_reached_at_once(
+    harness: Harness, bus: TalkBus
+) -> None:
+    """Frames are ephemeral, so attach returns only once the subscription exists."""
+    await harness.connect("s-kai", "kai")
+    before = bus.total_subscribers()
+    bus.subscribe_delay = 0.1  # a slow relay: the subscription takes a moment
+    await harness.connect("s-eric", "eric")
+    assert bus.total_subscribers() == before + 1
+
+
 async def test_a_new_relay_client_gets_a_new_subscription(
     pair: _Pair, bus: TalkBus
 ) -> None:

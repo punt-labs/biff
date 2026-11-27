@@ -167,3 +167,40 @@ async def test_biff_talk_fails_when_biffd_is_lost_mid_talk(
     await harness.daemon.stop()
     assert await asyncio.wait_for(talk, timeout=5.0) is False
     await screen.shows("biffd connection lost")
+
+
+async def test_a_hangup_that_arrives_with_the_accept_ends_the_wait(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    link = MagicMock()
+    link.pump.lost = ""
+    link.talk_read = AsyncMock(
+        return_value=TalkReading(
+            lines=(),
+            messages=(),
+            invites=(),
+            ended=True,  # the accept and the end were drained together
+            accept_published=True,
+            opening="",
+            opening_unsent=False,
+            dropped=0,
+            phase="idle",
+            peer="",
+        )
+    )
+    console = MagicMock()
+    shown: list[str] = []
+    console.say = lambda text="", *, end="\n": shown.append(text)
+    conversation = TalkConversation(
+        link=cast("DaemonLink", link),
+        console=console,
+        view=MagicMock(
+            invites=MagicMock(return_value=[]), dropped=MagicMock(return_value=[])
+        ),
+        prompt="you> ",
+    )
+
+    connected = await conversation._accepted("eric:tty2")
+
+    assert connected is False
+    assert any("ended" in line for line in shown)

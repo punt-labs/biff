@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import TYPE_CHECKING, cast
 
@@ -344,8 +345,18 @@ async def test_a_line_from_a_stranger_at_an_idle_prompt_is_announced(
 ) -> None:
     await talkers.eric.request("talk", to=talkers.kai_at, message="")
     await talkers.repl.screen.shows("wants to talk")
-    talkers.repl.typist.type("who")
-    await talkers.repl.screen.shows("eric:tty1")
+    kai_subject = talkers.bus.published[-1][0]  # where the invite went
+    status = cast("dict[str, dict[str, str]]", await talkers.eric.request("status"))
+    stray = {
+        "type": "message",
+        "from": "eric",
+        "from_tty": status["data"]["tty_name"],
+        "from_key": status["data"]["session_key"],
+        "to_key": kai_subject.removeprefix("talk.notify."),
+        "body": "stray line",
+    }
+    await talkers.bus.publish(kai_subject, json.dumps(stray).encode())
+    await talkers.repl.screen.shows("stray line")
 
 
 async def test_a_line_that_cannot_be_sent_is_reported_and_the_talk_goes_on(

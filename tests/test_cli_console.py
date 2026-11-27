@@ -138,3 +138,13 @@ async def test_say_writes_to_stdout_and_complain_to_stderr(
     shown.complain("to stderr")
     seen = capsys.readouterr()
     assert (seen.out, seen.err) == ("to stdout\n", "to stderr\n")
+
+
+async def test_end_of_input_stays_end_of_input_for_every_later_read(
+    console: tuple[PromptedConsole, Typist],
+) -> None:
+    """A talk loop that consumed the EOF must not leave the shell waiting."""
+    shown, typist = console
+    typist.end_input()
+    assert await shown.next(asyncio.Event()) is None
+    assert await asyncio.wait_for(shown.next(asyncio.Event()), timeout=1.0) is None

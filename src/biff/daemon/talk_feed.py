@@ -96,6 +96,7 @@ class TalkFeed:
         "_notices",
         "_relay",
         "_session_key",
+        "_subscribed",
         "_talk",
         "_task",
     )
@@ -109,6 +110,7 @@ class TalkFeed:
     _generation: int
     _latch: TalkNotifyLatch
     _task: asyncio.Task[None] | None
+    _subscribed: asyncio.Event
 
     def __new__(
         cls,
@@ -130,6 +132,7 @@ class TalkFeed:
         self._generation = 0
         self._latch = TalkNotifyLatch.for_resubscribe(logger)
         self._task = None
+        self._subscribed = asyncio.Event()
         return self
 
     def start(self) -> None:
@@ -139,8 +142,18 @@ class TalkFeed:
         if self._task is None or self._task.done():
             self._task = Supervised.spawn(self._run(), f"talk {self._session_key}")
 
+    async def ready(self) -> None:
+        """Return once the subscription exists, or at once if there is no talk.
+
+        Frames are ephemeral: one that arrives before the subscription does is
+        lost, so a client is told it is attached only after this returns.
+        """
+        if isinstance(self._relay, TalkTransport) and self._task is not None:
+            await self._subscribed.wait()
+
     def stop(self) -> None:
         """Stop feeding and release the subscription."""
+        self._subscribed.clear()
         if self._task is not None:
             self._task.cancel()
             self._task = None
@@ -177,6 +190,7 @@ class TalkFeed:
             return
         self._handle = handle
         self._generation = generation
+        self._subscribed.set()
         self._latch.record_success()
 
     async def _unsubscribe(self) -> None:

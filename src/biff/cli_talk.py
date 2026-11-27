@@ -157,6 +157,11 @@ class TalkConversation:
             say(f"{_CLEAR_LINE}{banner}")
         # The accepter's opening line renders once Connected prints.
         self._carried = (*self._carried, *reading.messages)
+        if reading.ended:
+            # The accept and the hangup were drained together: nothing is left to
+            # wait for.
+            say(f"{_CLEAR_LINE}Talk with {peer} ended.")
+            return False
         if reading.phase != "connected":
             return False
         if reading.opening:

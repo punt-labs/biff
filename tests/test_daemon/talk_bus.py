@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
@@ -47,6 +48,7 @@ class TalkBus:
         self.published: list[tuple[str, bytes]] = []
         self.subscribes = 0
         self.broken = False
+        self.subscribe_delay = 0.0
         self.relays: list[TalkBusRelay] = []
 
     async def publish(self, subject: str, payload: bytes) -> None:
@@ -58,12 +60,16 @@ class TalkBus:
             await callback(BusMessage(payload))
 
     async def subscribe(self, subject: str, cb: Callback) -> BusSubscription:
+        await asyncio.sleep(self.subscribe_delay)
         self.subscribes += 1
         self._subscribers.setdefault(subject, []).append(cb)
         return BusSubscription(self, subject, cb)
 
     def drop(self, subject: str, callback: Callback) -> None:
         self._subscribers[subject].remove(callback)
+
+    def total_subscribers(self) -> int:
+        return sum(len(callbacks) for callbacks in self._subscribers.values())
 
     def subscriber_count(self, subject: str) -> int:
         return len(self._subscribers.get(subject, []))

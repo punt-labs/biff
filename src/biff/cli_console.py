@@ -67,8 +67,18 @@ class PromptedConsole:
     prompt overtakes buffered output and collides with the last line.
     """
 
-    __slots__ = ("_gate", "_lines", "_prompt", "_pump", "_read", "_stop", "_typed")
+    __slots__ = (
+        "_ended",
+        "_gate",
+        "_lines",
+        "_prompt",
+        "_pump",
+        "_read",
+        "_stop",
+        "_typed",
+    )
 
+    _ended: bool
     _prompt: str
     _read: Callable[[str], str]
     _gate: threading.Event
@@ -82,6 +92,7 @@ class PromptedConsole:
         self = super().__new__(cls)
         self._prompt = prompt
         self._read = read
+        self._ended = False
         self._gate = threading.Event()
         self._stop = threading.Event()
         self._typed = queue.Queue()
@@ -130,7 +141,14 @@ class PromptedConsole:
         sys.stderr.flush()
 
     async def next(self, wake: asyncio.Event) -> Reading:
-        """Wait for a line, for *wake*, or two seconds."""
+        """Wait for a line, for *wake*, or two seconds.
+
+        Once input has ended every later read says so again: a talk loop may
+        have consumed the end of input, and the shell after it must not wait for
+        a line that can never come.
+        """
+        if self._ended:
+            return None
         line = asyncio.create_task(self._lines.get())
         woken = asyncio.create_task(wake.wait())
         done, pending = await asyncio.wait(
@@ -141,7 +159,9 @@ class PromptedConsole:
             with suppress(asyncio.CancelledError):
                 await task
         if line in done:
-            return line.result()
+            typed = line.result()
+            self._ended = typed is None
+            return typed
         return Tick.IDLE
 
     def _read_lines(self) -> None:

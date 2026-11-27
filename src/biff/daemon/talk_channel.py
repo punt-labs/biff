@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import TYPE_CHECKING, Self, final
 
 import biff.commands.talk as talk_commands
@@ -20,6 +22,8 @@ if TYPE_CHECKING:
     from biff.talk_state import TalkState
 
 __all__ = ["TalkChannel"]
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -66,6 +70,18 @@ class TalkChannel:
         """
         if ctx.talk.phase is not TalkPhase.IDLE:
             await talk_commands.end_or_cancel(ctx)
+
+    async def ready(self, timeout: float) -> None:
+        """Return once frames for this session are being received.
+
+        A relay that is slow to subscribe must not fail an attach: after
+        *timeout* seconds this logs and returns, the feed keeps trying, and a
+        client that talks in the meantime is told so by the relay.
+        """
+        try:
+            await asyncio.wait_for(self._feed.ready(), timeout=timeout)
+        except TimeoutError:
+            logger.warning("talk subscription not ready; the attach goes on")
 
     def start(self) -> None:
         """Subscribe while a client is attached; harmless when already running."""

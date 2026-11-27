@@ -144,7 +144,9 @@
   idle again. `biff talk` exits 1 when the connection to biffd is lost. An
   invite's opening line is sent as a normal line once the invite is accepted;
   `talk` to someone whose invite is unread accepts it; a queue that overflows
-  reports how many lines it lost.
+  reports how many lines it lost. A client is told it is attached only once
+  biffd's talk subscription for its session exists, so no frame is lost at
+  startup, and Ctrl-D during a talk ends the shell instead of leaving it waiting.
   The MCP `talk_read` text is unchanged.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the
