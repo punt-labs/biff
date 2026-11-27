@@ -228,7 +228,10 @@ async def test_a_new_relay_client_gets_a_new_subscription(
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
     before = bus.subscribes
     bus.relays[0].generation += 1  # the relay dialled a fresh client
-    await _eventually(lambda: bus.subscribes > before)
+    await _eventually(lambda: bus.subscribes > before)  # the new one is queued...
+    # ...and the old one is already released, so one subscription means the new
+    # one is confirmed: a frame sent earlier would be lost (core NATS has no replay).
+    await _eventually(lambda: bus.subscriber_count(subject) == 1)
     await pair.say(pair.kai, pair.eric_at, "")
     assert (await pair.read(pair.eric))["invites"] != []
     assert bus.subscriber_count(subject) == 1
