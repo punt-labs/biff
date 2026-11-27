@@ -1198,10 +1198,10 @@
   "src/biff/nats_relay.py": {
     "method_ratio": 0.99,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.0,
+    "avg_params": 1.01,
     "max_complexity": 9.0,
-    "avg_complexity": 2.59,
-    "module_size": 1135.0,
+    "avg_complexity": 2.61,
+    "module_size": 1132.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 0.667,
     "init_violations": 2.0,

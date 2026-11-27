@@ -1,0 +1,1478 @@
+{
+  "specification": "docs/specs/session-model.tex",
+  "timestamp": "2026-11-26T16:00:00Z",
+  "operations": [
+    {
+      "name": "DaemonExit",
+      "kind": "delta",
+      "inputs": [],
+      "stateVars": [
+        "daemonUp",
+        "opened",
+        "hello",
+        "subscribed",
+        "shown",
+        "known",
+        "runOf",
+        "durable"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Process ends; connections go, records and unread counts stay",
+          "condition": "daemonUp = ztrue"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {},
+          "preState": {
+            "daemonUp": "ztrue",
+            "known": [
+              "s1"
+            ],
+            "opened": [
+              "c1"
+            ],
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "every record dormant; unread kept",
+          "branch": 1,
+          "postState": {
+            "daemonUp": "zfalse",
+            "known": [
+              "s1"
+            ],
+            "opened": [],
+            "durable": {
+              "s1": 1
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {},
+          "preState": {
+            "daemonUp": "zfalse"
+          },
+          "notes": "Precondition daemonUp = ztrue fails"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "DaemonStart",
+      "kind": "delta",
+      "inputs": [],
+      "stateVars": [
+        "daemonUp",
+        "opened"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Daemon starts with no connection",
+          "condition": "daemonUp = zfalse"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {},
+          "preState": {
+            "daemonUp": "zfalse",
+            "opened": []
+          },
+          "notes": "restart finds every record dormant",
+          "branch": 1,
+          "postState": {
+            "daemonUp": "ztrue",
+            "opened": []
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {},
+          "preState": {
+            "daemonUp": "ztrue"
+          },
+          "notes": "Precondition daemonUp = zfalse fails"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "Arrive",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "s",
+          "type": "SESSION",
+          "constraints": [
+            "durable(s) < maxUnread"
+          ]
+        }
+      ],
+      "stateVars": [
+        "durable",
+        "daemonUp"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Mail reaches the identity-keyed inbox whether or not the daemon runs",
+          "condition": "durable(s) < maxUnread"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "s": "s1"
+          },
+          "preState": {
+            "daemonUp": "ztrue",
+            "durable": {
+              "s1": 0
+            }
+          },
+          "notes": "daemon up",
+          "branch": 1,
+          "postState": {
+            "durable": {
+              "s1": 1
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "s": "s1"
+          },
+          "preState": {
+            "daemonUp": "zfalse",
+            "durable": {
+              "s1": 0
+            }
+          },
+          "notes": "daemon down: arrival is durable, delivered after restart",
+          "branch": 1,
+          "postState": {
+            "durable": {
+              "s1": 1
+            }
+          }
+        },
+        {
+          "id": 3,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "s": "s1"
+          },
+          "preState": {
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "Bound durable(s) < maxUnread fails at maxUnread"
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "accepted": 2,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "Connect",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c notin opened"
+          ]
+        }
+      ],
+      "stateVars": [
+        "daemonUp",
+        "opened"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "A client opens a connection to the running daemon",
+          "condition": "daemonUp = ztrue & c notin opened"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemonUp": "ztrue",
+            "opened": []
+          },
+          "notes": "not yet bound to a session",
+          "branch": 1,
+          "postState": {
+            "opened": [
+              "c1"
+            ]
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemonUp": "zfalse",
+            "opened": []
+          },
+          "notes": "Daemon absent: client autostarts first"
+        },
+        {
+          "id": 3,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "daemonUp": "ztrue",
+            "opened": [
+              "c1"
+            ]
+          },
+          "notes": "c already opened"
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "accepted": 1,
+        "rejected": 2,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "RequestBeforeHello",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in opened",
+            "c notin dom hello"
+          ]
+        }
+      ],
+      "stateVars": [
+        "opened",
+        "hello",
+        "known",
+        "runOf",
+        "subscribed",
+        "shown",
+        "durable"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Request or bad hello before a valid hello: close, change nothing else (invariant 2)",
+          "condition": "c in opened & c notin dom hello"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "opened": [
+              "c1"
+            ],
+            "hello": {},
+            "known": [
+              "s1"
+            ]
+          },
+          "notes": "only the rejected connection is removed",
+          "branch": 1,
+          "postState": {
+            "opened": [],
+            "hello": {},
+            "known": [
+              "s1"
+            ]
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "opened": [
+              "c1"
+            ],
+            "hello": {
+              "c1": "(s1,r1)"
+            }
+          },
+          "notes": "c is already bound: not a pre-hello request"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "HelloCreate",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in opened"
+          ]
+        },
+        {
+          "name": "s",
+          "type": "SESSION",
+          "constraints": [
+            "s in sessions",
+            "s notin known"
+          ]
+        },
+        {
+          "name": "r",
+          "type": "RUN",
+          "constraints": []
+        }
+      ],
+      "stateVars": [
+        "known",
+        "runOf",
+        "hello"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "First hello for a session id creates its record bound to the named run",
+          "condition": "c in opened & c notin dom hello & s in sessions & s notin known"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1",
+            "s": "s1",
+            "r": "r1"
+          },
+          "preState": {
+            "opened": [
+              "c1"
+            ],
+            "known": []
+          },
+          "notes": "one record created",
+          "branch": 1,
+          "postState": {
+            "known": [
+              "s1"
+            ],
+            "runOf": {
+              "s1": "r1"
+            },
+            "hello": {
+              "c1": "(s1,r1)"
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1",
+            "s": "s1",
+            "r": "r1"
+          },
+          "preState": {
+            "opened": [
+              "c1"
+            ],
+            "known": [
+              "s1"
+            ]
+          },
+          "notes": "s already known: see HelloAttach / HelloNewRun"
+        },
+        {
+          "id": 3,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1",
+            "s": "s1",
+            "r": "r1"
+          },
+          "preState": {
+            "opened": [],
+            "known": []
+          },
+          "notes": "c not opened"
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "accepted": 1,
+        "rejected": 2,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "HelloAttach",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in opened"
+          ]
+        },
+        {
+          "name": "s",
+          "type": "SESSION",
+          "constraints": [
+            "s in known"
+          ]
+        },
+        {
+          "name": "r",
+          "type": "RUN",
+          "constraints": [
+            "runOf(s) = r"
+          ]
+        }
+      ],
+      "stateVars": [
+        "known",
+        "runOf",
+        "hello",
+        "subscribed",
+        "shown"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Second client attaches to the existing record in the same run",
+          "condition": "s in known & runOf(s) = r"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c2",
+            "s": "s1",
+            "r": "r1"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "runOf": {
+              "s1": "r1"
+            },
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "subscribed": [
+              "c1"
+            ]
+          },
+          "notes": "no second record; first client's subscription undisturbed",
+          "branch": 1,
+          "postState": {
+            "hello": {
+              "c1": "(s1,r1)",
+              "c2": "(s1,r1)"
+            },
+            "subscribed": [
+              "c1"
+            ],
+            "known": [
+              "s1"
+            ]
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c2",
+            "s": "s1",
+            "r": "r2"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "runOf": {
+              "s1": "r1"
+            }
+          },
+          "notes": "runOf(s) /= r: that is HelloNewRun"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "HelloNewRun",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in opened"
+          ]
+        },
+        {
+          "name": "s",
+          "type": "SESSION",
+          "constraints": [
+            "s in known"
+          ]
+        },
+        {
+          "name": "r",
+          "type": "RUN",
+          "constraints": [
+            "runOf(s) /= r"
+          ]
+        }
+      ],
+      "stateVars": [
+        "runOf",
+        "hello",
+        "subscribed",
+        "shown",
+        "known",
+        "durable"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "New main_agent_id is a new run: record kept, old run's subscription and pending deliveries released",
+          "condition": "s in known & runOf(s) /= r"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c2",
+            "s": "s1",
+            "r": "r2"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "runOf": {
+              "s1": "r1"
+            },
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "subscribed": [
+              "c1"
+            ],
+            "shown": {
+              "c1": 1
+            },
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "old connection stays open and bound, holds no subscription",
+          "branch": 1,
+          "postState": {
+            "runOf": {
+              "s1": "r2"
+            },
+            "subscribed": [],
+            "shown": {},
+            "durable": {
+              "s1": 1
+            },
+            "known": [
+              "s1"
+            ]
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c2",
+            "s": "s1",
+            "r": "r1"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "runOf": {
+              "s1": "r1"
+            }
+          },
+          "notes": "same run: that is HelloAttach"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "RequestReplacedRun",
+      "kind": "xi",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in dom hello"
+          ]
+        }
+      ],
+      "stateVars": [
+        "hello",
+        "runOf"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "A call from a replaced run is refused with a named error and changes nothing",
+          "condition": "second(hello(c)) /= runOf(first(hello(c)))"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r2"
+            }
+          },
+          "notes": "named error; no state change",
+          "branch": 1,
+          "postState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r2"
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r1"
+            }
+          },
+          "notes": "current run: request proceeds normally"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "Subscribe",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in dom hello",
+            "c notin subscribed"
+          ]
+        }
+      ],
+      "stateVars": [
+        "subscribed",
+        "shown",
+        "durable",
+        "hello",
+        "runOf"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Current run's connection subscribes and is first sent the durable unread summary",
+          "condition": "c in dom hello & c notin subscribed & second(hello(c)) = runOf(first(hello(c)))"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r1"
+            },
+            "durable": {
+              "s1": 1
+            },
+            "subscribed": []
+          },
+          "notes": "shown = durable (invariant 4)",
+          "branch": 1,
+          "postState": {
+            "subscribed": [
+              "c1"
+            ],
+            "shown": {
+              "c1": 1
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r1"
+            },
+            "durable": {
+              "s1": 0
+            },
+            "subscribed": []
+          },
+          "notes": "empty unread",
+          "branch": 1,
+          "postState": {
+            "subscribed": [
+              "c1"
+            ],
+            "shown": {
+              "c1": 0
+            }
+          }
+        },
+        {
+          "id": 3,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r2"
+            }
+          },
+          "notes": "replaced run holds no subscription"
+        },
+        {
+          "id": 4,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "subscribed": [
+              "c1"
+            ]
+          },
+          "notes": "already subscribed"
+        },
+        {
+          "id": 5,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {}
+          },
+          "notes": "not bound by a hello"
+        }
+      ],
+      "summary": {
+        "total": 5,
+        "accepted": 2,
+        "rejected": 3,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "Deliver",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in subscribed"
+          ]
+        }
+      ],
+      "stateVars": [
+        "shown",
+        "durable"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "One pending arrival is told once",
+          "condition": "c in subscribed & shown(c) < durable(first(hello(c)))"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "subscribed": [
+              "c1"
+            ],
+            "shown": {
+              "c1": 0
+            },
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "summary raised by exactly one",
+          "branch": 1,
+          "postState": {
+            "shown": {
+              "c1": 1
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "subscribed": [
+              "c1"
+            ],
+            "shown": {
+              "c1": 1
+            },
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "nothing pending: shown = durable (no duplicate)"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "ReadUnread",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in dom hello",
+            "second(hello(c)) = runOf(first(hello(c)))"
+          ]
+        }
+      ],
+      "stateVars": [
+        "durable",
+        "shown"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Read-once from a bound connection of the current run (subscribed or not): unread consumed; every subscribed connection of the session sees the empty summary",
+          "condition": "c in dom hello & second(hello(c)) = runOf(first(hello(c)))"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "subscribed": [
+              "c1",
+              "c2"
+            ],
+            "durable": {
+              "s1": 1
+            },
+            "shown": {
+              "c1": 1,
+              "c2": 1
+            }
+          },
+          "notes": "two subscribers of one session both see the empty summary",
+          "branch": 1,
+          "postState": {
+            "durable": {
+              "s1": 0
+            },
+            "shown": {
+              "c1": 0,
+              "c2": 0
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "subscribed": [
+              "c1",
+              "c3"
+            ],
+            "durable": {
+              "s1": 1,
+              "s2": 1
+            },
+            "shown": {
+              "c1": 1,
+              "c3": 1
+            }
+          },
+          "notes": "another session's summary unchanged (model scope is one session; needs a code test with two)",
+          "branch": 1,
+          "postState": {
+            "durable": {
+              "s1": 0,
+              "s2": 1
+            },
+            "shown": {
+              "c1": 0,
+              "c3": 1
+            }
+          }
+        },
+        {
+          "id": 3,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r1"
+            },
+            "subscribed": [],
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "one-shot read by an unsubscribed connection",
+          "branch": 1,
+          "postState": {
+            "durable": {
+              "s1": 0
+            }
+          }
+        },
+        {
+          "id": 4,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {},
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "unbound connection: precondition c in dom hello fails"
+        },
+        {
+          "id": 5,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "runOf": {
+              "s1": "r2"
+            },
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "replaced run: see RequestReplacedRun"
+        }
+      ],
+      "summary": {
+        "total": 5,
+        "accepted": 3,
+        "rejected": 2,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "Detach",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in opened"
+          ]
+        }
+      ],
+      "stateVars": [
+        "opened",
+        "hello",
+        "subscribed",
+        "shown",
+        "known",
+        "runOf",
+        "durable"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "Dropped connection: record, run and unread kept (invariant 3)",
+          "condition": "c in opened"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "opened": [
+              "c1"
+            ],
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "subscribed": [
+              "c1"
+            ],
+            "known": [
+              "s1"
+            ],
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "record becomes dormant",
+          "branch": 1,
+          "postState": {
+            "opened": [],
+            "hello": {},
+            "subscribed": [],
+            "known": [
+              "s1"
+            ],
+            "durable": {
+              "s1": 1
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "standard",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "opened": [
+              "c1"
+            ],
+            "hello": {}
+          },
+          "notes": "unbound connection drops",
+          "branch": 1,
+          "postState": {
+            "opened": []
+          }
+        },
+        {
+          "id": 3,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1"
+          },
+          "preState": {
+            "opened": []
+          },
+          "notes": "c not open"
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "accepted": 2,
+        "rejected": 1,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "SessionEnd",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "c",
+          "type": "CONN",
+          "constraints": [
+            "c in dom hello"
+          ]
+        },
+        {
+          "name": "s",
+          "type": "SESSION",
+          "constraints": [
+            "s in known"
+          ]
+        }
+      ],
+      "stateVars": [
+        "known",
+        "runOf",
+        "opened",
+        "hello",
+        "subscribed",
+        "shown",
+        "durable"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "The SessionEnd hook of the current run removes the record and its connections; unread mail stays",
+          "condition": "s in known & c in dom hello & hello(c) = (s, runOf(s))"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "c": "c1",
+            "s": "s1"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "runOf": {
+              "s1": "r1"
+            },
+            "hello": {
+              "c1": "(s1,r1)"
+            },
+            "opened": [
+              "c1"
+            ],
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "unread stays with the identity inbox",
+          "branch": 1,
+          "postState": {
+            "known": [],
+            "runOf": {},
+            "hello": {},
+            "opened": [],
+            "durable": {
+              "s1": 1
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1",
+            "s": "s1"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "runOf": {
+              "s1": "r2"
+            },
+            "hello": {
+              "c1": "(s1,r1)"
+            }
+          },
+          "notes": "only a connection of the current run can end the session: c1 is bound to replaced run r1"
+        },
+        {
+          "id": 3,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1",
+            "s": "s1"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "hello": {}
+          },
+          "notes": "caller c1 is unbound (dormant record): precondition c in dom hello fails"
+        },
+        {
+          "id": 4,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "c": "c1",
+            "s": "s1"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "runOf": {
+              "s1": "r2"
+            },
+            "hello": {
+              "c1": "(s1,r1)",
+              "c2": "(s1,r2)"
+            }
+          },
+          "notes": "stale hook from replaced connection c1 while current c2 is attached: session and c2 intact"
+        }
+      ],
+      "summary": {
+        "total": 4,
+        "accepted": 1,
+        "rejected": 3,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "RetentionExpire",
+      "kind": "delta",
+      "inputs": [
+        {
+          "name": "s",
+          "type": "SESSION",
+          "constraints": [
+            "s in known"
+          ]
+        }
+      ],
+      "stateVars": [
+        "known",
+        "runOf",
+        "hello",
+        "durable"
+      ],
+      "branches": [
+        {
+          "id": 1,
+          "description": "A dormant record past retention expires",
+          "condition": "s in known & no connection bound to s"
+        }
+      ],
+      "partitions": [
+        {
+          "id": 1,
+          "class": "happy-path",
+          "status": "accepted",
+          "inputs": {
+            "s": "s1"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "hello": {},
+            "durable": {
+              "s1": 1
+            }
+          },
+          "notes": "crashed session removed; mail kept",
+          "branch": 1,
+          "postState": {
+            "known": [],
+            "durable": {
+              "s1": 1
+            }
+          }
+        },
+        {
+          "id": 2,
+          "class": "rejected",
+          "status": "rejected",
+          "inputs": {
+            "s": "s1"
+          },
+          "preState": {
+            "known": [
+              "s1"
+            ],
+            "hello": {
+              "c1": "(s1,r1)"
+            }
+          },
+          "notes": "a record with a connection is never expired"
+        }
+      ],
+      "summary": {
+        "total": 2,
+        "accepted": 1,
+        "rejected": 1,
+        "pruned": 0
+      }
+    }
+  ]
+}
