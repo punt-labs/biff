@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.commands.plan_source import set_plan
+from biff.commands.plan_source import PlanWrite
 
 if TYPE_CHECKING:
     from biff.cli_context import CliContext
@@ -13,4 +13,4 @@ if TYPE_CHECKING:
 
 async def plan(ctx: CliContext, message: str) -> CommandResult:
     """Set the session's plan to *message*, as a person typing it would."""
-    return await set_plan(ctx, message, "manual")
+    return await PlanWrite(ctx, message, "manual").run()
