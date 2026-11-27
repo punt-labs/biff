@@ -42,6 +42,7 @@ from biff import commands
 from biff._cli_runtime import CliInvocation
 from biff.cli_app import CliApp
 from biff.cli_context import CliContext
+from biff.cli_key import KeyCli
 from biff.cli_session import cli_session, cli_session_host
 from biff.commands import CommandResult
 from biff.commands._session import update_current_session
@@ -1227,6 +1228,9 @@ def tty_cmd(
 def status() -> None:
     """Show connection state, session info, and pending messages."""
     _run(commands.status)
+
+
+app.add_typer(KeyCli.on_this_machine().typer_app(), name="key")
 
 
 # ---------------------------------------------------------------------------

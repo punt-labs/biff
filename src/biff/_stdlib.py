@@ -54,23 +54,57 @@ def _parse_repo_slug(url: str) -> str | None:
 
 
 def get_repo_slug(repo_root: Path) -> str | None:
-    """Resolve ``owner/repo`` from ``git remote get-url origin``.
+    """Resolve ``owner/repo`` from the origin remote.
 
-    Returns ``None`` when git is unavailable, no remote exists, or
-    the URL doesn't parse to a two-part slug.
+    The raw fetch URL is parsed first: it is the canonical clone URL even
+    when ``url.<base>.insteadOf`` rewrites it (an agent container rewrites
+    github remotes through a gateway whose URL carries an extra route
+    segment that would hide the slug).  Only when the raw value does not
+    parse (a shorthand such as ``gh:owner/repo``) is the expanded
+    ``git remote get-url origin`` run and parsed.
+
+    Returns ``None`` when git is unavailable, no remote exists (git exits
+    non-zero with empty stdout), or neither URL parses to a two-part slug.
     """
+    raw = _raw_origin_url(repo_root)
+    return _parse_repo_slug(raw) or _parse_repo_slug(
+        _first_non_empty(_git_lines(repo_root, "remote", "get-url", "origin"))
+    )
+
+
+def _raw_origin_url(repo_root: Path) -> str:
+    """Return the first usable raw ``remote.origin.url`` value, without rewrites.
+
+    An empty entry means different things to different Git versions: Git 2.43
+    keeps the earlier entries, Git 2.56 treats it as a reset.  So when the
+    list holds an empty entry, Git's own effective list (``remote get-url
+    --all``, which counts the entries that survive) decides how many trailing
+    raw entries count.  Without an empty entry the versions cannot differ.
+    """
+    raw = _git_lines(repo_root, "config", "--get-all", "remote.origin.url")
+    if "" in raw:
+        effective = len(_git_lines(repo_root, "remote", "get-url", "--all", "origin"))
+        raw = raw[max(len(raw) - effective, 0) :]
+    return _first_non_empty(raw)
+
+
+def _first_non_empty(lines: list[str]) -> str:
+    """Return the first non-empty line, or ``""`` when there is none."""
+    return next((line for line in lines if line), "")
+
+
+def _git_lines(repo_root: Path, *args: str) -> list[str]:
+    """Return the stdout lines of ``git -C repo_root *args``; ``[]`` on any failure."""
     try:
         result = subprocess.run(  # noqa: S603
-            ["git", "-C", str(repo_root), "remote", "get-url", "origin"],  # noqa: S607
+            ["git", "-C", str(repo_root), *args],  # noqa: S607
             capture_output=True,
             text=True,
             check=False,
         )
-        if result.returncode != 0:
-            return None
-        return _parse_repo_slug(result.stdout.strip())
     except FileNotFoundError:
-        return None
+        return []
+    return result.stdout.splitlines()
 
 
 def display_repo_name(name: str) -> str:
