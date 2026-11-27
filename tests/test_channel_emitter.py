@@ -762,8 +762,10 @@ class TestTimer:
         """O7: with a real clock, the one-shot sends the held event."""
         # The interval must outlast anything a loaded runner does between the two
         # checks, or the second one sends instead of being held and no timer arms.
+        # One second is ten times the stall simulated below; the same limiter logic
+        # is covered without a real clock by the tests around this one.
         real = ChannelEmitter(
-            rig.source, lambda: None, limit=RateLimit(per_kind=0.5, limit=10, span=60)
+            rig.source, lambda: None, limit=RateLimit(per_kind=1.0, limit=10, span=60)
         )
         real.serve(rig.link)
         real.initialized()
@@ -776,7 +778,9 @@ class TestTimer:
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 5.0
-        while real.is_timer_armed() and loop.time() < deadline:
+        # Wait for the delivery itself: the timer clears its handle before the
+        # deferred send runs, so a disarmed timer does not yet mean a sent event.
+        while len(rig.sink.metas) < 2 and loop.time() < deadline:
             await asyncio.sleep(0.02)
 
         assert [m["count"] for m in rig.sink.metas] == ["1", "2"]
