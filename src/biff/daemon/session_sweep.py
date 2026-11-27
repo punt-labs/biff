@@ -40,12 +40,13 @@ class SessionSweeper:
     one sweep covers every repository the host has used.
     """
 
-    __slots__ = ("_live", "_pool", "_resolver", "_store")
+    __slots__ = ("_completed", "_live", "_pool", "_resolver", "_store")
 
     _store: CliSessionStore
     _resolver: SessionResolver
     _pool: RelayPool
     _live: SessionTable
+    _completed: int
 
     def __new__(
         cls,
@@ -66,7 +67,13 @@ class SessionSweeper:
         self._resolver = resolver
         self._pool = pool
         self._live = live
+        self._completed = 0
         return self
+
+    @property
+    def completed(self) -> int:
+        """How many sweeps have finished; a test waits on it instead of on time."""
+        return self._completed
 
     async def sweep(self) -> None:
         """Judge every record of this host once.
@@ -74,6 +81,12 @@ class SessionSweeper:
         Housekeeping must never take the daemon down, so a record that cannot be
         judged is logged and the sweep moves on.
         """
+        try:
+            await self._sweep_all()
+        finally:
+            self._completed += 1
+
+    async def _sweep_all(self) -> None:
         try:
             records = self._store.list()
         except OSError:

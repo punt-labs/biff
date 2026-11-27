@@ -87,6 +87,8 @@ class SessionHost:
         """
         if tty is not None and (error := validate_tty_name(tty)):
             raise ValueError(error)
+        if tty is not None:
+            CliSessionRecord.require_unaliased(tty)
         sel = self.selector
         draft = CliSessionRecord.new(
             tty="pending",

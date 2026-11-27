@@ -258,10 +258,14 @@ async def test_the_daemon_sweeps_again_on_its_timer(
     sweeping: tuple[BiffDaemon, CliSessionStore, CountingFactory],
 ) -> None:
     daemon, store, _ = sweeping
+    sweeper = daemon._sweeper
     await daemon.start()
-    await daemon.sweep_sessions()  # a sweep that finds nothing, completed
+    await _eventually(lambda: sweeper.completed >= 1)  # the sweep at start is done
     late = _stored(store, "late", "live", LEASE + timedelta(minutes=1))
-    await _eventually(lambda: store.read(late.session_id).state == "dormant")
+    inserted = sweeper.completed
+    # Two more sweeps: the first may have listed the store before the insert.
+    await _eventually(lambda: sweeper.completed >= inserted + 2)
+    assert store.read(late.session_id).state == "dormant"
 
 
 async def test_the_sweep_renews_a_session_a_connection_is_attached_to(
@@ -582,7 +586,9 @@ async def test_ending_by_id_ends_that_session_not_one_named_like_it(
     await _call(kai, "session_new", tty="beta")
     alpha = next(r for r in harness.sessions.list() if r.tty == "alpha")
     beta = next(r for r in harness.sessions.list() if r.tty == "beta")
-    harness.sessions.rename(beta.session_id, alpha.session_id)  # an old alias
+    # An alias made before such names were refused: written past the rename.
+    path = harness.sessions.root / beta.session_id / "session.json"
+    path.write_text(replace(beta, tty=alpha.session_id).to_json())
     reply = await _call(kai, "session_end", ref=alpha.session_id)
     assert reply["error"] is False
     assert (

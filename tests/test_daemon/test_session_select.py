@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -100,7 +101,9 @@ class TestLookup:
         sel = _selector(tmp_path)
         original = _make(sel, "alpha")
         alias = _make(sel, "beta")
-        sel.store.rename(alias.session_id, original.session_id)  # an old alias
+        # An alias made before such names were refused: written past the rename.
+        path = sel.store.root / alias.session_id / "session.json"
+        path.write_text(dataclasses.replace(alias, tty=original.session_id).to_json())
         assert sel.lookup(original.session_id) == original
 
     def test_unknown(self, tmp_path: Path) -> None:

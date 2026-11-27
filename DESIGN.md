@@ -9665,9 +9665,12 @@ fetch and its merge; it does not protect a read that is itself cancelled there (
 connection closes) or a daemon that dies there, which `mail-refile.tex` still
 models as `SessionEndDuringRead` and PL-1753 tracks. An end names its target
 by session id before it waits and checks after the wait that the name still
-maps to that id; if it does not, it ends nothing and says the session changed. A generated session id is a valid tty name, so a name shaped like one
-(`cli-` and 16 hex digits) is refused at create and rename, and a lookup takes an
-exact id match before any name match. The temporary session a verb makes to run as is
+maps to that id; if it does not, it ends nothing and says the session changed. A generated session id is a valid tty name, so a stored CLI session may not be
+created or renamed to a name shaped like one (`cli-` and 16 hex digits;
+`CliSessionRecord.require_unaliased`), and a lookup takes an exact id match
+before any name match. The shape is defined once, in the session store. The
+shared `validate_tty_name` does not refuse it: an MCP session may have saved
+such an alias and keeps it on resume. The temporary session a verb makes to run as is
 deleted, not left ended, so `session ls --all` shows only sessions the user made.
 The session pointer module moved to `biff.daemon.session_pointer`; pi-tools'
 bridge imports the old path and must follow (PL-1756); there is no alias.

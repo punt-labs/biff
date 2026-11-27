@@ -220,10 +220,6 @@ class TestValidateTtyName:
     def test_accepts_max_length(self) -> None:
         assert validate_tty_name("a" * 20) is None
 
-    def test_rejects_a_name_shaped_like_a_session_id(self) -> None:
-        """A name that is also a generated session id would alias that session."""
-        assert "session id" in str(validate_tty_name("cli-0123456789abcdef"))
-
     def test_rejects_the_resume_hint_namespace(self) -> None:
         """``sid`` keys resume hints; as a name it could never be saved as one."""
         assert validate_tty_name("sid") is not None

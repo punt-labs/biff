@@ -17,7 +17,6 @@ from biff.daemon.session_store import (
     CliSessionStore,
 )
 from biff.session_routing import SessionIdError
-from biff.tty import validate_tty_name
 
 T0 = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
 T1 = T0 + timedelta(minutes=5)
@@ -512,10 +511,11 @@ class TestListSkipsUnreadableRecords:
         assert store.list() == (good,)
 
 
-def test_every_generated_session_id_is_refused_as_a_tty_name() -> None:
-    """The id generator and the name check share one pattern, so they agree."""
+def test_every_generated_session_id_is_refused_as_a_session_name() -> None:
+    """The id generator and the refusal of an id-shaped name share one pattern."""
     for _ in range(50):
         record = CliSessionRecord.new(
             tty="t", user="kai", repo="r", repo_root="/r", hostname="h", now=T0
         )
-        assert "session id" in str(validate_tty_name(record.session_id))
+        with pytest.raises(ValueError, match="looks like a session id"):
+            record.renamed(record.session_id)

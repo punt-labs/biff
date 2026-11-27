@@ -122,8 +122,9 @@
   Ending a session waits for a read of it that is in flight and refuses later
   reads with `session_ended`. The session pointer moved to
   `biff.daemon.session_pointer`; pi-tools must follow, tracked in PL-1756.
-  A tty name shaped like a generated session id (`cli-` and 16 hex digits) is
-  refused, and a session looked up by id is never confused with one named like it.
+  `session new --tty` and a rename of a CLI session refuse a name shaped like a
+  generated session id (`cli-` and 16 hex digits), and a session looked up by
+  id is never confused with one named like it.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the
   same text as before. `plan` and `tty` still write the plan-gate

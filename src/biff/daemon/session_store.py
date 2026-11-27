@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import tempfile
 from collections.abc import AsyncGenerator, Callable
@@ -17,11 +18,18 @@ from typing import Literal, Self, cast, get_args
 from biff._stdlib import biff_data_dir
 from biff.daemon.session_lock import SessionLock
 from biff.session_routing import ID_RE, MAX_ID_LENGTH, SessionIdError
-from biff.tty import CLI_ID_HEX_CHARS, CLI_ID_PREFIX, CLI_ID_RE
 
 logger = logging.getLogger(__name__)
 
 SessionState = Literal["live", "dormant", "ended"]
+
+CLI_ID_PREFIX = "cli-"
+"""Reserved prefix: harness session ids never carry it, so a CLI id cannot
+collide with a Claude Code id in the shared sessions directory."""
+CLI_ID_HEX_CHARS = 16
+CLI_ID_RE = re.compile(rf"{CLI_ID_PREFIX}[0-9a-f]{{{CLI_ID_HEX_CHARS}}}")
+"""The shape of a generated CLI session id: the one definition, read by the id
+generator, the store's validation and the refusal of a name of that shape."""
 
 SCHEMA_VERSION = 1
 _RECORD_FILE = "session.json"
@@ -153,10 +161,26 @@ class CliSessionRecord:
         _require_aware(now)
         return replace(self, state="ended", ended_at=now.astimezone(UTC))
 
+    @staticmethod
+    def require_unaliased(name: str) -> None:
+        """Refuse a display name shaped like a generated session id.
+
+        Such a name would alias that session's id, so a name and an id lookup
+        could reach different sessions.  This binds stored CLI sessions only; an
+        MCP session may hold any alias it saved.
+
+        Raises:
+            ValueError: *name* is shaped like a generated session id.
+        """
+        if CLI_ID_RE.fullmatch(name):
+            msg = f"tty name {name!r} looks like a session id; choose another name."
+            raise ValueError(msg)
+
     def renamed(self, tty: str) -> Self:
         """Return the record under a new display name; an ended record refuses."""
         if self.state == "ended":
             raise self.ended_error()
+        self.require_unaliased(tty)
         return replace(self, tty=tty)
 
     def ended_error(self) -> CliSessionEndedError:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from typing import TYPE_CHECKING, cast
 
+import pytest
+
 from biff.cli_daemon import DaemonCommand
 from biff.config import load_cli_config
 from biff.daemon.session_select import SessionSelector
@@ -150,3 +152,14 @@ async def test_session_ls_all_does_not_list_the_session_a_verb_made_to_run_as(
     rows = cast("list[dict[str, str]]", answer.data)
     await answer.abandon()
     assert [row["name"] for row in rows] == ["main"]
+
+
+async def test_a_session_cannot_be_renamed_to_an_id_shaped_name(
+    harness: Harness, repo: Path
+) -> None:
+    first = await _command(harness).tty("review")
+    await first.deliver(lambda result: None)
+    with pytest.raises(ValueError, match="looks like a session id"):
+        await _command(harness).tty("cli-0123456789abcdef")
+    names = [r.tty for r in harness.sessions.list() if r.state != "ended"]
+    assert names == ["review"]
