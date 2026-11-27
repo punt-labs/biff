@@ -206,8 +206,18 @@ class TestWatchLiveness:
             hits.clear()
             await relay.deliver(Message(from_user="eric", to_user="kai", body="x"))
             await _until(lambda: bool(hits), "wake after the rebuild")
-            noted = [r for r in caplog.records if r.levelno >= logging.WARNING]
-            assert len(noted) == 2  # onset and recovery, once each
+            # watchdog's own emitter thread logs while the observer is rebuilt
+            logging.getLogger("watchdog.observers.inotify").error("emitter inactive")
+            # The mixed-logger case is only exercised if that record was captured.
+            assert any(r.name == "watchdog.observers.inotify" for r in caplog.records)
+            noted = [
+                r
+                for r in caplog.records
+                if r.name == "biff.local_watch" and r.levelno >= logging.WARNING
+            ]
+            assert [r.levelno for r in noted] == [logging.ERROR, logging.WARNING]
+            assert "failed" in noted[0].getMessage()  # onset, then recovery
+            assert "recovered" in noted[1].getMessage()
         finally:
             keeper.stop()
 
