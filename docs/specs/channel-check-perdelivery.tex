@@ -73,7 +73,8 @@ recorded to state the once-a-minute bound as an invariant.
   replyOf : TOKEN \pfun SUBJECT \\
   delivered : TOKEN \pfun (0 \upto 2) \\
   emitted : TOKEN \pfun (0 \upto 2) \\
-  relayed : TOKEN \pfun (0 \upto 2)
+  relayed : TOKEN \pfun (0 \upto 2) \\
+  afterAck : TOKEN \pfun (0 \upto 2)
 \where
   clock \leq maxClock \\
   \# pending \leq 1 \\
@@ -97,6 +98,8 @@ is enabled, reaches the bad state, and is reported.
 \where
   \dom emitted = \dom delivered \\
   \dom relayed = \dom delivered \\
+  \dom afterAck = \dom delivered \\
+  \forall t : \dom afterAck @ afterAck~t \leq delivered~t \\
   \forall t : \dom emitted @ emitted~t \leq 1 \\
   \forall t : \dom relayed @ relayed~t \leq 1 \\
   \forall t : sent @ emitted~t = 1
@@ -107,9 +110,11 @@ one channel event whatever the number of deliveries ($emitted~t \leq 1$), the
 acknowledgement is relayed to the doctor at most once ($relayed~t \leq 1$), and a
 token that was sent was emitted exactly once.
 
-The replay case is a reachability goal: $spent \neq \emptyset \land \exists t
-@ t \in spent \land delivered~t = 2 \land emitted~t = 1$, a request frame delivered
-again after its token was acknowledged, with still exactly one event made.
+The replay case is a reachability goal on the ghost $afterAck~t$, the deliveries
+of $t$ made while it was already spent: $\exists t @ t \in spent \land
+afterAck~t \geq 1 \land emitted~t = 1$, a request frame delivered again after
+its token was acknowledged, with still exactly one event made.  (Two deliveries
+before the acknowledgement would not be this case, and do not satisfy it.)
 
 \begin{schema}{Invariant}
   HopInv
@@ -127,7 +132,8 @@ again after its token was acknowledged, with still exactly one event made.
   replyOf' = \emptyset \\
   delivered' = \emptyset \\
   emitted' = \emptyset \\
-  relayed' = \emptyset
+  relayed' = \emptyset \\
+  afterAck' = \emptyset
 \end{schema}
 
 \section{Operations}
@@ -147,7 +153,8 @@ again after its token was acknowledged, with still exactly one event made.
   replyOf' = replyOf \\
   delivered' = delivered \\
   emitted' = emitted \\
-  relayed' = relayed
+  relayed' = relayed \\
+  afterAck' = afterAck
 \end{schema}
 
 A session that is asked nothing is not stuck: it stays as it is.
@@ -179,7 +186,8 @@ before.  It retires the older pending token.
   replyOf' = \{ token? \mapsto reply? \} \\
   delivered' = delivered \oplus \{ token? \mapsto 0 \} \\
   emitted' = emitted \oplus \{ token? \mapsto 0 \} \\
-  relayed' = relayed \oplus \{ token? \mapsto 0 \}
+  relayed' = relayed \oplus \{ token? \mapsto 0 \} \\
+  afterAck' = afterAck \oplus \{ token? \mapsto 0 \}
 \end{schema}
 
 A request that names a foreign subject, or arrives inside the window, changes
@@ -217,7 +225,9 @@ modelled.
   replyOf' = replyOf \\
   delivered' = delivered \oplus \{ token? \mapsto delivered~token? + 1 \} \\
   emitted' = emitted \\
-  relayed' = relayed
+  relayed' = relayed \\
+  afterAck' = afterAck \oplus \{ token? \mapsto afterAck~token? +
+    ( \IF token? \in spent \THEN 1 \ELSE 0 ) \}
 \end{schema}
 
 The replay does not depend on the token being pending: the transport may redeliver
@@ -250,7 +260,8 @@ arrives.  The three counters, $delivered$, $emitted$ and $relayed$, are ghosts.
   replyOf' = replyOf \\
   delivered' = delivered \\
   emitted' = emitted \oplus \{ token? \mapsto emitted~token? + 1 \} \\
-  relayed' = relayed
+  relayed' = relayed \\
+  afterAck' = afterAck
 \end{schema}
 
 \subsection{Acknowledgement}
@@ -273,7 +284,8 @@ arrives.  The three counters, $delivered$, $emitted$ and $relayed$, are ghosts.
   replyOf' = replyOf \\
   delivered' = delivered \\
   emitted' = emitted \\
-  relayed' = relayed \oplus \{ token? \mapsto relayed~token? + 1 \}
+  relayed' = relayed \oplus \{ token? \mapsto relayed~token? + 1 \} \\
+  afterAck' = afterAck
 \end{schema}
 
 A wrong or repeated token changes nothing and says so.

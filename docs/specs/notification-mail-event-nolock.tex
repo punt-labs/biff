@@ -334,15 +334,25 @@ progress.  The formulas are:
   enabled(ReadCommit)\,)$ for each reader: a wake is read and a reading is
   committed; \\
   $AG\,(\,unreadN > 0 \land sentMark~kMail < mark~kMail \Rightarrow
-  EF\;sentMark~kMail = mark~kMail\,)$, a \emph{reachability} check: a mail
-  still owed can be announced.
+  EF\;\exists n @ n = mark~kMail \land cover~(kMail, n) = 1\,)$, a
+  \emph{reachability} check on \emph{coverage}: a mail still owed can reach a
+  state in which an event covering the latest arrival has gone out.  It does not
+  ask that the mark advance, because a silent catch-up (a newer reading that is not
+  owed) advances the mark with no event and would satisfy that.
 \end{quote}
 
-Under the assumption that the poll wake, the read and the commit are scheduled
-fairly (a step that stays enabled is eventually taken, and $Quiesce$ stands for the
-absence of work, so it is taken only when nothing else is enabled), the enabledness
-formulas give: an owed arrival is announced by push or by poll, at least once.  The
-model does not state fairness, and none of the formulas is a liveness theorem.
+The fairness assumption is stated \emph{per kind}.  For each kind $k$ the poll wake
+is weakly fair (a wake that stays enabled is eventually taken) and $ReadBegin$ at
+$k$, for each reader, is \emph{strongly} fair: if it is enabled infinitely often it
+is taken infinitely often.  Weak fairness of one $ReadBegin$ for all kinds would not
+do: $PollWake$ re-enables every kind, the lock is released between readings, and a
+scheduler could grant every lock to the wall and starve mail, each grant leaving
+mail enabled but never continuously.  The commit is weakly fair, and $Quiesce$
+stands for the absence of work, so it is taken only when nothing else is enabled.
+Under these assumptions the enabledness formulas give: an owed arrival of a kind is
+announced by push or by poll, at least once.  The model does not state fairness,
+the starvation trace is excluded by the assumption and not by the model, and none of
+the formulas is a liveness theorem.
 
 Arrivals owed are those still unread.  An arrival read before the poll has nothing
 left to announce: the trace check is the goal $arrivedN = 1 \land readN = 1 \land
@@ -383,7 +393,7 @@ The goal that the properties are not vacuous: an event goes out
 %%      -p MAX_OPERATIONS 500 -p TIME_OUT 600000"
 %%   ( ulimit -v 8000000; "$PROBCLI" docs/specs/notification-mail-event.tex $P -model_check )
 %%   "$PROBCLI" docs/specs/notification-mail-event.tex $P -model_check -ctlformula \
-%%       "AG({unreadN>0 & sentMark(kMail)<mark(kMail)} => EF {sentMark(kMail)=mark(kMail)})"   (reachability)
+%%       "AG({unreadN>0 & sentMark(kMail)<mark(kMail)} => EF {#n.(n:1..2 & n=mark(kMail) & cover(kMail,n)=1)})"   (reachability of coverage)
 %%   goals: "arrivedN=1 & readN=1 & sentMark(kMail)=1 & cover(kMail,1)=0"
 %%   "$PROBCLI" docs/specs/notification-mail-event.tex $P -model_check -ctlformula \
 %%       "AG({sentMark(kMail)<mark(kMail) & card(wake)=0} => e(PollWake))"

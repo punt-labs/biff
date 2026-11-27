@@ -94,7 +94,7 @@
       "confidence": "high"
     },
     {
-      "text": "DaemonRestart: the outbox is the daemon's memory and is lost (PL-1753)",
+      "text": "DaemonRestart (of a live or a dormant record): the outbox is the daemon's memory and is lost from either state (PL-1753)",
       "category": "effect",
       "source": "DaemonRestart",
       "coveredBy": "GAP: owed by the code PR",

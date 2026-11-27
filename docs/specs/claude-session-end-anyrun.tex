@@ -281,11 +281,11 @@ The daemon's sweep counts a dormant record's age.
   \Xi Effects \\
   \Delta Mail
   \where
-  recState = rsLive \\
+  recState \in \{ rsLive, rsDormant \} \\
   recState' = rsDormant \\
   currentRun' = currentRun \\
   conns' = \emptyset \\
-  age' = 0 \\
+  age' = ( \IF recState = rsLive \THEN 0 \ELSE age ) \\
   endRun' = endRun \\
   outboxN' = 0 \\
   lostN' = lostN + outboxN \\
@@ -295,9 +295,13 @@ The daemon's sweep counts a dormant record's age.
   issuedN' = issuedN
 \end{schema}
 
-A restart: the record is durable and returns dormant; every connection is gone.
-The outbox is the daemon's memory, so what it held is lost (the window the
-unconfirmed batch has in DES-099, PL-1753); the mail the relay holds is not.
+A restart, of a live record or of a dormant one (a detach leaves the outbox held
+with nobody connected, and the daemon may die then): the record is durable and
+returns dormant, with its age kept if it was already dormant; every connection
+is gone.  The outbox is the daemon's memory, so what it held is lost from either
+state (the window the unconfirmed batch has in DES-099, PL-1753); the mail the
+relay holds is not.  A restart in the middle of an end ($rsEnding$) is not
+modelled.
 
 %%----------------------------------------------------------------------
 \section{Ending a session}
@@ -601,9 +605,10 @@ thing taken out:
     formula is \textbf{FALSE}, a dormant record at its retention is never
     removed.
   \item \texttt{claude-session-end-showanywhere.tex}: $MailShow$ needs no
-    connection.  Held mail is consumed by a print with nobody connected (for
-    instance after a $DaemonRestart$, where the shipped model has already lost the
-    outbox): $shownDormant = zfalse$ is violated.
+    connection.  Held mail is consumed by a print with nobody connected:
+    $shownDormant = zfalse$ is violated, by $MailArrive$, $MailFetch$, $Detach$,
+    $MailShow$.  (A restart is not the route: it loses the outbox in this control
+    as in the shipped model, so the held mail has nothing left to show.)
   \item \texttt{claude-session-end-anyrun.tex}: $EndOwnSession$ accepts a
     connection of a replaced run: the replaced connection ends the session the
     newer run owns (checked by the goal $recState = rsEnding$ reached with

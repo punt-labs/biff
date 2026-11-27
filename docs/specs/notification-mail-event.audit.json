@@ -59,7 +59,7 @@
       "confidence": "high"
     },
     {
-      "text": "enabled(PollWake) with no wake; enabled(ReadBegin) and enabled(ReadCommit); EF an owed arrival is announced (reachability, no fairness stated)",
+      "text": "enabled(PollWake) with no wake; enabled(ReadBegin), enabled(ReadCommit); EF the event covering the latest owed arrival has gone out (coverage, not the mark); fairness per kind stated in the text",
       "category": "invariant",
       "source": "delivery",
       "coveredBy": "tests/test_channel_emitter.py::test_a_reconnect_announces_mail_that_arrived_while_disconnected",
