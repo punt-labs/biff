@@ -45,9 +45,10 @@ def _git_stdout(path: Path, *args: str) -> str:
 
 
 def _git_stdout_lines(path: Path, *args: str) -> list[str]:
+    """Return git's output lines; a failing command fails the test, not passes it."""
     return subprocess.run(  # noqa: S603
         ["git", "-C", str(path), *args],  # noqa: S607
-        check=False,
+        check=True,
         capture_output=True,
         text=True,
     ).stdout.splitlines()
