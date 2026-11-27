@@ -11,7 +11,7 @@ from biff.commands._result import CommandResult
 from biff.commands._session import update_current_session
 from biff.formatting import format_talk_echo
 from biff.models import PLAN_MAX_LENGTH, validate_plan
-from biff.session_edit import SessionEdit
+from biff.session_edit import SessionChangedError, SessionEdit
 
 if TYPE_CHECKING:
     from biff.cli_context import CliContext
@@ -35,13 +35,12 @@ class PlanWrite:
     and writing that marker (:class:`biff.plan_marker.PlanMarker`).
     """
 
-    __slots__ = ("_ctx", "_invalid", "_kept", "_message", "_source")
+    __slots__ = ("_ctx", "_kept", "_message", "_source")
 
     _ctx: CliContext
     _message: str
     _source: PlanSource
     _kept: str
-    _invalid: bool
 
     def __new__(cls, ctx: CliContext, message: str, source: PlanSource) -> Self:
         """Prepare to set *message* as *source* for the session of *ctx*."""
@@ -50,33 +49,47 @@ class PlanWrite:
         self._message = message
         self._source = source
         self._kept = ""
-        self._invalid = False
         return self
 
     async def run(self) -> CommandResult:
         """Write the plan, or say which manual plan was kept instead.
 
-        The guard and the write are one compare-and-set on the row, so a manual
-        plan that lands after an auto write read the row is seen on the retry,
-        never overwritten.
+        The length is checked before anything is stored, on every path.  The
+        guard and the write are one compare-and-set on the row, so a manual plan
+        that lands after an auto write read the row is seen on the retry, never
+        overwritten.  A missing row is rebuilt without the plan and the
+        compare-and-set run again, so a row another writer recreated meanwhile
+        is guarded like any other.
+
+        Raises:
+            SessionChangedError: The row is gone again after it was rebuilt.
         """
-        row = await self._ctx.relay.update_session_if(
-            SessionEdit(self._ctx.session_key, self._change)
-        )
+        try:
+            validate_plan(self._message)
+        except ValidationError:
+            return self._too_long()
+        row = await self._edit()
+        if row is None:
+            await update_current_session(self._ctx)
+            row = await self._edit()
         if self._kept:
             return CommandResult(
                 text=format_talk_echo("Plan unchanged (manual):", self._kept),
                 json_data={"plan": self._kept, "unchanged": True},
             )
-        if self._invalid:
-            return self._too_long()
-        if row is None:  # the row vanished: rebuild it with the plan in it
-            await update_current_session(
-                self._ctx, plan=self._message, plan_source=self._source
+        if row is None:
+            msg = (
+                f"session {self._ctx.session_key} has no presence row to set a plan on"
             )
+            raise SessionChangedError(msg)
         return CommandResult(
             text=format_talk_echo("Plan:", self._message),
             json_data={"plan": self._message},
+        )
+
+    async def _edit(self) -> UserSession | None:
+        return await self._ctx.relay.update_session_if(
+            SessionEdit(self._ctx.session_key, self._change)
         )
 
     def _change(self, row: UserSession) -> UserSession:
@@ -85,14 +98,8 @@ class PlanWrite:
         It runs once per attempt of the compare-and-set, so it decides afresh.
         """
         self._kept = ""
-        self._invalid = False
         if self._source == "auto" and row.plan_source == "manual" and row.plan:
             self._kept = row.plan
-            return row
-        try:
-            validate_plan(self._message)
-        except ValidationError:
-            self._invalid = True
             return row
         now = datetime.now(UTC)
         return row.model_copy(
