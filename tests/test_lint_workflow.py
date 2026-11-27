@@ -41,10 +41,31 @@ def _answers_only_for(sha: str, pulls: str) -> str:
     )
 
 
-def _split_bases(stdout: str) -> tuple[str, str]:
-    """Return the make arguments before ``LAYERS_BASE``, and its value."""
-    before, _, layers = stdout.partition(" LAYERS_BASE=")
-    return before, layers
+TARGETS = ["check-oo", "check-coupling", "check-suppressions", "check-layers"]
+
+
+def _make_arguments(stdout: str) -> list[str]:
+    """Return the arguments the stub ``make`` received, one per ``ARG:`` line."""
+    return [
+        line.removeprefix("ARG:")
+        for line in stdout.splitlines()
+        if line.startswith("ARG:")
+    ]
+
+
+def _make_variables(stdout: str) -> dict[str, str]:
+    """Return the ``NAME=value`` arguments make received, keyed by name."""
+    variables: dict[str, str] = {}
+    for arg in _make_arguments(stdout):
+        name, separator, value = arg.partition("=")
+        if separator:
+            variables[name] = value
+    return variables
+
+
+def _make_targets(stdout: str) -> list[str]:
+    """Return the targets make was asked to build."""
+    return [arg for arg in _make_arguments(stdout) if "=" not in arg]
 
 
 def _stub(directory: Path, name: str, body: str) -> None:
@@ -60,7 +81,7 @@ def _run_step(
     bin_dir.mkdir()
     _stub(bin_dir, "gh", gh_body)
     _stub(bin_dir, "uv", f'shift 2; exec "{sys.executable}" "$@"')
-    _stub(bin_dir, "make", 'echo "make $*"')
+    _stub(bin_dir, "make", "printf 'ARG:%s\\n' \"$@\"")
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "BEFORE_SHA": "609d79d5bd1246d4af45623d1550a406714fc349",
@@ -80,16 +101,22 @@ def _run_step(
 def test_a_labelled_merge_allows_the_layers_widening(tmp_path: Path) -> None:
     result = _run_step(tmp_path, sha=MERGE, gh_body=_answers_only_for(MERGE, PULLS))
     assert result.returncode == 0, result.stderr
-    others, layers = _split_bases(result.stdout)
-    assert ALLOW in layers
-    assert ALLOW not in others
-    assert "make check-oo check-coupling check-suppressions check-layers" in others
+    assert "::warning::" not in result.stdout
+    variables = _make_variables(result.stdout)
+    assert ALLOW in variables["LAYERS_BASE"]
+    assert [name for name, value in variables.items() if ALLOW in value] == [
+        "LAYERS_BASE"
+    ]
+    assert _make_targets(result.stdout) == TARGETS
 
 
 def test_the_prs_head_commit_does_not_allow_it(tmp_path: Path) -> None:
+    """The lookup succeeds and finds the labelled PR, whose merge commit differs."""
     result = _run_step(tmp_path, sha=HEAD, gh_body=_answers_only_for(HEAD, PULLS))
     assert result.returncode == 0, result.stderr
-    assert ALLOW not in result.stdout
+    assert "::warning::" not in result.stdout
+    assert ALLOW not in _make_variables(result.stdout)["LAYERS_BASE"]
+    assert _make_targets(result.stdout) == TARGETS
 
 
 def test_the_step_asks_about_the_pushed_commit(tmp_path: Path) -> None:
@@ -106,10 +133,8 @@ def test_a_failed_lookup_warns_stays_strict_and_still_runs_every_ratchet(
     result = _run_step(tmp_path, sha=MERGE, gh_body="exit 1")
     assert result.returncode == 0, result.stderr
     assert "::warning::" in result.stdout
-    assert ALLOW not in result.stdout
-    assert (
-        "make check-oo check-coupling check-suppressions check-layers" in result.stdout
-    )
+    assert ALLOW not in _make_variables(result.stdout)["LAYERS_BASE"]
+    assert _make_targets(result.stdout) == TARGETS
 
 
 def test_unreadable_pr_data_warns_and_stays_strict(tmp_path: Path) -> None:
