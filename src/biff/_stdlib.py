@@ -54,23 +54,26 @@ def _parse_repo_slug(url: str) -> str | None:
 
 
 def get_repo_slug(repo_root: Path) -> str | None:
-    """Resolve ``owner/repo`` from ``git remote get-url origin``.
+    """Resolve ``owner/repo`` from the raw ``remote.origin.url`` config value.
 
-    Returns ``None`` when git is unavailable, no remote exists, or
-    the URL doesn't parse to a two-part slug.
+    The raw value is read instead of ``git remote get-url origin`` because
+    ``get-url`` applies ``url.<base>.insteadOf`` rewrites.  An agent container
+    rewrites github remotes through a gateway whose URL carries an extra route
+    segment, which would hide the slug; the raw value is the canonical clone URL.
+
+    Returns ``None`` when git is unavailable, no remote exists (git exits
+    non-zero with empty stdout), or the URL doesn't parse to a two-part slug.
     """
     try:
         result = subprocess.run(  # noqa: S603
-            ["git", "-C", str(repo_root), "remote", "get-url", "origin"],  # noqa: S607
+            ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],  # noqa: S607
             capture_output=True,
             text=True,
             check=False,
         )
-        if result.returncode != 0:
-            return None
-        return _parse_repo_slug(result.stdout.strip())
     except FileNotFoundError:
         return None
+    return _parse_repo_slug(result.stdout.strip())
 
 
 def display_repo_name(name: str) -> str:

@@ -67,6 +67,16 @@
   footnote under the table. Sessions that died without deregistering are
   logged to biff.log at INFO instead.
 
+### Fixed
+
+- In an agent container, git rewrites github remotes through the model gateway
+  (`url.<gateway>.insteadOf`), and `git remote get-url origin` returns the
+  gateway form with an extra route segment. The repo slug failed to parse and
+  fell back to the directory name, so container sessions sat in repo
+  `punt-labs` while host sessions sat in `punt-labs/punt-labs`. The slug is now
+  read from the raw `remote.origin.url` config value, which holds the
+  canonical clone URL.
+
 ## [1.25.0] - 2026-11-25
 
 ### Added
