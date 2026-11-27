@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 
 from biff import commands
 from biff.cli_context import CliContext
+from biff.cli_plan import CallerPlan
 from biff.commands import CommandResult
 
 _DURATION_RE = re.compile(r"^\d+[mhd]$")
@@ -54,10 +55,7 @@ async def _read(ctx: CliContext, args: list[str]) -> CommandResult:
 async def _plan(ctx: CliContext, args: list[str]) -> CommandResult:
     if not args:
         return CommandResult(text="Usage: plan message | plan clear", error=True)
-    if args == ["clear"]:
-        return await commands.plan(ctx, "")
-    message = " ".join(args)
-    return await commands.plan(ctx, message)
+    return await CallerPlan.set(ctx, "" if args == ["clear"] else " ".join(args))
 
 
 async def _last(ctx: CliContext, args: list[str]) -> CommandResult:

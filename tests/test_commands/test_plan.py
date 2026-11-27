@@ -12,6 +12,7 @@ import pytest
 from biff._formatting import TABLE_WIDTH, visible_width
 from biff.cli_context import CliContext
 from biff.commands.plan import plan
+from biff.dispatch import dispatch
 from biff.formatting import _NO_PRINTABLE_TEXT, _NO_VISIBLE_CONTENT
 from biff.markers import has_plan_marker
 from biff.models import PLAN_MAX_LENGTH
@@ -149,7 +150,7 @@ class TestPlanMarkerKeying:
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         with (
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
-            patch("biff.commands.plan.get_repo_common_root", return_value=str(root)),
+            patch("biff.plan_marker.get_repo_common_root", return_value=str(root)),
         ):
             yield str(root)
 
@@ -157,7 +158,7 @@ class TestPlanMarkerKeying:
         self, ctx: CliContext, repo: str
     ) -> None:
         cli_ctx = replace(ctx, record_session_id="cli-abc123")
-        await plan(cli_ctx, "cli work")
+        await dispatch("plan cli work", cli_ctx)
         assert has_plan_marker(repo, "cli-abc123")
         assert not has_plan_marker(repo, None)
 
@@ -165,7 +166,7 @@ class TestPlanMarkerKeying:
         self, ctx: CliContext, repo: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-sess")
-        await plan(replace(ctx, record_session_id="cli-abc123"), "both")
+        await dispatch("plan both", replace(ctx, record_session_id="cli-abc123"))
         assert has_plan_marker(repo, "claude-sess")
         assert not has_plan_marker(repo, "cli-abc123")
 
@@ -173,12 +174,12 @@ class TestPlanMarkerKeying:
         self, ctx: CliContext, repo: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-sess")
-        await plan(ctx, "claude work")
+        await dispatch("plan claude work", ctx)
         assert has_plan_marker(repo, "claude-sess")
         assert not has_plan_marker(repo, None)
 
     async def test_no_session_at_all_uses_the_shared_bucket(
         self, ctx: CliContext, repo: str
     ) -> None:
-        await plan(ctx, "headless work")
+        await dispatch("plan headless work", ctx)
         assert has_plan_marker(repo, None)

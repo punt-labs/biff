@@ -12,7 +12,6 @@ from biff.relay import Relay
 logger = logging.getLogger(__name__)
 
 _TRANSFER_NS = uuid.UUID("5d0c3f0e-8f4e-4f43-9a6f-0d2d6f1b7e11")
-_RESTORE_NS = uuid.UUID("b3a1c7d2-2e49-4c52-8d1a-6e0f9c5a4b72")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,9 +78,7 @@ class InboxDrain:
         failed: list[uuid.UUID] = []
         for message in [*unmoved, *probe]:
             try:
-                await self.relay.deliver(
-                    message.model_copy(update={"id": self._restored_id(message.id)})
-                )
+                await self.relay.deliver(message.refiled())
             except Exception:
                 failed.append(message.id)
                 logger.exception("Could not restore message %s", message.id)
@@ -92,8 +89,3 @@ class InboxDrain:
     def _transfer_id(source: uuid.UUID) -> uuid.UUID:
         """Stable id of *source*'s copy in the user mailbox."""
         return uuid.uuid5(_TRANSFER_NS, str(source))
-
-    @staticmethod
-    def _restored_id(source: uuid.UUID) -> uuid.UUID:
-        """Stable id of *source*'s copy put back in the session inbox."""
-        return uuid.uuid5(_RESTORE_NS, str(source))

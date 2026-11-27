@@ -806,8 +806,8 @@ class TestSequentialTrackedRebuildRace:
 
         stale_kv = MagicMock()
         stale_kv.get = _stale_get
-        stale_kv.put = _stale_put
-        new_kv.put = _fresh_put
+        stale_kv.update = _stale_put
+        new_kv.update = _fresh_put
         relay._kv = stale_kv
 
         await relay.heartbeat("kai:tty1")

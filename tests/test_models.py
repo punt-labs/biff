@@ -18,6 +18,8 @@ from biff.models import (
     truncate_plan,
     validate_plan,
 )
+from biff.session_routing import MAX_ID_LENGTH
+from biff.tty import build_session_key
 
 
 class TestMessage:
@@ -44,6 +46,40 @@ class TestMessage:
         assert msg.id == msg_id
         assert msg.timestamp == ts
         assert msg.read is True
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "from_user",
+            "from_tty",
+            "to_user",
+            "nonce",
+            "sender_pubkey",
+            "encryption_mode",
+        ],
+    )
+    def test_text_fields_have_a_length_bound(self, field: str) -> None:
+        """A message crosses the wire, so no field is unbounded."""
+        fields = {"from_user": "kai", "to_user": "eric", "body": "hello"}
+        with pytest.raises(ValidationError):
+            Message.model_validate({**fields, field: "x" * 100_000})
+
+    def test_the_longest_legal_addresses_are_accepted(self) -> None:
+        """A user of 128 characters and a session id of 128 form a legal address."""
+        user, session_id = "u" * 128, "s" * 128
+        msg = Message(
+            from_user=user,
+            from_tty=session_id,
+            to_user=build_session_key(user, session_id),
+            body="hello",
+        )
+        assert len(msg.to_user) == 257
+
+    def test_a_tty_is_bounded_by_the_session_id_limit(self) -> None:
+        fields = {"from_user": "kai", "to_user": "eric", "body": "hello"}
+        Message.model_validate({**fields, "from_tty": "t" * MAX_ID_LENGTH})
+        with pytest.raises(ValidationError):
+            Message.model_validate({**fields, "from_tty": "t" * (MAX_ID_LENGTH + 1)})
 
     def test_frozen(self) -> None:
         msg = Message(from_user="kai", to_user="eric", body="hello")
@@ -418,3 +454,27 @@ class TestTruncatePlan:
         # a generated hint from a pathologically long branch must not fail
         # its own automatic /plan — truncated output is always acceptable.
         validate_plan(truncate_plan("→ " + "b" * 1000))
+
+
+class TestRefiled:
+    def test_the_copy_has_a_stable_id_of_its_own_and_the_same_address(self) -> None:
+        message = Message(from_user="eric", to_user="kai:tty1", body="hello")
+        copy = message.refiled()
+        assert (copy.id != message.id, copy.id == message.refiled().id) == (True, True)
+        assert (copy.to_user, copy.body) == ("kai:tty1", "hello")
+
+    def test_a_copy_names_the_held_message_it_was_filed_from(self) -> None:
+        held = Message(from_user="eric", to_user="kai:tty1", body="held")
+        other = Message(from_user="eric", to_user="kai:tty1", body="other")
+        pool = {held.id: held}
+        assert held.refiled().original_in(pool) == held.id
+        assert other.original_in(pool) == other.id
+        assert held.original_in(pool) == held.id
+
+    def test_a_chain_of_refiles_never_meets_itself(self) -> None:
+        message = Message(from_user="eric", to_user="kai:tty1", body="hello")
+        ids = [message.id]
+        for _ in range(100):
+            message = message.refiled()
+            ids.append(message.id)
+        assert len(set(ids)) == len(ids)

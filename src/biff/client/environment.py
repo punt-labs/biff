@@ -37,6 +37,15 @@ class ClientEnvironment:
         return explicit or environ.get("BIFF_USER", "")
 
     @staticmethod
+    def carries_relay_settings(environ: Mapping[str, str]) -> bool:
+        """Return whether *environ* sets a ``BIFF_RELAY_*`` override.
+
+        A process that does is not a session of a person: it is a runner handed
+        its relay and credentials explicitly, which biffd cannot carry.
+        """
+        return any(name in environ for name in _RELAY_OVERRIDES)
+
+    @staticmethod
     def require_no_relay_overrides(environ: Mapping[str, str]) -> None:
         """Refuse a client whose environment overrides the relay.
 

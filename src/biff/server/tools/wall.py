@@ -168,28 +168,35 @@ async def broadcast_wall_to_repos(
     *,
     wall: WallPost | None,
     target_repo: str | None,
-) -> None:
+) -> dict[str, BaseException]:
     """Shared wall broadcast logic for MCP tool and CLI paths.
 
     Uses ``return_exceptions=True`` so a failure on one repo does not
-    cancel writes to other repos.  Partial failures are logged.
+    cancel writes to other repos.  Failures are logged and returned by
+    repo, so a caller that must not report a lost write as delivered can
+    say so; an empty result means every write landed.
     """
     if target_repo is not None:
         if isinstance(relay, NatsRelay):
             await relay.set_wall_for_repo(target_repo, wall)
         else:
             await relay.set_wall(wall)
-        return
+        return {}
     # Broadcast to all visible repos
     if isinstance(relay, NatsRelay):
         repos = [r for r in visible_repos if r]  # skip empty (LocalRelay compat)
         tasks = [relay.set_wall_for_repo(r, wall) for r in repos]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        for repo, result in zip(repos, results, strict=True):
-            if isinstance(result, BaseException):
-                _log.warning("Wall broadcast failed for repo %s: %s", repo, result)
-    else:
-        await relay.set_wall(wall)
+        failed = {
+            repo: result
+            for repo, result in zip(repos, results, strict=True)
+            if isinstance(result, BaseException)
+        }
+        for repo, error in failed.items():
+            _log.warning("Wall broadcast failed for repo %s: %s", repo, error)
+        return failed
+    await relay.set_wall(wall)
+    return {}
 
 
 def _update_wall_marker(state: ServerState, wall: WallPost | None) -> None:

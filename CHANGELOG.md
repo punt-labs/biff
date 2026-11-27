@@ -87,9 +87,47 @@
   redirects into the same file, duplicated every WARNING and above.
 - The supervisor report in a failed start no longer repeats `state` and
   `active count` taken from launchd's nested blocks.
+- A `biff wall` that a relay refuses (an authorization error, an unreachable
+  server, a repository whose write failed) now exits 1 and prints the relay's
+  error; it used to log the failure and report success. This holds for every
+  path, not only a CI runner.
+- A CI `biff wall` reaches every repository of the configured organizations again.
+- A presence heartbeat no longer overwrites a plan or tty name saved between its
+  read and its write; the first command of a CLI session counts as activity.
+- Mail a daemon `read` left behind is given back to a relay that consumed it, so
+  `biff session end` moves it to your user mailbox instead of stranding it.
 - A service failure message no longer runs its last sentence into the pointer
   to the log (`... biff daemon serve See ~/.punt-labs/...`): the pointer is its
   own sentence.
+
+### Changed
+
+- `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
+  and `status` run through biffd, starting it first when it is down. They print the
+  same text as before. `plan` and `tty` still write the plan-gate
+  marker and rename the stored session in the calling process. A shell is
+  always a CLI session: the old rung that attached to a harness session as a
+  client is dropped, and stale stored sessions are no longer swept by these
+  commands (that moves into biffd).
+- `biff wall` posts, shows or clears the wall straight on the relay when the
+  environment carries `BIFF_RELAY_*` settings (a CI runner with no biffd), on the
+  configured repositories and those of its organizations; it is the only command
+  with a direct path. Every other command, and `wall` without those settings, goes
+  through biffd.
+- biffd's replies carry the engine's display text (`text`) beside `data` and
+  `error`, so a client prints the words the engine rendered instead of
+  rebuilding them. A `read` reply's rows and text are fitted to one budget
+  (half the frame limit) with bounded work, so a full batch can no longer
+  exceed a frame and wedge the inbox. `plan` in biffd no longer writes the
+  plan-gate marker, which belongs to the calling process.
+- A message's `from_user` (128 characters), `from_tty` (128), `to_user` (257,
+  `user:tty`) and encryption-envelope fields (256) are bounded where a message is
+  accepted. A stored message that fails validation is logged at ERROR with its id
+  and kept in the mailbox file.
+- `biff read` shows `N more unread; run biff read again` when a batch leaves mail
+  behind (with `--json`, `{"messages": [...], "more": N}` in that case), and
+  confirms mail read only after it was printed, so a closed pipe or an
+  unreadable reply loses nothing.
 
 ## [1.26.0] - 2026-11-26
 

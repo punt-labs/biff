@@ -47,7 +47,7 @@ class Inbox:
     @property
     def messages(self) -> list[Message]:
         """Every unread message, oldest first."""
-        return sorted((*self._tty, *self._user), key=lambda m: m.timestamp)
+        return sorted((*self._tty, *self._user), key=lambda m: (m.timestamp, m.id))
 
     async def unfetched(self) -> int:
         """Return how much unread mail the relay still holds beyond this fetch.
@@ -59,6 +59,19 @@ class Inbox:
         if not relay.consumes_on_fetch:
             return 0
         return (await relay.get_unread_summary(self._ctx.session_key)).count
+
+    async def refile(self, message: Message) -> bool:
+        """File *message* in the relay again; say whether the relay held it before.
+
+        A relay that consumes mail when it is fetched holds none of it afterwards,
+        so mail a read could not deliver goes back, where ending the session or a
+        read from another process finds it.  A relay that keeps unread mail is
+        left alone: filing the message again would copy it.
+        """
+        if not self._ctx.relay.consumes_on_fetch:
+            return False
+        await self._ctx.relay.deliver(message.refiled())
+        return True
 
     async def mark_read(self, delivered: Sequence[Message]) -> None:
         """Mark *delivered*, and only those messages, read."""

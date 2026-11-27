@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import queue as queue_mod
 import sys
 import threading as threading_mod
@@ -38,12 +39,14 @@ if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
 
 import biff.commands.talk as talk_commands
-from biff import commands
 from biff._cli_runtime import CliInvocation
 from biff.cli_app import CliApp
 from biff.cli_context import CliContext
+from biff.cli_daemon import Answer, DaemonCommand, Delivery, ResultPrinter
+from biff.cli_direct_wall import DirectWall
 from biff.cli_key import KeyCli
 from biff.cli_session import cli_session, cli_session_host
+from biff.client.environment import ClientEnvironment
 from biff.commands import CommandResult
 from biff.commands._session import update_current_session
 from biff.commands.session import SessionVerbs
@@ -1099,44 +1102,34 @@ async def _repl() -> None:
         raise typer.Exit(code=1) from None
 
 
-# ---------------------------------------------------------------------------
-# Product commands — CLI projections of MCP tools
-#
-# Each command delegates to a pure async function in ``biff.commands``
-# that returns a ``CommandResult``.  The ``_run()`` adapter handles
-# relay session setup, JSON/text branching, and exit codes.
-# ---------------------------------------------------------------------------
+# Product commands: each asks biffd to run the command by name; ``_run()``
+# prints the text or JSON and sets the exit code.
 
 
-def _run(
-    coro_factory: Callable[[CliContext], Awaitable[CommandResult]],
+def _run(call: Callable[[DaemonCommand], Awaitable[Answer]]) -> None:
+    """Run one command as a client of biffd; print its text or JSON."""
+    _drive(call, DaemonCommand.for_this_process)
+
+
+def _drive[C](
+    call: Callable[[C], Awaitable[Delivery]],
+    make: Callable[[str | None, str | None], C],
 ) -> None:
-    """Run a command function inside a CLI session.
-
-    Handles JSON/text branching, stderr for errors, and exit codes.
-    """
+    """Build the command with *make*, run *call* on it, and print the result."""
 
     async def _inner() -> None:
         try:
-            async with cli_session(
-                user_override=_user_override, session_ref=_session_ref
-            ) as ctx:
-                result = await coro_factory(ctx)
-        except ValueError as exc:
+            answer = await call(make(_user_override, _session_ref))
+            await answer.deliver(
+                ResultPrinter(json_output=_json_output, quiet=_quiet_output)
+            )
+        except DaemonCommand.FAILURES as exc:
             if _json_output:
                 _print_json({"error": str(exc)})
             else:
                 print(f"Error: {exc}", file=sys.stderr)
             raise typer.Exit(code=1) from None
-
-        if _json_output:
-            data = result.json_data if result.json_data is not None else result.text
-            _print_json(data)
-        elif result.error:
-            print(result.text, file=sys.stderr)
-        elif not _quiet_output:
-            print(result.text)
-        if result.error:
+        if answer.result.error:
             raise typer.Exit(code=1)
 
     asyncio.run(_inner())
@@ -1145,7 +1138,7 @@ def _run(
 @app.command()
 def who() -> None:
     """List active team members and what they're working on."""
-    _run(commands.who)
+    _run(lambda d: d.call("who"))
 
 
 @app.command()
@@ -1153,7 +1146,7 @@ def finger(
     user: Annotated[str, typer.Argument(help="User to query, e.g. kai or kai:tty1")],
 ) -> None:
     """Check what a user is working on and their availability."""
-    _run(lambda ctx: commands.finger(ctx, user))
+    _run(lambda d: d.call("finger", user=user))
 
 
 @app.command("write")
@@ -1162,13 +1155,13 @@ def write_cmd(
     message: Annotated[str, typer.Argument(help="Message to send (auto-splits)")],
 ) -> None:
     """Send a message to a teammate's inbox."""
-    _run(lambda ctx: commands.write(ctx, to, message))
+    _run(lambda d: d.call("write", to=to, message=message))
 
 
 @app.command("read")
 def read_cmd() -> None:
     """Check inbox for new messages. Marks all as read."""
-    _run(commands.read)
+    _run(lambda d: d.call("read"))
 
 
 @app.command()
@@ -1178,12 +1171,12 @@ def plan(
 ) -> None:
     """Set what you're currently working on."""
     if clear:
-        _run(lambda ctx: commands.plan(ctx, ""))
+        _run(lambda d: d.plan(""))
     elif not message:
         print("Usage: biff plan <message> | biff plan --clear", file=sys.stderr)
         raise typer.Exit(code=1)
     else:
-        _run(lambda ctx: commands.plan(ctx, message))
+        _run(lambda d: d.plan(message))
 
 
 @app.command("last")
@@ -1192,7 +1185,7 @@ def last_cmd(
     count: Annotated[int, typer.Option(help="Number of entries")] = 25,
 ) -> None:
     """Show session login/logout history."""
-    _run(lambda ctx: commands.last(ctx, user, count))
+    _run(lambda d: d.call("last", user=user, count=count))
 
 
 @app.command("wall")
@@ -1202,7 +1195,14 @@ def wall_cmd(
     clear: Annotated[bool, typer.Option("--clear", help="Remove active wall")] = False,
 ) -> None:
     """Post, read, or clear a team broadcast."""
-    _run(lambda ctx: commands.wall(ctx, message, duration, clear=clear))
+    if ClientEnvironment.carries_relay_settings(os.environ):
+        # A CI runner: no session, no inbox, no daemon, relay handed in explicitly.
+        _drive(
+            lambda d: d.wall(message, duration, clear=clear),
+            DirectWall.for_this_process,
+        )
+    else:
+        _run(lambda d: d.call("wall", message=message, duration=duration, clear=clear))
 
 
 @app.command()
@@ -1213,7 +1213,7 @@ def mesg(
     ],
 ) -> None:
     """Control message reception (on/off/y/n)."""
-    _run(lambda ctx: commands.mesg(ctx, enabled))
+    _run(lambda d: d.call("mesg", value=enabled))
 
 
 @app.command("tty")
@@ -1221,13 +1221,13 @@ def tty_cmd(
     name: Annotated[str, typer.Argument(help="Session name (optional)")] = "",
 ) -> None:
     """Name the current CLI session."""
-    _run(lambda ctx: commands.tty(ctx, name))
+    _run(lambda d: d.tty(name))
 
 
 @app.command()
 def status() -> None:
     """Show connection state, session info, and pending messages."""
-    _run(commands.status)
+    _run(lambda d: d.call("status"))
 
 
 app.add_typer(KeyCli.on_this_machine().typer_app(), name="key")

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from biff.client.connection import ConnectionLostError, DaemonError
 from biff.frame_reply import ErrorCode
-from biff.models import SessionEvent
+from biff.models import SessionEvent, UserSession
 from biff.relay import LocalRelay
 from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
@@ -284,3 +285,41 @@ async def test_a_failing_history_write_does_not_fail_the_hello(
     monkeypatch.setattr(HistoryRelay, "append_wtmp", broken)
     kai = await harness.connect("s-kai", "kai")
     assert cast("dict[str, object]", await kai.request("who"))["error"] is False
+
+
+async def _last_tool_at(harness: Harness, session_id: str) -> datetime:
+    relay = LocalRelay(harness.factory.built[0])
+    routing = SessionRouting(session_id, role=CLI_ROLE)
+    row = await relay.get_session(routing.session_key("kai"))
+    assert row is not None
+    return row.last_tool_at
+
+
+async def test_each_cli_attach_counts_as_activity(harness: Harness) -> None:
+    """A command is activity: idle time and mail routing follow it, as they did."""
+    first = await harness.connect("s-cli", "kai")
+    before = await _last_tool_at(harness, "s-cli")
+    await asyncio.sleep(0.05)
+    again = await harness.connect("s-cli", "kai")
+    assert await _last_tool_at(harness, "s-cli") > before
+    await first.close()
+    await again.close()
+
+
+async def test_first_cli_attach_to_a_surviving_row_counts_as_activity(
+    harness: Harness, tmp_path: Path
+) -> None:
+    """A command run after a daemon restart moves the idle clock it found."""
+    routing = SessionRouting("s-old", role=CLI_ROLE)
+    hour_ago = datetime.now(UTC) - timedelta(hours=1)
+    await LocalRelay(tmp_path / "relays" / "repo").update_session(
+        UserSession(
+            user="kai",
+            tty=routing.routing_id,
+            last_active=hour_ago,
+            last_tool_at=hour_ago,
+        )
+    )
+    client = await harness.connect("s-old", "kai")
+    assert await _last_tool_at(harness, "s-old") > hour_ago + timedelta(minutes=30)
+    await client.close()

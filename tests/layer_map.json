@@ -243,5 +243,13 @@
   "biff.usage": "kernel",
   "biff.user_scope": "kernel",
   "biff.who_columns": "render",
-  "biff.wtmp_reader": "engine"
+  "biff.wtmp_reader": "engine",
+  "biff.cli_daemon": "cli",
+  "biff.cli_daemon_wire": "cli",
+  "biff.cli_direct_wall": "cli",
+  "biff.cli_plan": "cli",
+  "biff.client.held_reply": "client",
+  "biff.daemon.read_batch": "daemon",
+  "biff.mailbox_line": "engine",
+  "biff.plan_marker": "engine"
 }

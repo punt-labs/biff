@@ -209,6 +209,10 @@ class Session:
         if row.tty_name != self._context.tty_name:
             self._context = replace(self._context, tty_name=row.tty_name)
 
+    async def touch(self) -> None:
+        """Count a command from a shell as activity on the session's presence row."""
+        await self._presence.touch()
+
     def attach(self, run: str) -> Attachment:
         """Attach a connection claiming *run*, starting a new run if it differs.
 
@@ -327,6 +331,8 @@ class SessionTable:
                 session.check_same(resolved)
                 if session.is_dormant:
                     await session.revive()
+            if hello.client == "cli":
+                await session.touch()
             return session.attach(hello.main_agent_id)
 
     @asynccontextmanager
