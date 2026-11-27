@@ -134,6 +134,8 @@ ignore = [
 "src/biff/cli_session.py" = ["T20"]
 "src/biff/installer.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/doctor.py" = ["T20", "FBT", "S603", "PLC0415"]
+"src/biff/supervision/runner.py" = ["S603"]
+"src/biff/supervision/detached.py" = ["S603"]
 "src/biff/keychain_vault.py" = ["S603"]
 "src/biff/nostr_directory.py" = ["S603"]
 "src/biff/plugins/claude_code/statusline.py" = ["S602", "T20"]
@@ -225,6 +227,7 @@ prefixes = [
     "run_dir",
     "session_id",
     "session_lock",
+    "supervision",
     "usage",
     "user_scope",
 ]
