@@ -597,11 +597,28 @@ class TestInstallScript:
     SCRIPT = Path(__file__).parents[2] / "install.sh"
     SERVICE_CALL = '"$BINARY" daemon install < /dev/null ||'
     PLUGIN_CALL = 'claude plugin install "${PLUGIN_NAME}'
+    CLI_CALL = 'uv tool install --force $PYTHON_FLAG "$PACKAGE==$VERSION"'
+    VERIFY_STEP = "# --- Step 7: Verify"
 
     @classmethod
-    def service_runs_before_plugin(cls, text: str) -> bool:
-        """Return whether the real service call precedes the real plugin call."""
-        return text.index(cls.SERVICE_CALL) < text.index(cls.PLUGIN_CALL)
+    def order_is_right(cls, text: str) -> bool:
+        """Return whether the CLI install, the service call and the plugin run so.
+
+        The service runs the binary the CLI install provides, and the plugin step
+        must not run before a service failure can be reported.
+        """
+        return (
+            text.index(cls.CLI_CALL)
+            < text.index(cls.SERVICE_CALL)
+            < text.index(cls.PLUGIN_CALL)
+        )
+
+    @classmethod
+    def _moved(cls, text: str, *, before: str) -> str:
+        """Return *text* with the service call cut out and put in front of *before*."""
+        without = text.replace(cls.SERVICE_CALL, "", 1)
+        at = without.index(before)
+        return without[:at] + cls.SERVICE_CALL + without[at:]
 
     def _blocks(self) -> tuple[str, str]:
         text = self.SCRIPT.read_text()
@@ -638,16 +655,20 @@ class TestInstallScript:
         )
         return Supervisor.run("/bin/sh", "-c", program)
 
-    def test_the_real_service_call_runs_before_the_real_plugin_call(self) -> None:
-        assert self.service_runs_before_plugin(self.SCRIPT.read_text())
+    def test_the_cli_install_then_the_service_then_the_plugin(self) -> None:
+        assert self.order_is_right(self.SCRIPT.read_text())
 
-    def test_the_order_check_fails_when_the_two_calls_are_swapped(self) -> None:
-        text = self.SCRIPT.read_text()
-        service = text.index(self.SERVICE_CALL)
-        plugin = text.index(self.PLUGIN_CALL)
-        # Mutant: the plugin call moved ahead of the service call.
-        swapped = text[:service] + self.PLUGIN_CALL + text[service:plugin]
-        assert not self.service_runs_before_plugin(swapped)
+    def test_the_order_check_fails_when_the_service_moves_after_the_plugin(
+        self,
+    ) -> None:
+        mutant = self._moved(self.SCRIPT.read_text(), before=self.VERIFY_STEP)
+        assert not self.order_is_right(mutant)
+
+    def test_the_order_check_fails_when_the_service_moves_before_the_cli_install(
+        self,
+    ) -> None:
+        mutant = self._moved(self.SCRIPT.read_text(), before=self.CLI_CALL)
+        assert not self.order_is_right(mutant)
 
     @pytest.mark.parametrize("status", [0, 3])
     def test_installed_or_no_manager_succeeds(
