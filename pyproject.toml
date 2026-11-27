@@ -289,7 +289,7 @@ imports = ["kernel", "wire", "engine", "render"]
 
 [tool.oo-ratchet.layers.server]
 prefixes = ["server"]
-imports = ["kernel", "wire", "engine", "render", "commands"]
+imports = ["kernel", "wire", "engine", "render", "commands", "client"]
 
 # Test helpers: no production layer may import them.
 [tool.oo-ratchet.layers.testing]
