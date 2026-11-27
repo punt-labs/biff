@@ -565,6 +565,17 @@ outcomes: done, failed, or no service manager.
 - **No service manager** (a container, or a Linux login with no systemd user
   session): `biff install` prints that biffd starts on demand and succeeds;
   `biff daemon install`, `start`, `stop`, `restart` exit 1 with the same text.
+- **A manager that exists and does not answer** (`systemctl` is installed and
+  `systemctl --user show-environment` fails, as in a container that ships
+  systemd without running it) is reported with systemctl's own words on stderr.
+  `biff install` still exits 0, because that container is the case biffd's
+  on-demand start exists for; `biff daemon install`, `start`, `stop` and
+  `restart` exit 1.
+- **Install proves itself.** After registering the unit, install waits up to five
+  seconds for `/health` and fails if biffd does not answer, so `Type=simple`
+  "active" is never taken for "working". A step that fails removes the unit
+  and disables it again; `uninstall` deletes the unit only after systemd reports
+  the service stopped, and a supervisor failure is an error, never ignored.
 - **A failed service install** does not skip the plugin step, because nothing
   routes through biffd yet, but it fails the command with exit 1.
 

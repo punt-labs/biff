@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING
@@ -11,9 +12,16 @@ import pytest
 from typer.testing import CliRunner
 
 from biff.__main__ import app
+from biff.plugins.claude_code.claude_md import ClaudeMdImport
 from biff.run_dir import RunDir
-from tests.test_supervision.fake_backend import FakeBackend
-from tests.test_supervision.patching import host_has, no_claude, port_is
+from tests.test_supervision.fake_backend import FakeBackend, RaisingBackend
+from tests.test_supervision.patching import (
+    host_has,
+    host_unreachable,
+    no_claude,
+    port_answers,
+    port_is,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -30,7 +38,10 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     binary.write_text("#!/bin/sh\n")
     binary.chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
+    # biffd is only in the home above, not in the venv's bin on PATH.
+    monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
     port_is(monkeypatch, "free")
+    port_answers(monkeypatch, answers=True)
     return tmp_path
 
 
@@ -203,3 +214,86 @@ class TestBiffInstall:
         runner.invoke(app, ["install"])
         result = runner.invoke(app, ["uninstall"])
         assert (result.exit_code, backend.config_path().exists()) == (0, False)
+
+
+class TestStatusNamesWhatItCannotShow:
+    def test_relay_connections_and_clients_are_reported_as_not_yet_available(
+        self, backend: FakeBackend, live_biffd: int
+    ) -> None:
+        runner.invoke(app, ["daemon", "install"])
+        result = runner.invoke(app, ["daemon", "status"])
+        assert "relay connections: not reported by biffd yet" in result.output
+        assert "attached clients: not reported by biffd yet" in result.output
+
+
+class TestHostFailuresAreOutcomesNotTracebacks:
+    @pytest.mark.parametrize(
+        "error",
+        [
+            subprocess.TimeoutExpired("systemctl", 30),
+            PermissionError("cannot write unit"),
+            FileNotFoundError("systemctl"),
+        ],
+        ids=["hung", "unwritable", "missing"],
+    )
+    def test_a_raising_supervisor_fails_the_command_cleanly(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch, error: BaseException
+    ) -> None:
+        host_has(monkeypatch, RaisingBackend(home / "u.service", error))
+        result = runner.invoke(app, ["daemon", "install"])
+        assert result.exit_code == 1
+        assert isinstance(result.exception, SystemExit)
+
+    def test_biff_install_still_installs_the_plugin_step_when_the_service_raises(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        no_claude(monkeypatch)
+        host_has(
+            monkeypatch,
+            RaisingBackend(
+                home / "u.service", subprocess.TimeoutExpired("systemctl", 30)
+            ),
+        )
+        result = runner.invoke(app, ["install"])
+        assert (result.exit_code, "Installed (CLI-only)" in result.output) == (1, True)
+
+    def test_biff_uninstall_strips_the_import_when_the_service_raises(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        no_claude(monkeypatch)
+        line = "@~/.punt-labs/biff/CLAUDE.md"
+        host_md = home / ".claude" / "CLAUDE.md"
+        ClaudeMdImport(host_md, line).register()
+        host_has(
+            monkeypatch, RaisingBackend(home / "u.service", PermissionError("denied"))
+        )
+        result = runner.invoke(app, ["uninstall"])
+        assert (result.exit_code, line in host_md.read_text()) == (1, False)
+        assert isinstance(result.exception, SystemExit)
+
+
+class TestAnUnreachableManagerIsNotAbsent:
+    REASON = "systemctl --user show-environment failed: Failed to connect to bus"
+
+    def test_install_says_why_on_stderr_and_still_exits_0(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        no_claude(monkeypatch)
+        host_unreachable(monkeypatch, self.REASON)
+        result = runner.invoke(app, ["install"])
+        assert result.exit_code == 0
+        assert "Failed to connect to bus" in result.stderr
+
+    def test_the_daemon_command_exits_1_with_the_reason(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        host_unreachable(monkeypatch, self.REASON)
+        result = runner.invoke(app, ["daemon", "install"])
+        assert (result.exit_code, "Failed to connect to bus" in result.output) == (
+            1,
+            True,
+        )
+
+    def test_an_absent_manager_carries_no_reason(self, no_manager: None) -> None:
+        result = runner.invoke(app, ["daemon", "install"])
+        assert "show-environment" not in result.output

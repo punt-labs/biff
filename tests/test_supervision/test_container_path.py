@@ -26,12 +26,15 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.subprocess
 
 _NUDGE: Final = textwrap.dedent("""\
+    import dataclasses
     import sys
     from biff.client.nudge import DaemonNudge
     from biff.run_dir import RunDir
+    from biff.supervision.biffd import BIFFD_SPEC
 
+    spec = dataclasses.replace(BIFFD_SPEC, health_port=int(sys.argv[1]))
     try:
-        DaemonNudge.for_host(RunDir.default()).ensure_running()
+        DaemonNudge.for_host(RunDir.default(), spec).ensure_running()
     except ConnectionError as exc:
         print(exc)
         sys.exit(1)
@@ -45,15 +48,15 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _run(home: Path, code: str, path: str) -> subprocess.CompletedProcess[str]:
+def _run(home: Path, port: int) -> subprocess.CompletedProcess[str]:
     env = {
         "HOME": str(home),
-        "PATH": path,
+        "PATH": "/usr/bin:/bin",
         "XDG_RUNTIME_DIR": str(home / "no-bus"),
         "PUNT_TELEMETRY": "off",
     }
     return subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-c", _NUDGE, str(port)],
         env=env,
         capture_output=True,
         text=True,
@@ -72,7 +75,8 @@ def home(tmp_path: Path) -> Path:
 def port(home: Path) -> Iterator[int]:
     """A free port recorded as the daemon's; any biffd left on it is killed."""
     number = _free_port()
-    RunDir(home / ".punt-labs" / "biff" / "run").write_port(number)
+    # A crash left a record of a port nothing listens on; the unit port wins.
+    RunDir(home / ".punt-labs" / "biff" / "run").write_port(1)
     yield number
     Supervisor.run("pkill", "-f", f"biffd --port {number}")
 
@@ -80,7 +84,7 @@ def port(home: Path) -> Iterator[int]:
 def test_without_the_executable_the_nudge_says_to_install(
     home: Path, port: int
 ) -> None:
-    result = _run(home, _NUDGE, "/usr/bin:/bin")
+    result = _run(home, port)
     assert (result.returncode, result.stdout.strip()) == (
         1,
         "biffd is not installed. Run: biff install",
@@ -93,6 +97,6 @@ def test_with_the_executable_the_nudge_starts_biffd_detached(
     (home / ".local" / "bin" / "biffd").symlink_to(
         Path(sys.executable).parent / "biffd"
     )
-    result = _run(home, _NUDGE, "/usr/bin:/bin")
+    result = _run(home, port)
     assert (result.returncode, result.stdout.strip()) == (0, "answers"), result.stderr
     assert HealthProbe(port).answers(1.0)

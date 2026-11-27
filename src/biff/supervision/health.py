@@ -7,13 +7,23 @@ import json
 from dataclasses import dataclass
 from typing import Final, Self, cast, final
 
-__all__ = ["Health", "HealthProbe", "HealthUnavailableError"]
+__all__ = [
+    "Health",
+    "HealthProbe",
+    "HealthProbes",
+    "HealthUnavailableError",
+    "NotBiffdError",
+]
 
 _LOOPBACK: Final = "127.0.0.1"
 
 
 class HealthUnavailableError(ConnectionError):
     """Nothing on the port answered ``/health`` as biffd does."""
+
+
+class NotBiffdError(HealthUnavailableError):
+    """Something answered ``/health`` clearly, and it is not biffd."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,14 +82,47 @@ class HealthProbe:
             payload: object = json.loads(body)
         except ValueError as exc:
             msg = f"{_LOOPBACK}:{self._port} did not answer /health with JSON"
-            raise HealthUnavailableError(msg) from exc
+            raise NotBiffdError(msg) from exc
         if status != http.client.OK or not isinstance(payload, dict):
             msg = f"{_LOOPBACK}:{self._port} answered /health with status {status}"
-            raise HealthUnavailableError(msg)
+            raise NotBiffdError(msg)
         fields = cast("dict[str, object]", payload)
         version = fields.get("version")
         uptime = fields.get("uptime_seconds")
         if not isinstance(version, str) or not isinstance(uptime, int | float):
             msg = f"{_LOOPBACK}:{self._port} is not biffd: /health lacks its fields"
-            raise HealthUnavailableError(msg)
+            raise NotBiffdError(msg)
         return Health(version, float(uptime))
+
+
+@final
+class HealthProbes:
+    """Asks each of several loopback ports in turn, and takes the first to answer.
+
+    biffd's recorded port can be stale after a crash, so a client also tries the
+    port its unit starts biffd on.
+    """
+
+    __slots__ = ("_ports",)
+
+    _ports: tuple[int, ...]
+
+    def __new__(cls, *ports: int) -> Self:
+        """Probe *ports* in order; a repeated port is asked once."""
+        self = super().__new__(cls)
+        self._ports = tuple(dict.fromkeys(ports))
+        return self
+
+    def live_port(self, timeout: float) -> int | None:
+        """Return the first port where biffd answers within *timeout*, if any.
+
+        ``None`` means no port answers: the absence the caller reports.
+        """
+        return next(
+            (port for port in self._ports if HealthProbe(port).answers(timeout)),
+            None,
+        )
+
+    def answers(self, timeout: float) -> bool:
+        """Return whether biffd answers on any port within *timeout* seconds each."""
+        return self.live_port(timeout) is not None

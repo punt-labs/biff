@@ -59,7 +59,7 @@ class ServiceCommands:
         as success when *idle_ok* says an absent service is the goal.
         """
         failed = outcome.status == "failed" or (
-            outcome.status == "no_manager" and not idle_ok
+            outcome.status in ("no_manager", "unreachable") and not idle_ok
         )
         typer.echo(outcome.message, err=failed)
         if failed:

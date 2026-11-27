@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import logging
 import os
 from typing import Self, final
 
@@ -14,8 +15,11 @@ from biff.daemon.environment import DaemonEnvironment
 from biff.daemon.server import BiffDaemon
 from biff.logging_config import configure_logging
 from biff.run_dir import RunDir
+from biff.supervision.biffd import PERMANENT_EXIT_STATUS
 
 __all__ = ["Foreground"]
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -37,7 +41,9 @@ class Foreground:
 
         Raises:
             typer.Exit: The daemon cannot start: the port is taken, or the run
-                directory or token file is not private.  One line says what to do.
+                directory or token file is not private.  One line says what to do,
+                on stderr and in the log, and the exit status is the one a unit is
+                told not to restart.
         """
         configure_logging(Role.DAEMON)
         removed = DaemonEnvironment.scrub(os.environ)
@@ -64,6 +70,11 @@ class Foreground:
 
     @staticmethod
     def _fail(message: str) -> None:
-        """Print *message* as biffd's one-line error and exit 1."""
+        """Report *message* as biffd's one-line error and exit permanently.
+
+        It goes to the log as well as stderr: under a service manager nobody reads
+        stderr, and the log is where the failure message sends the user.
+        """
+        logger.error("%s", message)
         typer.echo(f"biffd: {message}", err=True)
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=PERMANENT_EXIT_STATUS) from None

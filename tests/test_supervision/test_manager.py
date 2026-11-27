@@ -64,13 +64,16 @@ class TestSpec:
         self, home_with_binary: Path
     ) -> None:
         assert BIFFD_SPEC.resolve_exec_args() == [
-            str(home_with_binary / ".local" / "bin" / "biffd")
+            str(home_with_binary / ".local" / "bin" / "biffd"),
+            "--port",
+            "8424",
         ]
 
     def test_exec_args_name_the_missing_binary(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
         with pytest.raises(BinaryNotFoundError, match="biffd"):
             BIFFD_SPEC.resolve_exec_args()
 

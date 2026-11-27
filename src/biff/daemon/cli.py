@@ -30,7 +30,7 @@ class DaemonCommands:
     ) -> None:
         """Run the daemon in the foreground until interrupted.
 
-        Exits 1 with one line saying what to do when the daemon cannot start:
+        Exits 78 with one line saying what to do when the daemon cannot start:
         the port is taken, or the run directory or token file is not private.
         """
         Foreground(port).run()

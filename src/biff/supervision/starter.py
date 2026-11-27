@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from typing import TYPE_CHECKING, Literal, Protocol, Self, final
 
 from biff.supervision.detached import DetachedDaemon
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from biff.supervision.backend import ServiceBackend
+    from biff.supervision.detached import Child
     from biff.supervision.spec import ServiceSpec
 
 __all__ = ["Detacher", "HostStarter", "StartOutcome"]
@@ -26,7 +28,7 @@ class Detacher(Protocol):
         """Return the executable, or ``None`` when it is not installed."""
         ...
 
-    def launch(self, binary: Path, port: int) -> None:
+    def launch(self, binary: Path, port: int) -> Child:
         """Start *binary* on *port* in its own session."""
         ...
 
@@ -35,13 +37,15 @@ class Detacher(Protocol):
 class HostStarter:
     """Starts the service through its unit, or detached where there is no manager."""
 
-    __slots__ = ("_backend", "_detacher", "_port", "_spec")
+    __slots__ = ("_backend", "_child", "_detacher", "_port", "_spec")
 
     _spec: ServiceSpec
     _port: int
-    # None: the host has no service manager (see ServiceHost.backend).
+    # None: the host has no service manager (see ServiceHost.detect).
     _backend: ServiceBackend | None
     _detacher: Detacher
+    # None until a detached process was launched.
+    _child: Child | None
 
     def __new__(
         cls,
@@ -56,12 +60,18 @@ class HostStarter:
         self._port = port
         self._backend = backend
         self._detacher = detacher
+        self._child = None
         return self
 
     @classmethod
-    def for_host(cls, spec: ServiceSpec, port: int) -> Self:
-        """Return the starter for this host's service manager."""
-        return cls(spec, port, ServiceHost.backend(spec), DetachedDaemon(spec))
+    def for_host(cls, spec: ServiceSpec) -> Self:
+        """Return the starter for this host's service manager, on the unit's port."""
+        return cls(
+            spec,
+            spec.health_port,
+            ServiceHost.detect(spec).backend,
+            DetachedDaemon(spec),
+        )
 
     def start(self) -> StartOutcome:
         """Start biffd, or say it is not installed here.
@@ -71,9 +81,28 @@ class HostStarter:
         executable is what "installed" means.
 
         Raises:
-            ServiceActionFailedError: The unit exists but the supervisor refused
-                to start it.
+            ServiceActionFailedError: The unit exists, or the executable does, and
+                starting it failed: the supervisor refused, did not answer, is
+                missing, or the process could not be launched.
         """
+        try:
+            return self._start()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            what = (
+                "timed out" if isinstance(exc, subprocess.TimeoutExpired) else str(exc)
+            )
+            raise ServiceActionFailedError(
+                self._spec.failure_message("start", what)
+            ) from exc
+
+    def exit_note(self) -> str:
+        """Say how a detached process ended, or return ``""`` while it runs."""
+        status = None if self._child is None else self._child.poll()
+        if status is None:
+            return ""
+        return f"biffd exited with status {status} right after it was started"
+
+    def _start(self) -> StartOutcome:
         if self._backend is not None:
             if not self._backend.config_path().exists():
                 return "not_installed"
@@ -83,5 +112,5 @@ class HostStarter:
         binary = self._detacher.binary()
         if binary is None:
             return "not_installed"
-        self._detacher.launch(binary, self._port)
+        self._child = self._detacher.launch(binary, self._port)
         return "launched"

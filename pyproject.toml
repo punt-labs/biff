@@ -65,7 +65,7 @@ handoff-runtime = ["uv_build==0.13.9"]
 
 [project.scripts]
 biff = "biff.__main__:app"
-biffd = "biff.daemon.app:biffd_app"
+biffd = "biff.daemon.app:DaemonApps.biffd"
 biff-hook = "biff.plugins.claude_code._hook_runtime:main"
 
 [project.urls]

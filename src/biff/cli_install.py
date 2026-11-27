@@ -20,8 +20,11 @@ class MachineScope:
     def provision() -> bool:
         """Create biff's home tree and install biffd's service.
 
-        Returns whether the service install failed; a host with no service
-        manager is not a failure, because biffd then starts on demand.
+        Returns whether the service install failed.  A host with no service
+        manager is not a failure, because biffd then starts on demand; a manager
+        that exists and does not answer is printed to stderr with its reason, and
+        also is not, because a container that ships systemctl without running
+        systemd is the same case.
 
         Raises:
             typer.Exit: The home tree could not be created.
@@ -33,17 +36,18 @@ class MachineScope:
             raise typer.Exit(code=1) from exc
         outcome = BiffdService.for_host().install()
         failed = outcome.status == "failed"
-        typer.echo(outcome.message, err=failed)
+        typer.echo(outcome.message, err=failed or outcome.status == "unreachable")
         return failed
 
     @staticmethod
     def deprovision() -> bool:
         """Remove biffd's service; return whether that failed.
 
-        A host with no service manager has nothing to remove and prints nothing.
+        A host with no usable service manager has nothing to remove and prints
+        nothing.
         """
         outcome = BiffdService.for_host().uninstall()
         failed = outcome.status == "failed"
-        if outcome.status != "no_manager":
+        if outcome.status == "done" or failed:
             typer.echo(outcome.message, err=failed)
         return failed

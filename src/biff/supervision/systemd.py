@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import textwrap
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
@@ -14,6 +16,9 @@ if TYPE_CHECKING:
     from biff.supervision.spec import ServiceSpec
 
 __all__ = ["SystemdBackend"]
+
+_START_LIMIT_SECONDS = 60
+_START_LIMIT_BURST = 5
 
 
 @final
@@ -37,15 +42,25 @@ class SystemdBackend:
         return self
 
     @staticmethod
+    def unavailable_reason() -> str:
+        """Return why no systemd user manager answers here, or ``""`` when one does."""
+        try:
+            probe = Supervisor.run("systemctl", "--user", "show-environment")
+        except FileNotFoundError:
+            return "systemctl is not installed"
+        except subprocess.TimeoutExpired:
+            return "`systemctl --user show-environment` timed out"
+        except OSError as exc:
+            return f"cannot run systemctl: {exc}"
+        if probe.returncode == 0:
+            return ""
+        said = probe.stderr.strip() or f"exited {probe.returncode}"
+        return f"`systemctl --user show-environment` failed: {said}"
+
+    @staticmethod
     def available() -> bool:
         """Return whether a systemd user manager answers on this host."""
-        try:
-            return (
-                Supervisor.run("systemctl", "--user", "show-environment").returncode
-                == 0
-            )
-        except FileNotFoundError:
-            return False
+        return not SystemdBackend.unavailable_reason()
 
     def config_path(self) -> Path:
         """Return the unit file path."""
@@ -59,11 +74,14 @@ class SystemdBackend:
             [Unit]
             Description={self._spec.systemd_description}
             After=network.target
+            StartLimitIntervalSec={_START_LIMIT_SECONDS}
+            StartLimitBurst={_START_LIMIT_BURST}
 
             [Service]
             ExecStart={exec_start}
             Restart={restart}
             RestartSec=5
+            RestartPreventExitStatus={self._spec.permanent_exit_status}
 
             [Install]
             WantedBy=default.target
@@ -72,39 +90,82 @@ class SystemdBackend:
     def install(self) -> bool:
         """Write the unit, reload systemd, then enable and restart the service.
 
+        A step that fails leaves nothing behind: the unit is disabled and removed,
+        so a later check never finds half an install.
+
         Returns:
             False: installing always restarts, so it is never a no-op.
+
+        Raises:
+            ServiceActionFailedError: A systemctl step failed; the error carries
+                its stderr.
         """
         self._unit_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_atomically(self.unit_text())
-        self._require("daemon-reload")
-        self._require("enable", "--now", self._unit)
-        self._require("restart", self._unit)
+        try:
+            self._require("install", "daemon-reload")
+            self._require("install", "enable", "--now", self._unit)
+            self._require("install", "restart", self._unit)
+        except (ServiceActionFailedError, OSError, subprocess.TimeoutExpired):
+            self._roll_back()
+            raise
         return False
 
     def uninstall(self) -> None:
-        """Stop, disable and remove the unit; a missing unit is not an error."""
-        if not self._unit_path.exists():
-            return
-        Supervisor.run("systemctl", "--user", "disable", "--now", self._unit)
-        self._unit_path.unlink()
-        Supervisor.run("systemctl", "--user", "daemon-reload")
+        """Stop, disable and remove the unit; nothing to remove is not an error.
+
+        The unit file is deleted only after systemd confirms the service is
+        stopped and disabled, so a failure never leaves a running service with no
+        unit to manage it.
+
+        Raises:
+            ServiceActionFailedError: systemctl refused, or the service is still
+                active; the error carries its stderr.
+        """
+        existed = self._unit_path.exists()
+        if existed:
+            self._require("uninstall", "disable", "--now", self._unit)
+        elif self.is_active():
+            self._require("uninstall", "stop", self._unit)
+        if self.is_active():
+            msg = self._spec.failure_message(
+                "uninstall", f"{self._unit} is still active after it was stopped"
+            )
+            raise ServiceActionFailedError(msg)
+        if existed:
+            self._unit_path.unlink()
+            self._require("uninstall", "daemon-reload")
 
     def enable_autostart(self) -> bool:
         """Enable the unit for the next login without starting it."""
         return Supervisor.succeeds("systemctl", "--user", "enable", self._unit)
 
     def start(self) -> bool:
-        """Start the installed unit."""
-        return Supervisor.succeeds("systemctl", "--user", "start", self._unit)
+        """Start the installed unit.
+
+        Raises:
+            ServiceActionFailedError: systemctl refused; the error carries its stderr.
+        """
+        self._require("start", "start", self._unit)
+        return True
 
     def stop(self) -> bool:
-        """Stop the unit; it stays enabled."""
-        return Supervisor.succeeds("systemctl", "--user", "stop", self._unit)
+        """Stop the unit; it stays enabled.
+
+        Raises:
+            ServiceActionFailedError: systemctl refused; the error carries its stderr.
+        """
+        self._require("stop", "stop", self._unit)
+        return True
 
     def restart(self) -> bool:
-        """Restart the unit in one supervisor call."""
-        return Supervisor.succeeds("systemctl", "--user", "restart", self._unit)
+        """Restart the unit in one supervisor call.
+
+        Raises:
+            ServiceActionFailedError: systemctl refused; the error carries its stderr.
+        """
+        self._require("restart", "restart", self._unit)
+        return True
 
     def is_active(self) -> bool:
         """Return whether systemd reports the unit active."""
@@ -112,27 +173,34 @@ class SystemdBackend:
         return result.stdout.strip() == "active"
 
     def linger_warning(self) -> str:
-        """Warn that the unit stops at logout unless linger is enabled."""
+        """Warn that the unit stops at logout unless linger is enabled.
+
+        A loginctl that is missing, hung or failing leaves linger unknown, and an
+        unknown state earns no warning.
+        """
         try:
             user = os.getlogin()
-            shown = Supervisor.run(
-                "loginctl", "show-user", user, "--property=Linger"
-            ).stdout
-        except (OSError, FileNotFoundError):
-            return ""  # no login session or no loginctl: nothing to warn about
-        if "Linger=yes" in shown:
+            shown = Supervisor.run("loginctl", "show-user", user, "--property=Linger")
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        if shown.returncode != 0 or "Linger=yes" in shown.stdout:
             return ""
         return (
             "  Warning: loginctl linger is not enabled. biffd stops when you "
             "log out. Run: loginctl enable-linger"
         )
 
-    def _require(self, *args: str) -> None:
-        """Run ``systemctl --user`` *args*; raise when it fails."""
-        result = Supervisor.run("systemctl", "--user", *args)
-        if result.returncode != 0:
-            msg = f"systemctl --user {' '.join(args)} failed: {result.stderr.strip()}"
-            raise ServiceActionFailedError(msg)
+    def _require(self, action: str, *args: str) -> None:
+        """Run ``systemctl --user`` *args*; raise with its stderr when it fails."""
+        Supervisor.require(self._spec, action, "systemctl", "--user", *args)
+
+    def _roll_back(self) -> None:
+        """Undo a partial install; each step is best effort and the unit always goes."""
+        with suppress(OSError, subprocess.TimeoutExpired):
+            Supervisor.run("systemctl", "--user", "disable", "--now", self._unit)
+        self._unit_path.unlink(missing_ok=True)
+        with suppress(OSError, subprocess.TimeoutExpired):
+            Supervisor.run("systemctl", "--user", "daemon-reload")
 
     def _write_atomically(self, text: str) -> None:
         """Replace the unit file whole, so systemd never reads half of it."""
@@ -142,6 +210,15 @@ class SystemdBackend:
 
     @staticmethod
     def _quote(arg: str) -> str:
-        """Quote *arg* for ExecStart, which has its own parser and is not a shell."""
-        escaped = arg.replace("\\", "\\\\").replace('"', '\\"')
+        """Quote *arg* for ExecStart, which has its own parser and is not a shell.
+
+        Besides quotes and backslashes, systemd expands ``%`` specifiers and ``$``
+        variables inside ExecStart, so each is doubled to stay literal.
+        """
+        escaped = (
+            arg.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("%", "%%")
+            .replace("$", "$$")
+        )
         return f'"{escaped}"'

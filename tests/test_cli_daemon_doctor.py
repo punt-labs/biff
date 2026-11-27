@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import socket
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from importlib.metadata import PackageNotFoundError
 from typing import TYPE_CHECKING, Final, Self, final
 
 import pytest
@@ -12,7 +16,9 @@ import pytest
 from biff.cli_daemon_doctor import DaemonChecks, DaemonDiagnostics
 from biff.plugins.contract import CheckResult, PluginRegistry
 from biff.run_dir import RunDir
-from tests.test_supervision.fake_backend import FakeBackend
+from biff.supervision.biffd import BIFFD_SPEC
+from biff.supervision.host import Detection
+from tests.test_supervision.fake_backend import FakeBackend, RaisingBackend
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -123,16 +129,26 @@ def unit(tmp_path: Path) -> FakeBackend:
 
 
 def checks(
-    backend: FakeBackend | None,
+    backend: FakeBackend | RaisingBackend | None,
     run_dir: RunDir,
     port: int,
     relay: StubRelay | None = None,
+    *,
+    host: Detection | None = None,
 ) -> dict[str, CheckResult]:
     run_dir.write_port(port)
-    found = DaemonChecks(
-        backend, run_dir, relay or StubRelay(), CLIENT_VERSION
-    ).checks()
-    return {result.name: result for result in found}
+    found = host or (
+        Detection("absent", None, "")
+        if backend is None
+        else Detection("found", backend, "")
+    )
+    spec = dataclasses.replace(BIFFD_SPEC, health_port=port)
+    return {
+        result.name: result
+        for result in DaemonChecks(
+            found, run_dir, relay or StubRelay(), CLIENT_VERSION, spec=spec
+        ).checks()
+    }
 
 
 def test_all_seven_checks_pass_for_a_healthy_daemon(
@@ -143,13 +159,6 @@ def test_all_seven_checks_pass_for_a_healthy_daemon(
         NAMES,
         [True] * 7,
     )
-
-
-def test_checks_are_informational_until_the_daemon_is_the_default_path(
-    unit: FakeBackend, run_dir: RunDir, biffd_port: int
-) -> None:
-    results = checks(unit, run_dir, biffd_port)
-    assert not any(r.required for r in results.values())
 
 
 class TestEachFailureNamesItsRepair:
@@ -270,7 +279,9 @@ def test_diagnostics_prints_the_daemon_checks(
             f"biff.doctor.{name}", lambda: CheckResult("other", True, "ok")
         )
     run_dir.write_port(biffd_port)
-    source = DaemonChecks(unit, run_dir, StubRelay(), CLIENT_VERSION)
+    source = DaemonChecks(
+        Detection("found", unit, ""), run_dir, StubRelay(), CLIENT_VERSION
+    )
 
     def for_host() -> DaemonChecks:
         return source
@@ -279,3 +290,161 @@ def test_diagnostics_prints_the_daemon_checks(
     DaemonDiagnostics(PluginRegistry()).run()
     out = capsys.readouterr().out
     assert all(f"{name}:" in out for name in NAMES)
+
+
+@pytest.fixture
+def silent_port() -> Iterator[int]:
+    """A listener that accepts connections and never answers."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(8)
+    yield sock.getsockname()[1]
+    sock.close()
+
+
+class TestRequiredOnceInstalled:
+    def test_version_and_foreign_port_are_required_when_the_unit_exists(
+        self, unit: FakeBackend, run_dir: RunDir, biffd_port: int
+    ) -> None:
+        results = checks(unit, run_dir, biffd_port)
+        assert (
+            results["biffd version"].required,
+            results["biffd port"].required,
+            results["biffd health"].required,
+            results["biffd running"].required,
+        ) == (True, True, False, False)
+
+    def test_a_version_mismatch_with_an_installed_unit_fails_the_doctor(
+        self, unit: FakeBackend, run_dir: RunDir, old_biffd_port: int
+    ) -> None:
+        version = checks(unit, run_dir, old_biffd_port)["biffd version"]
+        assert (version.passed, version.required) == (False, True)
+
+    def test_a_foreign_port_holder_with_an_installed_unit_fails_the_doctor(
+        self, unit: FakeBackend, run_dir: RunDir, foreign_port: int
+    ) -> None:
+        port = checks(unit, run_dir, foreign_port)["biffd port"]
+        assert (port.passed, port.required) == (False, True)
+
+    def test_nothing_is_required_when_the_unit_is_not_installed(
+        self, tmp_path: Path, run_dir: RunDir, old_biffd_port: int
+    ) -> None:
+        results = checks(
+            FakeBackend(tmp_path / "none.service"), run_dir, old_biffd_port
+        )
+        assert not any(r.required for r in results.values())
+
+    def test_a_line_says_the_checks_are_advisory_without_a_unit(
+        self, tmp_path: Path, run_dir: RunDir, biffd_port: int
+    ) -> None:
+        results = checks(FakeBackend(tmp_path / "none.service"), run_dir, biffd_port)
+        assert "advisory" in results["biffd checks"].message
+
+    def test_no_advisory_line_when_the_unit_is_installed(
+        self, unit: FakeBackend, run_dir: RunDir, biffd_port: int
+    ) -> None:
+        assert "biffd checks" not in checks(unit, run_dir, biffd_port)
+
+    def test_the_summary_does_not_say_all_passed_for_a_mismatch(
+        self,
+        unit: FakeBackend,
+        run_dir: RunDir,
+        old_biffd_port: int,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        failed = [
+            r
+            for r in checks(unit, run_dir, old_biffd_port).values()
+            if r.required and not r.passed
+        ]
+        assert failed
+
+
+class TestDoctorNeverRaises:
+    def test_a_hung_supervisor_is_a_failed_line(
+        self, tmp_path: Path, run_dir: RunDir, biffd_port: int
+    ) -> None:
+        hung = RaisingBackend(
+            tmp_path / "u", subprocess.TimeoutExpired("systemctl", 30)
+        )
+        running = checks(hung, run_dir, biffd_port)["biffd running"]
+        assert (running.passed, "could not check" in running.message) == (False, True)
+
+    def test_an_unreadable_unit_directory_is_a_failed_line(
+        self, tmp_path: Path, run_dir: RunDir, biffd_port: int
+    ) -> None:
+        class _Unreadable(RaisingBackend):
+            __slots__ = ()
+
+            def config_path(self) -> Path:
+                raise PermissionError("denied")
+
+        unit = checks(_Unreadable(tmp_path / "u", OSError()), run_dir, biffd_port)[
+            "biffd unit"
+        ]
+        assert (unit.passed, "could not check" in unit.message) == (False, True)
+
+    def test_a_token_that_cannot_be_read_is_a_failed_line(
+        self, unit: FakeBackend, run_dir: RunDir, biffd_port: int
+    ) -> None:
+        run_dir.token_path.unlink()
+        run_dir.token_path.mkdir(mode=0o600)
+        token = checks(unit, run_dir, biffd_port)["biffd token"]
+        assert not token.passed
+
+    def test_a_missing_package_is_a_failed_version_line_not_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def missing(name: str) -> str:
+            raise PackageNotFoundError(name)
+
+        monkeypatch.setattr("biff.cli_daemon_doctor.package_version", missing)
+        results = {r.name: r for r in DaemonChecks.for_host().checks()}
+        assert "biffd version" in results
+
+    def test_an_unreadable_port_file_is_a_failed_port_line(
+        self, unit: FakeBackend, run_dir: RunDir, biffd_port: int
+    ) -> None:
+        run_dir.write_port(biffd_port)
+        run_dir.port_path.unlink()
+        run_dir.port_path.mkdir()
+        spec = dataclasses.replace(BIFFD_SPEC, health_port=biffd_port)
+        found = DaemonChecks(
+            Detection("found", unit, ""),
+            run_dir,
+            StubRelay(),
+            CLIENT_VERSION,
+            spec=spec,
+        ).checks()
+        assert {r.name: r for r in found}["biffd port"].passed is False
+
+
+class TestHostReasons:
+    def test_an_unreachable_manager_names_the_reason_on_the_unit_line(
+        self, run_dir: RunDir, biffd_port: int
+    ) -> None:
+        host = Detection("unreachable", None, "Failed to connect to bus")
+        unit = checks(None, run_dir, biffd_port, host=host)["biffd unit"]
+        assert "Failed to connect to bus" in unit.message
+
+    def test_an_unresponsive_port_names_the_restart(
+        self, unit: FakeBackend, run_dir: RunDir, silent_port: int
+    ) -> None:
+        port = checks(unit, run_dir, silent_port)["biffd port"]
+        assert (port.passed, "biff daemon restart" in port.message) == (False, True)
+
+
+class TestRecordedPortFallback:
+    def test_a_stale_recorded_port_falls_back_to_the_unit_port(
+        self, unit: FakeBackend, run_dir: RunDir, biffd_port: int
+    ) -> None:
+        run_dir.write_port(1)
+        spec = dataclasses.replace(BIFFD_SPEC, health_port=biffd_port)
+        found = DaemonChecks(
+            Detection("found", unit, ""),
+            run_dir,
+            StubRelay(),
+            CLIENT_VERSION,
+            spec=spec,
+        ).checks()
+        assert {r.name: r for r in found}["biffd health"].passed

@@ -21,6 +21,23 @@
   (`biffd is not installed. Run: biff install`) or `DaemonDidNotStartError`
   (`biffd is installed but did not start within 5 seconds. Run: biff daemon
   status, then biff doctor`). Nothing calls it yet.
+- biffd exits with status 78 when no restart can cure its failure (port taken,
+  run directory not private) and writes the reason to
+  `~/.punt-labs/biff/logs/biff.log`. The unit does not restart on 78, limits a
+  crash loop to five starts a minute, and passes `--port 8424` explicitly; the
+  LaunchAgent writes its output to the same log and throttles restarts to 30
+  seconds.
+- `biff install` and `biff daemon install` prove biffd answers `/health`
+  before they report success, remove the unit when a step fails, and carry the
+  supervisor's stderr into the error. `biff uninstall` removes the unit only
+  after the service is stopped and disabled. A hung or unwritable service
+  manager is an error message, not a traceback, and does not skip the rest of
+  uninstall. `biffd` is found on `PATH` as well as in `~/.local/bin`.
+- `biff doctor` fails on a version mismatch or a port held by another program
+  once biffd's unit is installed; otherwise its biffd lines are advisory and say
+  so. A client that finds a stale `serve.port` also tries 8424.
+- `biff daemon status` prints relay connections and attached clients as not
+  reported yet, because biffd has no method that returns them.
 - The service code lives in `biff.supervision` behind a `ServiceBackend`
   protocol that mirrors punt-service, which is not yet on PyPI. Moving to
   punt-service replaces `biff.supervision.systemd`, `launchd`, `host` and

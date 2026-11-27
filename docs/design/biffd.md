@@ -238,7 +238,7 @@ Commands:
 | `biff install` | Installs biffd's service as part of the two-phase install, after provisioning the home tree |
 | `biff daemon install`, `uninstall` | Install or remove the unit alone |
 | `biff daemon start`, `stop`, `restart` | Control the running service |
-| `biff daemon status` | Installed, loaded, port, version, relay connections, attached clients |
+| `biff daemon status` | Installed, loaded, port, version and uptime. Relay connections and attached clients print as "not reported by biffd yet": biffd has no method that returns them, and `biff doctor` checks the relay in the meantime |
 | `biff daemon serve` | Run in the foreground; what the unit and the container autostart execute |
 
 `biff doctor` gains daemon checks, each a `punt-service` doctor result:
@@ -253,13 +253,24 @@ Commands:
 
 Each failing check names the command that repairs it.
 
+**Restart policy.** A crash restarts biffd; a clean stop stays stopped. A
+failure that no restart can cure, such as a port that is taken or a run directory
+that is not private, exits with status 78 (`EX_CONFIG`) after writing its reason
+to `~/.punt-labs/biff/logs/biff.log`. The systemd unit does not restart on 78
+and limits any other crash loop to five starts a minute; the LaunchAgent has a
+30-second `ThrottleInterval`, because launchd cannot skip a restart by status.
+Both units start biffd with an explicit `--port 8424`, so `serve.port` records
+a port but never decides where the unit listens.
+
 ## When the daemon is absent
 
 A client never hangs and never silently does nothing (R-D.7). The sequence:
 
 1. Read the port from `~/.punt-labs/biff/run/serve.port` (8424 when the file
    is absent, so a `--port` override reaches every client), then connect to
-   `127.0.0.1:<port>` with a 1-second timeout.
+   `127.0.0.1:<port>` with a 1-second timeout. A record left by a crash can name
+   a port nothing listens on, so the client also tries 8424, the port the unit
+   starts biffd on, before it starts anything.
 2. On refusal, nudge: start the unit (`launchctl kickstart`, `systemctl --user
    start`), or start a detached `biffd` where no manager exists, then poll
    `/health` until it answers or 5 seconds pass.

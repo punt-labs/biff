@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, final
 
-from biff.daemon.app import daemon_app
+from biff.daemon.app import DaemonApps
 from biff.plugins.claude_code._hook_cli import HookAwareCli
 from biff.server.entrypoints import McpServerOptions
 
@@ -24,5 +24,5 @@ class CliApp:
         app = HookAwareCli.create_app()
         app.command()(McpServerOptions.serve)
         app.command()(McpServerOptions.mcp)
-        app.add_typer(daemon_app, name="daemon")
+        app.add_typer(DaemonApps.group(), name="daemon")
         return app

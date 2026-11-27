@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import final
 
@@ -20,14 +21,25 @@ class RelayStatus:
     def status(self, port: int) -> str:
         """Return the relay line biffd reports for the current directory.
 
+        Blocking.  Inside a running event loop it runs the query on a worker
+        thread with its own loop, because ``asyncio.run`` refuses to nest.
+
         Raises:
             ConnectionError: biffd cannot be reached, refuses the client, or its
                 relay is down; the message says which.
         """
         try:
-            return asyncio.run(self._ask(port))
+            return self._run(port)
         except (OSError, ValueError, DaemonError) as exc:
             raise ConnectionError(str(exc)) from exc
+
+    def _run(self, port: int) -> str:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._ask(port))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, self._ask(port)).result()
 
     @staticmethod
     async def _ask(port: int) -> str:

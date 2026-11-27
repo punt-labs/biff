@@ -5,22 +5,80 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
 
     from biff.supervision.port import PortState
 
 
-def port_probe(state: PortState) -> Callable[[], PortState]:
-    """Return a port probe that always reports *state*."""
-
-    def probe() -> PortState:
-        return state
-
-    return probe
-
-
 @final
+class FakePort:
+    """Reports a fixed port state, and whether biffd ever answers ``/health``."""
+
+    __slots__ = ("_answers", "_state")
+
+    _state: PortState
+    _answers: bool
+
+    def __new__(cls, state: PortState, *, answers: bool) -> Self:
+        self = super().__new__(cls)
+        self._state = state
+        self._answers = answers
+        return self
+
+    def state(self) -> PortState:
+        return self._state
+
+    def wait_until_answering(self, seconds: float) -> bool:
+        return self._answers
+
+
+def port_probe(state: PortState, *, answers: bool = True) -> FakePort:
+    """Return a port watcher that reports *state* and answers ``/health`` or not."""
+    return FakePort(state, answers=answers)
+
+
+class RaisingBackend:
+    """A backend whose supervisor calls raise *error*, as a missing or hung one does."""
+
+    __slots__ = ("_error", "_path")
+
+    _path: Path
+    _error: BaseException
+
+    def __new__(cls, config_path: Path, error: BaseException) -> Self:
+        self = super().__new__(cls)
+        self._path = config_path
+        self._error = error
+        return self
+
+    def enable_autostart(self) -> bool:
+        raise self._error
+
+    def install(self) -> bool:
+        raise self._error
+
+    def uninstall(self) -> None:
+        raise self._error
+
+    def stop(self) -> bool:
+        raise self._error
+
+    def start(self) -> bool:
+        raise self._error
+
+    def restart(self) -> bool:
+        raise self._error
+
+    def is_active(self) -> bool:
+        raise self._error
+
+    def config_path(self) -> Path:
+        return self._path
+
+    def linger_warning(self) -> str:
+        return ""
+
+
 class FakeBackend:
     """Satisfies ``ServiceBackend``; records each supervisor call it receives."""
 

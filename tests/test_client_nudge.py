@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Final, Self, final
 
@@ -13,13 +16,15 @@ from biff.client.nudge import (
     DaemonDidNotStartError,
     DaemonNotInstalledError,
     DaemonNudge,
+    DaemonPortFileError,
+    DaemonStartFailedError,
 )
 from biff.run_dir import RunDir
 from biff.supervision.biffd import BIFFD_SPEC
 from biff.supervision.errors import ServiceActionFailedError
 from biff.supervision.health import HealthProbe
 from biff.supervision.starter import HostStarter
-from tests.test_supervision.fake_backend import FakeBackend
+from tests.test_supervision.fake_backend import FakeBackend, RaisingBackend
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -62,16 +67,20 @@ class ScriptedProbe:
 class ScriptedStarter:
     """Reports a fixed outcome and counts how often it was asked to start."""
 
-    __slots__ = ("_error", "_outcome", "_starts")
+    __slots__ = ("_error", "_note", "_outcome", "_starts")
 
     _outcome: StartOutcome
     _error: bool
+    _note: str
     _starts: int
 
-    def __new__(cls, outcome: StartOutcome, *, error: bool = False) -> Self:
+    def __new__(
+        cls, outcome: StartOutcome, *, error: bool = False, note: str = ""
+    ) -> Self:
         self = super().__new__(cls)
         self._outcome = outcome
         self._error = error
+        self._note = note
         self._starts = 0
         return self
 
@@ -82,8 +91,11 @@ class ScriptedStarter:
     def start(self) -> StartOutcome:
         self._starts += 1
         if self._error:
-            raise ServiceActionFailedError("biffd start failed. See the log.")
+            raise ServiceActionFailedError("biffd start failed: unit is masked.")
         return self._outcome
+
+    def exit_note(self) -> str:
+        return self._note
 
 
 def nudge(probe: ScriptedProbe, starter: ScriptedStarter) -> DaemonNudge:
@@ -115,12 +127,37 @@ class TestEnsureRunning:
             ).ensure_running()
         assert str(caught.value) == DID_NOT_START
 
-    def test_a_refused_start_is_installed_but_down(self) -> None:
-        with pytest.raises(DaemonDidNotStartError) as caught:
+    def test_a_refused_start_says_so_and_does_not_claim_a_timeout(self) -> None:
+        with pytest.raises(DaemonStartFailedError) as caught:
             nudge(
                 ScriptedProbe(after=99), ScriptedStarter("launched", error=True)
             ).ensure_running()
-        assert str(caught.value) == DID_NOT_START
+        assert "did not start within" not in str(caught.value)
+        assert "unit is masked" in str(caught.value)
+        assert "Run: biff daemon status, then biff doctor" in str(caught.value)
+
+    def test_a_child_that_exited_is_reported_at_once_with_its_status(self) -> None:
+        probe = ScriptedProbe(after=10_000)
+        starter = ScriptedStarter("launched", note="biffd exited with status 78")
+        started = time.monotonic()
+        with pytest.raises(DaemonStartFailedError, match="status 78"):
+            DaemonNudge(probe, starter, patience=30.0, interval=0.01).ensure_running()
+        assert time.monotonic() - started < 2.0
+
+    def test_a_corrupt_port_file_is_a_connection_error(self, tmp_path: Path) -> None:
+        run_dir = RunDir(tmp_path / "run")
+        run_dir.ensure()
+        run_dir.port_path.write_text("not a port\n")
+        with pytest.raises(DaemonPortFileError, match=r"serve\.port"):
+            DaemonNudge.for_host(run_dir)
+
+    def test_a_stale_recorded_port_falls_back_to_the_unit_port(
+        self, tmp_path: Path, health_port: int
+    ) -> None:
+        run_dir = RunDir(tmp_path / "run")
+        run_dir.write_port(1)  # a crash left a port nothing listens on
+        spec = dataclasses.replace(BIFFD_SPEC, health_port=health_port)
+        DaemonNudge.for_host(run_dir, spec).ensure_running()
 
     def test_the_two_failures_are_distinct_types(self) -> None:
         assert not issubclass(DaemonNotInstalledError, DaemonDidNotStartError)
@@ -132,25 +169,55 @@ class TestEnsureRunning:
 
 
 @final
+class FakeChild:
+    """A launched process that has exited with *status*, or is still running."""
+
+    __slots__ = ("_status",)
+
+    _status: int | None
+
+    def __new__(cls, status: int | None) -> Self:
+        self = super().__new__(cls)
+        self._status = status
+        return self
+
+    def poll(self) -> int | None:
+        return self._status
+
+
+@final
 class FakeDetacher:
     """Records a detached launch and answers where the binary is."""
 
-    __slots__ = ("_found", "launched")
+    __slots__ = ("_error", "_found", "_status", "launched")
 
     _found: Path | None
+    _status: int | None
+    _error: OSError | None
     launched: list[tuple[Path, int]]
 
-    def __new__(cls, found: Path | None) -> Self:
+    def __new__(
+        cls,
+        found: Path | None,
+        *,
+        status: int | None = None,
+        error: OSError | None = None,
+    ) -> Self:
         self = super().__new__(cls)
         self._found = found
+        self._status = status
+        self._error = error
         self.launched = []
         return self
 
     def binary(self) -> Path | None:
         return self._found
 
-    def launch(self, binary: Path, port: int) -> None:
+    def launch(self, binary: Path, port: int) -> FakeChild:
+        if self._error is not None:
+            raise self._error
         self.launched.append((binary, port))
+        return FakeChild(self._status)
 
 
 class TestHostStarter:
@@ -188,6 +255,47 @@ class TestHostStarter:
         assert HostStarter(BIFFD_SPEC, 8424, None, FakeDetacher(None)).start() == (
             "not_installed"
         )
+
+    def test_a_popen_failure_is_a_failed_start_not_an_oserror(
+        self, tmp_path: Path
+    ) -> None:
+        detacher = FakeDetacher(tmp_path / "biffd", error=PermissionError("denied"))
+        starter = HostStarter(BIFFD_SPEC, 8424, None, detacher)
+        with pytest.raises(ServiceActionFailedError, match="denied"):
+            starter.start()
+
+    def test_a_missing_systemctl_is_a_failed_start(self, tmp_path: Path) -> None:
+        unit = tmp_path / "biffd.service"
+        unit.write_text("unit")
+        starter = HostStarter(
+            BIFFD_SPEC,
+            8424,
+            RaisingBackend(unit, FileNotFoundError("systemctl")),
+            FakeDetacher(None),
+        )
+        with pytest.raises(ServiceActionFailedError, match="systemctl"):
+            starter.start()
+
+    def test_a_hung_supervisor_is_a_failed_start(self, tmp_path: Path) -> None:
+        unit = tmp_path / "biffd.service"
+        unit.write_text("unit")
+        hung = subprocess.TimeoutExpired("systemctl", 30)
+        starter = HostStarter(
+            BIFFD_SPEC, 8424, RaisingBackend(unit, hung), FakeDetacher(None)
+        )
+        with pytest.raises(ServiceActionFailedError, match="timed out"):
+            starter.start()
+
+    def test_the_exit_note_names_a_child_that_died(self, tmp_path: Path) -> None:
+        detacher = FakeDetacher(tmp_path / "biffd", status=78)
+        starter = HostStarter(BIFFD_SPEC, 8424, None, detacher)
+        starter.start()
+        assert "status 78" in starter.exit_note()
+
+    def test_the_exit_note_is_empty_while_the_child_runs(self, tmp_path: Path) -> None:
+        starter = HostStarter(BIFFD_SPEC, 8424, None, FakeDetacher(tmp_path / "b"))
+        starter.start()
+        assert starter.exit_note() == ""
 
     def test_no_manager_launches_the_binary_detached_on_the_port(
         self, tmp_path: Path

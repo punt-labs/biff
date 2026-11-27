@@ -4,14 +4,22 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Protocol, Self, final
 
 from biff.supervision.runner import Supervisor
 
 if TYPE_CHECKING:
     from biff.supervision.spec import ServiceSpec
 
-__all__ = ["DetachedDaemon"]
+__all__ = ["Child", "DetachedDaemon"]
+
+
+class Child(Protocol):
+    """A process that was started; ``subprocess.Popen`` is the real one."""
+
+    def poll(self) -> int | None:
+        """Return the exit status, or ``None`` while the process runs."""
+        ...
 
 
 @final
@@ -39,6 +47,10 @@ class DetachedDaemon:
         installed = self._spec.binary_path
         return installed if installed.exists() else None
 
-    def launch(self, binary: Path, port: int) -> None:
-        """Start *binary* on *port*, detached from this process and its terminal."""
-        Supervisor.spawn_detached([str(binary), "--port", str(port)])
+    def launch(self, binary: Path, port: int) -> Child:
+        """Start *binary* on *port*, detached from this process and its terminal.
+
+        Raises:
+            OSError: The executable cannot be started.
+        """
+        return Supervisor.spawn_detached([str(binary), "--port", str(port)])

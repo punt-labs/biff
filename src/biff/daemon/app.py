@@ -2,25 +2,37 @@
 
 from __future__ import annotations
 
+from typing import final
+
 import typer
 
 from biff.daemon.cli import DaemonCommands
 from biff.daemon.service_cli import ServiceCommands
 
-__all__ = ["biffd_app", "daemon_app"]
+__all__ = ["DaemonApps"]
 
-daemon_app = typer.Typer(
-    help="Run and manage the per-user biff daemon.",
-    no_args_is_help=True,
-)
-daemon_app.command("serve")(DaemonCommands.serve)
-daemon_app.command("install")(ServiceCommands.install)
-daemon_app.command("uninstall")(ServiceCommands.uninstall)
-daemon_app.command("start")(ServiceCommands.start)
-daemon_app.command("stop")(ServiceCommands.stop)
-daemon_app.command("restart")(ServiceCommands.restart)
-daemon_app.command("status")(ServiceCommands.status)
 
-# The executable a service unit runs: ``biff daemon serve`` without the prefix.
-biffd_app = typer.Typer(add_completion=False)
-biffd_app.command()(DaemonCommands.serve)
+@final
+class DaemonApps:
+    """Builds the two ways to reach biffd's commands."""
+
+    @staticmethod
+    def group() -> typer.Typer:
+        """Return the ``biff daemon`` group: serve, and the service commands."""
+        app = typer.Typer(
+            help="Run and manage the per-user biff daemon.",
+            no_args_is_help=True,
+        )
+        app.command("serve")(DaemonCommands.serve)
+        app.command("install")(ServiceCommands.install)
+        app.command("uninstall")(ServiceCommands.uninstall)
+        app.command("start")(ServiceCommands.start)
+        app.command("stop")(ServiceCommands.stop)
+        app.command("restart")(ServiceCommands.restart)
+        app.command("status")(ServiceCommands.status)
+        return app
+
+    @staticmethod
+    def biffd() -> None:
+        """Run the daemon in the foreground: the ``biffd`` executable a unit runs."""
+        typer.run(DaemonCommands.serve)

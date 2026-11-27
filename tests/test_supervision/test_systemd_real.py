@@ -83,7 +83,7 @@ def spec(tmp_path: Path) -> Iterator[ServiceSpec]:
 
 @pytest.fixture
 def manager(spec: ServiceSpec) -> ServiceManager:
-    return ServiceManager(spec, SystemdBackend(spec), PortProbe(spec.health_port).state)
+    return ServiceManager(spec, SystemdBackend(spec), PortProbe(spec.health_port))
 
 
 def test_a_user_manager_is_available() -> None:
