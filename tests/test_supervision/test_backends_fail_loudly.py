@@ -595,6 +595,13 @@ class TestInstallScript:
     """The bootstrap's service step, run with a stub in place of ``biff``."""
 
     SCRIPT = Path(__file__).parents[2] / "install.sh"
+    SERVICE_CALL = '"$BINARY" daemon install < /dev/null ||'
+    PLUGIN_CALL = 'claude plugin install "${PLUGIN_NAME}'
+
+    @classmethod
+    def service_runs_before_plugin(cls, text: str) -> bool:
+        """Return whether the real service call precedes the real plugin call."""
+        return text.index(cls.SERVICE_CALL) < text.index(cls.PLUGIN_CALL)
 
     def _blocks(self) -> tuple[str, str]:
         text = self.SCRIPT.read_text()
@@ -606,12 +613,18 @@ class TestInstallScript:
         return block("biffd service"), block("service verdict")
 
     def _run(
-        self, tmp_path: Path, *, help_ok: bool, install_status: int
+        self,
+        tmp_path: Path,
+        *,
+        help_status: int,
+        help_error: str = "",
+        install_status: int = 0,
     ) -> subprocess.CompletedProcess[str]:
         stub = tmp_path / "biff"
         stub.write_text(
             "#!/bin/sh\n"
-            f'if [ "$3" = "--help" ]; then exit {0 if help_ok else 2}; fi\n'
+            f'if [ "$3" = "--help" ]; then echo "{help_error}" >&2; '
+            f"exit {help_status}; fi\n"
             f"exit {install_status}\n"
         )
         stub.chmod(0o755)
@@ -625,32 +638,45 @@ class TestInstallScript:
         )
         return Supervisor.run("/bin/sh", "-c", program)
 
-    def test_the_service_step_sits_between_the_cli_install_and_the_plugin(
-        self,
-    ) -> None:
+    def test_the_real_service_call_runs_before_the_real_plugin_call(self) -> None:
+        assert self.service_runs_before_plugin(self.SCRIPT.read_text())
+
+    def test_the_order_check_fails_when_the_two_calls_are_swapped(self) -> None:
         text = self.SCRIPT.read_text()
-        assert (
-            text.index("uv tool install")
-            < text.index('"$BINARY" daemon install')
-            < text.index("claude plugin marketplace")
-        )
+        service = text.index(self.SERVICE_CALL)
+        plugin = text.index(self.PLUGIN_CALL)
+        # Mutant: the plugin call moved ahead of the service call.
+        swapped = text[:service] + self.PLUGIN_CALL + text[service:plugin]
+        assert not self.service_runs_before_plugin(swapped)
 
     @pytest.mark.parametrize("status", [0, 3])
     def test_installed_or_no_manager_succeeds(
         self, tmp_path: Path, status: int
     ) -> None:
-        done = self._run(tmp_path, help_ok=True, install_status=status)
+        done = self._run(tmp_path, help_status=0, install_status=status)
         assert (done.returncode, "plugin-step-ran" in done.stdout) == (0, True)
 
     def test_a_refusing_manager_fails_after_the_plugin_step(
         self, tmp_path: Path
     ) -> None:
-        done = self._run(tmp_path, help_ok=True, install_status=1)
+        done = self._run(tmp_path, help_status=0, install_status=1)
         assert done.returncode == 1
         assert done.stdout.index("plugin-step-ran") < done.stdout.index("fail:")
 
-    def test_a_release_without_the_command_is_skipped_not_failed(
+    def test_a_release_without_the_command_is_skipped_with_a_note(
         self, tmp_path: Path
     ) -> None:
-        done = self._run(tmp_path, help_ok=False, install_status=2)
+        done = self._run(
+            tmp_path, help_status=2, help_error="Error: No such command 'install'."
+        )
         assert (done.returncode, "no 'daemon install'" in done.stdout) == (0, True)
+
+    def test_a_cli_that_fails_to_start_fails_loudly_with_its_stderr(
+        self, tmp_path: Path
+    ) -> None:
+        done = self._run(
+            tmp_path, help_status=1, help_error="ImportError: no module named nats"
+        )
+        assert done.returncode == 1
+        assert "ImportError: no module named nats" in done.stdout
+        assert "plugin-step-ran" in done.stdout

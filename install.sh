@@ -165,7 +165,9 @@ done
 # Any other failure is real, so it fails the script after the plugin step ran.
 # A pinned release without the command is skipped, not failed.
 SERVICE_STATUS=0
-if "$BINARY" daemon install --help < /dev/null > /dev/null 2>&1; then
+PROBE_STATUS=0
+PROBE_ERR=$("$BINARY" daemon install --help < /dev/null 2>&1 > /dev/null) || PROBE_STATUS=$?
+if [ "$PROBE_STATUS" = "0" ]; then
   info "Installing the biffd service..."
   "$BINARY" daemon install < /dev/null || SERVICE_STATUS=$?
   case "$SERVICE_STATUS" in
@@ -174,7 +176,14 @@ if "$BINARY" daemon install --help < /dev/null > /dev/null 2>&1; then
     *) warn "biffd service not installed (see: biff daemon status, biff doctor)" ;;
   esac
 else
-  warn "this biff release has no 'daemon install'; the biffd service is skipped"
+  case "$PROBE_ERR" in
+    *"No such command"*)
+      warn "this biff release has no 'daemon install'; the biffd service is skipped" ;;
+    *)
+      # The CLI itself failed to start: that is not an old release.
+      SERVICE_STATUS=$PROBE_STATUS
+      warn "biff failed to start, so the biffd service was not installed: $PROBE_ERR" ;;
+  esac
 fi
 # <<< biffd service
 
