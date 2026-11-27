@@ -208,9 +208,9 @@ class Session:
         """Whether no connection is attached."""
         return not self._attachments
 
-    def dormant_for(self) -> float:
-        """Return the seconds since the last connection left, or 0 while one is here."""
-        return 0.0 if self._attachments else time.monotonic() - self._idle_since
+    def idle_for(self) -> float:
+        """Return the seconds since the last connection left, or since the start."""
+        return time.monotonic() - self._idle_since
 
     @property
     def status(self) -> SessionStatus:

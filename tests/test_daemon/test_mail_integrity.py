@@ -15,7 +15,7 @@ import pytest
 from biff.client.connection import ClientIdentity, DaemonClient, RequestTimeoutError
 from biff.daemon.connection import ConnectionHandler
 from biff.relay import LocalRelay
-from tests.test_daemon.test_read_delivery import ConsumingRelay
+from tests.test_daemon.consuming import ConsumingRelay
 
 if TYPE_CHECKING:
     from collections.abc import Callable

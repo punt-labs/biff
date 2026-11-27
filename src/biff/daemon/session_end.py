@@ -73,33 +73,35 @@ class SessionEnd:
             self._live.forget(key, spare=session)
         return CommandResult(text="Session ended.", json_data={"ended": True})
 
-    async def expire(self, retention: float = RETENTION_SECONDS) -> None:
+    async def expire(self, retention: float) -> None:
         """End every harness session that has had no connection for *retention*.
 
         A session that cannot be ended now (the relay is down) keeps its record
         and is tried again by the next sweep.
         """
         for key, session in self._live.snapshot().items():
-            if key.role == CLI_ROLE or session.dormant_for() < retention:
-                continue
-            try:
-                await self._expire_one(key, session, retention)
-            except RELAY_ERRORS:
-                logger.warning(
-                    "could not expire session %s", key.session_id, exc_info=True
-                )
+            if key.role != CLI_ROLE and self._is_expired(session, retention):
+                try:
+                    await self._expire_one(key, session, retention)
+                except RELAY_ERRORS:
+                    logger.warning(
+                        "could not expire session %s", key.session_id, exc_info=True
+                    )
+
+    @staticmethod
+    def _is_expired(session: Session, retention: float) -> bool:
+        return session.is_dormant and session.idle_for() >= retention
 
     async def _expire_one(
         self, key: SessionKey, session: Session, retention: float
     ) -> None:
         async with self._live.guard(key):
             # A hello may have reattached it while this waited for the guard.
-            if self._live.snapshot().get(key) is not session:
-                return
-            if session.dormant_for() < retention:
-                return
-            await self._finish(session)
-            self._live.forget(key)
+            if self._live.snapshot().get(key) is session and self._is_expired(
+                session, retention
+            ):
+                await self._finish(session)
+                self._live.forget(key)
 
     @staticmethod
     async def refile_held(session: Session) -> None:

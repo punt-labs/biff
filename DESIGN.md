@@ -9782,3 +9782,42 @@ retry (three tries, then `SessionChangedError`) reads the manual plan and keeps
 it. The model's goal for the stamp is a heartbeat that moved the clock past the
 value it read (`beatAt > seenTool`), which no biff call can have caused, since
 a call between the read and the commit makes the commit fail.
+
+## DES-101: A Harness Session Ends in the Daemon, on Request or at Retention
+
+**Date:** 2026-11-27
+**Status:** SETTLED
+**Topic:** The `end` method and the retention sweep for harness sessions, the
+second group of daemon additions for PL-1670. Model:
+`docs/specs/claude-session-end.tex`. Detail: `docs/design/biffd.md`.
+
+**Decision.**
+
+- `end` (no params) ends the caller's own session. The ordering is the model's:
+  the effects (file the held batch back, drain the inbox to the user mailbox,
+  release the tty name, delete the row, append the logout) each run idempotently,
+  and the record is dropped and marked ended only after all of them. A failure
+  leaves the record, so there is no state in which a row outlives its record
+  (`BadOrphan`), and the next `end` finishes (`rsEnding` reaches `rsNone`).
+- The name is released only if the session still owns it. The model releases by
+  name and so orders the old end before the new hello; the owner check makes the
+  release harmless when the order is not kept.
+- A connection of a replaced run is refused by the daemon's existing run check
+  before the method runs (`EndRefused`).
+- Retention: `ExpireClaude` runs in the session sweep for a session that is
+  dormant and has been for the row's lifetime. A hello that reattaches first wins
+  (the sweep re-checks under the session's guard).
+- Held mail is refiled before the drop (requirement A2 of DES-099); with the
+  relay unavailable the end fails and keeps the mail.
+
+**Divergence from the model.** The model keeps the record across a daemon
+restart. The daemon holds harness records in memory, so a restart forgets them:
+their rows age out by the relay's own lifetime and the unconfirmed batch is lost
+with the outbox, as `DaemonRestart` says for the outbox. Persisting the records is
+not in this change.
+
+**Rejected.**
+
+- *A path or session id in `end`.* Only the caller's own session ends; another
+  session's end is the sweep's.
+- *Releasing the tty name by name.* It would free a name a new session took.

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from biff.daemon.resolver import ResolveError
-from biff.daemon.session_end import SessionEnd
+from biff.daemon.session_end import RETENTION_SECONDS, SessionEnd
 from biff.daemon.session_host import SessionHost
 from biff.daemon.session_pointer import CurrentPointer
 from biff.daemon.session_select import SessionSelector
@@ -90,7 +90,7 @@ class SessionSweeper:
 
     async def _expire_claude(self) -> None:
         """End the harness sessions whose retention is spent."""
-        await SessionEnd(self._live).expire()
+        await SessionEnd(self._live).expire(RETENTION_SECONDS)
 
     async def _sweep_all(self) -> None:
         try:
