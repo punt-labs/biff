@@ -347,32 +347,35 @@ class TestADebtInsideTheHandshakeWindowWakesOnce:
 
 
 @pytest.fixture
-def only_this_process_is_alive(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the liveness probe report every pid but this process's as gone.
+def dead_pid(monkeypatch: pytest.MonkeyPatch) -> int:
+    """Return a pid the liveness probe is made to report as gone.
 
-    The reclaim tests name probe directories for pids they need to be dead.  A real
-    pid cannot be guaranteed dead: the OS may hand a reaped child's pid, or a
-    literal such as 4194303, to a live process before the probe runs.  Replacing
-    the probe makes the tests independent of the host's pid space.
+    The probe is replaced by a fixed answer: only this process is alive.  A real
+    pid cannot be guaranteed dead, because the OS may hand a reaped child's pid, or
+    a literal such as 4194303, to a live process before the probe runs.  The pid
+    returned is never this process's own, even if pytest runs as 4194303.
     """
     me = os.getpid()
+    dead = next(pid for pid in (4194303, 4194302) if pid != me)
+    assert dead != me
 
     def is_running(pid: int) -> bool:
         return pid == me
 
     monkeypatch.setattr(AbandonedCanaries, "_is_running", staticmethod(is_running))
+    return dead
 
 
 class TestAbandonedProbeDirectories:
-    @pytest.mark.usefixtures("only_this_process_is_alive")
     async def test_a_dead_sessions_probe_is_reclaimed_and_a_live_ones_is_not(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        dead_pid: int,
     ) -> None:
         root = tmp_path / "canaries"
         monkeypatch.setattr(LocalWatch, "CANARY_ROOT", root)
-        dead = root / "4194303-abc"
+        dead = root / f"{dead_pid}-abc"
         live = root / f"{os.getpid()}-other"
         for d in (dead, live):
             d.mkdir(parents=True)
@@ -694,30 +697,37 @@ class TestStoppingANeverStartedWatchTouchesNothing:
 
 class TestTheRealLivenessProbe:
     def test_an_exited_process_is_reported_gone(self) -> None:
-        """The probe says a reaped child's pid is not running.
+        """The probe says an exited process's pid is not running.
 
-        This asserts only the probe's documented behavior, so it is not tied to the
-        reclaim tests: those replace the probe with a fixed answer, because the OS
-        may reassign a reaped pid before any probe can run.
+        The OS may give a reaped child's pid to a new process before the probe
+        runs, which the probe would then rightly report alive.  So only a pid an
+        independent ``os.kill(pid, 0)`` also finds gone is used; this asserts the
+        probe's documented behavior, never the host's pid allocation.
         """
-        child = subprocess.Popen([sys.executable, "-c", "pass"])
-        child.wait()
-        assert AbandonedCanaries._is_running(child.pid) is False
+        for _ in range(20):
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            child.wait()
+            try:
+                os.kill(child.pid, 0)
+            except ProcessLookupError:
+                assert AbandonedCanaries._is_running(child.pid) is False
+                return
+        pytest.skip("every reaped pid was reassigned at once, in 20 tries")
 
     def test_this_process_is_reported_running(self) -> None:
         assert AbandonedCanaries._is_running(os.getpid()) is True
 
 
 class TestReclaimSurvivesAnotherSessionsCleanup:
-    @pytest.mark.usefixtures("only_this_process_is_alive")
     def test_an_entry_gone_between_listing_and_lstat_is_skipped(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        dead_pid: int,
     ) -> None:
         root = tmp_path / "canaries"
         root.mkdir(mode=0o700)
-        dead = root / "4194303-abc"
+        dead = root / f"{dead_pid}-abc"
         dead.mkdir()
         gone = root / "4194302-def"  # listed, then removed by another session
         real_iterdir = type(root).iterdir
@@ -730,16 +740,16 @@ class TestReclaimSurvivesAnotherSessionsCleanup:
         AbandonedCanaries.reclaim(root)
         assert not dead.exists()  # the rest was still reclaimed
 
-    @pytest.mark.usefixtures("only_this_process_is_alive")
     def test_another_os_error_is_logged_and_skipped(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        dead_pid: int,
     ) -> None:
         root = tmp_path / "canaries"
         root.mkdir(mode=0o700)
-        dead = root / "4194303-abc"
+        dead = root / f"{dead_pid}-abc"
         dead.mkdir()
         odd = root / "4194302-def"
         odd.mkdir()
