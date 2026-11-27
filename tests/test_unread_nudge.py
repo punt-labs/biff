@@ -62,6 +62,32 @@ def test_nudge_while_polling_is_on(tmp_path: Path) -> None:
     assert "2 unread biff messages" in out["hookSpecificOutput"]["additionalContext"]
 
 
+def _stamp(home: Path) -> Path:
+    return home / ".punt-labs" / "biff" / "unread" / f"{_SESSION}.active"
+
+
+@pytest.mark.parametrize("biff_enabled", [True, False])
+def test_every_hook_call_stamps_the_session_active(
+    tmp_path: Path, biff_enabled: bool
+) -> None:
+    unread = {"count": 0, "biff_enabled": biff_enabled, "server_pid": 1}
+    _run(tmp_path, unread, polling=False)
+    assert _stamp(tmp_path).exists()
+
+
+def test_a_session_biff_never_served_gets_no_stamp(tmp_path: Path) -> None:
+    (tmp_path / ".punt-labs" / "biff" / "unread").mkdir(parents=True)
+    done = subprocess.run(  # noqa: S603 - runs the repo's own hook script
+        [_BASH, str(_HOOK)],
+        input=json.dumps({"hook_event_name": "PostToolUse", "session_id": _SESSION}),
+        capture_output=True,
+        text=True,
+        env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+        check=True,
+    )
+    assert (done.stdout, _stamp(tmp_path).exists()) == ("", False)
+
+
 @pytest.mark.parametrize("name", ["read.md", "read-dev.md"])
 def test_read_command_does_not_read_the_status_line(name: str) -> None:
     manifest = _HOOK.parents[1] / ".claude-plugin" / "plugin.json"

@@ -64,6 +64,14 @@ if [[ ! -f "$_unread_file" ]]; then
   exit 0
 fi
 
+# Stamp the session as active on every prompt and every tool call, biff's own
+# or not. The server's heartbeat carries this file's mtime into the shared
+# presence row's last_tool_at, so other hosts see the session's real idle
+# time instead of the time since its last biff tool call. A bare touch keeps
+# this inside the hook's latency budget; it runs before the mesg and polling
+# gates below because activity is not a notification.
+touch "$_unread_dir/${_session_key}.active" 2>/dev/null
+
 # `// true` would be wrong here: jq's `//` treats a literal `false` the
 # same as `null`/missing, which would silently un-mute a mesg-off session.
 # `!= false` is exact: only an explicit boolean `false` yields "false";

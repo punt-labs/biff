@@ -1760,7 +1760,7 @@
     "avg_params": 1.72,
     "max_complexity": 9.0,
     "avg_complexity": 3.5,
-    "module_size": 740.0,
+    "module_size": 738.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 0.061,
     "init_violations": 1.0,
@@ -2001,6 +2001,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/server/hook_activity.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.33,
+    "max_complexity": 4.0,
+    "avg_complexity": 2.67,
+    "module_size": 32.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/server/launch.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -2069,10 +2082,10 @@
   "src/biff/server/state.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.43,
+    "avg_params": 0.38,
     "max_complexity": 3.0,
-    "avg_complexity": 1.29,
-    "module_size": 80.0,
+    "avg_complexity": 1.25,
+    "module_size": 84.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

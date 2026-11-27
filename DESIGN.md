@@ -9322,3 +9322,40 @@ fetched via `ethos handoff fetch-runtime`: cold clean run passes in 206.04 s
 (cache miss + `prehydrate` + full `make check` launch), warm clean run hits
 cache in 1.16 s, and a syntax error in `src/biff/__init__.py` blocks with exit
 status 2 in 14.39 s.
+
+## DES-097: Idle Time Follows Every Tool Call, Carried by the Heartbeat
+
+**Date:** 2026-11-26
+**Status:** SETTLED
+**Topic:** `/who` on another host showed a live session as hours idle
+**Amends:** DES-056
+
+**Context.** DES-056 made `last_tool_at` the idle clock and wrote it only from
+biff's own tool handlers. Observed 2026-11-26: a session on one host called
+Bash and Edit every few minutes, its own `/who` read 0m, and another host read
+9h. Nothing crossed hosts: the owner's `/who` refreshed the row because `who`
+is a biff call, and a session that never calls a biff tool never refreshes it.
+A revived row restarts at the revival time, so it was not stale carry-over; the
+`last_tool_at` timestamp is normalized to UTC on read, so it was not clock skew.
+
+**Decision.** The PostToolUse and UserPromptSubmit hook already runs for every
+tool call (`plugin/hooks/unread-nudge.sh`). It now touches
+`<unread_dir>/<session_id>.active` first, a pure shell `touch` inside the hook's
+latency budget, and only for a session biff already serves (the unread file
+exists). `ServerState.heartbeat` runs on each heartbeat tick: after the relay
+heartbeat it reads that file's mtime and, when newer than the row's
+`last_tool_at`, writes it. The time moves forward only, so a stale stamp never
+undoes a later biff call. The server removes the file with the unread file on
+exit.
+
+**Alternatives.**
+
+- *Run `biff-hook` from PostToolUse for every tool.* Rejected: a Python start
+  per tool call is about 0.3 s, over the hook budget.
+- *Make the heartbeat write `last_tool_at = now`.* Rejected: it restores the
+  always-zero column DES-056 fixed; idle must reflect real activity.
+
+**Consequence.** Idle is accurate to the heartbeat interval (60 s) on other
+hosts. A harness other than Claude Code has no such hook and still reads idle
+until it calls a biff tool. The Z models (`session-model.tex`) do not yet state
+this transition; extending them is follow-up work.

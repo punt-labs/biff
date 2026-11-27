@@ -267,26 +267,24 @@ async def _heartbeat_loop(
 ) -> None:
     """Periodic heartbeat to keep this session alive in the relay.
 
-    Each ``heartbeat()`` call updates ``last_active`` and — for NATS KV —
-    resets the key's TTL.  When the process sleeps (laptop lid closed) or
-    dies (SIGKILL), heartbeats stop and the relay eventually expires the
-    session.  ``heartbeat()`` deliberately never touches ``last_tool_at``
-    — that field is the idle time ``/who`` and ``/finger`` display, and
-    must only advance on a real tool call, not this unconditional tick.
+    ``heartbeat()`` updates ``last_active`` and resets a NATS key's TTL; if
+    the process sleeps or dies the heartbeats stop and the relay expires the
+    session.  It never touches ``last_tool_at`` (the idle time ``/who``
+    shows): only a real tool call may advance that, and the plugin hook's
+    stamp of one is carried over by ``ServerState.heartbeat``.
     """
     # NATS logs a wedge's onset and recovery itself (_ConnectionHealth), so its
     # ticks stay at DEBUG; any other relay warns on the first failure and on
     # recovery (levels[0]), and drops to DEBUG while it keeps failing.
-    levels = (logging.WARNING, logging.DEBUG)
-    if isinstance(state.relay, NatsRelay):
-        levels = (logging.DEBUG, logging.DEBUG)
+    first = logging.DEBUG if isinstance(state.relay, NatsRelay) else logging.WARNING
+    levels = (first, logging.DEBUG)
     failing = False
     while not shutdown.is_set():
         with suppress(TimeoutError):
             await asyncio.wait_for(shutdown.wait(), timeout=interval)
             return  # Shutdown requested
         try:
-            await state.relay.heartbeat(state.session_key)
+            await state.heartbeat()
         except Exception:
             logger.log(levels[failing], "Heartbeat failed", exc_info=True)
             failing = True
@@ -726,12 +724,11 @@ def _remove_unread_files(unread_path: Path | None) -> None:
     if unread_path is None:
         return
     failure: OSError | None = None
-    for path in (unread_path, unread_path.with_suffix(".nudged")):
+    for path in (unread_path, *map(unread_path.with_suffix, (".nudged", ".active"))):
         try:
             path.unlink(missing_ok=True)
         except OSError as exc:
-            if failure is None:
-                failure = exc
+            failure = failure or exc
     if failure is not None:
         raise failure
 
