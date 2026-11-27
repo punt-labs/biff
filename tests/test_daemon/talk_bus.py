@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
@@ -52,7 +53,7 @@ class TalkBus:
         self.subscribe_block: asyncio.Event | None = None
         self.flush_gate: asyncio.Event | None = None
         self.flush_fails = False
-        self.failed_flushes = 0
+        self.failed_flushes: Counter[str] = Counter()  # per subject
         self._queued: list[tuple[str, Callback]] = []
         self.relays: list[TalkBusRelay] = []
 
@@ -76,7 +77,8 @@ class TalkBus:
 
     async def flush(self) -> None:
         if self.flush_fails:
-            self.failed_flushes += 1
+            for subject, _ in self._queued:  # each feed's own subscription
+                self.failed_flushes[subject] += 1
             msg = "the flush timed out"
             raise TimeoutError(msg)
         if self.flush_gate is not None:
@@ -108,7 +110,7 @@ class TalkBusRelay(LocalRelay):
         self.generation = 1
         self.down = False
         self.stale = False
-        self.failed_dials = 0
+        self.failed_dials: Counter[str] = Counter()  # per session key
         self.crash: Exception | None = None
         bus.relays.append(self)
 
@@ -117,16 +119,18 @@ class TalkBusRelay(LocalRelay):
         return self.generation
 
     def talk_notify_subject(self, session_key: str) -> str:
+        # The feed asks for its subject right after it dials, so this is where
+        # an outage is felt by one session's feed and counted for that session.
+        if self.crash is not None:
+            self.failed_dials[session_key] += 1
+            raise self.crash
+        if self.down:
+            self.failed_dials[session_key] += 1
+            msg = "no connection"
+            raise TimeoutError(msg)
         return f"talk.notify.{session_key}"
 
     async def get_nc(self) -> TalkClient:
-        if self.crash is not None:
-            self.failed_dials += 1
-            raise self.crash
-        if self.down:
-            self.failed_dials += 1
-            msg = "no connection"
-            raise TimeoutError(msg)
         return self._bus
 
     async def get_session(self, session_key: str) -> UserSession | None:

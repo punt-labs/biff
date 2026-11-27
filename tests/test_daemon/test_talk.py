@@ -266,7 +266,8 @@ async def test_a_failed_resubscribe_is_retried_and_the_feed_survives(
     relay = bus.relays[0]
     relay.down = True
     relay.generation += 1  # the client was replaced and the next dial fails
-    await _eventually(lambda: relay.failed_dials >= 2)  # several ticks fail
+    key = subject.removeprefix("talk.notify.")
+    await _eventually(lambda: relay.failed_dials[key] >= 2)  # this feed failed twice
     relay.down = False
     # Frames are ephemeral: one sent before the feed subscribes again is lost.
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
@@ -281,7 +282,8 @@ async def test_a_session_attached_while_the_relay_is_down_subscribes_when_it_ret
     await _tty(kai)  # the relay is built and answering
     bus.relays[0].down = True
     third = await harness.connect("s-third", "third")
-    await _eventually(lambda: bus.relays[0].failed_dials >= 1)
+    third_key = (await _subject(third)).removeprefix("talk.notify.")
+    await _eventually(lambda: bus.relays[0].failed_dials[third_key] >= 1)
     bus.relays[0].down = False
     third_subject = await _subject(third)
     await _eventually(lambda: bus.subscriber_count(third_subject) == 1)
@@ -301,7 +303,8 @@ async def test_a_failing_resubscribe_warns_once_then_recovers(
     with caplog.at_level(logging.INFO, logger="biff.daemon.talk_feed"):
         relay.down = True
         relay.generation += 1
-        await _eventually(lambda: relay.failed_dials >= 3)  # many ticks fail
+        key = subject.removeprefix("talk.notify.")
+        await _eventually(lambda: relay.failed_dials[key] >= 3)  # many ticks fail
         relay.down = False
         before = bus.subscribes
         await _eventually(lambda: bus.subscribes > before)
@@ -502,7 +505,8 @@ async def test_a_bug_in_the_feed_does_not_end_talk_for_the_session(
     relay = bus.relays[0]
     relay.crash = RuntimeError("a bug, not a relay outage")
     relay.generation += 1
-    await _eventually(lambda: relay.failed_dials >= 2)  # several ticks hit the bug
+    key = subject.removeprefix("talk.notify.")
+    await _eventually(lambda: relay.failed_dials[key] >= 2)  # this feed hit it twice
     relay.crash = None
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
     await pair.say(pair.kai, pair.eric_at, "")
@@ -603,7 +607,7 @@ async def test_a_failed_confirmation_does_not_leave_a_second_subscription_behind
     relay = bus.relays[0]
     bus.flush_fails = True
     relay.generation += 1  # resubscribe; the confirmation times out each tick
-    await _eventually(lambda: bus.failed_flushes >= 2)
+    await _eventually(lambda: bus.failed_flushes[subject] >= 2)
     bus.flush_fails = False
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
     await pair.say(pair.kai, pair.eric_at, "once")

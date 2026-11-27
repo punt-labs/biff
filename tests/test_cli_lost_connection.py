@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -133,10 +133,17 @@ async def test_a_request_lost_in_flight_ends_the_talk_as_lost(
     assert "biffd connection lost" in _complained(console)
 
 
-async def test_a_hangup_lost_in_flight_still_ends_the_talk() -> None:
+async def test_a_hangup_biffd_never_acknowledges_is_logged_and_not_a_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A lost hang-up leaves the exit status alone: biffd resets its side anyway."""
     link = _Link(phase="connected", raises={"talk_end"})
     console = _console(["end"])
-    assert await _talk(link, console).run("eric:tty2", "") is True  # ended by the user
+    with caplog.at_level(logging.WARNING, logger="biff.cli_talk"):
+        talked = await _talk(link, console).run("eric:tty2", "")
+    assert talked is True  # ended by the user
+    assert "could not tell biffd the talk ended" in caplog.text
+    assert _complained(console) == ""  # nothing is reported as a loss
 
 
 async def test_the_repl_prints_a_lost_request_and_keeps_its_prompt() -> None:
@@ -172,9 +179,14 @@ async def test_the_repl_prints_a_lost_command_and_keeps_its_prompt() -> None:
 class _Client:
     """A connection under a real :class:`DaemonLink`: it replies or is lost."""
 
-    def __init__(self, raises: set[str]) -> None:
+    raises: set[str]
+    asked: list[str]
+
+    def __new__(cls, raises: set[str]) -> Self:
+        self = super().__new__(cls)
         self.raises = raises
-        self.asked: list[str] = []
+        self.asked = []
+        return self
 
     async def request(self, method: str, **params: object) -> object:
         self.asked.append(method)
@@ -204,20 +216,8 @@ async def test_a_plan_the_real_link_cannot_set_never_ends_the_talk() -> None:
     )
     assert await talk.run("eric:tty2", "") is True
     assert "plan" in client.asked  # it was tried
+    assert "talk_end" in client.asked  # and the talk still hung up
     assert _complained(console) == ""  # and the loss of it is not reported as a loss
-
-
-async def test_a_hangup_biffd_never_acknowledges_is_logged_and_not_a_failure(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A lost hang-up leaves the exit status alone: biffd resets its side anyway."""
-    link = _Link(phase="connected", raises={"talk_end"})
-    console = _console(["end"])
-    with caplog.at_level(logging.WARNING, logger="biff.cli_talk"):
-        talked = await _talk(link, console).run("eric:tty2", "")
-    assert talked is True
-    assert "could not tell biffd the talk ended" in caplog.text
-    assert _complained(console) == ""  # nothing is reported as a loss
 
 
 async def test_a_hangup_biffd_could_not_deliver_is_shown_and_not_a_failure() -> None:
