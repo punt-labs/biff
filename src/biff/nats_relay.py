@@ -545,9 +545,8 @@ class NatsRelay:
     async def _ensure_connected(self) -> tuple[JetStreamContext, KeyValue]:
         """Lazily connect and provision infrastructure.
 
-        Reuses an existing NATS connection if available (e.g. after
-        :meth:`reset_infrastructure`).  Only creates a new connection
-        when none exists or the previous one was closed.
+        Reuses an existing NATS connection if available.  Only creates a
+        new connection when none exists or the previous one was closed.
 
         Rejects a terminally-closed relay in two places, not one: the
         fast-path check below fails immediately for the common case (no
@@ -1052,16 +1051,6 @@ class NatsRelay:
         """Return the NATS KV handle, connecting if necessary."""
         _, kv = await self._ensure_connected()
         return kv
-
-    def reset_infrastructure(self) -> None:
-        """Clear cached KV/stream handles, forcing re-provisioning.
-
-        Call after external deletion of the KV bucket or stream
-        (e.g. test cleanup) to ensure the next operation re-creates
-        them.  The underlying NATS connection is preserved.
-        """
-        self._js = self._kv = self._names_kv = None
-        self._wtmp_available = False
 
     async def purge_data(self) -> None:
         """Purge this repo's data from shared streams without deleting infrastructure.

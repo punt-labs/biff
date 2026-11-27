@@ -1,0 +1,245 @@
+{
+  "specification": "docs/specs/nats-relay.tex",
+  "testDirectory": "tests/",
+  "timestamp": "2026-11-26T16:00:00Z",
+  "summary": {
+    "covered": 19,
+    "total": 31,
+    "percentage": 61
+  },
+  "byCategory": {
+    "invariant": {
+      "covered": 2,
+      "total": 5
+    },
+    "effect": {
+      "covered": 12,
+      "total": 17
+    },
+    "precondition": {
+      "covered": 5,
+      "total": 9
+    }
+  },
+  "constraints": [
+    {
+      "text": "holdsHandle = {} (no client holds a relay handle)",
+      "category": "invariant",
+      "source": "DaemonLayerInv",
+      "coveredBy": "tests/test_layer_policy.py:210",
+      "confidence": "medium"
+    },
+    {
+      "text": "connState /= connected => no valid KV/stream/names handles",
+      "category": "invariant",
+      "source": "ConnectionInv",
+      "coveredBy": "tests/test_nats_reconnect.py:961",
+      "confidence": "high"
+    },
+    {
+      "text": "ClientAttach: client joins attached; no second record or dial",
+      "category": "effect",
+      "source": "ClientAttach",
+      "coveredBy": "tests/test_daemon/test_sessions.py:31",
+      "confidence": "medium"
+    },
+    {
+      "text": "ClientAttachRefused: absent daemon is named notRunning, never hangs",
+      "category": "effect",
+      "source": "ClientAttachRefused",
+      "coveredBy": "tests/test_daemon/test_client.py:356",
+      "confidence": "medium"
+    },
+    {
+      "text": "ClientDetach: attached' = attached \\ {c}",
+      "category": "effect",
+      "source": "ClientDetach",
+      "coveredBy": "tests/test_daemon/test_sessions.py:89",
+      "confidence": "medium"
+    },
+    {
+      "text": "Request(reqTimeout) on the current generation moves connected to halfOpen",
+      "category": "effect",
+      "source": "Request",
+      "coveredBy": "tests/test_nats_reconnect.py:593",
+      "confidence": "high"
+    },
+    {
+      "text": "StaleRequestTimeout (owner? < generation) is a no-op on the live connection",
+      "category": "precondition",
+      "source": "StaleRequestTimeout",
+      "coveredBy": "tests/test_nats_reconnect.py:562",
+      "confidence": "high"
+    },
+    {
+      "text": "StaleForceTeardown (gateEpoch? < reconnectEpoch) defers teardown",
+      "category": "precondition",
+      "source": "StaleForceTeardown",
+      "coveredBy": "tests/test_nats_reconnect.py:422",
+      "confidence": "high"
+    },
+    {
+      "text": "ForceReconnect from halfOpen tears down a genuinely wedged client",
+      "category": "precondition",
+      "source": "ForceReconnect",
+      "coveredBy": "tests/test_nats_reconnect.py:452",
+      "confidence": "high"
+    },
+    {
+      "text": "FlushWindowForceTeardown then late epoch callback heals",
+      "category": "effect",
+      "source": "FlushWindowForceTeardown",
+      "coveredBy": "tests/test_nats_reconnect.py:501",
+      "confidence": "high"
+    },
+    {
+      "text": "ReconnectEpochObserved advances reconnectEpoch",
+      "category": "effect",
+      "source": "ReconnectEpochObserved",
+      "coveredBy": "tests/test_nats_reconnect.py:401",
+      "confidence": "high"
+    },
+    {
+      "text": "EnsureConnected fresh dial resets reconnectEpoch and advances generation",
+      "category": "effect",
+      "source": "EnsureConnected",
+      "coveredBy": "tests/test_nats_reconnect.py:477",
+      "confidence": "high"
+    },
+    {
+      "text": "Subscribe guard subGen(k) < generation re-binds a stranded SUB",
+      "category": "precondition",
+      "source": "Subscribe",
+      "coveredBy": "tests/test_server/test_descriptions.py:1215",
+      "confidence": "high"
+    },
+    {
+      "text": "Subscribe is a no-op when subGen(k) = generation",
+      "category": "precondition",
+      "source": "Subscribe",
+      "coveredBy": "tests/test_server/test_descriptions.py:1184",
+      "confidence": "high"
+    },
+    {
+      "text": "SubscribeRetry: a failed subscribe is retried at the next liveness wake",
+      "category": "effect",
+      "source": "SubscribeRetry",
+      "coveredBy": "tests/test_server/test_descriptions.py:1266",
+      "confidence": "medium"
+    },
+    {
+      "text": "SnapshotDone moves the watcher to streaming, never to idle or stopped",
+      "category": "effect",
+      "source": "SnapshotDone",
+      "coveredBy": "tests/test_server/test_kv_watch.py:112",
+      "confidence": "high"
+    },
+    {
+      "text": "HandleTimeout keeps the watcher streaming",
+      "category": "effect",
+      "source": "HandleTimeout",
+      "coveredBy": "tests/test_server/test_kv_watch.py:219",
+      "confidence": "high"
+    },
+    {
+      "text": "RequestShutdown stops the watcher cleanly",
+      "category": "effect",
+      "source": "RequestShutdown",
+      "coveredBy": "tests/test_server/test_kv_watch.py:263",
+      "confidence": "high"
+    },
+    {
+      "text": "HandleError restarts the watcher (only HandleError raises restartCount)",
+      "category": "effect",
+      "source": "HandleError",
+      "coveredBy": "tests/test_server/test_kv_watch.py:311",
+      "confidence": "medium"
+    }
+  ],
+  "uncovered": [
+    {
+      "text": "daemon = daemonAbsent => attached = {}",
+      "category": "invariant",
+      "source": "DaemonLayerInv",
+      "suggestion": "Kill the daemon with a client attached; assert the client's connection is gone and the attached set is empty",
+      "testPattern": "assert daemon.attached == set()"
+    },
+    {
+      "text": "attached /= {} => connState /= closed",
+      "category": "invariant",
+      "source": "NatsRelayState",
+      "suggestion": "Attempt relay close while a client is attached; assert it is refused or the clients are dropped first",
+      "testPattern": "assert relay.state != CLOSED while daemon.attached"
+    },
+    {
+      "text": "daemon = daemonAbsent => connState = disconnected, generation = 0, every subGen(k) = 0, phase = idle, restartCount = 0",
+      "category": "invariant",
+      "source": "NatsRelayState",
+      "suggestion": "Start a daemon after a kill and assert a pristine relay: no connection, generation 0, no subscription, idle watcher",
+      "testPattern": "assert (state, generation, sub_gens, phase, restarts) == (DISCONNECTED, 0, {k: 0}, IDLE, 0)"
+    },
+    {
+      "text": "ClientAttach leaves the relay untouched: attaching to a disconnected relay causes no dial",
+      "category": "effect",
+      "source": "ClientAttach",
+      "suggestion": "Attach to a daemon whose relay is disconnected; assert connState and dial count unchanged until the first request",
+      "testPattern": "assert dials_after_attach == dials_before_attach"
+    },
+    {
+      "text": "ClientAttach precondition connState /= closed (daemon in shutdown)",
+      "category": "precondition",
+      "source": "ClientAttach",
+      "suggestion": "Attach during daemon shutdown",
+      "testPattern": "assert refusal.outcome == 'relayClosed'"
+    },
+    {
+      "text": "ClientAttachRefused: closed relay is named relayClosed",
+      "category": "effect",
+      "source": "ClientAttachRefused",
+      "suggestion": "Attach while the relay is closed; the daemon answers relayClosed",
+      "testPattern": "assert error.code == 'relayClosed'"
+    },
+    {
+      "text": "ClientDetach leaves connection, generation and always-on subscriptions unchanged (last client gone)",
+      "category": "effect",
+      "source": "ClientDetach",
+      "suggestion": "Detach the last client; assert generation, subGen and connState are the same",
+      "testPattern": "assert snapshot_before == snapshot_after"
+    },
+    {
+      "text": "DaemonExit enabled in every transport state, halfOpen and closed included",
+      "category": "precondition",
+      "source": "DaemonExit",
+      "suggestion": "Wedge the relay (halfOpen), kill and restart the daemon; assert recovery",
+      "testPattern": "assert reconnected after daemon restart"
+    },
+    {
+      "text": "DaemonExit resets connection, generation, epoch, subscriptions and watcher; the KV sessions survive",
+      "category": "effect",
+      "source": "DaemonExit",
+      "suggestion": "Kill the daemon, restart, assert presence rows remain and all relay counters are initial",
+      "testPattern": "assert sessions_after == sessions_before"
+    },
+    {
+      "text": "DaemonStart dials nothing; the first request dials",
+      "category": "effect",
+      "source": "DaemonStart",
+      "suggestion": "Start the daemon; assert zero relay connections until the first request",
+      "testPattern": "assert connect_calls == 0"
+    },
+    {
+      "text": "EnsureConnected and EnsureConnectFailed require daemon = daemonUp",
+      "category": "precondition",
+      "source": "EnsureConnected",
+      "suggestion": "No relay socket is ever opened outside a running daemon (client processes import no engine)",
+      "testPattern": "assert not any(client_process_opens_relay_socket)"
+    },
+    {
+      "text": "Close requires daemon = daemonUp and attached = {}",
+      "category": "precondition",
+      "source": "Close",
+      "suggestion": "Daemon shutdown closes the relay only after the last client has detached",
+      "testPattern": "assert close_order == ['detach_all', 'relay_close']"
+    }
+  ]
+}

@@ -187,18 +187,38 @@ exercised three times, not a hypothetical.  (A constructor, for the dual-session
 companion's inbox SUB, once existed; the companion was removed, PL-231,
 and the constructor with it.)
 
+A seventh refinement, added here, models the per-user daemon of DES-095
+(\texttt{docs/design/biffd.md}).  Until now every client process opened
+its own relay connection, so the model's single $Connection$ stood for
+``the relay handle of a process''.  With the daemon it stands for the
+relay handle of \emph{the daemon}, one per relay target, and the clients
+that talk to the daemon are a new layer on top of it
+(\S\ref{sec:daemon}, \S\ref{sec:daemonops}).  The layer adds the three
+situations a client can be in --- attached, detached, and facing an absent
+daemon --- and the four operations that move between them.  It proves that
+a client never holds a relay handle, that attaching and detaching leave
+the relay exactly as it was, that a daemon that does not exist holds
+nothing, and that every state with an attached client can reach a state in
+which that client's arrivals are delivered (\S\ref{sec:modelcheck}).  The
+transport machinery of the earlier refinements is unchanged and unweakened;
+three operations gained a guard that records that a dead process dials and
+closes nothing.
+
 %%----------------------------------------------------------------------
 \section{Basic Types}
 %%----------------------------------------------------------------------
 
 \begin{zed}
-  [USER, TTY, REPO, KVKEY, KVVALUE, SESSIONKEY]
+  [USER, TTY, REPO, KVKEY, KVVALUE, SESSIONKEY, CLIENT]
 \end{zed}
 
 $USER$ identifies a human user.  $TTY$ identifies a terminal
 session (random 8-char hex).  $REPO$ scopes all state to a
 repository.  $KVKEY$ and $KVVALUE$ are opaque KV store keys and
 values.  $SESSIONKEY$ is the composite $\{user\}:\{tty\}$ identifier.
+$CLIENT$ identifies a process that talks to the per-user daemon
+(\texttt{biff mcp}, the \texttt{biff} command, a hook, a harness
+plugin; DES-095).
 
 %%----------------------------------------------------------------------
 \section{Free Types}
@@ -306,6 +326,20 @@ request published while no SUB of this kind is bound is dropped (core NATS keeps
 no history), and the doctor reports the session as not confirmed.
 
 \begin{zed}
+  DaemonState ::= daemonUp | daemonAbsent
+\end{zed}
+
+\begin{zed}
+  AttachOutcome ::= attachOk | notRunning | relayClosed
+\end{zed}
+
+$DaemonState$ is whether the per-user daemon process exists.
+$AttachOutcome$ is what a client learns when it tries to attach:
+$attachOk$; $notRunning$, the daemon-absent error that names the cause
+rather than hanging; and $relayClosed$, the refusal of a daemon whose
+relay has been closed for shutdown.
+
+\begin{zed}
   ReqOutcome ::= reqOk | reqTimeout
 \end{zed}
 
@@ -396,6 +430,10 @@ watcher that has been rebound more than once.
   reconnectEpoch : \nat \\
   spuriousTeardown : ZBOOL \\
   epochPending : ZBOOL
+\end{schema}
+
+\begin{schema}{ConnectionInv}
+  Connection
   \where
   connState \neq connected \implies
   kvProvisioned = zfalse \land
@@ -413,6 +451,20 @@ watcher that has been rebound more than once.
   epochPending = ztrue \implies
   connState \in \{ connected, disconnected \}
 \end{schema}
+
+The predicates of the connection are stated in $ConnectionInv$, not in
+$Connection$, and the same split is made for $SessionStore$, $Watcher$
+and $DaemonLayer$.  The reason is the translation, not the mathematics.
+An operation written $\Delta Connection$ includes the predicates of
+$Connection$ on its after-state, and ProZ turns them into guards of the
+operation; a transition that would break one is then simply not enabled,
+and the model checker never reports it.  Predicates kept in $Connection$
+would therefore be assumed by every operation rather than checked of it.
+The schemas $Connection$, $SessionStore$, $Watcher$ and $DaemonLayer$
+carry only declarations, so the operations built on them carry no
+invariant guards; the inclusion $NatsRelayState$ (\S\ref{sec:composed})
+gathers the $\ldots Inv$ schemas and the reserved schema $Invariant$
+installs them, so each predicate is checked in every reachable state.
 
 This is the generalised handle-validity invariant: valid
 JetStream, sessions-KV, and names-KV handles exist \emph{if and
@@ -588,6 +640,46 @@ since the two share an after-state and differ only in the transition
 that reached it.
 
 %%----------------------------------------------------------------------
+\section{Daemon Layer}
+\label{sec:daemon}
+%%----------------------------------------------------------------------
+
+DES-095 moves the relay connection out of every client process and into
+one per-user daemon.  The $Connection$ schema above is then the relay
+handle \emph{of the daemon} for the one relay target this model
+describes; a repository with a different target has its own daemon-owned
+$Connection$, and the sessions of one target share it.  The daemon layer
+adds what the clients do to it.
+
+\begin{schema}{DaemonLayer}
+  daemon : DaemonState \\
+  attached : \power CLIENT \\
+  holdsHandle : \power CLIENT
+\end{schema}
+
+\begin{schema}{DaemonLayerInv}
+  DaemonLayer
+  \where
+  holdsHandle = \emptyset \\
+  daemon = daemonAbsent \implies attached = \emptyset
+\end{schema}
+
+$attached$ is the set of clients with an open, authenticated connection
+to the daemon.  $holdsHandle$ is the set of clients that hold a relay
+handle of their own.  It is empty in every state and no operation adds
+to it: that is invariant~1 of DES-095, ``no client state holds a relay
+handle'', stated as the predicate $holdsHandle = \emptyset$.  The
+operations that touch $attached$ ($ClientAttach$, $ClientDetach$) are
+$\Xi$ on $Connection$ --- attaching or detaching a client neither dials,
+nor tears down, nor rebinds a subscription --- so the relay handle that
+exists when $connState \in \{ connected, reconnecting, halfOpen \}$ has
+one owner, the daemon, and the number of handles per target is the
+cardinality of $Connection$, which is one.  A dropped daemon takes every
+attached client with it ($daemon = daemonAbsent \implies attached =
+\emptyset$): a client cannot stay attached to a process that does not
+exist.
+
+%%----------------------------------------------------------------------
 \section{Connection Operations}
 %%----------------------------------------------------------------------
 
@@ -600,8 +692,10 @@ transport, including when authentication fails after TCP connects.  Initial
 dials are bounded; indefinite reconnect applies only after a successful dial.
 
 \begin{schema}{EnsureConnected}
-  \Delta Connection
+  \Delta Connection \\
+  \Xi DaemonLayer
   \where
+  daemon = daemonUp \\
   connState = disconnected \lor connState = connected \\
   connState' = connected \\
   kvProvisioned' = ztrue \\
@@ -621,8 +715,10 @@ dials are bounded; indefinite reconnect applies only after a successful dial.
 \end{schema}
 
 \begin{schema}{EnsureConnectFailed}
-  \Delta Connection
+  \Delta Connection \\
+  \Xi DaemonLayer
   \where
+  daemon = daemonUp \\
   connState = disconnected \\
   connState' = disconnected \\
   kvProvisioned' = zfalse \\
@@ -716,8 +812,11 @@ afresh.
 \subsection{Close (Permanent)}
 
 \begin{schema}{Close}
-  \Delta Connection
+  \Delta Connection \\
+  \Xi DaemonLayer
   \where
+  daemon = daemonUp \\
+  attached = \emptyset \\
   connState \neq halfOpen \\
   connState' = closed \\
   kvProvisioned' = zfalse \\
@@ -740,34 +839,6 @@ biff-tww crash-loop the server never reaches an orderly
 never return --- so $halfOpen$ must be escaped by autonomous
 wedge detection, not by $Close$.  From $closed$ the operation is
 an idempotent self-loop, which keeps $closed$ deadlock-free.
-
-\subsection{Reset Infrastructure}
-
-\begin{schema}{ResetInfrastructure}
-  \Delta Connection
-  \where
-  connState \neq halfOpen \\
-  connState' = connState \\
-  kvProvisioned' = zfalse \\
-  streamsProvisioned' = zfalse \\
-  namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse \\
-  generation' = generation \\
-  subGen' = subGen \\
-  reconnectEpoch' = reconnectEpoch \\
-  spuriousTeardown' = spuriousTeardown \\
-  epochPending' = epochPending
-\end{schema}
-
-Clears cached handles without changing the transport state
-(\texttt{reset\_infrastructure()}).  By the handle-validity
-invariant, $connState' = connState$ together with cleared handles
-forces $connState \neq connected$; the operation is therefore a
-self-loop at $disconnected$, $reconnecting$, and $closed$, where
-the handles are already absent.  It is excluded from $halfOpen$
-for the same reason as $Close$: clearing a cached handle does not
-lift the wedge (the socket is still up and still unresponsive),
-so it must not be modelled as an escape.
 
 \subsection{Request (JetStream / KV Round-Trip)}
 
@@ -1444,6 +1515,10 @@ rebinds, even though this operation offers a path that does not.
 \begin{schema}{SessionStore}
   sessions : SESSIONKEY \pinj KVVALUE \\
   wallValue : KVKEY \pfun KVVALUE
+\end{schema}
+
+\begin{schema}{SessionStoreInv}
+  SessionStore
   \where
   \# sessions \leq maxSessions \\
   \# wallValue \leq 1
@@ -1525,6 +1600,10 @@ and its supervisor \texttt{\_kv\_watcher\_loop}.
   phase : WatcherPhase \\
   shutdownRequested : ZBOOL \\
   restartCount : \nat
+\end{schema}
+
+\begin{schema}{WatcherInv}
+  Watcher
   \where
   restartCount \leq maxRestarts \\
   phase = stopped \implies shutdownRequested = ztrue
@@ -1661,11 +1740,42 @@ checks \texttt{shutdown.is\_set()} on every iteration.
 %%----------------------------------------------------------------------
 
 \begin{schema}{NatsRelayState}
-  Connection \\
-  SessionStore \\
-  Watcher
+  ConnectionInv \\
+  SessionStoreInv \\
+  WatcherInv \\
+  DaemonLayerInv
   \where
-  phase = idle \implies restartCount = 0
+  phase = idle \implies restartCount = 0 \\
+  daemon = daemonAbsent \implies
+    ( connState = disconnected \land generation = 0 \land
+      reconnectEpoch = 0 \land epochPending = zfalse \land
+      wtmpAvailable = zfalse \land
+      ( \forall k : SubKind @ subGen(k) = 0 ) \land
+      phase = idle \land shutdownRequested = zfalse \land
+      restartCount = 0 ) \\
+  attached \neq \emptyset \implies connState \neq closed
+\end{schema}
+
+Two predicates tie the daemon layer to the transport.  First, a daemon
+that does not exist holds nothing: its relay connection, its generation
+and epoch counters, its always-on subscriptions and its watcher are all
+in their initial values, because they lived in the process that is gone.
+The $SessionStore$ is deliberately exempt --- it models the contents of
+the KV bucket, which the relay server keeps whether or not any daemon is
+running.  Second, a client is never attached to a closed relay: a closed
+relay is the daemon in shutdown, and $ClientAttach$ refuses it.
+
+ProZ installs a state schema's predicates as the machine-checked invariant
+only through the reserved schema name $Invariant$; without it the
+translation keeps only the typing of the components.  $Invariant$ makes
+every predicate of $ConnectionInv$, $SessionStoreInv$, $WatcherInv$,
+$DaemonLayerInv$ and $NatsRelayState$ a checked state invariant, and, the
+declaration schemas carrying no predicates, no operation assumes one: a
+transition that breaks a predicate is enabled, reaches the bad state, and
+is reported.
+
+\begin{schema}{Invariant}
+  NatsRelayState
 \end{schema}
 
 A watcher that has never left $idle$ has never been restarted.  The
@@ -1697,7 +1807,10 @@ which is enabled in every connection state.
   wallValue' = \emptyset \\
   phase' = idle \\
   shutdownRequested' = zfalse \\
-  restartCount' = 0
+  restartCount' = 0 \\
+  daemon' = daemonUp \\
+  attached' = \emptyset \\
+  holdsHandle' = \emptyset
 \end{schema}
 
 The composed initial state, $Init$, is: $connState = disconnected$ with no
@@ -1709,6 +1822,160 @@ lifecycle, the session store and the $Watcher$ as one machine: the watcher
 operations are reachable, and the $kvWatch$ liveness formula of
 \S\ref{sec:modelcheck} is checked against states in which the watcher is
 actually running rather than merely stated.
+
+%%----------------------------------------------------------------------
+\section{Daemon Operations}
+\label{sec:daemonops}
+%%----------------------------------------------------------------------
+
+A client is in one of three situations with respect to the daemon:
+\emph{attached} ($c \in attached$), \emph{detached} (the daemon is up and
+$c \notin attached$), or facing an \emph{absent} daemon
+($daemon = daemonAbsent$, so $attached = \emptyset$).  Four operations
+move between them, and none of the four dials, closes or rebinds anything
+on the relay except $DaemonExit$, which discards the whole process.
+
+\subsection{Client Attach}
+
+\begin{schema}{ClientAttach}
+  \Delta DaemonLayer \\
+  \Xi Connection \\
+  \Xi Watcher \\
+  \Xi SessionStore \\
+  c? : CLIENT \\
+  outcome! : AttachOutcome
+  \where
+  daemon = daemonUp \\
+  connState \neq closed \\
+  c? \notin attached \\
+  daemon' = daemon \\
+  attached' = attached \cup \{ c? \} \\
+  holdsHandle' = holdsHandle \\
+  outcome! = attachOk
+\end{schema}
+
+A client's authenticated \texttt{hello}.  The daemon is up and its relay
+not closed; the client joins $attached$.  The relay is untouched
+($\Xi Connection$): a client that attaches to a daemon whose relay is
+$disconnected$ does not cause a dial --- the daemon's lazy
+$EnsureConnected$ does, on the first request.  This is where the model
+differs from the process-per-session relay it replaces, in which every
+attach was a dial.
+
+\begin{schema}{ClientAttachRefused}
+  \Xi NatsRelayState \\
+  c? : CLIENT \\
+  outcome! : AttachOutcome
+  \where
+  ( daemon = daemonAbsent \land outcome! = notRunning ) \lor
+  ( daemon = daemonUp \land connState = closed \land
+    outcome! = relayClosed )
+\end{schema}
+
+The attach that fails.  Both refusals change nothing and name the cause:
+a client facing an absent daemon is told $notRunning$ (the client's
+autostart nudge is $DaemonStart$ below); a client facing a daemon whose
+relay is closed is told $relayClosed$.  Neither hangs and neither
+attaches.
+
+\subsection{Client Detach}
+
+\begin{schema}{ClientDetach}
+  \Delta DaemonLayer \\
+  \Xi Connection \\
+  \Xi Watcher \\
+  \Xi SessionStore \\
+  c? : CLIENT
+  \where
+  c? \in attached \\
+  daemon' = daemon \\
+  attached' = attached \setminus \{ c? \} \\
+  holdsHandle' = holdsHandle
+\end{schema}
+
+A dropped connection.  The relay, its subscriptions and the watcher are
+exactly as they were: with the last client gone the daemon keeps the relay
+connection, and the next client finds it warm.  A detach never ends a
+session; that is a property of the session model
+(\texttt{session-model.tex}), not of the transport.
+
+\subsection{Daemon Exit and Start}
+
+\begin{schema}{DaemonExit}
+  \Delta DaemonLayer \\
+  \Delta Connection \\
+  \Delta Watcher \\
+  \Xi SessionStore
+  \where
+  daemon = daemonUp \\
+  daemon' = daemonAbsent \\
+  attached' = \emptyset \\
+  holdsHandle' = holdsHandle \\
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = 0 \\
+  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, kvWatch \mapsto 0,
+    wallNotify \mapsto 0, channelCheck \mapsto 0 \} \\
+  reconnectEpoch' = 0 \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = zfalse \\
+  phase' = idle \\
+  shutdownRequested' = zfalse \\
+  restartCount' = 0
+\end{schema}
+
+The process ends, by a clean stop or a crash --- the model does not
+distinguish them, because the state they leave is the same.  It is
+enabled in \emph{every} transport state, $halfOpen$ and $closed$
+included: the process that holds a wedged handle can always be killed.
+Every client detaches, and the connection, the generation counter, the
+subscriptions and the watcher return to their initial values.  The
+$SessionStore$ is the KV bucket and survives.
+
+A consequence for the checks of \S\ref{sec:modelcheck}.  Because $DaemonExit$
+is enabled in every transport state, the generic deadlock check can no longer
+report a wedge whose recovery transitions have been removed, and the
+subscription-liveness formula holds trivially on any path through an exit
+(both $subGen(k)$ and $generation$ become $0$).  The in-process recovery
+claims are therefore evidenced by the frozen variants, which carry no daemon
+layer (\texttt{nats-relay-passA-nowedge.tex},
+\texttt{nats-relay-xko-isconnected.tex},
+\texttt{nats-relay-kvwatch-noreconcile.tex}), not by the extended model.
+Restart recovery of unread mail is invariant~4 of DES-095 (stated in
+\texttt{session-model.tex}); invariant~5 is checked here only in its transport half: from any state with an
+attached client, a state with the relay $connected$, every subscription current and
+some client attached is reachable.  That the \emph{original} client receives its
+pending arrivals is not tracked by this model.  Mail that
+the daemon has fetched but not yet acknowledged is held in process memory and
+is outside the relay's unread count that the model keeps.  The first hello of a
+session reads the presence row through the relay before the client is
+attached, so the code dials at hello time where $ClientAttach$ defers the dial
+to the first request; the model is the authority and the code is to conform.
+
+\begin{schema}{DaemonStart}
+  \Delta DaemonLayer \\
+  \Xi Connection \\
+  \Xi Watcher \\
+  \Xi SessionStore
+  \where
+  daemon = daemonAbsent \\
+  daemon' = daemonUp \\
+  attached' = attached \\
+  holdsHandle' = holdsHandle
+\end{schema}
+
+The client's autostart nudge (or the service manager's restart) brings the
+daemon back.  It starts with no relay connection ($\Xi Connection$ on a
+pristine $Connection$, by the invariant of $NatsRelayState$); the first
+request dials.  Guards were added to three operations above so that the
+daemon-absent state stays pristine: $EnsureConnected$ and
+$EnsureConnectFailed$ require $daemon = daemonUp$ (a dead process dials
+nothing), and $Close$ requires $daemon = daemonUp$ and $attached =
+\emptyset$ (the relay is closed only by a daemon in shutdown, after its
+last client has gone).
 
 %%----------------------------------------------------------------------
 \section{Key Properties and Model Checking}
