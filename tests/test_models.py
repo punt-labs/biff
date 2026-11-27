@@ -454,3 +454,27 @@ class TestTruncatePlan:
         # a generated hint from a pathologically long branch must not fail
         # its own automatic /plan — truncated output is always acceptable.
         validate_plan(truncate_plan("→ " + "b" * 1000))
+
+
+class TestRefiled:
+    def test_the_copy_has_a_stable_id_of_its_own_and_the_same_address(self) -> None:
+        message = Message(from_user="eric", to_user="kai:tty1", body="hello")
+        copy = message.refiled()
+        assert (copy.id != message.id, copy.id == message.refiled().id) == (True, True)
+        assert (copy.to_user, copy.body) == ("kai:tty1", "hello")
+
+    def test_a_copy_names_the_held_message_it_was_filed_from(self) -> None:
+        held = Message(from_user="eric", to_user="kai:tty1", body="held")
+        other = Message(from_user="eric", to_user="kai:tty1", body="other")
+        pool = {held.id: held}
+        assert held.refiled().original_in(pool) == held.id
+        assert other.original_in(pool) == other.id
+        assert held.original_in(pool) == held.id
+
+    def test_a_chain_of_refiles_never_meets_itself(self) -> None:
+        message = Message(from_user="eric", to_user="kai:tty1", body="hello")
+        ids = [message.id]
+        for _ in range(100):
+            message = message.refiled()
+            ids.append(message.id)
+        assert len(set(ids)) == len(ids)

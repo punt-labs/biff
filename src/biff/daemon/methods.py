@@ -130,12 +130,13 @@ class Methods:
     async def _read(self, session: Session, p: Params) -> Outcome:
         """Return the next batch of unread mail, acknowledged once delivered.
 
-        Fetched mail is held in the session's outbox, because some relays consume
-        mail at fetch: what a lost reply or a truncated batch leaves behind is
-        served by the next ``read``.  The batch is as much as fits the read
-        budget in bytes; a message larger than the budget alone is clipped, never
-        sent whole.  ``more`` counts what the batch leaves: held mail and mail
-        still on the relay behind a bounded fetch.
+        Fetched mail is held in the session's outbox until its reply is confirmed,
+        because some relays consume mail at fetch: a lost reply is served again by
+        the next ``read``.  What a truncated batch leaves behind goes back to such
+        a relay, so everything that drains the session finds it.  The batch is as
+        much as fits the read budget in bytes; a message larger than the budget
+        alone is clipped, never sent whole.  ``more`` counts what the batch
+        leaves: held mail and mail still on the relay behind a bounded fetch.
         """
         p.done()
         inbox = await Inbox.unread(session.context)
@@ -149,7 +150,9 @@ class Methods:
         }
         # The backlog summary is a hint for ``more``; a relay that fails to report
         # it must not sink a batch that was already fetched and is deliverable.
+        # Mail given back to the relay is counted by the relay's own backlog.
         left = len(pending) - len(batch)
+        left -= await self._refile(session, inbox, pending, batch)
         try:
             left += await inbox.unfetched()
         except RELAY_ERRORS as exc:
@@ -161,9 +164,35 @@ class Methods:
         return Outcome(result, partial(self._delivered, session, inbox, batch))
 
     @staticmethod
+    async def _refile(
+        session: Session, inbox: Inbox, pending: list[Message], batch: list[Message]
+    ) -> int:
+        """Give the relay back the mail this batch leaves, if the relay consumed it.
+
+        Return how many messages went back.
+
+        Held in the daemon alone, that mail would be out of reach of everything
+        else that drains or reads the session (ending it, another process), and
+        gone if the daemon died.  The batch itself stays held until confirmed.
+        """
+        sent = {m.id for m in batch}
+        left_behind = [m for m in pending if m.id not in sent]
+        filed = 0
+        for message in left_behind:
+            try:
+                if await inbox.refile(message):
+                    # Released as it is filed: a read cancelled before the next
+                    # refile must not leave this message in the relay and here.
+                    session.outbox.forget([message])
+                    filed += 1
+            except RELAY_ERRORS:
+                logger.warning("could not file message %s again", message.id)
+        return filed
+
+    @staticmethod
     async def _delivered(session: Session, inbox: Inbox, batch: list[Message]) -> None:
         """Forget the batch and mark it read, once the reply that carried it left."""
-        session.outbox.delivered(batch)
+        session.outbox.forget(batch)
         await inbox.mark_read(batch)
 
     @staticmethod

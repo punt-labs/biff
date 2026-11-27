@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import signal
 import time
 from dataclasses import dataclass
@@ -108,14 +109,15 @@ class BiffDaemon:
         self._port = port
         resolver = resolver or DiskResolver()
         pool = RelayPool(relay_factory or RelayPool.selecting())
+        live = SessionTable(
+            heartbeat_interval=heartbeat_interval,
+            org_refresh_interval=org_refresh_interval,
+        )
         self._core = DaemonCore(
             resolver=resolver,
             pool=pool,
-            sessions=SessionTable(
-                heartbeat_interval=heartbeat_interval,
-                org_refresh_interval=org_refresh_interval,
-            ),
-            methods=Methods(SessionMethods(sessions), read_budget),
+            sessions=live,
+            methods=Methods(SessionMethods(sessions, live), read_budget),
             seq=count(1),
             poll_interval=poll_interval,
             attach_timeout=attach_timeout,
@@ -123,7 +125,7 @@ class BiffDaemon:
         )
         self._server = None
         self._started = 0.0
-        self._sweeper = SessionSweeper(sessions, resolver, pool)
+        self._sweeper = SessionSweeper(sessions, resolver, pool, live.is_attached)
         self._sweep_interval = session_sweep_interval
         self._sweep_task = None
         return self
@@ -193,12 +195,18 @@ class BiffDaemon:
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, stop.set)
+            loop.add_signal_handler(sig, self._request_stop, sig, stop)
         await self.start()
         try:
             await stop.wait()
         finally:
             await self.stop()
+
+    @staticmethod
+    def _request_stop(sig: signal.Signals, stop: asyncio.Event) -> None:
+        """Say which signal asked biffd to stop, then let it shut down."""
+        logger.info("biffd stopping: signal=%s pid=%d", sig.name, os.getpid())
+        stop.set()
 
     async def _sweep_forever(self) -> None:
         """Sweep at start, then every interval, for as long as the daemon runs."""
@@ -214,6 +222,7 @@ class BiffDaemon:
             body = {
                 "version": pkg_version("punt-biff"),
                 "uptime_seconds": round(time.monotonic() - self._started, 3),
+                "pid": os.getpid(),
             }
             response = connection.respond(HTTPStatus.OK, json.dumps(body))
             # respond() stamps text/plain; setting would add a second header.

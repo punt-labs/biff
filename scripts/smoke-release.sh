@@ -43,7 +43,15 @@ esac
 printf 'Testing punt-biff %s from %s\n' "$version" "$channel"
 
 work=$(mktemp -d)
-trap 'rm -rf -- "$work"' EXIT
+daemon_pid=""
+cleanup() {
+  if [[ -n "$daemon_pid" ]]; then
+    kill "$daemon_pid" 2>/dev/null || true
+    wait "$daemon_pid" 2>/dev/null || true  # let biffd finish before its HOME goes
+  fi
+  rm -rf -- "$work"
+}
+trap cleanup EXIT
 cd "$work"
 uv_bin=$(command -v uv) || fail "uv is required"
 clean=(env -i "PATH=$PATH" "HOME=$HOME")
@@ -71,6 +79,17 @@ cd "$work/repo"
 "${isolated[@]}" git init --quiet
 "${isolated[@]}" git remote add origin https://github.com/punt-labs/biff-release-smoke.git
 biff=("${isolated[@]}" "$work/venv/bin/biff")
+
+# The CLI is a client of biffd. Serve one on a free port in the isolated HOME, so
+# the smoke neither installs a service nor leaves a daemon behind.
+"${biff[@]}" daemon serve --port 0 >"$work/biffd.log" 2>&1 &
+daemon_pid=$!
+port_file="$work/home/.punt-labs/biff/run/serve.port"
+for _ in $(seq 1 100); do
+  [[ -f "$port_file" ]] && break
+  sleep 0.1
+done
+[[ -f "$port_file" ]] || fail "biffd did not start: $(cat "$work/biffd.log")"
 
 actual=$("${biff[@]}" version) || fail "Installed biff version command failed"
 actual=${actual#biff }

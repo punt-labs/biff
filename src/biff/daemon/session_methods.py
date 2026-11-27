@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Self, cast, final
 
 from biff.commands import CommandResult
+from biff.commands.inbox import Inbox
 from biff.daemon.session_host import SessionHost
 from biff.daemon.session_pointer import CurrentPointer
 from biff.daemon.session_select import SessionSelector
@@ -17,11 +18,11 @@ if TYPE_CHECKING:
 
     from biff.daemon.params import Params
     from biff.daemon.session_store import CliSessionStore
-    from biff.daemon.sessions import Session
+    from biff.daemon.sessions import Session, SessionTable
 
 __all__ = ["SessionMethods"]
 
-type Handler = Callable[[SessionVerbs, Params], Awaitable[CommandResult]]
+type Handler = Callable[[Session, SessionVerbs, Params], Awaitable[CommandResult]]
 
 
 @final
@@ -34,20 +35,26 @@ class SessionMethods:
     method.  The repo pointer stays with the caller, so no verb writes it.
     """
 
-    __slots__ = ("_store", "_table")
+    __slots__ = ("_live", "_store", "_table")
 
     _store: CliSessionStore
+    _live: SessionTable
     _table: dict[str, Handler]
 
-    def __new__(cls, store: CliSessionStore) -> Self:
-        """Serve the verbs over the records in *store*."""
+    def __new__(cls, store: CliSessionStore, live: SessionTable) -> Self:
+        """Serve the verbs over the records in *store*.
+
+        *live* holds the sessions connections are attached to; ending a session
+        retires its entry there.
+        """
         self = super().__new__(cls)
         self._store = store
+        self._live = live
         self._table = {
-            "session_new": SessionMethods._new,
-            "session_ls": SessionMethods._ls,
-            "session_use": SessionMethods._use,
-            "session_end": SessionMethods._end,
+            "session_new": self._new,
+            "session_ls": self._ls,
+            "session_use": self._use,
+            "session_end": self._end,
         }
         return self
 
@@ -63,7 +70,7 @@ class SessionMethods:
             KeyError: *method* is not one of :attr:`names`.
         """
         try:
-            return await self._table[method](self._verbs(session), p)
+            return await self._table[method](session, self._verbs(session), p)
         except ValueError as exc:
             msg = f"Error: {exc}"
             return CommandResult(text=msg, json_data={"error": msg}, error=True)
@@ -88,26 +95,53 @@ class SessionMethods:
         )
         return SessionVerbs(host)
 
-    @staticmethod
-    async def _new(verbs: SessionVerbs, p: Params) -> CommandResult:
+    async def _new(
+        self, _session: Session, verbs: SessionVerbs, p: Params
+    ) -> CommandResult:
         tty = p.text("tty", "")
         p.done()
         return await verbs.new(tty or None)
 
-    @staticmethod
-    async def _ls(verbs: SessionVerbs, p: Params) -> CommandResult:
+    async def _ls(
+        self, _session: Session, verbs: SessionVerbs, p: Params
+    ) -> CommandResult:
         include_ended = p.flag("include_ended", default=False)
         p.done()
         return await verbs.ls(include_ended=include_ended)
 
-    @staticmethod
-    async def _use(verbs: SessionVerbs, p: Params) -> CommandResult:
+    async def _use(
+        self, _session: Session, verbs: SessionVerbs, p: Params
+    ) -> CommandResult:
         ref = p.text("ref")
         p.done()
         return await verbs.use(ref)
 
-    @staticmethod
-    async def _end(verbs: SessionVerbs, p: Params) -> CommandResult:
+    async def _end(
+        self, session: Session, verbs: SessionVerbs, p: Params
+    ) -> CommandResult:
+        """File the mail the session holds back in the relay, end it, retire it.
+
+        A consuming relay removed the mail the daemon fetched for the session, so
+        a batch whose reply was never confirmed exists only in its outbox.  It goes
+        back to the relay first, where ending drains it into the owner's mailbox
+        with the rest.  A message the relay refuses stops the end, with the mail
+        still held.  Connections attached to the ended session are told, so a
+        watcher does not keep listening at an address that no longer exists.
+        """
         ref = p.text("ref")
         p.done()
-        return await verbs.end(ref)
+        held = self._live.holding(verbs.host.selector.lookup(ref).session_id)
+        if held is not None:
+            await self._refile(held)
+        result = await verbs.end(ref)
+        row = cast("dict[str, str]", result.json_data)
+        self._live.retire(row["id"], spare=session)
+        return result
+
+    @staticmethod
+    async def _refile(held: Session) -> None:
+        """Give the relay back every message *held* still holds, one by one."""
+        inbox = Inbox(held.context, (), ())
+        for message in held.outbox.held():
+            if await inbox.refile(message):
+                held.outbox.forget([message])

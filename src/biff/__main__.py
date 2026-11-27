@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import queue as queue_mod
 import sys
 import threading as threading_mod
@@ -41,10 +42,12 @@ import biff.commands.talk as talk_commands
 from biff._cli_runtime import CliInvocation
 from biff.cli_app import CliApp
 from biff.cli_context import CliContext
-from biff.cli_daemon import Answer, DaemonCommand, ResultPrinter
+from biff.cli_daemon import Answer, DaemonCommand, Delivery, ResultPrinter
+from biff.cli_direct_wall import DirectWall
 from biff.cli_key import KeyCli
 from biff.cli_session import cli_session
 from biff.cli_watch import WatchCommand
+from biff.client.environment import ClientEnvironment
 from biff.commands._session import update_current_session
 from biff.config import find_git_root
 from biff.doctor import installed_plugin_version
@@ -1113,12 +1116,21 @@ def _run(
     It runs as *user* and in *repo* when given, else as the invocation's own.
     """
 
+    def make(invocation_user: str | None, session: str | None) -> DaemonCommand:
+        return DaemonCommand.for_this_process(user or invocation_user, session, repo)
+
+    _drive(call, make)
+
+
+def _drive[C](
+    call: Callable[[C], Awaitable[Delivery]],
+    make: Callable[[str | None, str | None], C],
+) -> None:
+    """Build the command with *make*, run *call* on it, and print the result."""
+
     async def _inner() -> None:
         try:
-            command = DaemonCommand.for_this_process(
-                user or _user_override, _session_ref, repo
-            )
-            answer = await call(command)
+            answer = await call(make(_user_override, _session_ref))
             await answer.deliver(
                 ResultPrinter(json_output=_json_output, quiet=_quiet_output)
             )
@@ -1194,7 +1206,14 @@ def wall_cmd(
     clear: Annotated[bool, typer.Option("--clear", help="Remove active wall")] = False,
 ) -> None:
     """Post, read, or clear a team broadcast."""
-    _run(lambda d: d.call("wall", message=message, duration=duration, clear=clear))
+    if ClientEnvironment.carries_relay_settings(os.environ):
+        # A CI runner: no session, no inbox, no daemon, relay handed in explicitly.
+        _drive(
+            lambda d: d.wall(message, duration, clear=clear),
+            DirectWall.for_this_process,
+        )
+    else:
+        _run(lambda d: d.call("wall", message=message, duration=duration, clear=clear))
 
 
 @app.command()
@@ -1265,7 +1284,7 @@ def session_ls(
     ] = False,
 ) -> None:
     """List this host's sessions."""
-    _run(lambda d: d.call("session_ls", include_ended=all_flag))
+    _run(lambda d: d.session_ls(include_ended=all_flag))
 
 
 @session_app.command("use")
@@ -1281,7 +1300,7 @@ def session_end(
     name: Annotated[str, typer.Argument(help="Session name or id")],
 ) -> None:
     """End a session; its unread mail moves to your user mailbox."""
-    _run(lambda d: d.call("session_end", ref=name))
+    _run(lambda d: d.session_end(name))
 
 
 # ---------------------------------------------------------------------------

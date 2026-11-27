@@ -39,14 +39,18 @@ class Lines:
         return parsed
 
 
-def _watcher(harness: Harness, out: Callable[[str], None]) -> WatchCommand:
+def _watcher(
+    harness: Harness,
+    out: Callable[[str], None],
+    reader_present: Callable[[], bool] = lambda: True,
+) -> WatchCommand:
     command = DaemonCommand(
         user_override="kai",
         session_ref=None,
         run_dir=harness.run_dir,
-        nudge=lambda: None,
+        nudge=lambda: harness.daemon.port,
     )
-    return WatchCommand(command, out)
+    return WatchCommand(command, out, reader_present)
 
 
 async def test_a_message_arrives_as_a_mail_line(harness: Harness, repo: Path) -> None:
@@ -92,10 +96,11 @@ async def test_two_watchers_both_get_every_event(harness: Harness, repo: Path) -
     await two.next()
     eric = await harness.connect("s-eric", "eric", cwd=str(repo))
     await eric.request("write", to="kai", message="x")
-    got = [(await one.next())["kind"], (await two.next())["kind"]]
+    first, second = await one.next(), await two.next()
     for task in tasks:
         task.cancel()
-    assert got == ["mail", "mail"]
+    assert (first["kind"], second["kind"]) == ("mail", "mail")
+    assert first["data"] == second["data"]  # the same arrival, seen twice
 
 
 async def test_sigterm_ends_the_watch_with_exit_zero(
@@ -133,7 +138,7 @@ async def test_a_lost_connection_exits_one_and_says_why(
 async def test_a_daemon_that_is_down_exits_one_on_stderr(
     harness: Harness, repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def down() -> None:
+    def down() -> int:
         msg = "biffd is not answering"
         raise ConnectionError(msg)
 
@@ -147,3 +152,14 @@ async def test_a_daemon_that_is_down_exits_one_on_stderr(
         "",
         "Error: biffd is not answering\n",
     )
+
+
+async def test_a_watch_whose_reader_left_ends_without_another_event(
+    harness: Harness, repo: Path
+) -> None:
+    lines = Lines()
+    reader_there = [True]
+    task = asyncio.create_task(_watcher(harness, lines, lambda: reader_there[0]).run())
+    await lines.next()
+    reader_there[0] = False
+    assert await asyncio.wait_for(task, timeout=_WAIT) == 0

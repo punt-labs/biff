@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, final
 
 from biff.supervision.launchd import LaunchdBackend
@@ -60,6 +61,25 @@ class ServiceHost:
 
     @staticmethod
     def _launchd(spec: ServiceSpec) -> Detection:
-        if LaunchdBackend.available():
+        reason = LaunchdBackend.unavailable_reason()
+        if not reason:
             return Detection("found", LaunchdBackend(spec), "")
-        return Detection("absent", None, "launchctl is not available")
+        if reason == "launchctl is not installed":
+            return Detection("absent", None, reason)
+        return Detection("unreachable", None, reason)
+
+    @staticmethod
+    def leftover_files(spec: ServiceSpec) -> tuple[Path, ...]:
+        """Return the unit or plist files of *spec* that exist on this host.
+
+        Looked up without asking the service manager, so a shell that cannot
+        reach the manager still finds a registration an earlier login made.
+        """
+        system = platform.system()
+        if system == "Darwin":
+            candidate = LaunchdBackend(spec).config_path()
+        elif system == "Linux":
+            candidate = SystemdBackend(spec).config_path()
+        else:
+            return ()
+        return (candidate,) if candidate.exists() else ()

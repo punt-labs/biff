@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self, final
 
 from biff.models import SessionEvent, UserSession
@@ -77,6 +78,15 @@ class PresenceRow:
         await self._relay.update_session(row)
         await self._login(row)
         return row
+
+    async def touch(self) -> None:
+        """Count a command as activity: advance the row's idle clock to now.
+
+        The heartbeat only proves the process is alive; ``last_tool_at`` is what
+        ``/who`` shows as idle time and what routes mail, so a command a person
+        runs must move it, as attaching a CLI session always did.
+        """
+        await self._relay.heartbeat(self.key, datetime.now(UTC))
 
     async def _login(self, row: UserSession) -> None:
         """Record the session's login for ``last``; history must not fail a hello."""

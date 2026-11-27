@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -74,6 +75,7 @@ class TestSpec:
     ) -> None:
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "py" / "python"))
         with pytest.raises(BinaryNotFoundError, match="biffd"):
             BIFFD_SPEC.resolve_exec_args()
 
@@ -103,12 +105,56 @@ class TestManager:
             manager.install()
         assert backend.calls == []
 
-    def test_install_over_a_running_biffd_is_allowed(
+    def test_install_over_its_own_running_service_is_allowed(
         self, unit: Path, home_with_binary: Path
     ) -> None:
         backend = FakeBackend(unit)
+        backend.start()
         ServiceManager(BIFFD_SPEC, backend, port_probe("ours")).install()
+        assert backend.calls == ["start", "install"]
+
+    def test_install_over_a_standalone_biffd_is_refused(
+        self, unit: Path, home_with_binary: Path
+    ) -> None:
+        backend = FakeBackend(unit)
+        manager = ServiceManager(BIFFD_SPEC, backend, port_probe("ours"))
+        with pytest.raises(PortConflictError, match="does not supervise"):
+            manager.install()
+        assert backend.calls == []
+
+    @pytest.mark.parametrize("action", ["start", "restart"])
+    def test_start_and_restart_over_a_standalone_biffd_are_refused(
+        self, unit: Path, action: str
+    ) -> None:
+        # A foreground biffd holds the port and answers /health; the unit's own
+        # biffd would fail to bind, so its answer is not the service's.
+        backend = FakeBackend(unit)
+        backend.install()
+        backend.stop()
+        manager = ServiceManager(BIFFD_SPEC, backend, port_probe("ours"))
+        with pytest.raises(PortConflictError, match="does not supervise"):
+            getattr(manager, action)()
+        assert backend.calls == ["install", "stop"]
+
+    @pytest.mark.parametrize("action", ["start", "restart"])
+    def test_start_and_restart_over_a_foreign_listener_are_refused(
+        self, unit: Path, action: str
+    ) -> None:
+        backend = FakeBackend(unit)
+        backend.install()
+        manager = ServiceManager(BIFFD_SPEC, backend, port_probe("foreign"))
+        with pytest.raises(PortConflictError, match="another program"):
+            getattr(manager, action)()
         assert backend.calls == ["install"]
+
+    @pytest.mark.parametrize("action", ["start", "restart"])
+    def test_start_and_restart_of_its_own_running_service_are_allowed(
+        self, unit: Path, action: str
+    ) -> None:
+        backend = FakeBackend(unit)
+        backend.install()
+        getattr(ServiceManager(BIFFD_SPEC, backend, port_probe("ours")), action)()
+        assert backend.calls == ["install", action]
 
     def test_uninstall_removes_the_unit(self, unit: Path) -> None:
         unit.write_text("unit")

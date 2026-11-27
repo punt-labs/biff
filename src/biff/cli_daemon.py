@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Protocol, Self, final
 
 from biff._stdlib import expand_bead_id
 from biff.cli_daemon_wire import UnreadableReplyError, WireResult
@@ -28,10 +28,22 @@ if TYPE_CHECKING:
     from biff.client.held_reply import HeldReply
     from biff.commands import CommandResult
 
-__all__ = ["Answer", "DaemonCommand", "ResultPrinter"]
+__all__ = ["Answer", "DaemonCommand", "Delivery", "ResultPrinter"]
 
 _PENDING_TTY = "pending"
 _NOT_NAMED = "biffd did not name this session; run: biff doctor"
+
+
+class Delivery(Protocol):
+    """A command's result and the means to show it; ``Answer`` is the real one."""
+
+    @property
+    def result(self) -> CommandResult:
+        """What the command prints."""
+        raise NotImplementedError
+
+    async def deliver(self, show: Callable[[CommandResult], None]) -> None:
+        """Show the result with *show*."""
 
 
 @final
@@ -124,14 +136,23 @@ class DaemonCommand:
     FAILURES = (ValueError, OSError, TimeoutError, DaemonError)
     """What a command fails with: a bad session, or an absent or refusing biffd."""
 
-    __slots__ = ("_cwd", "_nudge", "_ref", "_run_dir", "_selector", "_session_id")
+    __slots__ = (
+        "_bootstrapped",
+        "_cwd",
+        "_nudge",
+        "_ref",
+        "_run_dir",
+        "_selector",
+        "_session_id",
+    )
 
     _cwd: str
-    _nudge: Callable[[], None]
+    _nudge: Callable[[], int]
     _ref: str | None
     _run_dir: RunDir
     _selector: SessionSelector
     _session_id: str
+    _bootstrapped: bool
 
     def __new__(
         cls,
@@ -139,10 +160,10 @@ class DaemonCommand:
         user_override: str | None,
         session_ref: str | None,
         run_dir: RunDir,
-        nudge: Callable[[], None],
+        nudge: Callable[[], int],
         repo: Path | None = None,
     ) -> Self:
-        """Resolve who this invocation is; *nudge* returns once biffd answers.
+        """Resolve who this invocation is; *nudge* returns the port biffd answers on.
 
         It runs in *repo* when given, else in the current directory.
         """
@@ -154,6 +175,7 @@ class DaemonCommand:
         self._run_dir = run_dir
         self._nudge = nudge
         self._session_id = ""
+        self._bootstrapped = False
         return self
 
     @classmethod
@@ -166,8 +188,8 @@ class DaemonCommand:
         """Return the invocation at the default run directory; biffd starts if down."""
         run_dir = RunDir.default()
 
-        def start_biffd() -> None:
-            DaemonNudge.for_host(run_dir).ensure_running()
+        def start_biffd() -> int:
+            return DaemonNudge.for_host(run_dir).ensure_running()
 
         return cls(
             user_override=user_override,
@@ -229,12 +251,36 @@ class DaemonCommand:
         """Have biffd name the session *ref*, then point this repository at it."""
         return await self._pointing("session_use", {"ref": ref})
 
+    async def session_ls(self, *, include_ended: bool) -> Answer:
+        """Have biffd list this host's sessions."""
+        return await self._verb("session_ls", {"include_ended": include_ended})
+
+    async def session_end(self, ref: str) -> Answer:
+        """Have biffd end the session *ref*."""
+        return await self._verb("session_end", {"ref": ref})
+
+    async def _verb(self, method: str, params: dict[str, JsonValue]) -> Answer:
+        """Run the session verb *method* as this repository's session.
+
+        A session this call made only to run as (the repository had none) is
+        ended first: the verb then sees just the sessions the user made, and a
+        name the user asks for is not already taken by it.
+        """
+        client, record = await self.open()
+        try:
+            if self._bootstrapped:
+                await client.request("session_end", ref=record.session_id)
+        except BaseException:
+            await client.close()
+            raise
+        return await self._answer(client, method, params)
+
     async def _pointing(self, method: str, params: dict[str, JsonValue]) -> Answer:
         """Run the session verb *method*; point the repo at the session it names.
 
         The pointer is this repository's, so biffd does not hold it.
         """
-        answer = await self.call(method, **params)
+        answer = await self._verb(method, params)
         try:
             data = answer.data
             if not answer.result.error and isinstance(data, dict):
@@ -270,9 +316,10 @@ class DaemonCommand:
     async def open(self) -> tuple[DaemonClient, CliSessionRecord]:
         """Start biffd if down, connect as this session, and store it if new."""
         record, is_stored = await self._attach()
-        await asyncio.to_thread(self._nudge)
+        port = await asyncio.to_thread(self._nudge)
         client = await DaemonClient.connect(
             run_dir=self._run_dir,
+            port=port,
             identity=ClientIdentity(
                 client="cli",
                 session_id=record.session_id,
@@ -287,6 +334,7 @@ class DaemonCommand:
             await client.close()
             raise
         self._session_id = record.session_id
+        self._bootstrapped = not is_stored
         return client, record
 
     async def _attach(self) -> tuple[CliSessionRecord, bool]:

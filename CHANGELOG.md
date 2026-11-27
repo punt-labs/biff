@@ -9,24 +9,28 @@
   `unread`, `mail`, `wall`, `degraded` and `recovered`. Lines carry counts and
   the active wall, never a message body. It ends with exit 0 on Ctrl-C,
   SIGTERM or a closed pipe, and with exit 1 when the connection to biffd is
-  lost.
+  lost. It also ends when its reader leaves, within half a second, even when
+  no event is waiting (`biff watch | head -n 1`).
 - `biff install` installs biffd as a user service (systemd user unit `biffd`,
   macOS LaunchAgent `com.punt-labs.biffd`) and `biff uninstall` removes it.
   `biff daemon install`, `uninstall`, `start`, `stop`, `restart` and `status`
   manage the service alone. A new `biffd` executable runs the daemon in the
   foreground, as the unit executes it. A crash restarts biffd; a clean stop
   stays stopped. A host with no service manager, such as a container, reports
-  that and starts biffd on demand instead.
+  that and exits 3; `biff install` still succeeds there.
 - `biff doctor` checks biffd in seven lines: unit installed, process running,
   port owner, `/health`, token file mode, daemon version against client
-  version, and relay connection. Each failing line names the command that
+  version, and relay (reported as not available yet: asking biffd opens a
+  session, which would take part in mail routing). Each failing line names the command that
   repairs it. They are informational until the daemon is the default path.
 - `biff.client.nudge.DaemonNudge` starts biffd for a client that finds it
   down: it checks `/health` for one second, starts the unit or a detached
   `biffd`, and polls for five seconds. It raises `DaemonNotInstalledError`
   (`biffd is not installed. Run: biff install`) or `DaemonDidNotStartError`
   (`biffd is installed but did not start within 5 seconds. Run: biff daemon
-  status, then biff doctor`). Nothing calls it yet.
+  status, then biff doctor`). `ensure_running()` returns the port that
+  answered, which differs from the recorded one after a crash on a `--port`
+  override. Nothing calls it yet.
 - biffd exits with status 78 when no restart can cure its failure (port taken,
   run directory not private) and writes the reason to
   `~/.punt-labs/biff/logs/biff.log`. The unit does not restart on 78, limits a
@@ -34,7 +38,8 @@
   LaunchAgent writes its output to the same log and throttles restarts to 30
   seconds.
 - `biff install` and `biff daemon install` prove biffd answers `/health`
-  before they report success, remove the unit when a step fails, and carry the
+  before they report success, remove the unit when a step fails or the daemon
+  never answers, and carry the
   supervisor's stderr into the error. `biff uninstall` removes the unit only
   after the service is stopped and disabled. A hung or unwritable service
   manager is an error message, not a traceback, and does not skip the rest of
@@ -42,12 +47,65 @@
 - `biff doctor` fails on a version mismatch or a port held by another program
   once biffd's unit is installed; otherwise its biffd lines are advisory and say
   so. A client that finds a stale `serve.port` also tries 8424.
+- `biff install` and the `install.sh` bootstrap install the service; `biff
+  daemon install` refuses to register a unit while a biffd it does not
+  supervise answers on the port. The unit file follows `XDG_CONFIG_HOME`, and
+  `biffd` is found beside the running interpreter as well as in
+  `~/.local/bin` and on `PATH`. On macOS the service needs a GUI session; over
+  SSH without one, install says why. `biff uninstall` fails, naming the
+  command to run, when a unit file exists and the service manager cannot be
+  reached.
 - `biff daemon status` prints relay connections and attached clients as not
   reported yet, because biffd has no method that returns them.
+- `biff daemon install`, `start` and `restart` wait 30 seconds, not 5, for
+  `/health`; `BIFF_DAEMON_HEALTH_WAIT` (seconds, above 0, at most 600) sets the
+  wait. `start` and `restart` now wait for `/health` too, and refuse, as
+  `install` does, a port held by a biffd the service does not supervise. A
+  timeout says how long the wait was, whether the supervisor shows biffd
+  running now, and the supervisor's report (state, run count and last exit code
+  from `launchctl print`; the first lines of `systemctl --user status`). The
+  client nudge keeps its 5 seconds. A wait longer than 3 seconds prints one
+  `still waiting for biffd to answer /health` line to stderr.
+- `biff daemon install`, `start` and `restart` exit 4 with `still starting after
+  N seconds (machine load average X); it is running, not crashed` when the
+  supervisor shows biffd running as a pid whose `biffd starting` line is in
+  `biff.log` but `/health` has not answered; `install` keeps the service then.
+  A service that is not running, or has no startup line, fails as before.
+- `/health` reports biffd's `pid`, and `biff daemon status` prints it.
+- biffd writes `biffd starting: version=... pid=... port=... run_dir=...
+  python=...` to `~/.punt-labs/biff/logs/biff.log` before it loads the relay
+  stack, and `biffd listening on 127.0.0.1:<port>` once it listens. `biff.daemon`
+  no longer re-exports `BiffDaemon`; import it from `biff.daemon.server`.
 - The service code lives in `biff.supervision` behind a `ServiceBackend`
   protocol that mirrors punt-service, which is not yet on PyPI. Moving to
   punt-service replaces `biff.supervision.systemd`, `launchd`, `host` and
   `runner` with its backends; no other module changes.
+
+### Fixed
+
+- A refused `biff daemon install`, `start` or `restart` (another program holds
+  biffd's port) names the program, `held by python3 (pid 4930), not biffd`, when
+  `lsof` or `ss` can say, and writes one WARNING line to `biff.log`.
+- `biff daemon status` reads `unit: <path> (installed, not loaded)` for a launchd
+  job that `stop` booted out, and biffd logs `biffd stopping: signal=... pid=...`.
+- A connect-and-close on biffd's port (a port probe) no longer writes an ERROR
+  with a traceback to `biff.log`, and a real client's bad handshake is one
+  WARNING line, written once: biffd's stderr handler, which a LaunchAgent
+  redirects into the same file, duplicated every WARNING and above.
+- The supervisor report in a failed start no longer repeats `state` and
+  `active count` taken from launchd's nested blocks.
+- A `biff wall` that a relay refuses (an authorization error, an unreachable
+  server, a repository whose write failed) now exits 1 and prints the relay's
+  error; it used to log the failure and report success. This holds for every
+  path, not only a CI runner.
+- A CI `biff wall` reaches every repository of the configured organizations again.
+- A presence heartbeat no longer overwrites a plan or tty name saved between its
+  read and its write; the first command of a CLI session counts as activity.
+- Mail a daemon `read` left behind is given back to a relay that consumed it, so
+  `biff session end` moves it to your user mailbox instead of stranding it.
+- A service failure message no longer runs its last sentence into the pointer
+  to the log (`... biff daemon serve See ~/.punt-labs/...`): the pointer is its
+  own sentence.
 
 ### Changed
 
@@ -55,9 +113,12 @@
   session records. The CLI keeps only the repo pointer and the `-s` name. biffd
   sweeps stale records once at start and every 10 minutes, for every repository
   the host has used: a session idle for 8 hours goes dormant, and a dormant or
-  ended one is removed after 3 days with its relay row released. Like every
-  other command, a session verb runs as this repo's session, so in a repo with
-  no session it makes one first.
+  ended one is removed after 3 days with its relay row released. A session a
+  connection is attached to, such as a running `biff watch`, is renewed instead
+  of judged. Ending a session files the mail biffd held for it in your mailbox
+  and closes the connections attached to it with `session ended`. A session verb
+  runs as this repo's session; in a repo with none it makes one to run as and
+  ends it before the verb runs.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the
   same text as before. `plan` and `tty` still write the plan-gate
@@ -65,6 +126,11 @@
   always a CLI session: the old rung that attached to a harness session as a
   client is dropped, and stale stored sessions are no longer swept by these
   commands (that moves into biffd).
+- `biff wall` posts, shows or clears the wall straight on the relay when the
+  environment carries `BIFF_RELAY_*` settings (a CI runner with no biffd), on the
+  configured repositories and those of its organizations; it is the only command
+  with a direct path. Every other command, and `wall` without those settings, goes
+  through biffd.
 - biffd's replies carry the engine's display text (`text`) beside `data` and
   `error`, so a client prints the words the engine rendered instead of
   rebuilding them. A `read` reply's rows and text are fitted to one budget

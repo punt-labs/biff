@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import plistlib
 import socket
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -24,8 +26,13 @@ from biff.supervision.host import ServiceHost
 from biff.supervision.launchd import LaunchdBackend
 from biff.supervision.manager import ServiceManager
 from biff.supervision.port import PortProbe
+from biff.supervision.runner import Supervisor
 from biff.supervision.systemd import SystemdBackend
-from tests.test_supervision.fake_backend import FakeBackend, port_probe
+from tests.test_supervision.fake_backend import (
+    FailingUninstall,
+    FakeBackend,
+    port_probe,
+)
 from tests.test_supervision.scripted import ScriptedSupervisor
 
 if TYPE_CHECKING:
@@ -33,6 +40,7 @@ if TYPE_CHECKING:
 
 UNIT = "biffd"
 _REAL_DETECT = ServiceHost.detect  # captured before any test patches it
+_REAL_LEFTOVER = ServiceHost.leftover_files
 
 
 @pytest.fixture
@@ -43,13 +51,11 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     binary.write_text("#!/bin/sh\n")
     binary.chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
+    # A CI runner sets XDG_CONFIG_HOME; the unit directory must follow HOME here.
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "py" / "python"))
     return tmp_path
-
-
-@pytest.fixture
-def script(monkeypatch: pytest.MonkeyPatch) -> ScriptedSupervisor:
-    return ScriptedSupervisor().install(monkeypatch)
 
 
 def installed_unit(home: Path) -> Path:
@@ -140,6 +146,9 @@ class TestSystemdUnit:
         text = SystemdBackend(BIFFD_SPEC).unit_text()
         assert f"RestartPreventExitStatus={BIFFD_SPEC.permanent_exit_status}" in text
 
+    def test_exec_start_turns_variable_substitution_off(self, home: Path) -> None:
+        assert 'ExecStart=:"' in SystemdBackend(BIFFD_SPEC).unit_text()
+
     def test_the_unit_passes_the_port_explicitly(self, home: Path) -> None:
         text = SystemdBackend(BIFFD_SPEC).unit_text()
         assert f'"--port" "{BIFFD_SPEC.health_port}"' in text
@@ -153,7 +162,7 @@ class TestSystemdUnit:
         binary.write_text("#!/bin/sh\n")
         monkeypatch.setenv("HOME", str(odd))
         text = SystemdBackend(BIFFD_SPEC).unit_text()
-        assert "a%%b$$c" in text and "a%b$c" not in text
+        assert "a%%b$c" in text and "$$" not in text
 
 
 class TestSystemdAvailability:
@@ -352,15 +361,17 @@ class TestSpecBinary:
         binary.chmod(0o755)
         monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
         monkeypatch.setenv("PATH", str(bin_dir))
-        assert BIFFD_SPEC.resolve_exec_args()[0] == str(binary)
+        spec = dataclasses.replace(BIFFD_SPEC, beside_interpreter=False)
+        assert spec.resolve_exec_args()[0] == str(binary)
 
     def test_a_missing_binary_names_both_places(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+        spec = dataclasses.replace(BIFFD_SPEC, beside_interpreter=False)
         with pytest.raises(BinaryNotFoundError, match="PATH"):
-            BIFFD_SPEC.resolve_exec_args()
+            spec.resolve_exec_args()
 
     def test_the_spec_passes_the_port_to_biffd(self) -> None:
         assert BIFFD_SPEC.extra_args == ("--port", str(BIFFD_SPEC.health_port))
@@ -381,7 +392,27 @@ class TestManagerInstallProof:
             FakeBackend(tmp_path / "biffd.service"),
             port_probe("free", answers=False),
         )
-        with pytest.raises(ServiceActionFailedError, match=r"biff daemon status"):
+        with pytest.raises(ServiceActionFailedError, match=r"biff daemon serve"):
+            manager.install()
+
+    def test_a_failed_health_check_removes_the_registration(
+        self, tmp_path: Path, home: Path
+    ) -> None:
+        backend = FakeBackend(tmp_path / "biffd.service")
+        manager = ServiceManager(BIFFD_SPEC, backend, port_probe("free", answers=False))
+        with pytest.raises(ServiceActionFailedError, match="It was removed"):
+            manager.install()
+        assert (backend.calls, backend.config_path().exists()) == (
+            ["install", "uninstall"],
+            False,
+        )
+
+    def test_a_removal_that_fails_too_is_reported(
+        self, tmp_path: Path, home: Path
+    ) -> None:
+        backend = FailingUninstall(tmp_path / "biffd.service")
+        manager = ServiceManager(BIFFD_SPEC, backend, port_probe("free", answers=False))
+        with pytest.raises(ServiceActionFailedError, match="Removing it failed too"):
             manager.install()
 
     def test_an_unresponsive_port_does_not_block_install(
@@ -452,3 +483,223 @@ class TestPortProbe:
 
     def test_waiting_gives_up_after_the_deadline(self) -> None:
         assert PortProbe(1).wait_until_answering(0.3) is False
+
+
+class TestInstallationLookup:
+    """biffd is found where this installation put it, not only in ~/.local/bin."""
+
+    def test_the_interpreters_own_bin_directory_is_searched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        venv_bin = tmp_path / "envs" / "biff" / "bin"
+        venv_bin.mkdir(parents=True)
+        binary = venv_bin / "biffd"
+        binary.write_text("#!/bin/sh\n")
+        monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+        monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+        monkeypatch.setattr(sys, "executable", str(venv_bin / "python"))
+        assert BIFFD_SPEC.resolve_exec_args()[0] == str(binary)
+
+    def test_the_stable_uv_tool_link_still_comes_first(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        venv_bin = home / "envs" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "biffd").write_text("#!/bin/sh\n")
+        monkeypatch.setattr(sys, "executable", str(venv_bin / "python"))
+        assert BIFFD_SPEC.resolve_exec_args()[0] == str(home / ".local/bin/biffd")
+
+    def test_a_spec_that_does_not_look_beside_the_interpreter_does_not(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        venv_bin = tmp_path / "bin"
+        venv_bin.mkdir()
+        (venv_bin / "biffd").write_text("#!/bin/sh\n")
+        monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+        monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+        monkeypatch.setattr(sys, "executable", str(venv_bin / "python"))
+        spec = dataclasses.replace(BIFFD_SPEC, beside_interpreter=False)
+        with pytest.raises(BinaryNotFoundError):
+            spec.resolve_exec_args()
+
+
+class TestUnitDirectory:
+    def test_the_unit_follows_xdg_config_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        path = SystemdBackend(BIFFD_SPEC).config_path()
+        assert path == tmp_path / "xdg" / "systemd" / "user" / "biffd.service"
+
+    def test_without_xdg_config_home_it_is_dot_config(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        assert SystemdBackend(BIFFD_SPEC).config_path() == (
+            home / ".config" / "systemd" / "user" / "biffd.service"
+        )
+
+
+class TestLaunchdNeedsAGuiSession:
+    @pytest.fixture(autouse=True)
+    def _mac(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ServiceHost, "detect", staticmethod(_REAL_DETECT))
+        monkeypatch.setattr("platform.system", lambda: "Darwin")  # pyright: ignore[reportUnknownLambdaType]
+
+    def test_a_reachable_gui_domain_is_found(self, script: ScriptedSupervisor) -> None:
+        found = ServiceHost.detect(BIFFD_SPEC)
+        assert (found.status, isinstance(found.backend, LaunchdBackend)) == (
+            "found",
+            True,
+        )
+
+    def test_no_gui_domain_is_unreachable_and_says_so(
+        self, script: ScriptedSupervisor
+    ) -> None:
+        script.answer("launchctl", "print", rc=113, err="Could not find domain")
+        found = ServiceHost.detect(BIFFD_SPEC)
+        assert (found.status, "no GUI session" in found.reason) == ("unreachable", True)
+        assert found.backend is None
+
+    def test_no_launchctl_is_absent(self, script: ScriptedSupervisor) -> None:
+        script.raises("launchctl", error=FileNotFoundError("launchctl"))
+        assert ServiceHost.detect(BIFFD_SPEC).status == "absent"
+
+
+class TestLeftoverFiles:
+    """A registration an earlier login made is found without asking the manager."""
+
+    def test_the_unit_file_is_found_on_linux(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("platform.system", lambda: "Linux")  # pyright: ignore[reportUnknownLambdaType]
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        unit = installed_unit(home)
+        monkeypatch.setattr(ServiceHost, "leftover_files", staticmethod(_REAL_LEFTOVER))
+        assert ServiceHost.leftover_files(BIFFD_SPEC) == (unit,)
+
+    def test_nothing_is_found_when_nothing_is_installed(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("platform.system", lambda: "Linux")  # pyright: ignore[reportUnknownLambdaType]
+        monkeypatch.setattr(ServiceHost, "leftover_files", staticmethod(_REAL_LEFTOVER))
+        assert ServiceHost.leftover_files(BIFFD_SPEC) == ()
+
+
+class TestInstallScript:
+    """The bootstrap's service step, run with a stub in place of ``biff``."""
+
+    SCRIPT = Path(__file__).parents[2] / "install.sh"
+    SERVICE_CALL = '"$BINARY" daemon install < /dev/null ||'
+    PLUGIN_CALL = 'claude plugin install "${PLUGIN_NAME}'
+    CLI_CALL = 'uv tool install --force $PYTHON_FLAG "$PACKAGE==$VERSION"'
+    VERIFY_STEP = "# --- Step 7: Verify"
+
+    @classmethod
+    def order_is_right(cls, text: str) -> bool:
+        """Return whether the CLI install, the service call and the plugin run so.
+
+        The service runs the binary the CLI install provides, and the plugin step
+        must not run before a service failure can be reported.
+        """
+        return (
+            text.index(cls.CLI_CALL)
+            < text.index(cls.SERVICE_CALL)
+            < text.index(cls.PLUGIN_CALL)
+        )
+
+    @classmethod
+    def _moved(cls, text: str, *, before: str) -> str:
+        """Return *text* with the service call cut out and put in front of *before*."""
+        without = text.replace(cls.SERVICE_CALL, "", 1)
+        at = without.index(before)
+        return without[:at] + cls.SERVICE_CALL + without[at:]
+
+    def _blocks(self) -> tuple[str, str]:
+        text = self.SCRIPT.read_text()
+
+        def block(name: str) -> str:
+            start = text.index(f"# >>> {name}")
+            return text[start : text.index(f"# <<< {name}")]
+
+        return block("biffd service"), block("service verdict")
+
+    def _run(
+        self,
+        tmp_path: Path,
+        *,
+        help_status: int,
+        help_error: str = "",
+        install_status: int = 0,
+    ) -> subprocess.CompletedProcess[str]:
+        stub = tmp_path / "biff"
+        stub.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$3" = "--help" ]; then echo "{help_error}" >&2; '
+            f"exit {help_status}; fi\n"
+            f"exit {install_status}\n"
+        )
+        stub.chmod(0o755)
+        service, verdict = self._blocks()
+        program = (
+            'info() { echo "info: $1"; }\n'
+            'ok() { echo "ok: $1"; }\n'
+            'warn() { echo "warn: $1"; }\n'
+            'fail() { echo "fail: $1"; exit 1; }\n'
+            f'BINARY="{stub}"\n{service}\necho plugin-step-ran\n{verdict}\n'
+        )
+        return Supervisor.run("/bin/sh", "-c", program)
+
+    def test_the_cli_install_then_the_service_then_the_plugin(self) -> None:
+        assert self.order_is_right(self.SCRIPT.read_text())
+
+    def test_the_order_check_fails_when_the_service_moves_after_the_plugin(
+        self,
+    ) -> None:
+        mutant = self._moved(self.SCRIPT.read_text(), before=self.VERIFY_STEP)
+        assert not self.order_is_right(mutant)
+
+    def test_the_order_check_fails_when_the_service_moves_before_the_cli_install(
+        self,
+    ) -> None:
+        mutant = self._moved(self.SCRIPT.read_text(), before=self.CLI_CALL)
+        assert not self.order_is_right(mutant)
+
+    def test_a_still_starting_service_is_not_called_unsupervised(
+        self, tmp_path: Path
+    ) -> None:
+        done = self._run(tmp_path, help_status=0, install_status=4)
+        assert (done.returncode, "no service manager" in done.stdout) == (0, False)
+        assert "still starting" in done.stdout
+
+    @pytest.mark.parametrize("status", [0, 3])
+    def test_installed_or_no_manager_succeeds(
+        self, tmp_path: Path, status: int
+    ) -> None:
+        done = self._run(tmp_path, help_status=0, install_status=status)
+        assert (done.returncode, "plugin-step-ran" in done.stdout) == (0, True)
+
+    def test_a_refusing_manager_fails_after_the_plugin_step(
+        self, tmp_path: Path
+    ) -> None:
+        done = self._run(tmp_path, help_status=0, install_status=1)
+        assert done.returncode == 1
+        assert done.stdout.index("plugin-step-ran") < done.stdout.index("fail:")
+
+    def test_a_release_without_the_command_is_skipped_with_a_note(
+        self, tmp_path: Path
+    ) -> None:
+        done = self._run(
+            tmp_path, help_status=2, help_error="Error: No such command 'install'."
+        )
+        assert (done.returncode, "no 'daemon install'" in done.stdout) == (0, True)
+
+    def test_a_cli_that_fails_to_start_fails_loudly_with_its_stderr(
+        self, tmp_path: Path
+    ) -> None:
+        done = self._run(
+            tmp_path, help_status=1, help_error="ImportError: no module named nats"
+        )
+        assert done.returncode == 1
+        assert "ImportError: no module named nats" in done.stdout
+        assert "plugin-step-ran" in done.stdout

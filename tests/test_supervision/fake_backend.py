@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
+from biff.supervision.errors import ServiceActionFailedError
+
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from biff.supervision.holder import Holder
     from biff.supervision.port import PortState
 
 
@@ -14,27 +17,45 @@ if TYPE_CHECKING:
 class FakePort:
     """Reports a fixed port state, and whether biffd ever answers ``/health``."""
 
-    __slots__ = ("_answers", "_state")
+    __slots__ = ("_answers", "_holder", "_state", "_waits")
 
     _state: PortState
     _answers: bool
+    _waits: list[float]
+    # None: the host could not name the holder.
+    _holder: Holder | None
 
-    def __new__(cls, state: PortState, *, answers: bool) -> Self:
+    def __new__(
+        cls, state: PortState, *, answers: bool, holder: Holder | None = None
+    ) -> Self:
         self = super().__new__(cls)
         self._state = state
+        self._holder = holder
         self._answers = answers
+        self._waits = []
         return self
+
+    @property
+    def waits(self) -> list[float]:
+        """The number of seconds each wait for ``/health`` was allowed."""
+        return self._waits
 
     def state(self) -> PortState:
         return self._state
 
+    def holder(self) -> Holder | None:
+        return self._holder
+
     def wait_until_answering(self, seconds: float) -> bool:
+        self._waits.append(seconds)
         return self._answers
 
 
-def port_probe(state: PortState, *, answers: bool = True) -> FakePort:
-    """Return a port watcher that reports *state* and answers ``/health`` or not."""
-    return FakePort(state, answers=answers)
+def port_probe(
+    state: PortState, *, answers: bool = True, holder: Holder | None = None
+) -> FakePort:
+    """Return a port watcher that reports *state*, answers ``/health`` or not."""
+    return FakePort(state, answers=answers, holder=holder)
 
 
 class RaisingBackend:
@@ -155,3 +176,81 @@ class FakeBackend:
     def linger_warning(self) -> str:
         """Return no warning."""
         return ""
+
+
+class FailingUninstall(FakeBackend):
+    """A backend whose uninstall is refused by its supervisor."""
+
+    __slots__ = ()
+
+    def uninstall(self) -> None:
+        raise ServiceActionFailedError("systemctl refused to disable the unit")
+
+
+class DiagnosableBackend(FakeBackend):
+    """A backend that also reports what its supervisor shows, as launchd's does."""
+
+    __slots__ = ("_alive", "_report", "_seen")
+
+    _report: str
+    _alive: bool
+    _seen: list[bool]
+
+    def __new__(cls, config_path: Path, report: str, *, alive: bool = True) -> Self:
+        """Report *report*; show the service running unless ``alive`` is false."""
+        self = super().__new__(cls, config_path)
+        self._report = report
+        self._alive = alive
+        self._seen = []
+        return self
+
+    def is_active(self) -> bool:
+        """Return the scripted state, whatever was installed."""
+        return self._alive
+
+    @property
+    def unit_present_when_asked(self) -> list[bool]:
+        """Whether the unit still existed at each call to ``diagnosis``."""
+        return self._seen
+
+    def diagnosis(self) -> str:
+        """Return the scripted report, noting whether the unit still exists."""
+        self._seen.append(self.config_path().exists())
+        return self._report
+
+
+class PiddedBackend(DiagnosableBackend):
+    """A backend whose supervisor also knows the service's pid, as both real ones do."""
+
+    __slots__ = ("_pid",)
+
+    # None: the supervisor shows no process, as for a job that is not running.
+    _pid: int | None
+
+    def __new__(cls, config_path: Path, *, pid: int | None, alive: bool = True) -> Self:
+        """Show the service running as *pid*, or not running with ``alive=False``."""
+        self = super().__new__(cls, config_path, "state = running", alive=alive)
+        self._pid = pid
+        return self
+
+    def main_pid(self) -> int | None:
+        """Return the scripted pid."""
+        return self._pid
+
+
+class LoadedBackend(FakeBackend):
+    """A backend that also knows whether its supervisor has the job loaded."""
+
+    __slots__ = ("_loaded",)
+
+    _loaded: bool
+
+    def __new__(cls, config_path: Path, *, loaded: bool) -> Self:
+        """Report the job loaded or, with ``loaded=False``, not."""
+        self = super().__new__(cls, config_path)
+        self._loaded = loaded
+        return self
+
+    def is_loaded(self) -> bool:
+        """Return the scripted state."""
+        return self._loaded

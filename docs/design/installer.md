@@ -563,19 +563,97 @@ outcomes: done, failed, or no service manager.
 - **Port guard.** Install refuses when another program holds port 8424; a
   running biffd on it is fine.
 - **No service manager** (a container, or a Linux login with no systemd user
-  session): `biff install` prints that biffd starts on demand and succeeds;
-  `biff daemon install`, `start`, `stop`, `restart` exit 1 with the same text.
+  session): `biff install` says biffd is not supervised and succeeds;
+  `biff daemon install`, `start`, `stop`, `restart` exit 3 with the same text,
+  so a bootstrap can tell "no manager" from 1, a manager that refused.
 - **A manager that exists and does not answer** (`systemctl` is installed and
   `systemctl --user show-environment` fails, as in a container that ships
   systemd without running it) is reported with systemctl's own words on stderr.
-  `biff install` still exits 0, because that container is the case biffd's
-  on-demand start exists for; `biff daemon install`, `start`, `stop` and
-  `restart` exit 1.
-- **Install proves itself.** After registering the unit, install waits up to five
-  seconds for `/health` and fails if biffd does not answer, so `Type=simple`
-  "active" is never taken for "working". A step that fails removes the unit
-  and disables it again; `uninstall` deletes the unit only after systemd reports
-  the service stopped, and a supervisor failure is an error, never ignored.
+  `biff install` still exits 0, because that container is the case with no
+  manager to supervise biffd; `biff daemon install`, `start`, `stop` and
+  `restart` exit 3.
+- **Install proves itself.** After registering the unit, install waits for
+  `/health` and fails if biffd does not answer, so `Type=simple` "active" is
+  never taken for "working". `daemon start` and `restart` wait the same way but
+  leave the unit installed when biffd does not answer. A step that fails, or a
+  daemon that never answers, removes the unit and disables it again;
+  `uninstall` deletes the unit only after systemd reports the service stopped,
+  and a supervisor failure is an error, never ignored.
+- **The health wait is 30 seconds and `BIFF_DAEMON_HEALTH_WAIT` sets it.** The
+  first value, 5 seconds, failed on a macOS laptop at a load average of 150 to
+  229: launchd had spawned biffd, never saw it exit, and the install's own
+  rollback removed it 5.25 seconds later. Spawn to first `/health` answer was
+  measured on a 24-core Linux machine with `biffd --port N`: 0.75 s warm, 1.77 s
+  with the bytecode cache deleted; with 24 busy loops (load average 79 on that
+  shared machine) 0.99 to 2.34 s warm and 1.38 s cold. biffd imports its relay
+  stack before it listens, so the time grows with CPU contention and with
+  Python 3.14's cold imports; 30 seconds is more than ten times the worst
+  measured value. The variable takes seconds above 0 and at most 600; anything
+  else fails the command with the variable named, before the service is touched.
+  The nudge keeps 5 seconds: it blocks a client's own call, the longest measured
+  start under load (2.34 s) fits, and its error names the commands that find out
+  why. A client that must wait longer starts biffd with `biff daemon start`.
+- **A timeout says what the supervisor knew.** The error reports how long the
+  wait was (not how long biffd ran: it may have exited early and been
+  restarted), whether the supervisor shows biffd running now (slow to start, or
+  restarted after an exit) or not (it exited or never started, so read
+  `biff.log`), and the supervisor's own report: the state, run count, pid and
+  last exit code from the job's own block of `launchctl print
+  gui/<uid>/<label>` on macOS (its nested `coalition` and `endpoints` blocks
+  repeat `state` and `active count` and are skipped); the first eight lines
+  of `systemctl --user status` on Linux. All of it is read before the rollback,
+  which still removes the unit.
+- **A slow start under load is not a failure.** When the wait lapses and the
+  supervisor shows biffd running as a pid whose own `biffd starting` line is in
+  `biff.log` (read from the log's last megabyte), the command says `still
+  starting after N seconds (machine load average X); it is running, not
+  crashed` and exits 4. It is not 3, which means no service manager: the
+  bootstrap answers 3 by telling the user to start a foreground biffd, which
+  would compete for the port with the one the service is starting. `install.sh`
+  treats 4 as a note. `install`
+  keeps the service in that case and says so; it removes it only for the
+  failures it always did. A supervisor that does not show biffd running, no
+  startup line for that pid, or a pid the supervisor cannot name keeps the
+  failure text and the rollback. This case was measured: on a Mac at load 175
+  the new process logged `biffd starting` 37 s before it listened, longer than
+  the 30 s wait.
+- **A refusal names its holder and leaves a trace.** When another program holds
+  the port, `install`, `start` and `restart` look it up with `lsof -nP
+  -iTCP:<port> -sTCP:LISTEN -Fpcn`, else `ss -ltnpH`, with no shell and a 2
+  second limit, and say `held by python3 (pid 4930), not biffd`. A tool that is
+  missing, hangs, is refused or names nothing adds nothing: the lookup never
+  fails the refusal and never guesses. The refusal is also written to `biff.log`
+  as one WARNING line with the port, the holder if known and the command, because
+  every biff process writes that log and a refusal that is only printed leaves no
+  record. (Under `biff daemon ...` the log's stderr handler also prints the line.)
+- **`stop` leaves launchd's plist, so `status` says so.** launchd's stop boots
+  the job out and keeps the plist; `status` then reads `installed: yes`,
+  `running: no` while `launchctl print` says it cannot find the service. The unit
+  line now reads `unit: <plist> (installed, not loaded)` for that state.
+- **biffd logs why it stops.** `biffd stopping: signal=SIGTERM pid=N` is written
+  when a stop signal arrives, before websockets' own `server closing`.
+- **A probe is not an error in the log.** A connect and close with no request
+  fails websockets' handshake as a broken client does, and websockets logs both
+  at ERROR with a traceback. biffd now logs a probe as one DEBUG line and a
+  client that sent anything else, including a partial request or LF-only line
+  endings, as one WARNING line with its reason, no traceback. The record had also been written twice: the daemon's stderr
+  handler and its file handler both took it, and under a LaunchAgent stderr is
+  `biff.log`. biffd now sends only CRITICAL to stderr.
+- **`biff daemon status` prints the pid** that `/health` reports, which is
+  biffd's own `os.getpid()`; a biffd older than the field prints no pid line.
+- **start and restart refuse a port the service does not hold.** A foreground
+  biffd answers `/health` too, so `start` and `restart` apply the install
+  guard first: a biffd the service does not supervise, or another program, on
+  the port is refused with the command to run after stopping it.
+- **A long wait says so.** After 3 seconds without an answer, `install`,
+  `start` and `restart` print one line to stderr, so a person does not think a
+  command that waits up to 30 seconds has hung.
+- **biffd logs its own start.** Its first line in `biff.log` after logging is
+  configured gives version, pid, port, run directory and interpreter; a second
+  says when it listens. The relay stack is imported after the first line, not
+  before it (`biff.daemon` imports nothing at package level), so a daemon that
+  is still loading has said it started. Under a service manager they are the
+  only record that biffd ran at all.
 - **A failed service install** does not skip the plugin step, because nothing
   routes through biffd yet, but it fails the command with exit 1.
 
@@ -587,10 +665,14 @@ manager, "installed" means the unit file exists, whatever else is on `PATH`;
 without one it means a `biffd` executable on `PATH` or in `~/.local/bin`.
 
 `biff doctor` gains seven biffd lines (unit, running, port, health, token,
-version, relay), each naming its repair command. They are informational
-(`required=False`) until the daemon is the default path, so a machine that has
-not run `biff install` since upgrading still passes `biff doctor`. They live in
-the `cli` layer because the relay line asks the daemon over its protocol.
+version, relay), each naming its repair command. While the unit is not
+installed they are informational (`required=False`) and a line says so, so a
+machine that has not run `biff install` since upgrading still passes. Once the
+unit is installed, a version mismatch and a port held by another program fail
+`biff doctor`. The relay line only says relay connections are not reported yet:
+the one way to ask biffd opens a session, and a session opened by doctor takes
+part in mail routing. A supervisor that hangs or a file that cannot be read is a
+failed line, never a traceback.
 
 ### Why a stand-in library
 

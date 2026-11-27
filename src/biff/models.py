@@ -10,6 +10,7 @@ All datetime fields are normalized to UTC; naive datetimes are rejected.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, tzinfo
 from typing import Annotated, Literal, cast
@@ -85,6 +86,9 @@ def truncate_plan(text: str) -> str:
     return text[: PLAN_MAX_LENGTH - 1] + "…"
 
 
+_REFILE_NS = uuid.UUID("b3a1c7d2-2e49-4c52-8d1a-6e0f9c5a4b72")
+
+
 class Message(BaseModel):
     """A single async message between two users.
 
@@ -114,6 +118,23 @@ class Message(BaseModel):
     @classmethod
     def _normalize_timestamp(cls, v: datetime) -> datetime:
         return _ensure_utc(v)
+
+    def refiled(self) -> Message:
+        """Return this message as it is filed again where it came from.
+
+        The id is derived from this one's, so filing it twice cannot make two
+        copies; the address is kept, so it lands in the inbox it was fetched from.
+        """
+        return self.model_copy(update={"id": uuid.uuid5(_REFILE_NS, str(self.id))})
+
+    def original_in(self, held: Mapping[uuid.UUID, Message]) -> uuid.UUID:
+        """Return the id in *held* of the message this one is the refiled copy of.
+
+        A refile that landed but was reported failed leaves the original held and
+        its copy in the relay; the copy's id is derived from the original's, so
+        the two are one message.  A message that copies nothing held is its own.
+        """
+        return next((i for i, m in held.items() if m.refiled().id == self.id), self.id)
 
 
 class UserSession(BaseModel):

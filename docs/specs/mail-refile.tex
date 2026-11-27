@@ -1,0 +1,672 @@
+%
+% mail-refile.tex
+%
+% Z Specification for a partial read on a consuming relay: the refile of the
+% remainder, and the confirmation of the batch (DES-095, DES-099).
+%
+% Companion to session-model.tex and nats-relay.tex.  session-model.tex keeps
+% the unread mail of a session as a count ($durable$, $shown$); this model
+% needs the messages themselves, because the properties are about which
+% message is where.  It is kept apart because those two specifications
+% already have large state spaces.
+%
+% Type-check: fuzz -t mail-refile.tex
+% Model-check: see the end of this file.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff Mail Refile and Confirmation: A Z Specification}
+\author{Punt Labs}
+\date{November 2026}
+\maketitle
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+The NATS relay \emph{consumes} mail when it is fetched: a fetch acknowledges
+the messages it returns, and the work queue deletes what is acknowledged.
+After a fetch the mail exists only in the memory of whoever fetched it.
+
+The daemon's \texttt{read} fetches a bounded batch, fits as much of it into
+the reply as the read budget allows, and is left with a remainder.  The
+remainder used to stay in the daemon's outbox, out of reach of everything else
+that drains a session: ending the session, or a read from another process,
+found the relay empty.  A test on a real relay found 0 of 26 messages
+reachable after a partial read.  The remainder is now filed back into the
+relay under an id derived from its own (\texttt{Message.refiled}), so that
+filing it twice cannot make two copies.
+
+The reply carries the batch.  The batch stays in the outbox until the client
+confirms it, and the client confirms only after it has printed it
+(\texttt{request\_held}, \texttt{HeldReply.confirm}).  A confirmation sent
+before the print let a client that died in between mark as read a message it
+had never shown.
+
+This specification states what is claimed and what is not.  The claims hold
+when nothing fails; each failure that voids one is an explicit operation.
+
+\begin{enumerate}
+  \item \textbf{No remainder is lost.} After any partial read, every message
+    the batch does not carry is in the relay or, if the relay refused it,
+    in the outbox of a session that has not ended.
+  \item \textbf{Nothing is duplicated.} A message is held by at most one of
+    the relay and the outbox, and the relay holds at most one copy of it.
+  \item \textbf{\texttt{more} counts each remaining message once.}
+  \item \textbf{A message is marked read only after it was shown.}
+  \item \textbf{Nothing vanishes unaccounted.} Every issued message is shown,
+    drained, held, or recorded as lost by a named event.
+\end{enumerate}
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  ReadPhase ::= rdIdle | rdFetched
+\end{zed}
+
+\begin{axdef}
+  fetchMax : \nat \\
+  batchMax : \nat
+  \where
+  fetchMax = 2 \\
+  batchMax = 1
+\end{axdef}
+
+$fetchMax$ is the bound of one consuming fetch; $batchMax$ is the number of
+messages the read budget fits into one reply.  Both are small so that
+ProB can enumerate them, and $batchMax < fetchMax$ is what makes a read
+partial.
+
+\begin{zed}
+  MAIL == 1 \upto 2 \\
+  GEN == 0 \upto 1 \\
+  WIRE == MAIL \cross GEN
+\end{zed}
+
+$MAIL$ is a message as the sender knows it.  $WIRE$ is a message as the relay
+knows it: the message and the generation of its id.  A refile gives the
+message the next id in its chain; the id is \texttt{uuid5} of the previous
+one, so the chain never meets itself.  The model counts the generations
+modulo two, which is sound because a message has one live copy (property 2),
+and the one pair that would collide is exactly the case the derivation is
+there for: a copy filed twice from the same predecessor.
+
+\begin{axdef}
+  refile : WIRE \fun WIRE
+  \where
+  refile = \{ m : MAIL; g : GEN @ (m, g) \mapsto (m, (g + 1) \mod 2) \}
+\end{axdef}
+
+\begin{axdef}
+  mailOf : \power WIRE \fun \power MAIL
+  \where
+  \forall s : \power WIRE @ mailOf~s = \{ w : s @ first~w \}
+\end{axdef}
+
+%%----------------------------------------------------------------------
+\section{State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Store}
+  relay : \power WIRE \\
+  held : \power WIRE \\
+  sent : \power WIRE \\
+  phase : ReadPhase
+\end{schema}
+
+$relay$ is the session's inbox in the relay, shared with every process that
+drains it.  $held$ is the daemon's outbox: process memory, lost with the
+process.  $sent$ is the batch of the reply the client has not yet confirmed;
+a message in $sent$ is held.  $phase$ is $rdFetched$ between the fetch of a
+read and its reply.
+
+\begin{schema}{Client}
+  shown : \power MAIL \\
+  done : \power MAIL \\
+  dupShown : ZBOOL
+\end{schema}
+
+$shown$ is what the client has printed, $done$ what has been marked read, and
+$dupShown$ records that a reply offered the client a message it had already
+printed.
+
+\begin{schema}{Ledger}
+  issued : \power MAIL \\
+  drained : \power MAIL \\
+  lostBatch : \power MAIL \\
+  lostRest : \power MAIL
+\end{schema}
+
+A ghost.  $issued$ is every message ever filed; $drained$ is what an ending
+session moved into its owner's mailbox, where it is reachable.  $lostBatch$
+and $lostRest$ are what a failure took from the outbox without the client
+having been shown it: the batch of an unconfirmed reply, and the rest.
+
+\begin{schema}{Flags}
+  faulted : ZBOOL \\
+  cancelled : ZBOOL \\
+  refileTimedOut : ZBOOL \\
+  moreOut : 0 \upto 2 \\
+  moreTruth : 0 \upto 2 \\
+  moreSlack : 0 \upto 2
+\end{schema}
+
+$faulted$ is set by every operation that is a failure and not a protocol
+step: a daemon crash, a relay that refuses a refile, a session that ends
+during a read.  A read cancelled half-way and a refile that landed but timed
+out are events of their own, $cancelled$ and $refileTimedOut$, so that a
+witness query can isolate each; like $faulted$ they leave unfiled mail in the
+outbox only, and the claim that the remainder is reachable is stated while
+none of the three has happened.  $moreOut$ is the \texttt{more}
+the last reply carried, computed as the code computes it; $moreTruth$ is the
+number of messages that reply left, computed from the ledger.
+
+\begin{schema}{MailState}
+  Store \\
+  Client \\
+  Ledger \\
+  Flags
+\end{schema}
+
+\begin{schema}{MailInv}
+  MailState
+  \where
+  sent \subseteq held \\
+  done \subseteq shown \\
+  shown \subseteq issued \\
+  issued \subseteq shown \cup drained \cup mailOf~relay \cup mailOf~held \cup
+    lostBatch \cup lostRest \\
+  ( faulted = zfalse \land cancelled = zfalse \land refileTimedOut = zfalse )
+    \implies lostRest = \emptyset \\
+  ( \forall m : MAIL @ \# \{ w : relay | first~w = m \} \leq 1 \land
+    \# \{ w : held | first~w = m \} \leq 1 ) \\
+  ( \forall w : relay; h : held | first~w = first~h @ w = refile~h ) \\
+  moreTruth \leq moreOut \\
+  moreOut \leq moreTruth + moreSlack
+\end{schema}
+
+The five properties, in the order of the introduction (the first is the
+fifth line, the last the second).
+
+\begin{schema}{Invariant}
+  MailInv
+\end{schema}
+
+\begin{schema}{Init}
+  MailState'
+  \where
+  relay' = \emptyset \\
+  held' = \emptyset \\
+  sent' = \emptyset \\
+  phase' = rdIdle \\
+  shown' = \emptyset \\
+  done' = \emptyset \\
+  dupShown' = zfalse \\
+  issued' = \emptyset \\
+  drained' = \emptyset \\
+  lostBatch' = \emptyset \\
+  lostRest' = \emptyset \\
+  faulted' = zfalse \\
+  cancelled' = zfalse \\
+  refileTimedOut' = zfalse \\
+  moreOut' = 0 \\
+  moreTruth' = 0 \\
+  moreSlack' = 0
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Operations}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Arrive}
+  \Delta Store \\
+  \Xi Client \\
+  \Delta Ledger \\
+  \Xi Flags \\
+  m? : MAIL
+  \where
+  m? \notin issued \\
+  relay' = relay \cup \{ (m?, 0) \} \\
+  held' = held \\
+  sent' = sent \\
+  phase' = phase \\
+  issued' = issued \cup \{ m? \} \\
+  drained' = drained \\
+  lostBatch' = lostBatch \\
+  lostRest' = lostRest
+\end{schema}
+
+A message is filed in the session's inbox.
+
+\begin{schema}{ReadFetch}
+  \Delta Store \\
+  \Xi Client \\
+  \Xi Ledger \\
+  \Xi Flags \\
+  fetched? : \power WIRE
+  \where
+  phase = rdIdle \\
+  fetched? \subseteq relay \\
+  \# fetched? \leq fetchMax \\
+  \# relay \leq fetchMax \implies fetched? = relay \\
+  relay' = relay \setminus fetched? \\
+  held' = ( held \setminus \{ h : held | refile~h \in fetched? \} ) \cup fetched? \\
+  sent' = sent \\
+  phase' = rdFetched
+\end{schema}
+
+The consuming fetch: what it returns leaves the relay and is held.  A
+bounded fetch takes the whole inbox when the inbox fits.  A fetched message
+that is the refile of a held one is that message filed again, and replaces
+it (\texttt{Outbox.merge}); this is what makes a refile that landed but was
+reported failed, or a read interrupted before the release, harmless to the
+count of copies.
+
+\begin{schema}{ReadReply}
+  \Delta Store \\
+  \Delta Client \\
+  \Xi Ledger \\
+  \Delta Flags \\
+  batch? : \power WIRE
+  \where
+  phase = rdFetched \\
+  batch? \subseteq held \\
+  shown' = shown \\
+  done' = done \\
+  dupShown' = ( \IF mailOf~batch? \cap shown \neq \emptyset \THEN ztrue \ELSE dupShown ) \\
+  \# batch? \leq batchMax \\
+  \# held \leq batchMax \implies batch? = held \\
+  \# held > batchMax \implies \# batch? = batchMax \\
+  relay' = relay \cup refile \limg held \setminus batch? \rimg \\
+  held' = batch? \\
+  sent' = batch? \\
+  phase' = rdIdle \\
+  cancelled' = cancelled \\
+  refileTimedOut' = refileTimedOut \\
+  faulted' = faulted \\
+  moreOut' = \# relay' \\
+  moreTruth' = \# ( mailOf~( relay' \cup ( held' \setminus batch? ) ) \setminus
+    mailOf~batch? ) \\
+  moreSlack' = \# \{ h : held' | refile~h \in relay' \}
+\end{schema}
+
+The reply and the refile.  The batch is the part of the outbox the budget
+fits.  The remainder is filed back, each message under its derived id, and
+released from the outbox; the batch stays, unconfirmed.  The reply says
+$moreOut' = \# relay'$: \texttt{left = len(pending) - len(batch) - filed +
+unfetched}, where $filed$ is the remainder and $unfetched$ the relay's own
+count after the refile, so the remainder is subtracted from the one count and
+added by the other.  $moreTruth'$ is the number of \emph{distinct messages} the
+reply leaves: those held anywhere for a later read, less the ones this
+reply carries.  The two agree when no message has two copies; that is the
+sense in which \texttt{more} counts each remaining message once.
+
+\begin{schema}{ReadReplyRefused}
+  \Delta Store \\
+  \Delta Client \\
+  \Xi Ledger \\
+  \Delta Flags \\
+  batch? : \power WIRE
+  \where
+  phase = rdFetched \\
+  batch? \subseteq held \\
+  shown' = shown \\
+  done' = done \\
+  dupShown' = ( \IF mailOf~batch? \cap shown \neq \emptyset \THEN ztrue \ELSE dupShown ) \\
+  \# batch? \leq batchMax \\
+  \# held \leq batchMax \implies batch? = held \\
+  \# held > batchMax \implies \# batch? = batchMax \\
+  relay' = relay \\
+  held' = held \\
+  sent' = batch? \\
+  phase' = rdIdle \\
+  cancelled' = cancelled \\
+  refileTimedOut' = refileTimedOut \\
+  faulted' = ztrue \\
+  moreOut' = \# ( held \setminus batch? ) + \# relay \\
+  moreTruth' = \# ( mailOf~( relay \cup ( held \setminus batch? ) ) \setminus
+    mailOf~batch? ) \\
+  moreSlack' = \# \{ h : held | refile~h \in relay \}
+\end{schema}
+
+The relay refused the refile (\texttt{RELAY\_ERRORS}, logged).  The remainder
+stays in the outbox and is offered again by the next read.  The reply still
+counts it: \texttt{left = len(pending) - len(batch) - filed + unfetched} with
+$filed = 0$, that is the held remainder plus the relay's own backlog, which is
+$moreTruth'$; the count invariant is not switched off by a refusal.  Here
+$moreSlack' = \# \{ h : held | refile~h \in relay \}$ counts the held messages
+whose filed copy is already in the relay, which a refusal never adds.
+
+\begin{schema}{ReadReplyTimedOut}
+  \Delta Store \\
+  \Delta Client \\
+  \Xi Ledger \\
+  \Delta Flags \\
+  batch? : \power WIRE
+  \where
+  phase = rdFetched \\
+  batch? \subseteq held \\
+  shown' = shown \\
+  done' = done \\
+  dupShown' = ( \IF mailOf~batch? \cap shown \neq \emptyset \THEN ztrue \ELSE dupShown ) \\
+  \# batch? \leq batchMax \\
+  \# held \leq batchMax \implies batch? = held \\
+  \# held > batchMax \implies \# batch? = batchMax \\
+  relay' = relay \cup refile \limg held \setminus batch? \rimg \\
+  held' = held \\
+  sent' = batch? \\
+  phase' = rdIdle \\
+  cancelled' = cancelled \\
+  refileTimedOut' = ztrue \\
+  faulted' = faulted \\
+  moreOut' = \# ( held \setminus batch? ) + \# relay' \\
+  moreTruth' = \# ( mailOf~( relay' \cup ( held \setminus batch? ) ) \setminus
+    mailOf~batch? ) \\
+  moreSlack' = \# \{ h : held | refile~h \in relay' \}
+\end{schema}
+
+The refile \emph{landed} and was reported as a timeout (\texttt{TimeoutError}
+is in \texttt{RELAY\_ERRORS}): the remainder is in the relay under its derived
+id and, as far as the daemon knows, still in the outbox.  The next fetch
+reconciles the two (the $ReadFetch$ replacement), and a second refile of the
+same message is the same wire id, which the relay takes as one message
+(\texttt{Nats-Msg-Id} within the stream's duplicate window; the local relay
+compares ids).
+
+What the bound says about this state.  The witness is the goal
+$refileTimedOut = ztrue \land cancelled = zfalse \land mailOf~relay \setminus mailOf~held \neq
+mailOf~relay$, a message in both stores right after the timeout.  With
+$MAIL = 1 \upto 2$ and $fetchMax = 2$ the relay never holds more wires than one
+fetch takes, so the next $ReadFetch$ always retrieves the surviving copy and
+replaces the held original with it (the at-least-once rule working, not a
+loss), and no state has the copy still in the relay once the fetch has run.  A
+larger inbox than one fetch could leave the copy behind, and the state would
+then persist across reads; the bound hides that, and the code's protection
+there is that the refile is idempotent by id (the copy's id is derived from the
+original's, so filing it again is the same message, never a second copy), and
+that $Outbox.merge$ reconciles the two whenever the copy is finally fetched.
+
+\begin{schema}{ReadCancelled}
+  \Delta Store \\
+  \Xi Client \\
+  \Xi Ledger \\
+  \Delta Flags \\
+  rest? : \power WIRE
+  \where
+  phase = rdFetched \\
+  rest? \subseteq held \\
+  rest? \neq \emptyset \\
+  relay' = relay \cup refile \limg rest? \rimg \\
+  held' = held \setminus rest? \\
+  sent' = sent \setminus rest? \\
+  phase' = rdIdle \\
+  cancelled' = ztrue \\
+  refileTimedOut' = refileTimedOut \\
+  faulted' = faulted \\
+  moreOut' = moreOut \\
+  moreTruth' = moreTruth \\
+  moreSlack' = moreSlack
+\end{schema}
+
+The read is cancelled after some of its refiles landed.  The connection's
+closing cancels its running requests (\texttt{Connection.\_serve},
+\texttt{task.cancel()}), so this is reachable.  It is a fault for the claim that
+the remainder is reachable (what was not yet filed stays in the outbox only),
+but not for the claim that no message is duplicated: the outbox releases each
+message as it is filed (\texttt{Methods.\_refile}), so a message is in the
+relay or in the outbox, never both, whenever the cancellation lands.  The superseded code released the filed messages once,
+after the whole loop; that is the frozen variant
+\texttt{mail-refile-cancel-dup.tex}, whose $ReadCancelled$ keeps $held' =
+held$.
+
+\begin{schema}{ClientShow}
+  \Xi Store \\
+  \Delta Client \\
+  \Xi Ledger \\
+  \Xi Flags \\
+  w? : WIRE
+  \where
+  w? \in sent \\
+  shown' = shown \cup \{ first~w? \} \\
+  done' = done \\
+  dupShown' = dupShown
+\end{schema}
+
+The client prints a message of the reply it holds.
+
+\begin{schema}{Confirm}
+  \Delta Store \\
+  \Delta Client \\
+  \Xi Ledger \\
+  \Xi Flags \\
+  w? : WIRE
+  \where
+  w? \in sent \\
+  first~w? \in shown \\
+  held' = held \setminus \{ w? \} \\
+  sent' = sent \setminus \{ w? \} \\
+  relay' = relay \\
+  phase' = phase \\
+  shown' = shown \\
+  done' = done \cup \{ first~w? \} \\
+  dupShown' = dupShown
+\end{schema}
+
+The client confirms a message, and the daemon marks it read and forgets it.
+The guard $first~w? \in shown$ is the ordering of \texttt{Answer.deliver}:
+print, flush, then confirm.
+
+\begin{schema}{SessionEnd}
+  \Delta Store \\
+  \Xi Client \\
+  \Delta Ledger \\
+  \Xi Flags
+  \where
+  phase = rdIdle \\
+  relay' = \emptyset \\
+  held' = \emptyset \\
+  sent' = \emptyset \\
+  phase' = rdIdle \\
+  issued' = issued \\
+  drained' = drained \cup mailOf~relay \\
+  lostBatch' = lostBatch \cup ( mailOf~sent \setminus shown ) \\
+  lostRest' = lostRest \cup ( mailOf~( held \setminus sent ) \setminus shown )
+\end{schema}
+
+The session ends.  The drain moves what the relay holds into the owner's
+mailbox, and the session's record, with its outbox, is discarded.
+
+\begin{schema}{SessionEndDuringRead}
+  \Delta Store \\
+  \Xi Client \\
+  \Delta Ledger \\
+  \Delta Flags
+  \where
+  phase = rdFetched \\
+  relay' = \emptyset \\
+  held' = \emptyset \\
+  sent' = \emptyset \\
+  phase' = rdIdle \\
+  issued' = issued \\
+  drained' = drained \cup mailOf~relay \\
+  lostBatch' = lostBatch \cup ( mailOf~sent \setminus shown ) \\
+  lostRest' = lostRest \cup ( mailOf~( held \setminus sent ) \setminus shown ) \\
+  cancelled' = cancelled \\
+  refileTimedOut' = refileTimedOut \\
+  faulted' = ztrue \\
+  moreOut' = moreOut \\
+  moreTruth' = moreTruth \\
+  moreSlack' = moreSlack
+\end{schema}
+
+The session ends between a read's fetch and its reply.
+
+\begin{schema}{DaemonCrash}
+  \Delta Store \\
+  \Xi Client \\
+  \Delta Ledger \\
+  \Delta Flags
+  \where
+  relay' = relay \\
+  held' = \emptyset \\
+  sent' = \emptyset \\
+  phase' = rdIdle \\
+  issued' = issued \\
+  drained' = drained \\
+  lostBatch' = lostBatch \cup ( mailOf~sent \setminus shown ) \\
+  lostRest' = lostRest \cup ( mailOf~( held \setminus sent ) \setminus shown ) \\
+  cancelled' = cancelled \\
+  refileTimedOut' = refileTimedOut \\
+  faulted' = ztrue \\
+  moreOut' = moreOut \\
+  moreTruth' = moreTruth \\
+  moreSlack' = moreSlack
+\end{schema}
+
+The daemon dies.  The relay keeps what it holds; the outbox is gone.
+
+\begin{schema}{Quiesce}
+  \Xi MailState
+\end{schema}
+
+The stutter that stands for ``nothing more happens'': the bound on
+$MAIL$ ends the history of arrivals, and without $Quiesce$ ProB would
+report the end of the bounded history as a deadlock.
+
+%%----------------------------------------------------------------------
+\section{Model Checking}
+%%----------------------------------------------------------------------
+
+$MailInv$ is the state invariant; probcli reports it for the shipped
+operations in the transcript at the end of this file.
+
+These things the specification does \emph{not} promise, each reachable and
+each stated as a reachability formula so that it is not an omission:
+
+\begin{enumerate}
+  \item \textbf{A duplicate delivery is possible.}  $EF\;(dupShown = ztrue)$
+    holds, along $Arrive \to ReadFetch \to ReadReply \to ClientShow \to
+    ReadFetch \to ReadReply$: a client that prints, dies before it confirms,
+    and reads again is shown the message again, because the batch is still in
+    the outbox and the next read offers it.  Delivery is at least once.  The same read also
+    refiles a message that an earlier, unconfirmed reply already showed.
+  \item \textbf{A batch is lost if the daemon dies or the session ends
+    before the client has been shown it.}  $EF\;(lostBatch \neq \emptyset)$
+    holds, along the trace $Arrive \to ReadFetch \to ReadReply \to
+    SessionEnd$ with no $ClientShow$: the batch of an unconfirmed reply is
+    held only in the outbox, and neither the drain nor a restart reads the
+    outbox.  A client that dies between the reply and its print keeps the
+    message unread \emph{only while the session and the daemon live}.  Two
+    separate obligations close this.  (a) Session end routed through the
+    daemon refiles the held batch before it drops the record: a hard
+    requirement of the A2 change (DES-099), after which $SessionEnd$ no longer
+    reaches $lostBatch \neq \emptyset$.  (b) The daemon-crash window is
+    PL-1753: acknowledge the relay only after the client has shown the mail.
+  \item \textbf{A refile that landed but timed out can deliver a message
+    twice.}  $ReadReplyTimedOut$ leaves the filed copy in the relay and the
+    original held; the next fetch reconciles them, so the two are never offered
+    together ($held$ holds one copy of each message, an invariant).  But if the
+    original is shown and confirmed first, the copy still in the relay is shown
+    again; $EF\;(dupShown = ztrue \land faulted = ztrue)$ is reachable.
+    This is the at-least-once duplicate, allowed.
+  \item \textbf{After a timed-out refile the reply's \texttt{more} can
+    overcount, by a stated bound.}  The remainder is still held and its landed
+    copy is in the relay, and the code adds the held remainder to the relay's
+    own count, so each such message is counted twice.  The invariant is not
+    switched off; it is replaced by the exact statement the code satisfies:
+    $moreTruth \leq moreOut \land moreOut \leq moreTruth + moreSlack$.  In plain
+    words, \texttt{more} never undercounts the messages still unread (when the relay backlog count succeeds; the code leaves the backlog out when it fails), and it
+    overcounts by at most $moreSlack$, the number of held messages whose filed
+    copy is already in the relay (the timed-out-but-landed refiles outstanding
+    at that reply).  Where $moreSlack = 0$ the count is exact.  The overcount is
+    reachable ($EF\;(moreOut > moreTruth)$) and the bound is checked over the
+    whole state space.  The next read reconciles it: the copy's id is derived
+    from the original's, so the fetched copy is the same message, $ReadFetch$
+    replaces the held original with it, and the next reply counts it once.
+  \item \textbf{Idempotence by id is the relay's, and on NATS it is time-bound.}
+    The model takes a second filing of the same wire id as one message.  On the
+    local relay that is a comparison with the inbox; on NATS it is JetStream's
+    duplicate window (\texttt{Nats-Msg-Id}, 2 minutes by default), and
+    \texttt{NatsRelay.deliver} does not check the inbox.  A landed copy that
+    stays unfetched for longer than the window, behind more than one fetch batch,
+    followed by a refile of the same held original, publishes a second copy: a
+    duplicate delivery if the two are fetched in different reads, allowed
+    (at least once).  The model, whose inbox always fits one fetch, does not reach
+    it; this paragraph is the statement.
+  \item \textbf{Order across reads is not guaranteed.}  A refile appends to
+    the relay, behind mail that arrived during the read, so a later read can
+    show a newer message before an older refiled one.  Within one reply the mail
+    is ordered by timestamp, ties by id.  The model has no clock and does not
+    state this; it is an ordering limit, not a loss.
+  \item \textbf{The fetch-to-refile window is a crash window.}  A consuming
+    fetch removes the mail from the relay before the remainder is filed
+    again; $DaemonCrash$ between $ReadFetch$ and $ReadReply$ puts the
+    remainder in $lostRest$ ($EF\;(lostRest \neq \emptyset \land faulted =
+    ztrue)$).  The Relay API has no acknowledge-after-write, so this is the
+    same obligation as (b), PL-1753, and no more than that is claimed here.
+\end{enumerate}
+
+Three frozen variants are the negative controls.
+\texttt{mail-refile-cancel-dup.tex} has a $ReadCancelled$ that leaves the
+filed messages in the outbox (the release after the loop): the goal $cancelled
+= ztrue \land refileTimedOut = zfalse \land mailOf~relay \setminus mailOf~held
+\neq mailOf~relay$ is reached right after the cancellation (a message in the
+relay and in the outbox), where the shipped model does not reach it, and
+$MailInv$ is violated at the next fetch.
+\texttt{mail-refile-drop.tex} has a $ReadReply$ that files nothing back
+(the code before the refile): $MailInv$ is violated, with the trace $Arrive
+\to Arrive \to ReadFetch \to ReadReply \to SessionEnd$, the remainder lost
+with no fault.  \texttt{mail-refile-confirm-early.tex} has a $Confirm$ with no
+$first~w? \in shown$ guard (the confirmation sent before the print):
+$MailInv$ is violated by a message marked read and never shown.
+
+%%----------------------------------------------------------------------
+%% Reproducing the checks.  Run from the repo root; one probcli at a time.
+%%
+%%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
+%%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 6 -p MAX_INITIALISATIONS 20 \
+%%      -p MAX_OPERATIONS 500 -p TIME_OUT 600000"
+%%
+%% The invariant, exhaustively: 3,979 states, 25,062 transitions, under a second.  With MAIL = 1..3 a run of the earlier model, which still reached
+%% duplicate copies, exceeded 29 GB and was stopped at 11 minutes: MAIL = 1..3
+%% is NOT checked.
+%%
+%%   ( ulimit -v 8000000; "$PROBCLI" docs/specs/mail-refile.tex $P -model_check )
+%%
+%% Reachability of the three limits (each reports GOAL found, shortest trace):
+%%
+%%   "$PROBCLI" docs/specs/mail-refile.tex $P -model_check \
+%%       -goal "lostBatch/={} & faulted=zfalse"
+%%   "$PROBCLI" docs/specs/mail-refile.tex $P -model_check \
+%%       -goal "dupShown=ztrue & faulted=zfalse"
+%%   (a message in both stores, each event isolated by its own flag:)
+%%   "$PROBCLI" docs/specs/mail-refile.tex $P -model_check \
+%%       -goal "cancelled=ztrue & refileTimedOut=zfalse & mailOf(relay)-mailOf(held) /= mailOf(relay)"
+%%       (UNREACHABLE here; the same goal on mail-refile-cancel-dup.tex is
+%%        reached by Arrive, ReadFetch, ReadCancelled)
+%%   "$PROBCLI" docs/specs/mail-refile.tex $P -model_check \
+%%       -goal "refileTimedOut=ztrue & cancelled=zfalse & mailOf(relay)-mailOf(held) /= mailOf(relay)"
+%%       (reached by Arrive, Arrive, ReadFetch, ReadReplyTimedOut)
+%%   "$PROBCLI" docs/specs/mail-refile.tex $P -model_check \
+%%       -goal "moreOut>0 & faulted=zfalse"
+%%
+%% Negative controls, each of which must report an invariant violation:
+%%
+%%   "$PROBCLI" docs/specs/mail-refile-drop.tex $P -model_check
+%%   "$PROBCLI" docs/specs/mail-refile-confirm-early.tex $P -model_check
+%%   "$PROBCLI" docs/specs/mail-refile-cancel-dup.tex $P -model_check
+%%----------------------------------------------------------------------
+
+\end{document}

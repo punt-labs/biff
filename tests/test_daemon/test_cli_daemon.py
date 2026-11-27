@@ -11,6 +11,7 @@ from biff.__main__ import app
 from biff.cli_daemon import DaemonCommand
 from biff.cli_daemon_wire import UnreadableReplyError
 from biff.client.connection import DaemonUnreachableError
+from biff.client.environment import UnsupportedOverrideError
 from biff.client.nudge import DaemonNudge
 from biff.commands import CommandResult
 from biff.daemon import methods as methods_module
@@ -19,6 +20,7 @@ from biff.daemon.session_store import CliSessionStore
 from biff.markers import has_plan_marker
 from biff.plugins.claude_code.hook import handle_pre_tool_use
 from biff.run_dir import RunDir
+from biff.supervision.health import HealthProbes
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -35,10 +37,13 @@ if TYPE_CHECKING:
 def _command(
     harness: Harness,
     ref: str | None = None,
-    nudge: Callable[[], None] = lambda: None,
+    nudge: Callable[[], int] | None = None,
 ) -> DaemonCommand:
     return DaemonCommand(
-        user_override="kai", session_ref=ref, run_dir=harness.run_dir, nudge=nudge
+        user_override="kai",
+        session_ref=ref,
+        run_dir=harness.run_dir,
+        nudge=nudge or (lambda: harness.daemon.port),
     )
 
 
@@ -77,7 +82,7 @@ async def test_a_new_session_records_the_tty_name_biffd_claimed(
 async def test_a_command_that_never_reaches_biffd_leaves_no_session_behind(
     harness: Harness, repo: Path
 ) -> None:
-    def down() -> None:
+    def down() -> int:
         raise DaemonUnreachableError("biffd is not answering")
 
     with pytest.raises(DaemonUnreachableError):
@@ -246,12 +251,12 @@ async def test_a_backlog_says_how_much_mail_is_left(
 class _Probe:
     """biffd answers once the starter has run, if the starter launched it."""
 
-    def __init__(self, starter: _Starter, comes_up: bool) -> None:
+    def __init__(self, starter: _Starter, port: int | None) -> None:
         self._starter = starter
-        self._comes_up = comes_up
+        self._port = port
 
-    def answers(self, timeout: float) -> bool:
-        return bool(self._starter.starts) and self._comes_up
+    def live_port(self, timeout: float) -> int | None:
+        return self._port if self._starter.starts else None
 
 
 class _Starter:
@@ -269,18 +274,17 @@ class _Starter:
         return ""  # the fake process never exits
 
 
-def _nudge(outcome: StartOutcome, *, comes_up: bool) -> tuple[DaemonNudge, _Starter]:
+def _nudge(outcome: StartOutcome, *, port: int | None) -> tuple[DaemonNudge, _Starter]:
+    """A nudge over a fake backend: *port* answers once the starter has run."""
     starter = _Starter(outcome)
-    nudge = DaemonNudge(
-        _Probe(starter, comes_up), starter, patience=0.05, interval=0.01
-    )
+    nudge = DaemonNudge(_Probe(starter, port), starter, patience=0.05, interval=0.01)
     return nudge, starter
 
 
 async def test_a_command_with_biffd_down_starts_it_first(
     harness: Harness, repo: Path
 ) -> None:
-    nudge, starter = _nudge("launched", comes_up=True)
+    nudge, starter = _nudge("launched", port=harness.daemon.port)
     text = await _text(_command(harness, nudge=nudge.ensure_running), "who")
     assert (starter.starts, "kai" in text) == (["start"], True)
 
@@ -327,6 +331,27 @@ def test_when_biffd_cannot_be_started_the_command_exits_1_with_the_design_messag
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    nudge, _ = _nudge(outcome, comes_up=False)
+    nudge, _ = _nudge(outcome, port=None)
     result = _run_cli(nudge, tmp_path / "run", monkeypatch)
     assert (result.exit_code, message in result.output) == (1, True)
+
+
+async def test_the_daemon_path_refuses_relay_settings_in_the_environment(
+    harness: Harness, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BIFF_RELAY_URL", "nats://relay.invalid:4222")
+    with pytest.raises(UnsupportedOverrideError, match="BIFF_RELAY_URL"):
+        await _command(harness).call("who")
+
+
+async def test_a_stale_recorded_port_does_not_hide_a_healthy_daemon(
+    harness: Harness, repo: Path
+) -> None:
+    """A crash on a custom port leaves serve.port stale; the daemon on the other
+    port answers the nudge's probe, and the command must connect to that port."""
+    starter = _Starter("launched")
+    stale = 1  # nothing listens here
+    harness.run_dir.write_port(stale)
+    nudge = DaemonNudge(HealthProbes(stale, harness.daemon.port), starter)
+    text = await _text(_command(harness, nudge=nudge.ensure_running), "who")
+    assert ("kai" in text, starter.starts) == (True, [])

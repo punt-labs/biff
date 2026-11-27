@@ -11,6 +11,7 @@ from biff.daemon.params import Params
 from biff.daemon.refusal import RefusalError
 from biff.daemon.session_methods import SessionMethods
 from biff.daemon.session_store import CliSessionStore
+from biff.daemon.sessions import SessionTable
 from biff.frame_reply import ErrorCode
 
 if TYPE_CHECKING:
@@ -65,7 +66,8 @@ def test_refusals_carry_the_invalid_params_code() -> None:
 
 
 def test_every_command_object_is_a_method(tmp_path: Path) -> None:
-    methods = Methods(SessionMethods(CliSessionStore(tmp_path)))
+    live = SessionTable(heartbeat_interval=1.0, org_refresh_interval=1.0)
+    methods = Methods(SessionMethods(CliSessionStore(tmp_path), live))
     assert set(methods.names) == {
         "who",
         "finger",

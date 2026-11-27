@@ -9487,9 +9487,29 @@ the reply. The process holds no relay connection.
    `N more unread; run biff read again`; with `--json` the output is
    `{"messages": [...], "more": N}` in that case only, a bare list otherwise.
 7. **A daemon that is down is started.** Before connecting, the command calls
-   `DaemonNudge.for_host(run_dir).ensure_running()` on a worker thread. It exits
+   `DaemonNudge.for_host(run_dir).ensure_running()` on a worker thread and connects
+   to the port it returns, so a stale `serve.port` left by a crash on a custom
+   port does not hide a healthy daemon on 8424. It exits
    1 with `biffd is not installed. Run: biff install` or `biffd is installed but
    did not start within 5 seconds. Run: biff daemon status, then biff doctor`.
+
+8. **One named exception: a publish-only CI client.** `biff wall` holds a relay
+   connection of its own, and only when the environment carries `BIFF_RELAY_*`
+   settings. That is a CI runner (the `biff-notify` workflow in seven repos): it
+   has no session, no inbox and no daemon, and its relay and credentials arrive
+   in the environment, which biffd cannot carry (a daemon scrubs `BIFF_RELAY_*`
+   and a client refuses them). `ClientEnvironment.carries_relay_settings` owns
+   the decision; `DirectWall` (`cli_direct_wall.py`) runs the one wall command
+   against the relay it was handed and closes it: post and clear reach the
+   configured repo plus the repos its organizations contain (discovered as an
+   in-process CLI did), and show reads the configured repo's wall only. A relay that refuses a write is a non-zero exit carrying the
+   relay's error; `broadcast_wall_to_repos` now returns the failed repos and
+   the wall command reports them, for every path. No other command has a direct
+   path: with the same
+   environment `read`, `who` and the rest still go to biffd and still refuse the
+   settings. Without relay settings `wall` goes through biffd like every command.
+   Rejected: starting a daemon in each workflow (an edit in seven repos), and
+   carrying relay credentials in the hello (a trust-model decision).
 
 **Behavior changes.**
 
@@ -9499,6 +9519,82 @@ the reply. The process holds no relay connection.
 - Session sweep (lapse a stale stored session to dormant, expire it past
   retention) is not run by these commands. It moves into the daemon with the
   `session` verbs.
+- A `read` that leaves mail behind gives it back to a relay that consumed it at
+  fetch (NATS), instead of holding it in the daemon alone: `biff session end`
+  drains the relay in the calling process, and mail only the daemon held was
+  unreachable after it (measured: 0 of 26 left-behind messages reachable on a
+  consuming relay, all 26 on the local relay). Filed again, the mail carries an
+  id derived from its own, so a repeat cannot copy it. Only the batch of an
+  unconfirmed reply stays held in the daemon; `session end` routed through the
+  daemon (A2) takes that batch too.
+- A presence heartbeat on the NATS relay writes the row only if no one changed
+  it since the read (a compare-and-set on the revision, retried), so a plan or
+  name saved in between is no longer overwritten by the idle-clock update that
+  every CLI attach now makes. The first CLI attach to a session, including one
+  whose row outlived a daemon restart, counts as activity like each later one.
+- Delivery of a `read` is at least once, never exactly once. The client confirms
+  after it printed, so a client that dies between the print and the confirmation
+  is shown the same mail again by the next read: a duplicate, not a loss. A
+  client that dies before the print keeps the mail unread, but only while the
+  session and the daemon live: the unconfirmed batch is held in the daemon alone,
+  so `session end` or a daemon crash before the next read loses it. Two
+  obligations close that. `session end` routed through the daemon refiles the held
+  batch before it drops the record: a hard requirement of A2. The daemon-crash
+  window, and the window between a consuming fetch and the refile of its
+  remainder, are PL-1753: acknowledge the relay only after the client has shown
+  the mail.
+- A refile whose write landed but was reported as a timeout, or whose read was
+  interrupted before the release, leaves the filed copy in the relay and the
+  original in the outbox. A refile is idempotent by id: `Message.refiled` gives a
+  stable derived id, and a second filing of the same message is one message (the
+  local relay compares ids; JetStream drops a repeated `Nats-Msg-Id` inside its
+  duplicate window). `Outbox.merge` closes the rest: a fetched message whose id is
+  the refiled id of a held one replaces it, so the two are never offered together.
+  If the original was already shown and confirmed, the copy is shown again: an
+  allowed at-least-once duplicate (`mail-refile.tex`, `ReadReplyTimedOut`).
+  In that window `more` counts the message twice (the held remainder and the landed
+  copy in the relay) until the next fetch reconciles them.
+  `more` is best-effort and promises no more than this. It can overcount, by the
+  number of timed-out refiles outstanding (each counted as the held original and
+  as its landed copy), and by a copy that lands late, until the next read
+  reconciles them. It leaves out the relay's backlog when counting that backlog
+  fails (`Methods._read` logs it and reports the held remainder only), so it can
+  also undercount then. Otherwise it does not undercount the unread mail. The
+  model states the bound for the case where the backlog count succeeds
+  (`mail-refile.tex`: `moreTruth <= moreOut <= moreTruth + moreSlack`). A refused
+  refile is not such a window: the remainder stays held, and `more` counts it once
+  (modelled and checked, `ReadReplyRefused`).
+- The idempotence of a refile by id is the relay's, and on NATS it is time-bound.
+  `NatsRelay.deliver` publishes with `Nats-Msg-Id` set to the message id and does
+  not check the id against the inbox, so JetStream drops a repeat only inside the
+  stream's duplicate window (the server default, 2 minutes; biff sets none). The
+  local relay compares the id with the inbox and has no window. The window matters
+  only when a landed copy stays unfetched for more than 2 minutes, behind more than
+  one fetch batch (`FETCH_BATCH`, 100 per inbox), and the daemon then files the
+  same held original again: a second copy is published. Fetched in the same read
+  the two collapse (the outbox is keyed by id); fetched in different reads the
+  second is shown again. That is an allowed at-least-once duplicate, not a loss, and
+  no cheap fix exists: checking the inbox for the id would need a fetch that does
+  not consume (PL-1753).
+- Mail is ordered by timestamp, ties by id, within one reply. Across replies the
+  order is not guaranteed: a refile appends behind mail that arrived during the
+  read, and a fetch pulls one bounded batch per inbox, so a later read can show a
+  newer message before an older refiled one. This is an ordering limit, not a loss.
+- A read cancelled between refiles leaves each message in the relay or in the
+  outbox, never both: `Methods._refile` releases each message from the outbox as
+  it is filed, not once after the loop. (Released once after the loop, a cancelled
+  read left one copy in each, and the next `more` counted both.)
+- These claims are machine-checked. `docs/specs/presence-heartbeat.tex` models the
+  heartbeat write; its frozen variant `presence-heartbeat-blindput.tex` (the blind
+  put) loses a plan written between the read and the write, and the
+  compare-and-set model reaches no such state in 922 states.
+  `docs/specs/mail-refile.tex` models the partial read, the refile and the
+  confirmation; `mail-refile-drop.tex` (no refile),
+  `mail-refile-confirm-early.tex` (confirm before print) and
+  `mail-refile-cancel-dup.tex` (release after the loop) are its negative
+  controls. `nats-relay.tex` and `session-model.tex` point at both.
+- Talk and the REPL attach to a Claude Code session through `cli_session_host`
+  as they did before this change; they move in A3.
 
 **Consequence.** The REPL and `talk` still open an in-process session through
 `cli_session` in `__main__.py`, as do `watch` and the `session` verbs; the REPL
@@ -9511,7 +9607,8 @@ use (`DaemonCommand.open()`), subscribes, and prints each event as one JSON
 line `{"seq", "kind", "data"}` on stdout, flushed per line, and nothing else on
 stdout. An event carries counts and the active wall, never a message body; a
 watcher that wants bodies runs `biff read`. SIGINT, SIGTERM and a closed
-stdout end it with exit 0; a lost connection says `biffd connection lost:
+stdout end it with exit 0, and a reader that left is noticed every half second
+even with no event to print (`poll` reports an error on a pipe nobody reads); a lost connection says `biffd connection lost:
 <reason>` on stderr and exits 1. Two watchers are two connections, and each
 gets every event.
 
@@ -9536,14 +9633,25 @@ raises `ValueError` for a refusal and the method turns it into a failed result,
 `Error: <reason>`. `new` and `use` no longer write the repo pointer: the reply
 names the session by `id` and `DaemonCommand.session_new` and `session_use`
 write the pointer, so the CLI is the one writer of it. A session verb runs as
-the invocation's session like every other command, which means a verb in a repo
-with no session makes one first (`session ls` in a fresh repo lists it);
-`--repo` and `--as` select the repository and user that session belongs to.
+the invocation's session like every other command. In a repo with no session
+the invocation makes one to run as and `DaemonCommand` ends it before the verb
+runs, so `session ls` in a fresh repo lists nothing and the first name is free;
+`--repo` and `--as` select the repository and user the verbs act for.
 `SessionSweeper` (`daemon/session_sweep.py`) resolves each stored record's
 repository through the daemon's resolver, takes its relay from the pool, and
 runs `SessionHost.sweep_one`, so one sweep covers every repository the host
 has used; before, only the current repository's records were judged. A record
-whose repository no longer resolves is left alone and logged.
+whose repository no longer resolves is left alone and logged. A session a
+connection is attached to is renewed, not judged: a `biff watch` that runs for
+days would otherwise have its record expire under it, because the daemon's
+heartbeat refreshes the relay row and not the stored lease.
+
+Ending a session also retires it from the daemon: the mail the session's outbox
+held (a consuming relay removed it at fetch, so it exists nowhere else) is filed
+in the owner's mailbox, and every connection attached to it is closed with
+`session ended`, except those of the session that asked, whose connection ends
+with its command. A `watch` on the session shows `biffd connection lost:
+session ended`. A watcher that shares the asking session is not told.
 
 The session store and its helpers moved from `biff/cli_session_*.py` and
 `biff/commands/session.py` into `biff/daemon/` (`session_store`, `session_lock`,

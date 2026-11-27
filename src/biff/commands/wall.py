@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
@@ -15,6 +16,17 @@ from biff.formatting import (
 )
 from biff.models import WallPost
 from biff.server.tools.wall import broadcast_wall_to_repos
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+
+def _undelivered(failed: Mapping[str, BaseException]) -> CommandResult:
+    """Return the error naming each repository the relay refused, and why."""
+    text = "wall not delivered: " + "; ".join(
+        f"{repo}: {error}" for repo, error in sorted(failed.items())
+    )
+    return CommandResult(text=text, json_data={"error": text}, error=True)
 
 
 async def _show(ctx: CliContext) -> CommandResult:
@@ -34,9 +46,11 @@ async def wall(
 ) -> CommandResult:
     """Post, read, or clear a team broadcast."""
     if clear:
-        await broadcast_wall_to_repos(
+        failed = await broadcast_wall_to_repos(
             ctx.relay, ctx.visible_repos, wall=None, target_repo=None
         )
+        if failed:
+            return _undelivered(failed)
         return CommandResult(text="Wall cleared.", json_data={"status": "cleared"})
 
     message = sanitize_wall_message(message)
@@ -61,9 +75,11 @@ async def wall(
     except ValueError as exc:  # includes pydantic's ValidationError
         return CommandResult(text=str(exc), json_data={"error": str(exc)}, error=True)
 
-    await broadcast_wall_to_repos(
+    failed = await broadcast_wall_to_repos(
         ctx.relay, ctx.visible_repos, wall=post, target_repo=None
     )
+    if failed:
+        return _undelivered(failed)
     return CommandResult(
         text=format_wall_confirmation(post),
         json_data=post.model_dump(mode="json"),

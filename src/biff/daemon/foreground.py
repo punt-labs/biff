@@ -6,17 +6,23 @@ import asyncio
 import errno
 import logging
 import os
-from typing import Self, final
+import sys
+from importlib import import_module
+from importlib.metadata import version as pkg_version
+from typing import TYPE_CHECKING, Self, cast, final
 
 import typer
 from punt_observe.logging import Role
 
 from biff.daemon.environment import DaemonEnvironment
-from biff.daemon.server import BiffDaemon
+from biff.daemon.handshake_log import HandshakeLog
 from biff.daemon.session_store import CliSessionStore
 from biff.logging_config import configure_logging
 from biff.run_dir import RunDir
 from biff.supervision.biffd import PERMANENT_EXIT_STATUS
+
+if TYPE_CHECKING:
+    from biff.daemon.server import BiffDaemon
 
 __all__ = ["Foreground"]
 
@@ -46,7 +52,21 @@ class Foreground:
                 on stderr and in the log, and the exit status is the one a unit is
                 told not to restart.
         """
-        configure_logging(Role.DAEMON)
+        # Only CRITICAL goes to stderr: under a LaunchAgent stderr is biff.log, and
+        # every WARNING the file handler wrote was written a second time.
+        configure_logging(Role.DAEMON, stderr_level="CRITICAL")
+        HandshakeLog.install()
+        run_dir = RunDir.default()
+        # The first line biffd writes: under a service manager nothing else says
+        # that it was started, or by which interpreter, before it listens.
+        logger.info(
+            "biffd starting: version=%s pid=%d port=%d run_dir=%s python=%s",
+            pkg_version("punt-biff"),
+            os.getpid(),
+            self._port,
+            run_dir.path,
+            sys.executable,
+        )
         removed = DaemonEnvironment.scrub(os.environ)
         if removed:
             typer.echo(
@@ -54,10 +74,14 @@ class Foreground:
                 "each session resolves its own",
                 err=True,
             )
-        daemon = BiffDaemon(
-            run_dir=RunDir.default(),
-            port=self._port,
-            sessions=CliSessionStore.default(),
+        # Loaded here, after the line above: the relay stack is most of biffd's
+        # start-up time, and a daemon that is still importing it has said so.
+        server = import_module("biff.daemon.server")
+        daemon = cast(
+            "BiffDaemon",
+            server.BiffDaemon(
+                run_dir=run_dir, port=self._port, sessions=CliSessionStore.default()
+            ),
         )
         try:
             asyncio.run(daemon.run_foreground())

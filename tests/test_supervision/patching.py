@@ -8,9 +8,12 @@ from biff.supervision.host import Detection, ServiceHost
 from biff.supervision.port import PortProbe
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pytest
 
     from biff.supervision.backend import ServiceBackend
+    from biff.supervision.holder import Holder
     from biff.supervision.port import PortState
     from biff.supervision.spec import ServiceSpec
 
@@ -21,7 +24,11 @@ def host_is(monkeypatch: pytest.MonkeyPatch, found: Detection) -> None:
     def detect(spec: ServiceSpec) -> Detection:
         return found
 
+    def leftover(spec: ServiceSpec) -> tuple[Path, ...]:
+        return ()
+
     monkeypatch.setattr(ServiceHost, "detect", staticmethod(detect))
+    monkeypatch.setattr(ServiceHost, "leftover_files", staticmethod(leftover))
 
 
 def host_has(monkeypatch: pytest.MonkeyPatch, backend: ServiceBackend | None) -> None:
@@ -46,6 +53,15 @@ def port_is(monkeypatch: pytest.MonkeyPatch, state: PortState) -> None:
     monkeypatch.setattr(PortProbe, "state", report)
 
 
+def port_holder(monkeypatch: pytest.MonkeyPatch, holder: Holder | None) -> None:
+    """Make every ``PortProbe`` name *holder* as the program on its port."""
+
+    def named(self: PortProbe) -> Holder | None:
+        return holder
+
+    monkeypatch.setattr(PortProbe, "holder", named)
+
+
 def port_answers(monkeypatch: pytest.MonkeyPatch, *, answers: bool) -> None:
     """Make every ``PortProbe`` say biffd does or does not answer ``/health``."""
 
@@ -62,3 +78,12 @@ def no_claude(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr("shutil.which", find)
+
+
+def leftover_is(monkeypatch: pytest.MonkeyPatch, *paths: Path) -> None:
+    """Make ``ServiceHost.leftover_files`` report *paths* as installed."""
+
+    def leftover(spec: ServiceSpec) -> tuple[Path, ...]:
+        return paths
+
+    monkeypatch.setattr(ServiceHost, "leftover_files", staticmethod(leftover))

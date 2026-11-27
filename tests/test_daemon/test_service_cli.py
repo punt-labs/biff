@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING
 
@@ -14,12 +16,22 @@ from typer.testing import CliRunner
 from biff.__main__ import app
 from biff.plugins.claude_code.claude_md import ClaudeMdImport
 from biff.run_dir import RunDir
-from tests.test_supervision.fake_backend import FakeBackend, RaisingBackend
+from biff.supervision.health import HealthProbe
+from biff.supervision.holder import Holder
+from biff.supervision.port import PortProbe
+from tests.test_supervision.fake_backend import (
+    FakeBackend,
+    LoadedBackend,
+    PiddedBackend,
+    RaisingBackend,
+)
 from tests.test_supervision.patching import (
     host_has,
     host_unreachable,
+    leftover_is,
     no_claude,
     port_answers,
+    port_holder,
     port_is,
 )
 
@@ -28,6 +40,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 runner = CliRunner()
+_REAL_WAIT = PortProbe.wait_until_answering  # captured before any test patches it
 
 
 @pytest.fixture
@@ -40,6 +53,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))
     # biffd is only in the home above, not in the venv's bin on PATH.
     monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "py" / "python"))
     port_is(monkeypatch, "free")
     port_answers(monkeypatch, answers=True)
     return tmp_path
@@ -61,7 +75,9 @@ def no_manager(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 class _Health(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        body = json.dumps({"version": "9.9.9", "uptime_seconds": 12.5}).encode()
+        body = json.dumps(
+            {"version": "9.9.9", "uptime_seconds": 12.5, "pid": 4321}
+        ).encode()
         self.send_response(200)
         self.end_headers()
         self.wfile.write(body)
@@ -92,11 +108,11 @@ class TestDaemonInstall:
         assert "biffd running." in result.output
         assert str(backend.config_path()) in result.output
 
-    def test_install_without_a_manager_fails_and_names_the_alternative(
+    def test_install_without_a_manager_exits_3_and_names_the_alternative(
         self, no_manager: None
     ) -> None:
         result = runner.invoke(app, ["daemon", "install"])
-        assert (result.exit_code, "biff daemon serve" in result.output) == (1, True)
+        assert (result.exit_code, "biff daemon serve" in result.output) == (3, True)
 
     def test_install_without_the_executable_names_it(
         self, backend: FakeBackend, tmp_path: Path
@@ -127,6 +143,37 @@ class TestDaemonControl:
         result = runner.invoke(app, ["daemon", "start"])
         assert (result.exit_code, "biff daemon install" in result.output) == (1, True)
 
+    @pytest.mark.parametrize("verb", ["start", "restart"])
+    def test_a_slow_start_says_on_stderr_that_it_is_waiting(
+        self, backend: FakeBackend, monkeypatch: pytest.MonkeyPatch, verb: str
+    ) -> None:
+        # Real wait loop, a biffd that answers only after 0.4 s, notice after 0.1 s.
+        monkeypatch.setattr(PortProbe, "wait_until_answering", _REAL_WAIT)
+        monkeypatch.setattr(PortProbe, "NOTICE_AFTER_SECONDS", 0.1)
+        begun = time.monotonic()
+
+        def answers(self: HealthProbe, timeout: float) -> bool:
+            return time.monotonic() - begun > 0.4
+
+        monkeypatch.setattr(HealthProbe, "answers", answers)
+        backend.install()
+        result = runner.invoke(app, ["daemon", verb])
+        assert result.exit_code == 0, result.output
+        assert result.stderr.count("still waiting for biffd to answer /health") == 1
+
+    def test_a_quick_start_prints_no_waiting_line(
+        self, backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(PortProbe, "wait_until_answering", _REAL_WAIT)
+
+        def answers(self: HealthProbe, timeout: float) -> bool:
+            return True
+
+        monkeypatch.setattr(HealthProbe, "answers", answers)
+        backend.install()
+        result = runner.invoke(app, ["daemon", "start"])
+        assert (result.exit_code, result.stderr) == (0, "")
+
     @pytest.mark.parametrize("verb", ["start", "stop", "restart"])
     def test_control_verbs_reach_the_supervisor(
         self, backend: FakeBackend, verb: str
@@ -150,10 +197,170 @@ class TestDaemonControl:
         self, no_manager: None, verb: str
     ) -> None:
         result = runner.invoke(app, ["daemon", verb])
+        assert result.exit_code == 3
+
+
+class TestARefusedStartLeavesATrace:
+    """A refusal is written to biff.log as well as printed."""
+
+    @pytest.fixture
+    def log(self, home: Path) -> Path:
+        return home / ".punt-labs" / "biff" / "logs" / "biff.log"
+
+    def refusals(self, log: Path) -> list[str]:
+        return [line for line in log.read_text().splitlines() if "refused" in line]
+
+    @pytest.mark.parametrize("verb", ["start", "restart", "install"])
+    def test_one_warning_line_names_port_holder_and_command(
+        self,
+        backend: FakeBackend,
+        monkeypatch: pytest.MonkeyPatch,
+        log: Path,
+        verb: str,
+    ) -> None:
+        port_is(monkeypatch, "foreign")
+        port_holder(monkeypatch, Holder("python3", 4930))
+        backend.install()
+        result = runner.invoke(app, ["daemon", verb])
+        (line,) = self.refusals(log)
         assert result.exit_code == 1
+        assert [
+            part
+            for part in (
+                "[WARNING]",
+                "8424",
+                "python3 (pid 4930)",
+                f"biff daemon {verb}",
+            )
+            if part not in line
+        ] == []
+
+    def test_an_unnamed_holder_is_not_guessed_in_the_log(
+        self,
+        backend: FakeBackend,
+        monkeypatch: pytest.MonkeyPatch,
+        log: Path,
+    ) -> None:
+        port_is(monkeypatch, "foreign")
+        port_holder(monkeypatch, None)
+        backend.install()
+        runner.invoke(app, ["daemon", "start"])
+        (line,) = self.refusals(log)
+        assert "pid" not in line
+
+    def test_the_terminal_message_names_the_holder_too(
+        self, backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        port_is(monkeypatch, "foreign")
+        port_holder(monkeypatch, Holder("python3", 4930))
+        backend.install()
+        result = runner.invoke(app, ["daemon", "start"])
+        assert "held by python3 (pid 4930)" in result.stderr
+
+
+class TestAStillStartingDaemon:
+    """A slow start under load exits 4 with its own text, not 1 with a failure."""
+
+    @pytest.fixture
+    def starting(self, home: Path, monkeypatch: pytest.MonkeyPatch) -> PiddedBackend:
+        backend = PiddedBackend(home / "units" / "biffd.service", pid=4242)
+        host_has(monkeypatch, backend)
+        port_answers(monkeypatch, answers=False)
+        monkeypatch.setattr(PortProbe, "wait_until_answering", _REAL_WAIT)
+
+        def silent(self: HealthProbe, timeout: float) -> bool:
+            return False
+
+        monkeypatch.setattr(HealthProbe, "answers", silent)
+        monkeypatch.setenv("BIFF_DAEMON_HEALTH_WAIT", "0.5")
+        log = home / ".punt-labs" / "biff" / "logs" / "biff.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("biffd starting: version=1 pid=4242 port=8424\n")
+        return backend
+
+    def test_install_keeps_the_service_and_exits_4(
+        self, starting: PiddedBackend
+    ) -> None:
+        result = runner.invoke(app, ["daemon", "install"])
+        assert (result.exit_code, starting.config_path().exists()) == (4, True)
+
+    def test_install_says_it_is_running_not_crashed_on_stderr(
+        self, starting: PiddedBackend
+    ) -> None:
+        result = runner.invoke(app, ["daemon", "install"])
+        assert "it is running, not crashed" in result.stderr
+
+    @pytest.mark.parametrize("verb", ["start", "restart"])
+    def test_start_and_restart_exit_4(self, starting: PiddedBackend, verb: str) -> None:
+        starting.install()
+        result = runner.invoke(app, ["daemon", verb])
+        assert (result.exit_code, "still starting" in result.stderr) == (4, True)
 
 
 class TestDaemonStatus:
+    def test_a_unit_that_is_not_loaded_says_so_on_the_unit_line(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=False)
+        host_has(monkeypatch, unit)
+        unit.install()
+        unit.stop()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert f"unit: {unit.config_path()} (installed, not loaded)" in result.output
+
+    def test_a_running_unit_is_never_called_not_loaded(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # One snapshot decides: a job that is running is loaded, so the second
+        # question is not asked and the two status lines cannot disagree.
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=False)
+        host_has(monkeypatch, unit)
+        unit.install()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert ("running: yes" in result.output, "not loaded" in result.output) == (
+            True,
+            False,
+        )
+
+    def test_a_loaded_unit_has_no_such_note(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=True)
+        host_has(monkeypatch, unit)
+        unit.install()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert "not loaded" not in result.output
+
+    def test_a_loaded_unit_that_is_not_running_has_no_such_note(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A job launchd holds but is not running (waiting for its next start) is
+        # installed and loaded; only a job launchd has dropped is "not loaded".
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=True)
+        host_has(monkeypatch, unit)
+        unit.install()
+        unit.stop()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert ("running: no" in result.output, "not loaded" in result.output) == (
+            True,
+            False,
+        )
+
+    def test_a_backend_with_no_notion_of_loading_has_no_such_note(
+        self, backend: FakeBackend
+    ) -> None:
+        backend.install()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert "not loaded" not in result.output
+
+    def test_an_uninstalled_unit_is_not_called_installed_not_loaded(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=False)
+        host_has(monkeypatch, unit)
+        result = runner.invoke(app, ["daemon", "status"])
+        assert "not loaded" not in result.output
+
     def test_not_installed(self, backend: FakeBackend) -> None:
         result = runner.invoke(app, ["daemon", "status"])
         assert (result.exit_code, "installed: no" in result.output) == (1, True)
@@ -168,6 +375,7 @@ class TestDaemonStatus:
         assert "running: yes" in result.output
         assert f"port: {live_biffd}" in result.output
         assert "version: 9.9.9" in result.output
+        assert "pid: 4321" in result.output
 
     def test_installed_but_not_answering_exits_1(
         self, backend: FakeBackend, home: Path
@@ -201,7 +409,7 @@ class TestBiffInstall:
         self, no_manager: None
     ) -> None:
         result = runner.invoke(app, ["install"])
-        assert (result.exit_code, "starts on demand" in result.output) == (0, True)
+        assert (result.exit_code, "biff daemon serve" in result.output) == (0, True)
 
     def test_install_reports_a_failed_service_install_and_exits_1(
         self, backend: FakeBackend, tmp_path: Path
@@ -284,16 +492,44 @@ class TestAnUnreachableManagerIsNotAbsent:
         assert result.exit_code == 0
         assert "Failed to connect to bus" in result.stderr
 
-    def test_the_daemon_command_exits_1_with_the_reason(
+    def test_the_daemon_command_exits_3_with_the_reason(
         self, home: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         host_unreachable(monkeypatch, self.REASON)
         result = runner.invoke(app, ["daemon", "install"])
         assert (result.exit_code, "Failed to connect to bus" in result.output) == (
-            1,
+            3,
             True,
         )
 
     def test_an_absent_manager_carries_no_reason(self, no_manager: None) -> None:
         result = runner.invoke(app, ["daemon", "install"])
         assert "show-environment" not in result.output
+
+
+class TestUninstallWhereTheManagerCannotBeReached:
+    def test_a_leftover_unit_is_a_failure_that_names_the_command(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unit = home / ".config" / "systemd" / "user" / "biffd.service"
+        host_unreachable(monkeypatch, "Failed to connect to bus")
+        leftover_is(monkeypatch, unit)
+        result = runner.invoke(app, ["daemon", "uninstall"])
+        assert result.exit_code == 1
+        assert str(unit) in result.output
+        assert "Failed to connect to bus" in result.output
+        assert "biff daemon uninstall" in result.output
+
+    def test_biff_uninstall_fails_too(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        no_claude(monkeypatch)
+        host_unreachable(monkeypatch, "bus is down")
+        leftover_is(monkeypatch, home / "biffd.service")
+        assert runner.invoke(app, ["uninstall"]).exit_code == 1
+
+    def test_nothing_installed_is_success(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        host_unreachable(monkeypatch, "bus is down")
+        assert runner.invoke(app, ["daemon", "uninstall"]).exit_code == 0

@@ -11,6 +11,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from importlib.metadata import version as pkg_version
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -567,6 +568,40 @@ class TestProductCommands:
         with _patched_daemon(daemon):
             result = runner.invoke(app, argv)
         assert (result.exit_code, daemon.calls) == (0, [("tty", {"name": name})])
+
+
+class TestRelaySettingsInTheEnvironment:
+    """Only ``wall`` may bypass biffd, and only for a runner handed a relay."""
+
+    _RELAY: ClassVar[dict[str, str]] = {"BIFF_RELAY_URL": "nats://relay.invalid:4222"}
+
+    def test_a_wall_without_relay_settings_goes_through_the_daemon(self) -> None:
+        daemon = _FakeDaemon(CommandResult(text="Wall posted"))
+        with _patched_daemon(daemon):
+            result = runner.invoke(app, ["wall", "freeze"])
+        assert (result.exit_code, [m for m, _ in daemon.calls]) == (0, ["wall"])
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["who"],
+            ["finger", "kai"],
+            ["write", "kai", "hi"],
+            ["read"],
+            ["plan", "x"],
+            ["last"],
+            ["mesg", "y"],
+            ["tty", "dev"],
+            ["status"],
+        ],
+    )
+    def test_every_other_command_goes_through_the_daemon_whatever_the_environment(
+        self, argv: list[str]
+    ) -> None:
+        daemon = _FakeDaemon(CommandResult(text="ok"))
+        with _patched_daemon(daemon):
+            result = runner.invoke(app, argv, env=self._RELAY)
+        assert (result.exit_code, len(daemon.calls)) == (0, 1)
 
 
 class TestProductCommandErrorHandling:

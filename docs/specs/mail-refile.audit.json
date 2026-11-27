@@ -1,0 +1,130 @@
+{
+  "specification": "docs/specs/mail-refile.tex",
+  "testDirectory": "tests/",
+  "timestamp": "2026-11-27T12:00:00Z",
+  "summary": {
+    "covered": 14,
+    "total": 14,
+    "percentage": 100,
+    "gaps": 0
+  },
+  "constraints": [
+    {
+      "text": "sent <= held: the unconfirmed batch stays in the outbox",
+      "category": "invariant",
+      "source": "MailInv",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_a_held_reply_marks_mail_read_only_when_confirmed; ::test_a_reply_that_cannot_be_sent_does_not_consume_the_mail",
+      "confidence": "high"
+    },
+    {
+      "text": "done <= shown: mail is marked read only after it was shown",
+      "category": "invariant",
+      "source": "MailInv",
+      "coveredBy": "tests/test_daemon/test_cli_daemon.py::test_mail_stays_unread_when_the_result_cannot_be_shown; ::test_mail_is_read_once_it_has_been_shown",
+      "confidence": "high"
+    },
+    {
+      "text": "faulted = zfalse => lostRest = {}: after a partial read the remainder is reachable by a drain",
+      "category": "invariant",
+      "source": "MailInv",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_mail_a_batch_left_behind_moves_with_the_session_when_it_ends",
+      "confidence": "high"
+    },
+    {
+      "text": "faulted = zfalse => at most one copy of a message in relay and outbox",
+      "category": "invariant",
+      "source": "MailInv",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_filing_a_remainder_again_leaves_one_copy; tests/test_models.py::TestRefiled::test_a_chain_of_refiles_never_meets_itself",
+      "confidence": "high"
+    },
+    {
+      "text": "moreTruth <= moreOut <= moreTruth + moreSlack: more never undercounts and overcounts only by the timed-out-but-landed refiles outstanding (exact when moreSlack = 0); not covered at runtime: the lower bound when the relay backlog count fails (more then leaves it out)",
+      "category": "invariant",
+      "source": "MailInv",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_more_after_a_refile_that_landed_but_timed_out_stays_within_its_bound (upper bound, mutation-checked); ::test_a_batch_that_leaves_mail_behind_says_how_much",
+      "confidence": "high"
+    },
+    {
+      "text": "issued <= shown + drained + relay + outbox + lost: nothing vanishes unaccounted",
+      "category": "invariant",
+      "source": "MailInv",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_an_oversized_inbox_is_delivered_in_batches_with_none_lost",
+      "confidence": "high"
+    },
+    {
+      "text": "ReadFetch: a consuming fetch removes what it returns from the relay",
+      "category": "effect",
+      "source": "ReadFetch",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::ConsumingRelay (fixture, every test runs on it)",
+      "confidence": "medium"
+    },
+    {
+      "text": "ReadReply: the remainder is filed back under a derived id; held' = batch",
+      "category": "effect",
+      "source": "ReadReply",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_mail_a_batch_left_behind_moves_with_the_session_when_it_ends; tests/test_models.py::TestRefiled::test_the_copy_has_a_stable_id_of_its_own_and_the_same_address",
+      "confidence": "high"
+    },
+    {
+      "text": "ReadReplyRefused: a refused refile leaves the remainder in the outbox for the next read, and more counts it once",
+      "category": "effect",
+      "source": "ReadReplyRefused",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_a_remainder_the_relay_refuses_is_offered_again_by_the_next_read",
+      "confidence": "high"
+    },
+    {
+      "text": "Confirm: the confirmation releases the batch from the outbox and marks it read",
+      "category": "effect",
+      "source": "Confirm",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_a_held_reply_marks_mail_read_only_when_confirmed; ::test_a_sent_reply_consumes_the_mail_it_carried",
+      "confidence": "high"
+    },
+    {
+      "text": "ReadCancelled (flag cancelled): a read cancelled between refiles leaves each message in the relay or the outbox, never both (goal cancelled & overlap unreachable)",
+      "category": "invariant",
+      "source": "MailInv",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_a_read_cancelled_between_refiles_leaves_one_copy_of_each_message",
+      "confidence": "high"
+    },
+    {
+      "text": "ReadFetch: a fetched message that is the refile of a held one replaces it (held keeps one copy per message)",
+      "category": "effect",
+      "source": "ReadFetch",
+      "coveredBy": "tests/test_daemon/test_outbox.py::test_a_filed_copy_of_a_held_message_is_the_same_message; ::test_a_copy_filed_twice_over_is_still_one_message",
+      "confidence": "high"
+    },
+    {
+      "text": "ReadReplyTimedOut (flag refileTimedOut): a refile that landed but timed out leaves copy and original, read once afterwards; the fetch reconciles them",
+      "category": "effect",
+      "source": "ReadReplyTimedOut",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_a_refile_that_landed_but_timed_out_is_read_once",
+      "confidence": "high"
+    },
+    {
+      "text": "EF dupShown: a batch shown and not confirmed is offered again (at least once)",
+      "category": "effect",
+      "source": "ReadReply",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_a_held_reply_marks_mail_read_only_when_confirmed; ::test_undelivered_mail_stays_unread_across_two_reads",
+      "confidence": "high"
+    }
+  ],
+  "limitsWithoutTest": [
+    {
+      "text": "EF lostBatch /= {} with no fault: SessionEnd discards an unconfirmed, unshown batch held in the outbox",
+      "reason": "describes a defect, and a test would pin it; hard requirement of A2 (session end through the daemon refiles the held batch); the crash window and the fetch-to-refile window are PL-1753"
+    },
+    {
+      "text": "DaemonCrash, SessionEndDuringRead: fault operations",
+      "reason": "environment events, not required behaviour"
+    },
+    {
+      "text": "EF moreOut > moreTruth: after a timed-out refile more overcounts, by at most moreSlack (held messages whose filed copy is already in the relay); it never undercounts; the next read reconciles it",
+      "reason": "a stated bound, checked in the model (9,155 states, exhaustive); the code-side overcount is the double count of a landed copy and a held remainder, which no test exercises"
+    }
+  ],
+  "notModelled": [
+    "MAIL, GEN bounds; Quiesce",
+    "order within a reply (timestamp, then id): tests/test_daemon/test_outbox.py::test_a_batch_is_oldest_first_and_ties_break_by_id",
+    "order across reads: a stated limit (DES-099), no clock in the model"
+  ]
+}

@@ -1,7 +1,9 @@
-"""biffd: the per-user daemon that owns relay connections and session state."""
+"""biffd: the per-user daemon that owns relay connections and session state.
+
+Nothing is imported here: the executable logs its start before it loads the
+relay stack, and any import of a ``biff.daemon`` module runs this file first.
+"""
 
 from __future__ import annotations
 
-from biff.daemon.server import BiffDaemon
-
-__all__ = ["BiffDaemon"]
+__all__: list[str] = []

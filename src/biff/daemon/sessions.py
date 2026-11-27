@@ -19,6 +19,7 @@ from biff.daemon.session_key import SessionKey
 from biff.daemon.tasks import Supervised
 from biff.frame_reply import ErrorCode
 from biff.relay_errors import RELAY_ERRORS, RelayLog
+from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
@@ -219,6 +220,15 @@ class Session:
         if row.tty_name != self._context.tty_name:
             self._context = replace(self._context, tty_name=row.tty_name)
 
+    async def touch(self) -> None:
+        """Count a command from a shell as activity on the session's presence row."""
+        await self._presence.touch()
+
+    def end_attachments(self) -> None:
+        """Tell every connection attached that the session ended."""
+        for held in tuple(self._attachments):
+            held.end()
+
     def attach(self, run: str) -> Attachment:
         """Attach a connection claiming *run*, starting a new run if it differs.
 
@@ -337,7 +347,32 @@ class SessionTable:
                 session.check_same(resolved)
                 if session.is_dormant:
                     await session.revive()
+            if hello.client == "cli":
+                await session.touch()
             return session.attach(hello.main_agent_id)
+
+    def is_attached(self, session_id: str) -> bool:
+        """Whether any connection is attached to a session with *session_id*."""
+        return any(
+            not session.is_dormant
+            for key, session in self._sessions.items()
+            if key.session_id == session_id
+        )
+
+    def holding(self, session_id: str) -> Session | None:
+        """Return the shell session *session_id* if the daemon holds it."""
+        return self._sessions.get(SessionKey(session_id, CLI_ROLE))
+
+    def retire(self, session_id: str, *, spare: Session) -> None:
+        """Forget the shell session *session_id*, which was ended.
+
+        Every connection attached to it is told, except those of *spare*, the
+        session that asked: its connection ends with its command, after the
+        reply.
+        """
+        session = self._sessions.pop(SessionKey(session_id, CLI_ROLE), None)
+        if session is not None and session is not spare:
+            session.end_attachments()
 
     @asynccontextmanager
     async def _guard(self, key: SessionKey) -> AsyncGenerator[None]:

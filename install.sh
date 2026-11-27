@@ -158,6 +158,37 @@ for dir in "" active current logs sessions unread; do
   chmod 700 "$path"
 done
 
+# --- biffd service (biff install does the same) ---
+
+# >>> biffd service
+# Exit 3 means this host has no usable service manager (a container): a note.
+# Exit 4 means the service is installed and biffd is still starting: also a note.
+# Any other failure is real, so it fails the script after the plugin step ran.
+# A pinned release without the command is skipped, not failed.
+SERVICE_STATUS=0
+PROBE_STATUS=0
+PROBE_ERR=$("$BINARY" daemon install --help < /dev/null 2>&1 > /dev/null) || PROBE_STATUS=$?
+if [ "$PROBE_STATUS" = "0" ]; then
+  info "Installing the biffd service..."
+  "$BINARY" daemon install < /dev/null || SERVICE_STATUS=$?
+  case "$SERVICE_STATUS" in
+    0) ok "biffd service installed" ;;
+    3) warn "no service manager here; biffd is not supervised (start it: biff daemon serve)" ;;
+    4) warn "biffd service installed and still starting; see: biff daemon status" ;;
+    *) warn "biffd service not installed (see: biff daemon status, biff doctor)" ;;
+  esac
+else
+  case "$PROBE_ERR" in
+    *"No such command"*)
+      warn "this biff release has no 'daemon install'; the biffd service is skipped" ;;
+    *)
+      # The CLI itself failed to start: that is not an old release.
+      SERVICE_STATUS=$PROBE_STATUS
+      warn "biff failed to start, so the biffd service was not installed: $PROBE_ERR" ;;
+  esac
+fi
+# <<< biffd service
+
 # --- Steps 4-6: Claude Code plugin (skipped in CLI-only mode) ---
 
 if [ "$SKIP_PLUGIN" = "0" ]; then
@@ -216,6 +247,14 @@ info "Verifying installation..."
 printf '\n'
 "$BINARY" doctor || true
 printf '\n'
+
+# >>> service verdict
+# A real service failure fails the script, after the plugin and doctor ran.
+case "$SERVICE_STATUS" in
+  0|3|4) ;;
+  *) fail "The biffd service was not installed; fix it with: biff daemon install" ;;
+esac
+# <<< service verdict
 
 # --- Done ---
 

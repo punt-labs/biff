@@ -1,0 +1,73 @@
+{
+  "specification": "docs/specs/presence-heartbeat.tex",
+  "testDirectory": "tests/",
+  "timestamp": "2026-11-27T12:00:00Z",
+  "summary": {
+    "covered": 8,
+    "total": 8,
+    "percentage": 100,
+    "gaps": 0
+  },
+  "constraints": [
+    {
+      "text": "fields = intended: a heartbeat never overwrites a field written after its read",
+      "category": "invariant",
+      "source": "PresenceInv",
+      "coveredBy": "tests/test_nats_heartbeat_race.py::test_plan_saved_between_read_and_write_survives_a_heartbeat; ::test_no_field_another_writer_saved_after_the_read_is_overwritten",
+      "confidence": "high"
+    },
+    {
+      "text": "HeartbeatRead: tries < maxTries (the read loop is bounded)",
+      "category": "precondition",
+      "source": "HeartbeatRead",
+      "coveredBy": "tests/test_nats_heartbeat_race.py::test_a_heartbeat_that_loses_every_race_gives_up_after_three_tries",
+      "confidence": "high"
+    },
+    {
+      "text": "HeartbeatCommit: curRev = seenRev (write only if the revision is unchanged since the read)",
+      "category": "precondition",
+      "source": "HeartbeatCommit",
+      "coveredBy": "tests/test_nats_heartbeat_race.py::test_plan_saved_between_read_and_write_survives_a_heartbeat",
+      "confidence": "high"
+    },
+    {
+      "text": "HeartbeatCommit: fields' = seenFields (every other field is carried over)",
+      "category": "effect",
+      "source": "HeartbeatCommit",
+      "coveredBy": "tests/test_nats_heartbeat_race.py::test_no_field_another_writer_saved_after_the_read_is_overwritten",
+      "confidence": "high"
+    },
+    {
+      "text": "HeartbeatCommit: the heartbeat clock moves",
+      "category": "effect",
+      "source": "HeartbeatCommit",
+      "coveredBy": "tests/test_nats_heartbeat_race.py::test_heartbeat_still_advances_the_idle_clock_after_a_conflict",
+      "confidence": "high"
+    },
+    {
+      "text": "HeartbeatConflict: curRev /= seenRev writes nothing and spends a try",
+      "category": "precondition",
+      "source": "HeartbeatConflict",
+      "coveredBy": "tests/test_nats_heartbeat_race.py::test_a_heartbeat_that_loses_every_race_gives_up_after_three_tries",
+      "confidence": "high"
+    },
+    {
+      "text": "HeartbeatConflict: tries' = tries + 1, tries < maxTries = 3",
+      "category": "effect",
+      "source": "HeartbeatConflict",
+      "coveredBy": "tests/test_nats_heartbeat_race.py::test_a_heartbeat_that_loses_every_race_gives_up_after_three_tries",
+      "confidence": "high"
+    },
+    {
+      "text": "NextTick: the next tick has a fresh budget",
+      "category": "effect",
+      "source": "NextTick",
+      "coveredBy": "tests/test_nats_heartbeat_race.py::test_the_next_tick_starts_with_a_fresh_budget_after_one_gave_up",
+      "confidence": "high"
+    }
+  ],
+  "notModelled": [
+    "maxRev, maxBeat: bounds that keep ProB finite",
+    "Quiesce: the stutter that ends a bounded history"
+  ]
+}

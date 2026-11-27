@@ -18,6 +18,16 @@ if TYPE_CHECKING:
 __all__ = ["LaunchdBackend"]
 
 _THROTTLE_SECONDS = 30
+# The ``launchctl print`` keys that say what became of the job.
+_DIAGNOSIS_KEYS = (
+    "active count",
+    "state",
+    "runs",
+    "pid",
+    "immediate reason",
+    "last exit code",
+    "last exit status",
+)
 
 
 @final
@@ -45,13 +55,33 @@ class LaunchdBackend:
         self._target = f"{cls._domain()}/{spec.launchd_label}"
         return self
 
-    @staticmethod
-    def available() -> bool:
-        """Return whether ``launchctl`` is on this host."""
+    @classmethod
+    def unavailable_reason(cls) -> str:
+        """Return why launchd cannot run a LaunchAgent here, or ``""`` when it can.
+
+        A LaunchAgent loads into the user's GUI domain, which does not exist for
+        a login over SSH with no one at the console.
+        """
+        domain = cls._domain()
         try:
-            return Supervisor.run("launchctl", "version").returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            return False
+            probe = Supervisor.run("launchctl", "print", domain)
+        except FileNotFoundError:
+            return "launchctl is not installed"
+        except subprocess.TimeoutExpired:
+            return f"`launchctl print {domain}` timed out"
+        except OSError as exc:
+            return f"cannot run launchctl: {exc}"
+        if probe.returncode == 0:
+            return ""
+        said = probe.stderr.strip() or f"exited {probe.returncode}"
+        return (
+            f"`launchctl print {domain}` failed (no GUI session for this user?): {said}"
+        )
+
+    @classmethod
+    def available(cls) -> bool:
+        """Return whether launchd can run a LaunchAgent for this user."""
+        return not cls.unavailable_reason()
 
     def config_path(self) -> Path:
         """Return the plist path."""
@@ -135,7 +165,7 @@ class LaunchdBackend:
         Raises:
             ServiceActionFailedError: launchctl refused; the error carries its stderr.
         """
-        if not self._loaded():
+        if not self.is_loaded():
             self._require("start", "bootstrap", self._domain(), str(self._plist_path))
         self._require("start", "kickstart", self._target)
         return True
@@ -167,6 +197,22 @@ class LaunchdBackend:
         result = Supervisor.run("launchctl", "print", self._target)
         return result.returncode == 0 and "state = running" in result.stdout
 
+    def diagnosis(self) -> str:
+        """Return the state, run count and last exit code from ``launchctl print``.
+
+        ``launchctl`` prints the exit code after the job's program, arguments and
+        environment, so the first lines would not hold it.
+        """
+        return Supervisor.excerpt(
+            "launchctl", "print", self._target, keys=_DIAGNOSIS_KEYS
+        )
+
+    def main_pid(self) -> int | None:
+        """Return the job's pid from ``launchctl print``, or ``None`` without one."""
+        result = Supervisor.run("launchctl", "print", self._target)
+        pid = Supervisor.top_level_fields(result.stdout).get("pid", "")
+        return int(pid) if pid.isdecimal() else None
+
     def linger_warning(self) -> str:
         """Return no warning: a LaunchAgent survives logout of the shell."""
         return ""
@@ -175,16 +221,17 @@ class LaunchdBackend:
     def _domain() -> str:
         return f"gui/{os.getuid()}"
 
-    def _loaded(self) -> bool:
+    def is_loaded(self) -> bool:
+        """Return whether launchd has the job loaded, running or not."""
         return Supervisor.run("launchctl", "print", self._target).returncode == 0
 
     def _unload(self) -> None:
         """Boot the job out if it is loaded, and wait until launchd has let it go."""
-        if not self._loaded():
+        if not self.is_loaded():
             return
         self._require("stop", "bootout", self._target)
         deadline = time.monotonic() + self.UNLOAD_WAIT_SECONDS
-        while self._loaded():
+        while self.is_loaded():
             if time.monotonic() >= deadline:
                 msg = self._spec.failure_message(
                     "stop", f"{self._target} is still loaded after bootout"

@@ -137,3 +137,33 @@ def test_uninstall_removes_the_unit_and_stops_the_daemon(
     manager.uninstall()
     assert not SystemdBackend(spec).config_path().exists()
     assert _until(lambda: not probe.answers(1.0), seconds=8.0)
+
+
+def test_a_dollar_and_a_percent_in_the_path_still_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``:`` prefix and ``%%`` keep ``a$b%c`` literal for real systemd."""
+    name = f"biffd-it-{uuid.uuid4().hex[:8]}"
+    port = _free_port()
+    odd_bin = tmp_path / "a$b%c" / "bin"
+    odd_bin.mkdir(parents=True)
+    daemon = Path(sys.executable).parent / "biffd"
+    wrapper = odd_bin / name
+    wrapper.write_text(f'#!/bin/sh\nexec env HOME="{tmp_path}" "{daemon}" "$@"\n')
+    wrapper.chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(odd_bin / "python"))
+    spec = dataclasses.replace(
+        BIFFD_SPEC,
+        display_name=name,
+        systemd_unit=name,
+        binary_name=name,
+        process_name=name,
+        extra_args=("--port", str(port)),
+        health_port=port,
+    )
+    backend = SystemdBackend(spec)
+    try:
+        ServiceManager(spec, backend, PortProbe(port)).install()
+        assert _until(lambda: HealthProbe(port).answers(1.0))
+    finally:
+        backend.uninstall()

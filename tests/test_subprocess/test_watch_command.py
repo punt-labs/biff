@@ -57,3 +57,28 @@ async def test_biff_watch_prints_each_arrival_and_ends_on_sigterm(
         await eric.close()
     assert (first["kind"], second["kind"]) == ("unread", "mail")
     assert (watch.returncode, out, err) == (0, "", "")
+
+
+async def test_biff_watch_ends_when_its_reader_leaves_even_with_no_event(
+    run_dir: RunDir, repo: Path, tmp_path: Path
+) -> None:
+    env = {**os.environ, "HOME": str(tmp_path), "PUNT_TELEMETRY": "off"}
+    watch = subprocess.Popen(
+        [sys.executable, "-m", "biff", "--user", "kai", "watch"],
+        cwd=repo,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _next_line(watch)  # what `biff watch | head -n 1` reads
+        assert watch.stdout is not None
+        watch.stdout.close()
+        status = watch.wait(timeout=_EXIT_TIMEOUT)
+    finally:
+        watch.kill()
+        watch.wait()
+        assert watch.stderr is not None
+        watch.stderr.close()
+    assert status == 0

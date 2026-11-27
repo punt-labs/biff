@@ -18,6 +18,7 @@ __all__ = ["Supervisor"]
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS: Final = 30.0
+_EXCERPT_LINES: Final = 8
 
 
 @final
@@ -25,19 +26,22 @@ class Supervisor:
     """Runs ``systemctl``, ``launchctl``, ``claude`` and a detached ``biffd``."""
 
     @staticmethod
-    def run(*argv: str) -> subprocess.CompletedProcess[str]:
+    def run(
+        *argv: str, timeout: float = _TIMEOUT_SECONDS
+    ) -> subprocess.CompletedProcess[str]:
         """Run *argv* and return its result; a non-zero exit is the caller's to read.
 
         Raises:
             OSError: The program is missing or cannot be run.
-            subprocess.TimeoutExpired: The supervisor did not answer in 30 seconds.
+            subprocess.TimeoutExpired: The program did not answer within *timeout*
+                seconds (30 by default).
         """
         return subprocess.run(
             argv,
             capture_output=True,
             text=True,
             check=False,
-            timeout=_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
 
     @staticmethod
@@ -52,6 +56,42 @@ class Supervisor:
                 result.stderr.strip(),
             )
         return result.returncode == 0
+
+    @staticmethod
+    def top_level_fields(text: str) -> dict[str, str]:
+        """Return the ``key = value`` pairs one tab deep in *text*, first of each key.
+
+        ``launchctl print`` indents a job's own keys one tab and its nested blocks
+        (``endpoints``, ``coalition``) deeper, and the nested blocks repeat keys
+        such as ``state`` that mean something else.
+        """
+        found: dict[str, str] = {}
+        for line in text.splitlines():
+            if line.startswith("\t") and not line.startswith("\t\t"):
+                key, separator, value = line.strip().partition(" = ")
+                if separator:
+                    found.setdefault(key, value)
+        return found
+
+    @staticmethod
+    def excerpt(*argv: str, keys: tuple[str, ...] = ()) -> str:
+        """Run *argv* and return what it printed, cut to the part worth reading.
+
+        With *keys*, the top-level ``key = value`` lines for those keys, in that
+        order, as a report whose answer comes late needs; with none of them
+        present, or no *keys*, the first eight lines.  A supervisor reports "not
+        running" with a non-zero exit, so the exit status is not read; stderr
+        stands in when stdout is empty.
+
+        Raises:
+            OSError: The program is missing or cannot be run.
+            subprocess.TimeoutExpired: The supervisor did not answer in 30 seconds.
+        """
+        result = Supervisor.run(*argv)
+        text = result.stdout.strip() or result.stderr.strip() or "no output"
+        fields = Supervisor.top_level_fields(text)
+        wanted = [f"{key} = {fields[key]}" for key in keys if key in fields]
+        return "\n".join(wanted or text.splitlines()[:_EXCERPT_LINES])
 
     @staticmethod
     def require(spec: ServiceSpec, action: str, *argv: str) -> None:

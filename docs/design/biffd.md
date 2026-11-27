@@ -51,7 +51,12 @@ connection per distinct target and the sessions of one repository share it.
 
 ## What stays in clients
 
-A client holds no relay connection and no private key. It sends requests,
+A client holds no relay connection and no private key, with one named exception:
+`biff wall` in a process whose environment carries `BIFF_RELAY_*` settings (a CI
+runner posting a build failure, with no session, inbox or daemon) posts, shows
+or clears the wall on the relay it was handed, on its configured repositories
+and those of its organizations, and closes it. No other command has a direct
+path (DES-099). It sends requests,
 receives replies and events, and renders them.
 
 | Client | Role |
@@ -252,7 +257,7 @@ Commands:
 4. `/health` answers within one second.
 5. The token file exists at mode 0600.
 6. The daemon version equals the client version.
-7. Each relay connection is up, or names why it is not.
+7. Each relay connection is up, or names why it is not. Until biffd has a method that returns its relay connections without opening a session (an opened session takes part in mail routing), this line says the relay is not reported and only checks that biffd answers.
 
 Each failing check names the command that repairs it.
 

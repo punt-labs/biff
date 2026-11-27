@@ -272,7 +272,7 @@ Each command is also available with the plugin prefix, for example `/biff:read`.
 
 ### CLI
 
-Every slash command has a matching `biff` subcommand. The CLI works outside Claude Code: in any terminal, SSH session or CI job.
+Every slash command has a matching `biff` subcommand. The CLI works outside Claude Code, in any terminal or SSH session. The product commands (`who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`, `status`) run through biffd, the per-user daemon: a command starts it when it is down, and `biff install` installs it as a user service. A command that cannot start it exits 1 and says why. The one exception is `biff wall` in a CI runner whose environment carries `BIFF_RELAY_*` settings (no session, no daemon): it talks to that relay directly: posting and clearing reach the configured repository and every repository of the configured organizations, showing reads the configured repository's wall only, and it exits 1 when the relay refuses.
 
 | Command | What it does |
 |---------|--------------|
@@ -302,7 +302,7 @@ Setup and maintenance commands:
 | `biff doctor` | Check the installation |
 | `biff daemon serve` | Run biffd, the per-user daemon, in the foreground (not yet used by other commands) |
 | `biff daemon install`, `uninstall` | Install or remove biffd's user service alone (systemd user unit, macOS LaunchAgent) |
-| `biff daemon start`, `stop`, `restart`, `status` | Control the service; `status` shows whether it is installed and running, and its version |
+| `biff daemon start`, `stop`, `restart`, `status` | Control the service; `status` shows whether it is installed and running, and its version. `install`, `start` and `restart` wait up to 30 seconds for biffd to answer `/health` (set `BIFF_DAEMON_HEALTH_WAIT` to a number of seconds up to 600) and print one line to stderr when the wait passes 3 seconds; a biffd that is running but not yet answering exits 4 with `still starting`, not a failure; `status` also prints biffd's pid |
 | `biff install-statusline` | Add biff to your Claude Code status line |
 | `biff uninstall-statusline` | Restore your original status line |
 | `biff uninstall` | Remove the plugin, biffd's service and this clone's biff git hooks |
@@ -391,7 +391,7 @@ biff session end main           # End it; unread mail moves to your user mailbox
 biff -s main write kai "hi"     # Run one command as session "main" (or set BIFF_SESSION)
 ```
 
-Without `-s`, a command runs as the first of: `BIFF_SESSION`; this repo's default (`biff session use`, or the last `session new`); a fresh session. The `session` verbs run as that session too, so a verb in a repo with no session makes one first. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
+Without `-s`, a command runs as the first of: `BIFF_SESSION`; this repo's default (`biff session use`, or the last `session new`); a fresh session. The `session` verbs run as that session too; in a repo with no session a verb makes one to run as and ends it before the verb runs, so `session ls` there lists nothing and `session new --tty tty1` may take the first name. A shell is always a CLI session, even when run from Claude Code. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
 
 ### Keys and agent attestation
 

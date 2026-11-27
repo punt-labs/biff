@@ -1,0 +1,292 @@
+%
+% presence-heartbeat-blindput.tex  (FROZEN NEGATIVE CONTROL: do not edit)
+%
+% Z Specification for the heartbeat write of a presence row (PL-1704).
+%
+% Companion to nats-relay.tex: that specification models the sessions bucket
+% as SessionStore (sessions : SESSIONKEY \pinj KVVALUE) and says nothing about
+% two writers racing on one row.  This one models the race, and the
+% compare-and-set that closes it.  It is kept apart because every component
+% added to the composed state of nats-relay.tex multiplies a state space that
+% already holds 831,363 states.
+%
+% Type-check: fuzz -t presence-heartbeat.tex
+% Model-check: see the end of this file.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff Presence Heartbeat: A Z Specification}
+\author{Punt Labs}
+\date{November 2026}
+\maketitle
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+A session's presence row lives in one key of the sessions bucket.  Two
+writers use it.  The heartbeat (\texttt{NatsRelay.heartbeat}) reads the row,
+moves \texttt{last\_active} forward, and writes the row back.  Everything
+else (\texttt{plan}, \texttt{mesg}, a tty rename) reads the row, changes one
+field, and writes it back.
+
+The heartbeat's read and its write are two round trips.  A plan saved
+between them is in the bucket when the heartbeat writes, and the heartbeat
+writes the row it read: the plan is gone.  The loss is silent, and it is
+the heartbeat's own tick that causes it.  PL-1704 is a report of exactly this.
+
+The bucket gives every write a revision, and \texttt{kv.update} writes only
+if the revision is the one the caller names.  The heartbeat now names the
+revision it read.  A write that finds the row changed fails, and the
+heartbeat reads again; after three failures it gives up until the next tick.
+One skipped tick is harmless: the row lives for three days.
+
+This specification states the property and checks it twice: against the
+blind write that was shipped, where ProB finds the lost plan, and against
+the compare-and-set, where the state is unreachable.
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  FIELD ::= fplan | fmesg
+\end{zed}
+
+$FIELD$ stands for every field of the row that a writer other than the
+heartbeat owns.  Two of them are enough to say that the heartbeat preserves
+\emph{every} such field and not one in particular.
+
+\begin{axdef}
+  maxRev : \nat \\
+  maxBeat : \nat \\
+  maxTries : \nat
+  \where
+  maxRev = 4 \\
+  maxBeat = 2 \\
+  maxTries = 3
+\end{axdef}
+
+$maxRev$ and $maxBeat$ bound the revision and the heartbeat clock so that
+ProB can enumerate them.  $maxTries$ is the retry limit of
+\texttt{heartbeat}.  Field values are the numbers $0$ and $1$.
+
+\begin{zed}
+  HbPhase ::= hbIdle | hbRead
+\end{zed}
+
+%%----------------------------------------------------------------------
+\section{State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Row}
+  fields : FIELD \fun (0 \upto 1) \\
+  beat : 0 \upto maxBeat \\
+  curRev : 0 \upto maxRev
+\end{schema}
+
+The row in the bucket: the fields the other writers own, the heartbeat clock
+($last\_active$), and the revision the bucket assigned to the last write.
+
+\begin{schema}{Heartbeat}
+  phase : HbPhase \\
+  seenFields : FIELD \fun (0 \upto 1) \\
+  seenRev : 0 \upto maxRev \\
+  tries : 0 \upto maxTries
+\end{schema}
+
+The heartbeat in flight.  After its read, $seenFields$ and $seenRev$ are the
+row and the revision it holds; $tries$ counts the failed writes of this tick.
+
+\begin{schema}{Intent}
+  intended : FIELD \fun (0 \upto 1)
+\end{schema}
+
+A ghost.  $intended$ is what the other writers last wrote to each field, in
+the order they wrote it.  It is not in the bucket and the code has no such
+variable; it exists so that a lost write is a state and not an argument.
+
+\begin{schema}{PresenceState}
+  Row \\
+  Heartbeat \\
+  Intent
+\end{schema}
+
+\begin{schema}{PresenceInv}
+  PresenceState
+  \where
+  fields = intended
+\end{schema}
+
+The property.  The row in the bucket holds, for every field, the last value
+a writer other than the heartbeat gave it: the heartbeat never overwrites a
+plan or any other field written after its read.
+
+\begin{schema}{Invariant}
+  PresenceInv
+\end{schema}
+
+\begin{schema}{Init}
+  PresenceState'
+  \where
+  fields' = \{ fplan \mapsto 0, fmesg \mapsto 0 \} \\
+  beat' = 0 \\
+  curRev' = 0 \\
+  phase' = hbIdle \\
+  seenFields' = \{ fplan \mapsto 0, fmesg \mapsto 0 \} \\
+  seenRev' = 0 \\
+  tries' = 0 \\
+  intended' = \{ fplan \mapsto 0, fmesg \mapsto 0 \}
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Operations}
+%%----------------------------------------------------------------------
+
+\begin{schema}{HeartbeatRead}
+  \Delta Heartbeat \\
+  \Xi Row \\
+  \Xi Intent
+  \where
+  phase = hbIdle \\
+  tries < maxTries \\
+  phase' = hbRead \\
+  seenFields' = fields \\
+  seenRev' = curRev \\
+  tries' = tries
+\end{schema}
+
+\texttt{kv.get} of the row.  Enabled while the tick has tries left.
+
+\begin{schema}{WriteField}
+  \Delta Row \\
+  \Xi Heartbeat \\
+  \Delta Intent \\
+  f? : FIELD \\
+  v? : 0 \upto 1
+  \where
+  curRev < maxRev \\
+  fields' = fields \oplus \{ f? \mapsto v? \} \\
+  intended' = intended \oplus \{ f? \mapsto v? \} \\
+  beat' = beat \\
+  curRev' = curRev + 1
+\end{schema}
+
+A writer other than the heartbeat sets one field.  It runs whenever it
+likes, in particular while a heartbeat is in $hbRead$.
+
+\begin{schema}{HeartbeatCommit}
+  \Delta Row \\
+  \Delta Heartbeat \\
+  \Xi Intent
+  \where
+  phase = hbRead \\
+  curRev < maxRev \\
+  fields' = seenFields \\
+  beat' = (beat + 1) \mod (maxBeat + 1) \\
+  curRev' = curRev + 1 \\
+  phase' = hbIdle \\
+  seenFields' = seenFields \\
+  seenRev' = seenRev \\
+  tries' = 0
+\end{schema}
+
+\texttt{kv.update(key, row, last=entry.revision)}.  The guard $curRev =
+seenRev$ is the compare: the bucket accepts the write only if no write has
+landed since the read.  The row written is the row read with the clock
+moved, $fields' = seenFields$; the guard is what makes that equal to the row
+now in the bucket.  The clock wraps at $maxBeat$ only to keep ProB's state
+space finite.
+
+\begin{schema}{HeartbeatConflict}
+  \Xi Row \\
+  \Delta Heartbeat \\
+  \Xi Intent
+  \where
+  phase = hbRead \\
+  curRev \neq seenRev \\
+  phase' = hbIdle \\
+  seenFields' = seenFields \\
+  seenRev' = seenRev \\
+  tries' = tries + 1 \\
+  tries < maxTries
+\end{schema}
+
+\texttt{KeyWrongLastSequenceError}: the row changed since the read.  Nothing
+is written; the loop goes round again, and $HeartbeatRead$ is no longer
+enabled once $tries = maxTries$ (``Session changed concurrently, skip
+heartbeat'').
+
+\begin{schema}{NextTick}
+  \Xi Row \\
+  \Delta Heartbeat \\
+  \Xi Intent
+  \where
+  phase = hbIdle \\
+  tries > 0 \\
+  tries' = 0 \\
+  phase' = hbIdle \\
+  seenFields' = seenFields \\
+  seenRev' = seenRev
+\end{schema}
+
+The next heartbeat tick starts with a fresh budget.
+
+\begin{schema}{Quiesce}
+  \Xi PresenceState
+\end{schema}
+
+The bound on $curRev$ ends the writers' history after four writes.  $Quiesce$
+is the stutter that stands for ``nothing more happens''; without it ProB
+reports the end of the bounded history as a deadlock, which says something
+about the bound and nothing about the protocol.
+
+%%----------------------------------------------------------------------
+\section{Model Checking}
+%%----------------------------------------------------------------------
+
+\begin{enumerate}
+  \item \textbf{No lost write}: $PresenceInv$, $fields = intended$, is a
+    state invariant.  ProB checks it over the whole bounded state space.
+  \item \textbf{Liveness of the tick}: $EF\; beat \neq 0$: a heartbeat
+    can land.  A guard that were never enabled would make the first
+    property vacuous.
+  \item \textbf{The race is real}: $EF\;(phase = hbRead \land curRev \neq
+    seenRev)$ is reachable, so the compare-and-set has something to refuse.
+\end{enumerate}
+
+The superseded write is reproduced in the frozen variant
+\texttt{presence-heartbeat-blindput.tex}, whose $HeartbeatCommit$ has no
+$curRev = seenRev$ guard (the \texttt{kv.put} the code used to make).  ProB
+reports an invariant violation there, with the trace $HeartbeatRead \to
+WriteField \to HeartbeatCommit$: the plan written between the read and the
+write is overwritten by the value the heartbeat read.
+
+%%----------------------------------------------------------------------
+%% Reproducing the checks.  Run from the repo root; probcli is not assumed to
+%% be on PATH.  Bounded run (one probcli at a time):
+%%
+%%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
+%%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 6 -p MAX_INITIALISATIONS 20 \
+%%      -p MAX_OPERATIONS 500 -p TIME_OUT 600000"
+%%   "$PROBCLI" docs/specs/presence-heartbeat.tex $P -model_check
+%%   "$PROBCLI" docs/specs/presence-heartbeat.tex $P -model_check -ctlformula "EF {beat/=0}"
+%%   "$PROBCLI" docs/specs/presence-heartbeat.tex $P -model_check -ctlformula \
+%%       "EF {phase=hbRead & curRev/=seenRev}"
+%%
+%% Negative control, which must report an invariant violation:
+%%
+%%   "$PROBCLI" docs/specs/presence-heartbeat-blindput.tex $P -model_check
+%%----------------------------------------------------------------------
+
+\end{document}

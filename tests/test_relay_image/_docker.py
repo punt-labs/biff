@@ -10,6 +10,7 @@ of bypassing them.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
@@ -26,6 +27,7 @@ _IMAGE_TAG: Final[str] = "biff-relay-pytest:local"
 _HEALTHY_TIMEOUT_S: Final[float] = 20.0
 _DOCKER_TIMEOUT_S: Final[float] = 30.0
 _BUILD_TIMEOUT_S: Final[float] = 180.0
+_SUBSCRIBED_TIMEOUT_S: Final[float] = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,6 +288,52 @@ class DockerRelay:
             f"{name} did not become healthy within {timeout}s\n"
             f"stdout:\n{logs.stdout}\nstderr:\n{logs.stderr}"
         )
+
+    def deliveries_by_subject(self, name: str) -> dict[str, int]:
+        """Return how many messages ``name``'s server has delivered per subject.
+
+        Asks the server's own loopback monitor (``/subsz?subs=1``) from inside
+        the container with the image's BusyBox ``wget``, because the monitor
+        port is deliberately not published to the host. A subject appears
+        here once something subscribes to it; a subject several clients
+        subscribe to reports the last one listed.
+        """
+        result = subprocess.run(  # noqa: S603
+            [
+                self._docker,
+                "exec",
+                name,
+                "wget",
+                "-q",
+                "-O-",
+                "http://127.0.0.1:8222/subsz?subs=1",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=_DOCKER_TIMEOUT_S,
+        )
+        listing: dict[str, list[dict[str, str | int]]] = json.loads(result.stdout)
+        return {
+            str(sub["subject"]): int(sub["msgs"])
+            for sub in listing["subscriptions_list"]
+        }
+
+    def wait_subscribed(
+        self, name: str, subject: str, timeout: float = _SUBSCRIBED_TIMEOUT_S
+    ) -> None:
+        """Block until the server reports a subscriber on ``subject``.
+
+        Core NATS does not replay: a message published before the subscriber
+        registered is gone. A test that publishes then must wait on this fact
+        rather than sleep for the time registration usually takes.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if subject in self.deliveries_by_subject(name):
+                return
+            time.sleep(0.05)
+        pytest.fail(f"{name} had no subscriber on {subject!r} within {timeout}s")
 
     def stop(self, name: str) -> None:
         subprocess.run(  # noqa: S603

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import final
@@ -40,12 +41,21 @@ class ServiceSpec:
     # taken or a run directory that is not private.  A supervisor that is told
     # it must not restart on it does not loop.
     permanent_exit_status: int
+    # Also look for the executable beside the running interpreter: a wheel
+    # installed with pip, pipx or Homebrew puts it there, not in ~/.local/bin.
+    beside_interpreter: bool
 
     def failure_message(self, action: str, detail: str = "") -> str:
-        """Describe a refused supervisor *action*, with *detail*, and name the log."""
-        why = f": {detail}" if detail else "."
+        """Describe a refused supervisor *action*, with *detail*, and name the log.
+
+        The pointer to the log is its own sentence: a detail that ends in a word,
+        such as a command or a supervisor's stderr, gets its full stop here.
+        """
+        said = detail.rstrip().rstrip(".!?")
+        why = f": {said}" if said else ""
         return (
-            f"{self.display_name} {action} failed{why} See {self.log_path} for details."
+            f"{self.display_name} {action} failed{why}. "
+            f"See {self.log_path} for details."
         )
 
     def resolve_exec_args(self) -> list[str]:
@@ -61,19 +71,27 @@ class ServiceSpec:
         return [str(binary), *self.extra_args]
 
     def resolve_binary(self) -> Path:
-        """Return the executable at ``~/.local/bin``, else the one on ``PATH``.
+        """Return the executable, looking in the places an install puts it.
+
+        The stable ``uv tool`` link in ``~/.local/bin`` comes first, then the
+        directory of the running interpreter (the installation this command came
+        from), then ``PATH``.
 
         Raises:
-            BinaryNotFoundError: The executable is in neither place.
+            BinaryNotFoundError: The executable is in none of them.
         """
         installed = self.binary_path
         if installed.exists():
             return installed
+        beside = Path(sys.executable).parent / self.binary_name
+        if self.beside_interpreter and beside.exists():
+            return beside
         found = shutil.which(self.binary_name)
         if found is None:
             msg = (
-                f"Cannot find {self.binary_name} binary at {installed} or on PATH. "
-                "Install it first: uv tool install punt-biff"
+                f"Cannot find {self.binary_name} binary at {installed}, beside "
+                f"{sys.executable} or on PATH. Install it first: "
+                "uv tool install punt-biff"
             )
             raise BinaryNotFoundError(msg)
         return Path(found)

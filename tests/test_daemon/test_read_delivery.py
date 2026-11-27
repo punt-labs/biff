@@ -10,22 +10,31 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from biff.client.connection import DaemonError
+from biff.commands.inbox import Inbox
 from biff.daemon import connection as connection_module
 from biff.daemon.connection import ConnectionHandler
+from biff.daemon.methods import Methods
+from biff.daemon.outbox import Outbox
+from biff.daemon.session_drain import InboxDrain
 from biff.frame_reply import ErrorCode
 from biff.models import Message, UnreadSummary
 from biff.relay import LocalRelay
+from biff.session_id import CLI_ROLE
+from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
     import uuid
     from collections.abc import Sequence
     from pathlib import Path
 
+    from biff.cli_context import CliContext
+    from biff.daemon.sessions import Session
     from tests.test_daemon.conftest import Harness
 
 
@@ -62,6 +71,24 @@ class ConsumingRelay(LocalRelay):
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[uuid.UUID]) -> None:
         return None
+
+
+class RefusingRelay(ConsumingRelay):
+    """A consuming relay that can be told to refuse every delivery."""
+
+    refusing = False
+
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
+        if RefusingRelay.refusing:
+            msg = "relay refused the delivery"
+            raise ConnectionError(msg)
+        await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
 
 
 @pytest.fixture(autouse=True, params=["local", "consuming"])
@@ -262,3 +289,150 @@ async def test_a_batch_filled_to_the_budget_fits_one_frame_with_its_text(
         if not _more(result):
             break
     assert received == sent
+
+
+async def test_mail_a_batch_left_behind_moves_with_the_session_when_it_ends(
+    harness: Harness,
+) -> None:
+    """``session end`` drains the relay; mail the daemon held must be there."""
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    for n in range(30):
+        await eric.request("write", to="kai", message=f"m{n:03d} " + "x" * 200)
+    first = await kai.request("read")
+    left_behind = 30 - len(_bodies(first))
+    assert left_behind > 0
+    await asyncio.sleep(0.2)  # the daemon marks the delivered batch read
+    relay = harness.factory.relay_type(harness.factory.built[0])
+    key = SessionRouting("s-kai", role=CLI_ROLE).session_key("kai")
+    await InboxDrain(relay).move(key, "kai")
+    reachable = [*await relay.fetch(key), *await relay.fetch_user_inbox("kai")]
+    assert len(reachable) == left_behind
+
+
+async def test_filing_a_remainder_again_leaves_one_copy(harness: Harness) -> None:
+    """Refiling the same message twice must not make two copies of it."""
+    await harness.connect("s-kai", "kai")
+    relay = harness.factory.relay_type(harness.factory.built[0])
+    key = SessionRouting("s-kai", role=CLI_ROLE).session_key("kai")
+    message = Message(from_user="eric", to_user=key, body="remainder")
+    await relay.deliver(message.refiled())
+    await relay.deliver(message.refiled())
+    fetched = await relay.fetch(key)
+    assert [m.body for m in fetched] == ["remainder"]
+
+
+async def test_a_remainder_the_relay_refuses_is_offered_again_by_the_next_read(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused refile keeps the mail in the outbox: none lost, none twice."""
+    harness.factory.relay_type = RefusingRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    sent = [f"message {n:03d} " + "x" * 200 for n in range(30)]
+    for body in sent:
+        await eric.request("write", to="kai", message=body)
+    with monkeypatch.context() as patch:
+        patch.setattr(RefusingRelay, "refusing", True)
+        first = await kai.request("read")
+    received = _bodies(first)
+    assert _more(first) == len(sent) - len(received)
+    for _ in range(30):
+        result = await kai.request("read")
+        received += _bodies(result)
+        if not _more(result):
+            break
+    assert received == sent
+
+
+class CancellingRelay(ConsumingRelay):
+    """A consuming relay whose connection ends after a few deliveries."""
+
+    allowed: int | None = None
+
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
+        if CancellingRelay.allowed is not None:
+            if CancellingRelay.allowed == 0:
+                raise asyncio.CancelledError
+            CancellingRelay.allowed -= 1
+        await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
+
+
+async def test_a_read_cancelled_between_refiles_leaves_one_copy_of_each_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each refiled message leaves the outbox as it is filed, not after the loop."""
+    relay = CancellingRelay(tmp_path)
+    key = SessionRouting("s-kai", role=CLI_ROLE).session_key("kai")
+    mail = [Message(from_user="eric", to_user=key, body=f"m{n}") for n in range(5)]
+    outbox = Outbox(retains=True)
+    pending = outbox.merge(mail)
+    ctx = cast("CliContext", SimpleNamespace(relay=relay))
+    session = cast("Session", SimpleNamespace(outbox=outbox))
+    with monkeypatch.context() as patch:
+        patch.setattr(CancellingRelay, "allowed", 2)
+        with pytest.raises(asyncio.CancelledError):
+            await Methods._refile(session, Inbox(ctx, [], []), pending, pending[:1])
+    filed = [m.body for m in await relay.fetch(key)]
+    held = [m.body for m in outbox.merge([])]
+    assert sorted([*filed, *held]) == sorted(m.body for m in mail)
+
+
+class LandingTimeoutRelay(ConsumingRelay):
+    """A relay whose write lands but is reported as timed out."""
+
+    timing_out = False
+
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
+        await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
+        if LandingTimeoutRelay.timing_out:
+            raise TimeoutError
+
+
+async def test_a_refile_that_landed_but_timed_out_is_read_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The filed copy and the held original are one message on the next read."""
+    relay = LandingTimeoutRelay(tmp_path)
+    key = SessionRouting("s-kai", role=CLI_ROLE).session_key("kai")
+    mail = [Message(from_user="eric", to_user=key, body=f"m{n}") for n in range(4)]
+    outbox = Outbox(retains=True)
+    pending = outbox.merge(mail)
+    ctx = cast("CliContext", SimpleNamespace(relay=relay))
+    session = cast("Session", SimpleNamespace(outbox=outbox))
+    with monkeypatch.context() as patch:
+        patch.setattr(LandingTimeoutRelay, "timing_out", True)
+        filed = await Methods._refile(session, Inbox(ctx, [], []), pending, pending[:1])
+    assert filed == 0  # every write was reported as failed, though each landed
+    merged = outbox.merge(await relay.fetch(key))
+    assert sorted(m.body for m in merged) == ["m0", "m1", "m2", "m3"]
+
+
+async def test_more_after_a_refile_that_landed_but_timed_out_stays_within_its_bound(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`more` before reconciliation: never below unread, above by landed copies."""
+    harness.factory.relay_type = LandingTimeoutRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    sent = [f"message {n:03d} " + "x" * 200 for n in range(30)]
+    for body in sent:
+        await eric.request("write", to="kai", message=body)
+    with monkeypatch.context() as patch:
+        patch.setattr(LandingTimeoutRelay, "timing_out", True)
+        first = await kai.request("read")
+    unread = len(sent) - len(_bodies(first))
+    landed = unread  # every refile of the remainder landed and was reported failed
+    assert unread <= _more(first) <= unread + landed

@@ -5,26 +5,36 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from biff.client.connection import DaemonError
+from biff.client.connection import (
+    ClientIdentity,
+    ConnectionLostError,
+    DaemonClient,
+    DaemonError,
+)
 from biff.daemon.server import BiffDaemon
-from biff.daemon.session_host import LEASE, RETENTION
+from biff.daemon.session_host import LEASE, RETENTION, SessionHost
+from biff.daemon.session_pointer import CurrentPointer
+from biff.daemon.session_select import SessionSelector
 from biff.daemon.session_store import CliSessionRecord, CliSessionStore
-from biff.models import Message
+from biff.daemon.session_verbs import SessionVerbs
+from biff.models import BiffConfig, Message
+from biff.relay import LocalRelay
 from biff.run_dir import RunDir
 from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
 from biff.tty import get_hostname
 from tests.test_daemon.conftest import CountingFactory, FakeResolver
+from tests.test_daemon.test_read_delivery import ConsumingRelay
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
-    from pathlib import Path
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
-    from biff.client.connection import DaemonClient
+    from biff.commands import CommandResult
     from biff.daemon.session_store import SessionState
     from tests.test_daemon.conftest import Harness
 
@@ -213,14 +223,34 @@ async def test_the_daemon_sweeps_a_stale_live_record_to_dormant_at_start(
 
 
 async def test_the_daemon_expires_a_record_past_retention_and_releases_its_row(
-    sweeping: tuple[BiffDaemon, CliSessionStore, CountingFactory],
+    sweeping: tuple[BiffDaemon, CliSessionStore, CountingFactory], tmp_path: Path
 ) -> None:
-    daemon, store, factory = sweeping
-    gone = _stored(store, "gone", "dormant", RETENTION + timedelta(minutes=1))
+    daemon, store, _ = sweeping
+    relay = LocalRelay(tmp_path / "relays" / "repo")
+    host = SessionHost(
+        relay=relay,
+        config=BiffConfig(user="kai", repo_name="test"),
+        selector=SessionSelector(
+            store=store,
+            pointer=CurrentPointer(tmp_path / "current"),
+            user="kai",
+            repo="test",
+            repo_root=Path("/work/repo"),
+            hostname=get_hostname(),
+        ),
+        hostname=get_hostname(),
+        pwd="/work/repo",
+    )
+    made = await host.create("gone")
+    key = _key(made)
+    assert await relay.get_session(key) is not None
+    path = store.root / made.session_id / "session.json"
+    old = datetime.now(UTC) - RETENTION - timedelta(minutes=1)
+    path.write_text(replace(made, state="dormant", last_attached_at=old).to_json())
     await daemon.start()
     await _eventually(lambda: store.list() == ())
-    assert gone.session_id not in {r.session_id for r in store.list()}
-    assert factory.built != []
+    assert await relay.get_session(key) is None
+    assert await relay.get_tty_reservation_owner("kai", "gone") is None
 
 
 async def test_the_daemon_sweeps_again_on_its_timer(
@@ -231,3 +261,153 @@ async def test_the_daemon_sweeps_again_on_its_timer(
     await asyncio.sleep(0.2)  # the start sweep found nothing to do
     late = _stored(store, "late", "live", LEASE + timedelta(minutes=1))
     await _eventually(lambda: store.read(late.session_id).state == "dormant")
+
+
+async def test_the_sweep_renews_a_session_a_connection_is_attached_to(
+    sweeping: tuple[BiffDaemon, CliSessionStore, CountingFactory], run_dir: RunDir
+) -> None:
+    daemon, store, _ = sweeping
+    stale = _stored(store, "held", "live", RETENTION + timedelta(minutes=1))
+    await daemon.start()
+    watcher = await DaemonClient.connect(
+        run_dir=run_dir,
+        port=daemon.port,
+        identity=ClientIdentity(
+            client="cli", session_id=stale.session_id, cwd="/work/repo", user="kai"
+        ),
+    )
+    try:
+        await daemon.sweep_sessions()
+        kept = store.read(stale.session_id)
+    finally:
+        await watcher.close()
+    assert kept.state == "live"
+    assert datetime.now(UTC) - kept.last_attached_at < timedelta(minutes=1)
+
+
+async def _bodies_a_new_session_reads(harness: Harness) -> list[str]:
+    """Read everything a session that did not exist before the end can read."""
+    fresh = await harness.connect("s-fresh", "kai")
+    bodies: list[str] = []
+    for _ in range(10):
+        data = cast("list[dict[str, str]]", (await _call(fresh, "read"))["data"])
+        if not data:
+            break
+        bodies += [row["body"] for row in data]
+    return bodies
+
+
+async def test_ending_a_session_files_back_a_read_nobody_confirmed(
+    harness: Harness,
+) -> None:
+    harness.factory.relay_type = ConsumingRelay
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="alpha")
+    (record,) = (r for r in harness.sessions.list() if r.tty == "alpha")
+    holder = await harness.connect(record.session_id, "kai")
+    relay = ConsumingRelay(harness.factory.built[0])
+    await relay.deliver(
+        Message(from_user="eric", from_tty="t", to_user=_key(record), body="held")
+    )
+    unconfirmed = await holder.request_held("read")  # fetched, never confirmed
+    assert unconfirmed.result is not None
+    await _call(kai, "session_end", ref="alpha")
+    assert await _bodies_a_new_session_reads(harness) == ["held"]
+
+
+async def test_ending_a_session_files_back_the_batch_held_after_a_split_read(
+    harness: Harness,
+) -> None:
+    harness.factory.relay_type = ConsumingRelay
+    harness.daemon._core.methods._read_budget = 1400  # one message per reply
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="alpha")
+    (record,) = (r for r in harness.sessions.list() if r.tty == "alpha")
+    holder = await harness.connect(record.session_id, "kai")
+    relay = ConsumingRelay(harness.factory.built[0])
+    for n in range(3):
+        await relay.deliver(
+            Message(
+                from_user="eric",
+                from_tty="t",
+                to_user=_key(record),
+                body=f"m{n} " + "x" * 300,
+            )
+        )
+    unconfirmed = await holder.request_held("read")  # a batch of one, unconfirmed
+    assert unconfirmed.result is not None
+    await _call(kai, "session_end", ref="alpha")
+    bodies = await _bodies_a_new_session_reads(harness)
+    assert sorted(b[:2] for b in bodies) == ["m0", "m1", "m2"]
+
+
+async def test_ending_a_session_ends_the_connections_attached_to_it(
+    harness: Harness,
+) -> None:
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="alpha")
+    (record,) = (r for r in harness.sessions.list() if r.tty == "alpha")
+    watcher = await harness.connect(record.session_id, "kai")
+    await watcher.subscribe()
+    await asyncio.wait_for(watcher.next_event(), timeout=_WAIT)
+    await _call(kai, "session_end", ref="alpha")
+    with pytest.raises(ConnectionLostError, match="session ended"):
+        await asyncio.wait_for(watcher.next_event(), timeout=_WAIT)
+
+
+async def test_a_session_can_end_itself_and_still_hear_the_answer(
+    harness: Harness,
+) -> None:
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="alpha")
+    (record,) = (r for r in harness.sessions.list() if r.tty == "alpha")
+    own = await harness.connect(record.session_id, "kai")
+    reply = await _call(own, "session_end", ref="alpha")
+    assert (reply["text"], reply["error"]) == ("ended alpha", False)
+
+
+async def test_each_session_verb_prints_through_biffd_what_it_prints_in_process(
+    harness: Harness, tmp_path: Path
+) -> None:
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="main")
+    relay = LocalRelay(harness.factory.built[0])
+    hostname = get_hostname()
+    host = SessionHost(
+        relay=relay,
+        config=BiffConfig(user="kai", repo_name="test"),
+        selector=SessionSelector(
+            store=harness.sessions,
+            pointer=CurrentPointer(tmp_path / "current"),
+            user="kai",
+            repo="test",
+            repo_root=Path("/work/repo"),
+            hostname=hostname,
+        ),
+        hostname=hostname,
+        pwd="/work/repo",
+    )
+    verbs = SessionVerbs(host)
+    table: list[tuple[str, dict[str, str | bool], Awaitable[CommandResult]]] = [
+        ("session_ls", {}, verbs.ls(include_ended=False)),
+        ("session_ls", {"include_ended": True}, verbs.ls(include_ended=True)),
+        ("session_use", {"ref": "main"}, verbs.use("main")),
+    ]
+    for method, params, in_process in table:
+        reply = await _call(kai, method, **params)
+        expected = await in_process
+        assert (method, reply["text"], reply["data"]) == (
+            method,
+            expected.text,
+            expected.json_data,
+        )
+    assert (await _call(kai, "session_end", ref="main"))["text"] == "ended main"
+    refusals: list[tuple[str, str, Awaitable[CommandResult]]] = [
+        ("session_use", "nope", verbs.use("nope")),
+        ("session_end", "main", verbs.end("main")),  # already ended
+    ]
+    for method, ref, in_process in refusals:
+        reply = await _call(kai, method, ref=ref)
+        with pytest.raises(ValueError) as refused:
+            await in_process
+        assert (method, reply["text"]) == (method, f"Error: {refused.value}")

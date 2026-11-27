@@ -20,7 +20,7 @@ def _command(harness: Harness, repo: Path | None = None) -> DaemonCommand:
         user_override="kai",
         session_ref=None,
         run_dir=harness.run_dir,
-        nudge=lambda: None,
+        nudge=lambda: harness.daemon.port,
         repo=repo,
     )
 
@@ -87,7 +87,7 @@ async def test_session_ls_prints_the_daemons_table(
 ) -> None:
     made = await _command(harness).session_new("main")
     await made.deliver(lambda result: None)
-    answer = await _command(harness).call("session_ls")
+    answer = await _command(harness).session_ls(include_ended=False)
     text = answer.result.text
     await answer.abandon()
     assert text.splitlines()[0].startswith("NAME")
@@ -97,7 +97,7 @@ async def test_session_ls_prints_the_daemons_table(
 async def test_session_end_ends_the_named_session(harness: Harness, repo: Path) -> None:
     made = await _command(harness).session_new("main")
     await made.deliver(lambda result: None)
-    answer = await _command(harness).call("session_end", ref="main")
+    answer = await _command(harness).session_end("main")
     await answer.deliver(lambda result: None)
     (record,) = (r for r in harness.sessions.list() if r.tty == "main")
     assert (answer.result.text, record.state) == ("ended main", "ended")
@@ -113,3 +113,29 @@ async def test_a_session_new_in_another_repo_is_made_there(
     await answer.deliver(lambda result: None)
     (record,) = (r for r in harness.sessions.list() if r.tty == "remote")
     assert record.repo_root == str(other)
+
+
+async def test_a_session_verb_in_a_fresh_repo_can_take_the_first_name(
+    harness: Harness, repo: Path
+) -> None:
+    answer = await _command(harness).session_new("tty1")
+    await answer.deliver(lambda result: None)
+    assert (answer.result.error, answer.result.text) == (False, "tty1")
+
+
+async def test_a_session_verb_leaves_no_session_nobody_asked_for(
+    harness: Harness, repo: Path
+) -> None:
+    made = await _command(harness).session_new("main")
+    await made.deliver(lambda result: None)
+    live = [r.tty for r in harness.sessions.list() if r.state != "ended"]
+    assert live == ["main"]
+
+
+async def test_session_ls_in_a_fresh_repo_lists_nothing(
+    harness: Harness, repo: Path
+) -> None:
+    answer = await _command(harness).session_ls(include_ended=False)
+    text = answer.result.text
+    await answer.abandon()
+    assert text == "No sessions."

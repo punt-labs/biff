@@ -32,6 +32,8 @@ class Health:
 
     version: str
     uptime_seconds: float
+    # A biffd older than the field does not report it; absence is the contract.
+    pid: int | None = None
 
 
 @final
@@ -92,7 +94,12 @@ class HealthProbe:
         if not isinstance(version, str) or not isinstance(uptime, int | float):
             msg = f"{_LOOPBACK}:{self._port} is not biffd: /health lacks its fields"
             raise NotBiffdError(msg)
-        return Health(version, float(uptime))
+        pid = fields.get("pid")
+        return Health(
+            version,
+            float(uptime),
+            pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
+        )
 
 
 @final

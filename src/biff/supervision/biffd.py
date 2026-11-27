@@ -30,4 +30,5 @@ BIFFD_SPEC: Final = ServiceSpec(
     restart_on_crash_only=True,
     log_path=LOG_PATH,
     permanent_exit_status=PERMANENT_EXIT_STATUS,
+    beside_interpreter=True,
 )

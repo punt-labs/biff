@@ -1694,6 +1694,23 @@ is refused ($RequestReplacedRun$).  The model abstracts the batching of a
 large inbox: one $ReadUnread$ consumes the whole count, where the daemon may
 deliver a batch and report a remaining count.
 
+That abstraction hides three things this model cannot state, because it keeps
+a count and not the messages.  They are specified in \texttt{mail-refile.tex}.
+(1) On a relay that consumes mail at fetch, the remainder of a partial read is
+filed back into the relay under a derived id, so that every other reader of
+the session finds it, and filing it twice cannot copy it; the model there
+checks that no remainder is lost and none duplicated while nothing fails.
+(2) The client confirms a batch only after it has printed it, and the daemon
+marks the batch read on the confirmation; $shown~c \leq durable(\ldots)$ is
+the count form of ``no more arrivals than exist'', and the message form is
+that a message is marked read only after it was shown.  (3) Delivery is at
+least once: a client that dies after the print and before the confirmation is
+shown the batch again, and a batch held in the daemon alone is lost if the
+daemon dies or the session ends before the client has been shown it.
+$ReadUnread$ does not model the duplicate, and it models the loss window as
+unreachable ($durable' = 0$ is immediate); \texttt{mail-refile.tex} makes both
+reachable and says so.
+
 %%--------------------------------------------------------------------
 \subsection{Detach and the end of a session}
 %%--------------------------------------------------------------------
