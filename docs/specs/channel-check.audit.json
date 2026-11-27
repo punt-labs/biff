@@ -4,9 +4,9 @@
   "timestamp": "2026-11-27T20:00:00Z",
   "summary": {
     "covered": 3,
-    "total": 8,
-    "percentage": 38,
-    "gaps": 5
+    "total": 9,
+    "percentage": 33,
+    "gaps": 6
   },
   "constraints": [
     {
@@ -62,6 +62,13 @@
       "text": "SendEvent: needs the request to have reached the client",
       "category": "precondition",
       "source": "SendEvent",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "DeliverRequest: a request frame replayed after the acknowledgement makes no second event and no second relayed ack",
+      "category": "effect",
+      "source": "DeliverRequest",
       "coveredBy": "GAP: owed by the code PR",
       "confidence": "high"
     }

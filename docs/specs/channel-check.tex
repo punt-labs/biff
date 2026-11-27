@@ -105,6 +105,10 @@ one channel event whatever the number of deliveries ($emitted~t \leq 1$), the
 acknowledgement is relayed to the doctor at most once ($relayed~t \leq 1$), and a
 token that was sent was emitted exactly once.
 
+The replay case is a reachability goal: $spent \neq \emptyset \land \exists t
+@ t \in spent \land delivered~t = 2 \land emitted~t = 1$, a request frame delivered
+again after its token was acknowledged, with still exactly one event made.
+
 \begin{schema}{Invariant}
   HopInv
 \end{schema}
@@ -200,7 +204,7 @@ modelled.
   \Delta CheckState \\
   token? : TOKEN
 \where
-  token? \in pending \\
+  token? \in \dom delivered \\
   delivered~token? < 2 \\
   clock' = clock \\
   acceptedAt' = acceptedAt \\
@@ -213,6 +217,11 @@ modelled.
   emitted' = emitted \\
   relayed' = relayed
 \end{schema}
+
+The replay does not depend on the token being pending: the transport may redeliver
+a request frame after the acknowledgement closed the token, or after a newer
+request retired it, so $DeliverRequest$ is enabled for any token that was ever
+requested, up to the two deliveries modelled.
 
 A request that reaches the client again does not make a second event: $SendEvent$
 needs the token in $unsent$ and takes it out, so $emitted~t \leq 1$ however

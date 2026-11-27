@@ -3,14 +3,14 @@
   "testDirectory": "tests/",
   "timestamp": "2026-11-27T20:00:00Z",
   "summary": {
-    "covered": 4,
-    "total": 8,
-    "percentage": 50,
+    "covered": 5,
+    "total": 9,
+    "percentage": 56,
     "gaps": 4
   },
   "constraints": [
     {
-      "text": "cover (k, n) <= 1 and cover = 1 iff n <= sentMark: at most one event per arrival",
+      "text": "cover (k, n) <= 1 and cover = 1 implies n <= sentMark: at most one event per arrival",
       "category": "invariant",
       "source": "MailEventInv",
       "coveredBy": "tests/test_channel_emitter.py::test_each_wall_key_is_announced_once; ::test_a_reconnect_announces_nothing_already_announced",
@@ -59,10 +59,17 @@
       "confidence": "high"
     },
     {
-      "text": "AG(sentMark < mark => EF sentMark = mark), AG(sentMark < mark & no wake => enabled(PollWake))",
+      "text": "enabled(PollWake) with no wake; enabled(ReadBegin) and enabled(ReadCommit); EF an owed arrival is announced (reachability, no fairness stated)",
       "category": "invariant",
       "source": "delivery",
       "coveredBy": "tests/test_channel_emitter.py::test_a_reconnect_announces_mail_that_arrived_while_disconnected",
+      "confidence": "medium"
+    },
+    {
+      "text": "staleSent = zfalse: no event for mail read before the poll (the unread sample); the record advances, coverage unchanged",
+      "category": "invariant",
+      "source": "MailEventInv",
+      "coveredBy": "tests/test_channel_emitter.py::TestNeverStale::test_mail_read_before_the_send_is_not_announced",
       "confidence": "medium"
     }
   ],

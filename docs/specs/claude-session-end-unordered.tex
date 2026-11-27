@@ -140,11 +140,15 @@ session of a clear, after its hello.
   outboxN : 0 \upto maxMail \\
   inboxN : 0 \upto maxMail \\
   shownN : 0 \upto maxMail \\
-  issuedN : 0 \upto maxMail
+  issuedN : 0 \upto maxMail \\
+  lostN : 0 \upto maxMail \\
+  shownDormant : ZBOOL
 \end{schema}
 
 Mail counts: held by the session ($outboxN$), in the user's inbox ($inboxN$),
-shown to the client ($shownN$), and issued in all ($issuedN$, a ghost).
+shown to the client ($shownN$), lost with a daemon that restarted ($lostN$, a
+ghost), and issued in all ($issuedN$, a ghost).  $shownDormant$ is a ghost that
+records a print made while nobody was connected.
 
 \begin{schema}{EndState}
   Record \\
@@ -164,14 +168,17 @@ shown to the client ($shownN$), and issued in all ($issuedN$, a ghost).
   recState \neq rsEnding \implies
     ( rowTodo = zfalse \land ttyTodo = zfalse \land logTodo = zfalse \land
       mailTodo = zfalse ) \\
-  outboxN + inboxN + shownN = issuedN
+  outboxN + inboxN + shownN + lostN = issuedN \\
+  shownDormant = zfalse
 \end{schema}
 
 The invariants, in the order of the obligations.  A row, or the old session's tty
 name, exists only while the record does ($BadOrphan$ is not a state).  The new
 session of a clear always holds its tty name.  A live record has a connection and
 a dormant one has none.  An end that is not in progress owes nothing.  And mail
-is conserved: issued is held, in the inbox, or shown.
+is conserved: issued is held, in the inbox, shown, or lost with a restart of the
+daemon (the outbox is its memory).  An end loses nothing: $FileOutbox$ moves what
+is held to the inbox, and only $DaemonRestart$ adds to $lostN$.
 
 \begin{schema}{Invariant}
   EndInv
@@ -196,7 +203,9 @@ is conserved: issued is held, in the inbox, or shown.
   outboxN' = 0 \\
   inboxN' = 0 \\
   shownN' = 0 \\
-  issuedN' = 0
+  issuedN' = 0 \\
+  lostN' = 0 \\
+  shownDormant' = zfalse
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -270,17 +279,25 @@ The daemon's sweep counts a dormant record's age.
 \begin{schema}{DaemonRestart}
   \Delta Record \\
   \Xi Effects \\
-  \Xi Mail
+  \Delta Mail
   \where
   recState = rsLive \\
   recState' = rsDormant \\
   currentRun' = currentRun \\
   conns' = \emptyset \\
   age' = 0 \\
-  endRun' = endRun
+  endRun' = endRun \\
+  outboxN' = 0 \\
+  lostN' = lostN + outboxN \\
+  shownDormant' = shownDormant \\
+  inboxN' = inboxN \\
+  shownN' = shownN \\
+  issuedN' = issuedN
 \end{schema}
 
 A restart: the record is durable and returns dormant; every connection is gone.
+The outbox is the daemon's memory, so what it held is lost (the window the
+unconfirmed batch has in DES-099, PL-1753); the mail the relay holds is not.
 
 %%----------------------------------------------------------------------
 \section{Ending a session}
@@ -415,6 +432,8 @@ that runs after a new hello is wrong.
   outboxN' = 0 \\
   shownN' = shownN \\
   issuedN' = issuedN \\
+  lostN' = lostN \\
+  shownDormant' = shownDormant \\
   mailTodo' = zfalse \\
   rowPresent' = rowPresent \\
   ttyOwner' = ttyOwner \\
@@ -486,7 +505,9 @@ reply before it sends the hello.
   inboxN' = inboxN + 1 \\
   issuedN' = issuedN + 1 \\
   outboxN' = outboxN \\
-  shownN' = shownN
+  shownN' = shownN \\
+  lostN' = lostN \\
+  shownDormant' = shownDormant
 \end{schema}
 
 \begin{schema}{MailFetch}
@@ -499,19 +520,29 @@ reply before it sends the hello.
   inboxN' = inboxN - 1 \\
   outboxN' = outboxN + 1 \\
   shownN' = shownN \\
-  issuedN' = issuedN
+  issuedN' = issuedN \\
+  lostN' = lostN \\
+  shownDormant' = shownDormant
 \end{schema}
+
+The client prints a message it was handed.  It needs a connected client: with the
+session dormant (a daemon restart left no connection) the held mail cannot be
+shown, and a reply already in flight when the daemon died counts as shown, which
+is the count $shownN$ took when it was handed over.
 
 \begin{schema}{MailShow}
   \Xi Record \\
   \Xi Effects \\
   \Delta Mail
   \where
+  recState = rsLive \\
   outboxN > 0 \\
   outboxN' = outboxN - 1 \\
   shownN' = shownN + 1 \\
   inboxN' = inboxN \\
-  issuedN' = issuedN
+  issuedN' = issuedN \\
+  lostN' = lostN \\
+  shownDormant' = ( \IF recState = rsDormant \THEN ztrue \ELSE shownDormant )
 \end{schema}
 
 \begin{schema}{Quiesce}
@@ -522,24 +553,37 @@ reply before it sends the hello.
 \section{Model Checking}
 %%----------------------------------------------------------------------
 
-$EndInv$ is the state invariant.  The retention obligation is two CTL formulas
-over the same machine.  $EF$ alone would be satisfied by a client that
-reattaches and ends the session, which is not retention, so the first states
-that expiry is \emph{enabled}, and the second that an end in progress can always
-finish:
+$EndInv$ is the state invariant.  The retention obligation is stated as
+\emph{enabledness}, plus one reachability check, and not as liveness.  $EF$
+alone would be satisfied by a client that reattaches and ends the session, which
+is not retention, and $AF$ cannot hold of a machine whose $Quiesce$ may be taken
+forever.  So:
 
 \begin{quote}
   $AG\,(\,recState = rsDormant \land age = maxAge \Rightarrow
   enabled(ExpireClaude)\,)$ \\
-  $AG\,(\,recState = rsEnding \Rightarrow EF\;recState = rsNone\,)$
+  $AG\,(\,recState = rsEnding \land rowTodo = ztrue \Rightarrow
+  enabled(DeleteRow)\,)$, and the same for $ReleaseTty$, $AppendLogout$ and
+  $FileOutbox$ with their flags \\
+  $AG\,(\,recState = rsEnding \land rowTodo = ttyTodo = logTodo = mailTodo =
+  zfalse \Rightarrow enabled(FinishEnd)\,)$ \\
+  $AG\,(\,recState = rsEnding \Rightarrow EF\;recState = rsNone\,)$, a
+  \emph{reachability} check: from an end in progress the record can be removed
 \end{quote}
+
+Under the assumption that the daemon's sweep and the end's steps are scheduled
+fairly (a step that stays enabled is eventually taken, and $Quiesce$ stands for the
+absence of work, so it is taken only when nothing else is enabled), the
+enabledness formulas give: a dormant session at its retention is removed, and an
+end in progress finishes.  The model does not state fairness, and none of the
+formulas is a liveness theorem.
 
 and the non-vacuity goals are that both transitions are reachable:
 $recState = rsEnding$ after $EndOwnSession$ and after $ExpireClaude$, that
 $EndRefused$ is enabled ($currentRun = 1 \land 0 \in conns$), and that a clear
 completes ($newLive = ztrue$).
 
-Five frozen variants are the negative controls, each the shipped file with one
+Six frozen variants are the negative controls, each the shipped file with one
 thing taken out:
 \begin{itemize}
   \item \texttt{claude-session-end-nofile.tex}: $FileOutbox$ drops what the session
@@ -556,6 +600,10 @@ thing taken out:
     $age > maxAge$, which the saturating sweep never reaches: the first retention
     formula is \textbf{FALSE}, a dormant record at its retention is never
     removed.
+  \item \texttt{claude-session-end-showanywhere.tex}: $MailShow$ needs no
+    connection.  Held mail is consumed by a print with nobody connected (for
+    instance after a $DaemonRestart$, where the shipped model has already lost the
+    outbox): $shownDormant = zfalse$ is violated.
   \item \texttt{claude-session-end-anyrun.tex}: $EndOwnSession$ accepts a
     connection of a replaced run: the replaced connection ends the session the
     newer run owns (checked by the goal $recState = rsEnding$ reached with
@@ -572,7 +620,11 @@ thing taken out:
 %%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
 %%       "AG({recState=rsDormant & age=2} => e(ExpireClaude))"
 %%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
-%%       "AG({recState=rsEnding} => EF {recState=rsNone})"
+%%       "AG({recState=rsEnding & rowTodo=ztrue} => e(DeleteRow))"
+%%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
+%%       "AG({recState=rsEnding & rowTodo=zfalse & ttyTodo=zfalse & logTodo=zfalse & mailTodo=zfalse} => e(FinishEnd))"
+%%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
+%%       "AG({recState=rsEnding} => EF {recState=rsNone})"   (reachability)
 %%   goals: "recState=rsEnding & age=2", "newLive=ztrue", "recState=rsLive & conns/={} & currentRun=1"
 %%
 %% Negative controls (each reports an invariant violation, the noexpire one a

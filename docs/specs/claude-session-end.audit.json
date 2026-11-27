@@ -4,9 +4,9 @@
   "timestamp": "2026-11-27T20:00:00Z",
   "summary": {
     "covered": 3,
-    "total": 11,
-    "percentage": 27,
-    "gaps": 8
+    "total": 13,
+    "percentage": 23,
+    "gaps": 10
   },
   "constraints": [
     {
@@ -31,7 +31,7 @@
       "confidence": "high"
     },
     {
-      "text": "outboxN + inboxN + shownN = issuedN: an end loses no mail",
+      "text": "outboxN + inboxN + shownN + lostN = issuedN: an end loses nothing; only a daemon restart loses the outbox (lostN)",
       "category": "invariant",
       "source": "EndInv",
       "coveredBy": "tests/test_daemon/test_read_delivery.py::test_mail_a_batch_left_behind_moves_with_the_session_when_it_ends (the remainder only; the held batch is owed)",
@@ -83,6 +83,20 @@
       "text": "AG(dormant & age = maxAge => enabled(ExpireClaude)); AG(rsEnding => EF rsNone)",
       "category": "invariant",
       "source": "retention",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "shownDormant = zfalse: held mail is shown only to a connected client",
+      "category": "invariant",
+      "source": "EndInv",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "DaemonRestart: the outbox is the daemon's memory and is lost (PL-1753)",
+      "category": "effect",
+      "source": "DaemonRestart",
       "coveredBy": "GAP: owed by the code PR",
       "confidence": "high"
     }
