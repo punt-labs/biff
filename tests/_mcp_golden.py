@@ -11,18 +11,66 @@ step, with the patterns in :data:`VOLATILE`.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
-__all__ = ["STEPS", "VOLATILE", "Step", "normalise"]
+from biff.nostr_directory import NostrDirectory
+from biff.relay import LocalRelay
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
+
+    from biff.models import SessionEvent
+
+__all__ = [
+    "STEPS",
+    "VOLATILE",
+    "HistoryRelay",
+    "Step",
+    "isolate_machine",
+    "normalise",
+]
 
 type User = Literal["kai", "eric"]
 
-VOLATILE: Final[dict[str, tuple[re.Pattern[str], str]]] = {
-    "date": (re.compile(r"[A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}"), "<DATE>"),
-    "idle": (re.compile(r"idle \d+:\d{2}"), "idle <H:MM>"),
-    "minutes_left": (re.compile(r"\((\d+)m( remaining)?\)"), r"(<N>m\2)"),
-    "idle_column": (re.compile(r"(?<=_test-integration  )\d+m"), "<N>m"),
+type Replacement = Callable[[re.Match[str]], str]
+
+
+def _within(low: int, high: int, token: str) -> Replacement:
+    """Replace a match by *token* only when its ``n`` group is in ``low..high``.
+
+    A value outside the band is left as it is, so the comparison fails on it: a
+    wall of ten minutes must not pass for a wall of an hour.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        if low <= int(match["n"]) <= high:
+            return match.expand(token)
+        return match[0]
+
+    return replace
+
+
+VOLATILE: Final[dict[str, tuple[re.Pattern[str], Replacement]]] = {
+    "date": (
+        re.compile(r"[A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}"),
+        lambda _match: "<DATE>",
+    ),
+    "idle": (
+        re.compile(r"idle 0:(?P<n>\d{2})"),
+        _within(0, 1, "idle <0:00-0:01>"),
+    ),
+    "minutes_left": (
+        re.compile(r"\((?P<n>\d+)m(?P<rest> remaining)?\)"),
+        _within(58, 60, r"(<58-60>m\g<rest>)"),
+    ),
+    "idle_column": (
+        re.compile(r"(?<=_test-integration  )(?P<n>\d+)m"),
+        _within(0, 1, "<0-1>m"),
+    ),
 }
 
 _X = "x" * 100
@@ -43,8 +91,8 @@ class Step:
 def normalise(text: str, names: tuple[str, ...]) -> str:
     """Replace the parts of *text* that the clock decides."""
     for name in names:
-        pattern, token = VOLATILE[name]
-        text = pattern.sub(token, text)
+        pattern, replace = VOLATILE[name]
+        text = pattern.sub(replace, text)
     return text
 
 
@@ -81,8 +129,8 @@ STEPS: Final[tuple[Step, ...]] = (
         "who",
         {},
         "▶  NAME          K  REPO               IDLE  S  P  HOST     \n"
-        "   kai:kaitty       _test-integration  <N>m    +  -  test-host\n"
-        "   eric:erictty     _test-integration  <N>m    +  +  test-host",
+        "   kai:kaitty       _test-integration  <0-1>m    +  -  test-host\n"
+        "   eric:erictty     _test-integration  <0-1>m    +  +  test-host",
         ("idle_column",),
     ),
     Step("kai", "mesg", {"enabled": False}, "is n"),
@@ -91,8 +139,8 @@ STEPS: Final[tuple[Step, ...]] = (
         "who",
         {},
         "▶  NAME          K  REPO               IDLE  S  P  HOST     \n"
-        "   kai:kaitty       _test-integration  <N>m    -  -  test-host\n"
-        "   eric:erictty     _test-integration  <N>m    +  +  test-host",
+        "   kai:kaitty       _test-integration  <0-1>m    -  -  test-host\n"
+        "   eric:erictty     _test-integration  <0-1>m    +  +  test-host",
         ("idle_column",),
     ),
     Step("kai", "mesg", {"enabled": True}, "is y"),
@@ -101,7 +149,7 @@ STEPS: Final[tuple[Step, ...]] = (
         "finger",
         {"user": "eric"},
         "▶  Login: eric                           Messages: on\n"
-        "   On since <DATE> (UTC) on erictty, idle <H:MM>\n"
+        "   On since <DATE> (UTC) on erictty, idle <0:00-0:01>\n"
         "   Host: test-host  Dir: /test\n"
         "   Plan:\n"
         "    eric plan",
@@ -112,7 +160,7 @@ STEPS: Final[tuple[Step, ...]] = (
         "finger",
         {"user": "kai"},
         "▶  Login: kai                            Messages: on\n"
-        "   On since <DATE> (UTC) on kaitty, idle <H:MM>\n"
+        "   On since <DATE> (UTC) on kaitty, idle <0:00-0:01>\n"
         "   Host: test-host  Dir: /test\n"
         "   No Plan.",
         ("date", "idle"),
@@ -161,14 +209,14 @@ STEPS: Final[tuple[Step, ...]] = (
         "kai",
         "wall",
         {"message": "freeze now", "duration": "1h"},
-        "Wall posted (<N>m):\n   freeze now",
+        "Wall posted (<58-60>m):\n   freeze now",
         ("minutes_left",),
     ),
     Step(
         "kai",
         "wall",
         {},
-        "▶  WALL from kai (kaitty) (<N>m remaining)\n   freeze now",
+        "▶  WALL from kai (kaitty) (<58-60>m remaining)\n   freeze now",
         ("minutes_left",),
     ),
     Step(
@@ -224,3 +272,44 @@ STEPS: Final[tuple[Step, ...]] = (
         "Error: not in a git repository.",
     ),
 )
+
+
+class HistoryRelay(LocalRelay):
+    """A local relay that keeps session history, as the NATS relay does.
+
+    ``LocalRelay`` persists none, so ``last`` over it always says there is no
+    history; a table with rows needs a relay that remembers.
+    """
+
+    def __init__(self, data_dir: Path, events: tuple[SessionEvent, ...] = ()) -> None:
+        super().__init__(data_dir)
+        self._events = list(events)
+
+    async def append_wtmp(self, event: SessionEvent) -> None:
+        """Remember *event*."""
+        self._events.append(event)
+
+    async def get_wtmp(
+        self, *, user: str | None = None, count: int = 25
+    ) -> list[SessionEvent]:
+        """Return up to *count* events, most recent first."""
+        wanted = [e for e in self._events if user is None or e.user == user]
+        return sorted(wanted, key=lambda e: e.timestamp, reverse=True)[:count]
+
+
+def isolate_machine(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    """Keep a golden run off the machine it runs on.
+
+    A plan writes a marker under the Biff home, and ``who`` looks each user's
+    published key up in ethos or the Biff home; neither may reach the person
+    who runs the tests, or the text would depend on them.  The home is private to
+    *root*, and the key directory is an empty file there with no ethos behind it.
+    """
+    monkeypatch.setenv("HOME", str(root / "home"))
+
+    def empty_directory(
+        cls: type[NostrDirectory], _repo_root: Path | None
+    ) -> NostrDirectory:
+        return cls(None, root / "nostr.yaml")
+
+    monkeypatch.setattr(NostrDirectory, "for_repo", classmethod(empty_directory))
