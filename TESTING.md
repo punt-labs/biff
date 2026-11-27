@@ -289,8 +289,12 @@ biff-5ex/DES-062): the same push-vs-poll comparison as tier 3c's
 `test_push_vs_poll_latency.py`, run end to end against the real
 container instead of a bare `nats-server`. Marked
 `@pytest.mark.transcript`, so it also saves a human-readable transcript
-to `tests/transcripts/`. Run it directly, or via the one-command
-wrapper:
+to `tests/transcripts/`. It waits for the relay to report the inbox-notify
+subscriber (`DockerRelay.wait_subscribed`, via the container's `/subsz`
+monitor) before publishing, because core NATS does not replay a poke sent
+before the subscription registers; a `late-sub` parameter delays the
+subscriptions to keep that ordering covered. Run it directly, or via the
+one-command wrapper:
 
 ```bash
 ./scripts/demo-push-vs-poll.sh
