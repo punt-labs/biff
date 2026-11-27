@@ -9,7 +9,8 @@ from biff._formatting import terminal_safe
 from biff.formatting import format_talk_end, format_talk_line
 
 if TYPE_CHECKING:
-    from biff.cli_talk_wire import TalkReading, WireMessage
+    from biff.cli_talk_reading import TalkReading
+    from biff.cli_talk_wire import WireMessage
     from biff.repl_display import ReplDisplay
 
 __all__ = ["TalkView"]

@@ -12,3 +12,4 @@
 {"ts":"2026-11-26T18:11:55Z","verdict":"relaxed","file":"src/biff/nostr_directory.py","before":0,"after":1,"reason":"one subprocess call to the ethos executable resolved with shutil.which; arguments are validated handle and key names","commit":"b5873d0"}
 {"ts":"2026-11-26T19:18:33Z","verdict":"relaxed","file":"src/biff/keychain_vault.py","before":0,"after":1,"reason":"the one subprocess call to /usr/bin/security (moved from key_vault.py when the vaults were split into one module each); fixed program path, validated arguments","commit":"9ecede3"}
 {"ts":"2026-11-27T06:39:43Z","total":199,"by_category":{"noqa":120,"type_ignore":9,"pylint_disable":0,"pyright_ignore":28,"file_level":1,"per_file_ignores":41}}
+{"ts":"2026-11-27T18:50:53Z","total":199,"by_category":{"noqa":120,"type_ignore":9,"pylint_disable":0,"pyright_ignore":28,"file_level":1,"per_file_ignores":41}}

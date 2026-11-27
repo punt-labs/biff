@@ -267,5 +267,7 @@
   "biff.cli_repl": "cli",
   "biff.cli_talk": "cli",
   "biff.cli_talk_view": "cli",
-  "biff.cli_talk_wire": "cli"
+  "biff.cli_talk_wire": "cli",
+  "biff.cli_talk_outcome": "cli",
+  "biff.cli_talk_reading": "cli"
 }

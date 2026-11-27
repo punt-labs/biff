@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Self, final
 
+from biff._formatting import terminal_safe
 from biff.cli_console import PromptedConsole, Tick
 from biff.cli_link import DaemonLink
 from biff.cli_talk_view import TalkView
@@ -16,7 +17,8 @@ if TYPE_CHECKING:
 
     from biff.cli_console import Console
     from biff.cli_daemon import DaemonCommand
-    from biff.cli_talk_wire import TalkReading, WireMessage
+    from biff.cli_talk_reading import TalkReading
+    from biff.cli_talk_wire import WireMessage
 
 __all__ = ["TalkConversation"]
 
@@ -94,9 +96,11 @@ class TalkConversation:
         say = self._console.say
         outcome = await self._link.talk(to, opening)
         if outcome.error or outcome.phase == "idle":
-            say(outcome.text)
+            say(terminal_safe(outcome.text))
             return not outcome.error
-        peer = outcome.peer
+        # The peer's name came off the network: the daemon cleans it, and so
+        # does every place it is shown or published.
+        peer = terminal_safe(outcome.peer)
         await self._link.set_plan(f"talking to {peer}")
         try:
             if outcome.phase == "inviting":
@@ -124,7 +128,7 @@ class TalkConversation:
             while True:
                 got = await self._console.next(wake)
                 if self._link.pump.lost:
-                    say(f"biffd connection lost: {self._link.pump.lost}")
+                    say(terminal_safe(f"biffd connection lost: {self._link.pump.lost}"))
                     return False
                 if got is Tick.IDLE:
                     wake.clear()
@@ -172,7 +176,7 @@ class TalkConversation:
             while not over:
                 got = await console.next(wake)
                 if self._link.pump.lost:
-                    lost = self._link.pump.lost
+                    lost = terminal_safe(self._link.pump.lost)
                     console.say(f"{_CLEAR_LINE}biffd connection lost: {lost}")
                     over = True
                 elif got is Tick.IDLE:
@@ -209,7 +213,7 @@ class TalkConversation:
             return
         sent = await self._link.talk(peer, line)
         if sent.error:
-            self._console.say(f"{_CLEAR_LINE}{sent.text}")
+            self._console.say(f"{_CLEAR_LINE}{terminal_safe(sent.text)}")
 
     async def _withdraw(self, peer: str = "") -> None:
         """End the talk, or withdraw the invite; never raise out of a hangup.

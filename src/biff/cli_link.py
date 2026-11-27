@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_daemon_wire import WireResult
 from biff.cli_events import EventPump
-from biff.cli_talk_wire import TalkOutcome, TalkReading
+from biff.cli_talk_outcome import TalkOutcome
+from biff.cli_talk_reading import TalkReading
 from biff.client.connection import DaemonError
 from biff.commands import CommandResult
 from biff.dispatch import Call

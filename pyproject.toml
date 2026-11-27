@@ -347,6 +347,8 @@ prefixes = [
     "cli_watch",
     "cli_talk",
     "cli_talk_view",
+    "cli_talk_outcome",
+    "cli_talk_reading",
     "cli_talk_wire",
     "dispatch",
     "repl_display",

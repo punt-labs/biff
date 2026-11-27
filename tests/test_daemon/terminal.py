@@ -28,7 +28,10 @@ class Typist:
 
     def __call__(self, prompt: str) -> str:
         self.prompts.append(prompt)
-        line = self._typed.get(timeout=30)
+        try:
+            line = self._typed.get(timeout=30)
+        except queue.Empty:
+            raise EOFError from None  # a test that left the reader waiting
         if line is None:
             raise EOFError
         return line

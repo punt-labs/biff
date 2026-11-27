@@ -11,8 +11,9 @@ from __future__ import annotations
 import re
 from typing import Literal
 
+from biff.cli_talk_reading import TalkReading
 from biff.cli_talk_view import TalkView
-from biff.cli_talk_wire import TalkReading, WireInvite, WireMessage
+from biff.cli_talk_wire import WireInvite, WireMessage
 from biff.repl_display import ReplDisplay
 from biff.talk_types import TalkNotification
 

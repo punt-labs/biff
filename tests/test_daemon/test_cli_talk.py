@@ -11,7 +11,7 @@ from biff._formatting import HEADER_PREFIX
 from biff.cli_daemon import DaemonCommand
 from biff.cli_link import DaemonLink
 from biff.cli_talk import TalkConversation
-from biff.cli_talk_wire import TalkReading
+from biff.cli_talk_reading import TalkReading
 from tests.test_daemon.terminal import Screen, Typist
 
 if TYPE_CHECKING:

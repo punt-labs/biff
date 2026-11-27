@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING, cast
 
@@ -367,3 +368,25 @@ async def test_talk_reports_where_the_conversation_stands(pair: _Pair) -> None:
         await pair.kai.request("talk", to=pair.eric_at, message=""),
     )
     assert _data(invited) == {"phase": "inviting", "peer": pair.eric_at}
+
+
+_HOSTILE_TTY = "tty1\x1b[2J\x1b]52;c;cHduZWQ=\x07\nPWN"
+
+
+async def test_a_hostile_invite_reaches_the_reader_without_controls(
+    pair: _Pair, bus: TalkBus
+) -> None:
+    frame = {
+        "type": "invite",
+        "from": "kai",
+        "from_tty": _HOSTILE_TTY,
+        "from_key": "kai:abc123",
+        "to_key": pair.eric_at,
+        "body": "",
+    }
+    await bus.publish(f"talk.notify.{pair.eric_at}", json.dumps(frame).encode())
+    seen = _data(await pair.eric.request("talk_read"))
+    shown = json.dumps(seen["invites"]) + "".join(cast("list[str]", seen["lines"]))
+    assert "\\u001b" not in shown
+    assert "\\n" not in shown
+    assert "\\u0007" not in shown

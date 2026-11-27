@@ -148,9 +148,12 @@ class PendingInvite:
         for the direct-record path where the frame is recorded on arrival.
         """
         return cls(
-            user=notif.nfrom,
+            # A sender whose name is not printable fails the key check below.
+            user=terminal_safe(notif.nfrom),
             session_key=notif.nfrom_key,
-            tty=notif.nfrom_tty,
+            # The display tty is shown and echoed back in an accept; the sender
+            # chose it, so only its printable characters are kept.
+            tty=terminal_safe(notif.nfrom_tty),
             arrived=time.monotonic() if arrived is None else arrived,
         )
 

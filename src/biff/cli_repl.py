@@ -10,8 +10,8 @@ from biff.cli_console import PromptedConsole, Tick
 from biff.cli_daemon import DaemonCommand
 from biff.cli_link import DaemonLink
 from biff.cli_talk import TalkConversation
+from biff.cli_talk_reading import TalkUnavailableError
 from biff.cli_talk_view import TalkView
-from biff.cli_talk_wire import TalkUnavailableError
 from biff.commands import CommandResult
 from biff.dispatch import Call, available_commands, parse
 from biff.models import WallPost
