@@ -334,6 +334,7 @@ prefixes = [
     "cli_daemon_doctor",
     "cli_daemon_relay",
     "cli_install",
+    "cli_daemon",
     "cli_key",
     "cli_plan",
     "cli_session",

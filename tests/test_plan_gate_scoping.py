@@ -169,6 +169,7 @@ class TestCliOnlyPlanSatisfiesGate:
             patch("pathlib.Path.cwd", return_value=repo),
         ):
             result = await dispatch("plan biff-ar1: fix the plan gate", ctx)
+            assert result is not None
             assert not result.error
 
             gate_result = handle_pre_tool_use(

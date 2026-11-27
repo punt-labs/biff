@@ -7,11 +7,9 @@ import io
 import logging
 import subprocess
 import sys
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AbstractContextManager
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,10 +17,11 @@ from punt_observe.logging import Role
 from typer.testing import CliRunner
 
 from biff.__main__ import _suppress_nats_noise, app
-from biff.cli_context import CliContext
+from biff.client.connection import DaemonError, DaemonUnreachableError
 from biff.commands import CommandResult
 from biff.config import ResolvedConfig
 from biff.doctor import installed_plugin_version
+from biff.frame_reply import ErrorCode
 from biff.logging_config import configure_logging
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
@@ -65,24 +64,32 @@ _RESOLVED = ResolvedConfig(
 # Helpers for product-command tests
 # ---------------------------------------------------------------------------
 
-_MOCK_CTX = CliContext(
-    relay=MagicMock(),
-    config=BiffConfig(user="kai", repo_name="myrepo"),
-    session_key="kai:abc123",
-    user="kai",
-    tty="abc123",
-)
+
+class _FakeDaemon:
+    """Stands in for ``DaemonCommand``: records what the CLI asked biffd."""
+
+    def __init__(self, outcome: CommandResult | Exception) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self._outcome = outcome
+
+    async def _answer(self, method: str, params: dict[str, object]) -> CommandResult:
+        self.calls.append((method, params))
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+    async def call(self, method: str, **params: object) -> CommandResult:
+        return await self._answer(method, params)
+
+    async def plan(self, message: str) -> CommandResult:
+        return await self._answer("plan", {"message": message})
+
+    async def tty(self, name: str) -> CommandResult:
+        return await self._answer("tty", {"name": name})
 
 
-@asynccontextmanager
-async def _fake_session(
-    *,
-    interactive: bool = False,
-    user_override: str | None = None,
-    session_ref: str | None = None,
-) -> AsyncGenerator[CliContext]:
-    """Drop-in replacement for ``cli_session`` that needs no NATS."""
-    yield _MOCK_CTX
+def _patched_daemon(daemon: _FakeDaemon) -> AbstractContextManager[MagicMock]:
+    return patch("biff.__main__.DaemonCommand.for_this_process", return_value=daemon)
 
 
 class TestGlobalFlags:
@@ -98,17 +105,14 @@ class TestGlobalFlags:
         assert result.exit_code == 0
         assert "biff" in result.output
 
-    @patch("biff.commands.who", new_callable=AsyncMock)
-    def test_user_override(self, mock_who: AsyncMock) -> None:
-        """--user propagates identity override to cli_session."""
-        mock_who.return_value = CommandResult(text="ok")
-        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
+    def test_user_override(self) -> None:
+        """--user propagates identity override to the daemon command."""
+        daemon = _FakeDaemon(CommandResult(text="ok"))
+        with _patched_daemon(daemon) as made:
             result = runner.invoke(app, ["--user", "github-actions", "who"])
         assert result.exit_code == 0
-        mock_sess.assert_called_once_with(
-            user_override="github-actions", session_ref=None
-        )
-        mock_who.assert_awaited_once()
+        made.assert_called_once_with("github-actions", None)
+        assert daemon.calls == [("who", {})]
 
 
 class TestVersionCommand:
@@ -496,173 +500,103 @@ class TestNoArgsRepl:
 
 
 class TestProductCommands:
-    """Smoke tests for all 10 product commands via CliRunner.
+    """Each product command forwards its arguments to biffd by method name."""
 
-    Each test mocks ``cli_session`` (no NATS needed) and the underlying
-    ``commands.*`` function, then verifies the CLI parsed args correctly
-    and forwarded them to the command function.
-    """
+    @pytest.mark.parametrize(
+        ("argv", "method", "params"),
+        [
+            (["who"], "who", {}),
+            (["finger", "@kai"], "finger", {"user": "@kai"}),
+            (["write", "@eric", "hello"], "write", {"to": "@eric", "message": "hello"}),
+            (["read"], "read", {}),
+            (["last"], "last", {"user": "", "count": 25}),
+            (["last", "@kai", "--count", "5"], "last", {"user": "@kai", "count": 5}),
+            (
+                ["wall", "deploy freeze", "--duration", "2h"],
+                "wall",
+                {"message": "deploy freeze", "duration": "2h", "clear": False},
+            ),
+            (["wall"], "wall", {"message": "", "duration": "", "clear": False}),
+            (
+                ["wall", "--clear"],
+                "wall",
+                {"message": "", "duration": "", "clear": True},
+            ),
+            (["mesg", "on"], "mesg", {"value": "on"}),
+            (["status"], "status", {}),
+        ],
+    )
+    def test_forwards_to_the_daemon(
+        self, argv: list[str], method: str, params: dict[str, object]
+    ) -> None:
+        daemon = _FakeDaemon(CommandResult(text="the engine's words"))
+        with _patched_daemon(daemon):
+            result = runner.invoke(app, argv)
+        assert (result.exit_code, daemon.calls) == (0, [(method, params)])
+        assert "the engine's words" in result.output
 
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.who", new_callable=AsyncMock)
-    def test_who(self, mock_who: AsyncMock) -> None:
-        mock_who.return_value = CommandResult(text="no sessions")
-        result = runner.invoke(app, ["who"])
-        assert result.exit_code == 0
-        assert "no sessions" in result.output
-        mock_who.assert_awaited_once_with(_MOCK_CTX)
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.finger", new_callable=AsyncMock)
-    def test_finger(self, mock_finger: AsyncMock) -> None:
-        mock_finger.return_value = CommandResult(text="Login: kai")
-        result = runner.invoke(app, ["finger", "@kai"])
-        assert result.exit_code == 0
-        assert "Login: kai" in result.output
-        mock_finger.assert_awaited_once_with(_MOCK_CTX, "@kai")
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.write", new_callable=AsyncMock)
-    def test_write(self, mock_write: AsyncMock) -> None:
-        mock_write.return_value = CommandResult(text="Message sent to @eric.")
-        result = runner.invoke(app, ["write", "@eric", "hello"])
-        assert result.exit_code == 0
-        assert "Message sent" in result.output
-        mock_write.assert_awaited_once_with(_MOCK_CTX, "@eric", "hello")
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.read", new_callable=AsyncMock)
-    def test_read(self, mock_read: AsyncMock) -> None:
-        mock_read.return_value = CommandResult(text="No messages.")
-        result = runner.invoke(app, ["read"])
-        assert result.exit_code == 0
-        assert "No messages" in result.output
-        mock_read.assert_awaited_once_with(_MOCK_CTX)
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.plan", new_callable=AsyncMock)
-    def test_plan(self, mock_plan: AsyncMock) -> None:
-        mock_plan.return_value = CommandResult(text="Plan: fixing tests")
-        result = runner.invoke(app, ["plan", "fixing tests"])
-        assert result.exit_code == 0
-        assert "fixing tests" in result.output
-        mock_plan.assert_awaited_once_with(_MOCK_CTX, "fixing tests")
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.last", new_callable=AsyncMock)
-    def test_last(self, mock_last: AsyncMock) -> None:
-        mock_last.return_value = CommandResult(text="no sessions")
-        result = runner.invoke(app, ["last"])
-        assert result.exit_code == 0
-        mock_last.assert_awaited_once_with(_MOCK_CTX, "", 25)
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.last", new_callable=AsyncMock)
-    def test_last_with_user_and_count(self, mock_last: AsyncMock) -> None:
-        mock_last.return_value = CommandResult(text="@kai sessions")
-        result = runner.invoke(app, ["last", "@kai", "--count", "5"])
-        assert result.exit_code == 0
-        mock_last.assert_awaited_once_with(_MOCK_CTX, "@kai", 5)
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.wall", new_callable=AsyncMock)
-    def test_wall_post(self, mock_wall: AsyncMock) -> None:
-        mock_wall.return_value = CommandResult(text="Wall posted")
-        result = runner.invoke(app, ["wall", "deploy freeze", "--duration", "2h"])
-        assert result.exit_code == 0
-        mock_wall.assert_awaited_once_with(
-            _MOCK_CTX, "deploy freeze", "2h", clear=False
+    def test_plan(self) -> None:
+        daemon = _FakeDaemon(CommandResult(text="Plan: fixing tests"))
+        with _patched_daemon(daemon):
+            result = runner.invoke(app, ["plan", "fixing tests"])
+        assert (result.exit_code, daemon.calls) == (
+            0,
+            [("plan", {"message": "fixing tests"})],
         )
 
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.wall", new_callable=AsyncMock)
-    def test_wall_read(self, mock_wall: AsyncMock) -> None:
-        mock_wall.return_value = CommandResult(text="No active wall.")
-        result = runner.invoke(app, ["wall"])
-        assert result.exit_code == 0
-        mock_wall.assert_awaited_once_with(_MOCK_CTX, "", "", clear=False)
+    def test_plan_clear(self) -> None:
+        daemon = _FakeDaemon(CommandResult(text="Plan cleared"))
+        with _patched_daemon(daemon):
+            result = runner.invoke(app, ["plan", "--clear"])
+        assert (result.exit_code, daemon.calls) == (0, [("plan", {"message": ""})])
 
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.wall", new_callable=AsyncMock)
-    def test_wall_clear(self, mock_wall: AsyncMock) -> None:
-        mock_wall.return_value = CommandResult(text="Wall cleared.")
-        result = runner.invoke(app, ["wall", "--clear"])
-        assert result.exit_code == 0
-        mock_wall.assert_awaited_once_with(_MOCK_CTX, "", "", clear=True)
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.mesg", new_callable=AsyncMock)
-    def test_mesg(self, mock_mesg: AsyncMock) -> None:
-        mock_mesg.return_value = CommandResult(text="is y")
-        result = runner.invoke(app, ["mesg", "on"])
-        assert result.exit_code == 0
-        assert "is y" in result.output
-        mock_mesg.assert_awaited_once_with(_MOCK_CTX, "on")
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.tty", new_callable=AsyncMock)
-    def test_tty_with_name(self, mock_tty: AsyncMock) -> None:
-        mock_tty.return_value = CommandResult(text="tty: dev")
-        result = runner.invoke(app, ["tty", "dev"])
-        assert result.exit_code == 0
-        mock_tty.assert_awaited_once_with(_MOCK_CTX, "dev")
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.tty", new_callable=AsyncMock)
-    def test_tty_no_name(self, mock_tty: AsyncMock) -> None:
-        mock_tty.return_value = CommandResult(text="tty: abc123")
-        result = runner.invoke(app, ["tty"])
-        assert result.exit_code == 0
-        mock_tty.assert_awaited_once_with(_MOCK_CTX, "")
-
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.status", new_callable=AsyncMock)
-    def test_status(self, mock_status: AsyncMock) -> None:
-        mock_status.return_value = CommandResult(text="connected")
-        result = runner.invoke(app, ["status"])
-        assert result.exit_code == 0
-        assert "connected" in result.output
-        mock_status.assert_awaited_once_with(_MOCK_CTX)
+    @pytest.mark.parametrize(("argv", "name"), [(["tty", "dev"], "dev"), (["tty"], "")])
+    def test_tty(self, argv: list[str], name: str) -> None:
+        daemon = _FakeDaemon(CommandResult(text="tty"))
+        with _patched_daemon(daemon):
+            result = runner.invoke(app, argv)
+        assert (result.exit_code, daemon.calls) == (0, [("tty", {"name": name})])
 
 
 class TestProductCommandErrorHandling:
-    """Test _run() error paths: command errors, ValueError, JSON output."""
+    """Test _run() error paths: command errors, daemon errors, JSON output."""
 
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.who", new_callable=AsyncMock)
-    def test_command_error_exits_1(self, mock_who: AsyncMock) -> None:
-        mock_who.return_value = CommandResult(text="something broke", error=True)
-        result = runner.invoke(app, ["who"])
-        assert result.exit_code == 1
+    def test_command_error_exits_1(self) -> None:
+        daemon = _FakeDaemon(CommandResult(text="something broke", error=True))
+        with _patched_daemon(daemon):
+            assert runner.invoke(app, ["who"]).exit_code == 1
 
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.who", new_callable=AsyncMock)
-    def test_json_output(self, mock_who: AsyncMock) -> None:
-        mock_who.return_value = CommandResult(
-            text="fallback", json_data=[{"user": "kai"}]
+    def test_json_output(self) -> None:
+        daemon = _FakeDaemon(
+            CommandResult(text="fallback", json_data=[{"user": "kai"}])
         )
-        result = runner.invoke(app, ["--json", "who"])
+        with _patched_daemon(daemon):
+            result = runner.invoke(app, ["--json", "who"])
         assert result.exit_code == 0
         assert '"user"' in result.output
         assert "kai" in result.output
 
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch("biff.commands.who", new_callable=AsyncMock)
-    def test_quiet_suppresses_output(self, mock_who: AsyncMock) -> None:
-        mock_who.return_value = CommandResult(text="some output")
-        result = runner.invoke(app, ["--quiet", "who"])
+    def test_quiet_suppresses_output(self) -> None:
+        daemon = _FakeDaemon(CommandResult(text="some output"))
+        with _patched_daemon(daemon):
+            result = runner.invoke(app, ["--quiet", "who"])
         assert result.exit_code == 0
         assert result.output.strip() == ""
 
-    @patch("biff.__main__.cli_session", new=_fake_session)
-    @patch(
-        "biff.commands.who",
-        new_callable=AsyncMock,
-        side_effect=ValueError("no relay configured"),
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            ValueError("unknown session: x"),
+            DaemonUnreachableError("biffd is not answering on 127.0.0.1:8424"),
+            DaemonError(ErrorCode.INTERNAL, "boom"),
+            TimeoutError("no reply"),
+        ],
     )
-    def test_value_error_exits_1(self, _mock_who: AsyncMock) -> None:
-        result = runner.invoke(app, ["who"])
-        assert result.exit_code == 1
+    def test_a_failure_exits_1_with_its_message(self, failure: Exception) -> None:
+        daemon = _FakeDaemon(failure)
+        with _patched_daemon(daemon):
+            result = runner.invoke(app, ["who"])
+        assert (result.exit_code, str(failure) in result.output) == (1, True)
 
 
 class TestNatsErrorStaysOffTerminal:
@@ -1040,53 +974,32 @@ class TestUninstallResilient:
 
 
 class TestSessionOption:
-    """``-s`` and ``BIFF_SESSION`` reach ``cli_session`` as ``session_ref``."""
+    """``-s`` and ``BIFF_SESSION`` reach the daemon command as ``session_ref``."""
 
-    @patch("biff.commands.who", new_callable=AsyncMock)
-    def test_dash_s_passes_the_ref(self, mock_who: AsyncMock) -> None:
-        mock_who.return_value = CommandResult(text="ok")
-        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
-            result = runner.invoke(app, ["-s", "main", "who"])
+    def _made(self, argv: list[str], env: dict[str, str] | None = None) -> MagicMock:
+        with _patched_daemon(_FakeDaemon(CommandResult(text="ok"))) as made:
+            result = runner.invoke(app, argv, env=env)
         assert result.exit_code == 0
-        mock_sess.assert_called_once_with(user_override=None, session_ref="main")
+        return made
 
-    @patch("biff.commands.who", new_callable=AsyncMock)
-    def test_env_var_is_equivalent(self, mock_who: AsyncMock) -> None:
-        mock_who.return_value = CommandResult(text="ok")
-        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
-            result = runner.invoke(app, ["who"], env={"BIFF_SESSION": "main"})
-        assert result.exit_code == 0
-        mock_sess.assert_called_once_with(user_override=None, session_ref="main")
+    def test_dash_s_passes_the_ref(self) -> None:
+        made = self._made(["-s", "main", "who"])
+        made.assert_called_once_with(None, "main")
 
-    @patch("biff.commands.who", new_callable=AsyncMock)
-    def test_flag_beats_env(self, mock_who: AsyncMock) -> None:
-        mock_who.return_value = CommandResult(text="ok")
-        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
-            runner.invoke(app, ["-s", "a", "who"], env={"BIFF_SESSION": "b"})
-        mock_sess.assert_called_once_with(user_override=None, session_ref="a")
+    def test_env_var_is_equivalent(self) -> None:
+        made = self._made(["who"], env={"BIFF_SESSION": "main"})
+        made.assert_called_once_with(None, "main")
 
-    @patch("biff.commands.who", new_callable=AsyncMock)
-    def test_absent_is_none(self, mock_who: AsyncMock) -> None:
-        mock_who.return_value = CommandResult(text="ok")
-        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
-            runner.invoke(app, ["who"], env={"BIFF_SESSION": ""})
-        mock_sess.assert_called_once_with(user_override=None, session_ref=None)
+    def test_flag_beats_env(self) -> None:
+        made = self._made(["-s", "a", "who"], env={"BIFF_SESSION": "b"})
+        made.assert_called_once_with(None, "a")
+
+    def test_absent_is_none(self) -> None:
+        made = self._made(["who"], env={"BIFF_SESSION": ""})
+        made.assert_called_once_with(None, None)
 
     def test_bad_target_is_a_named_error_exit_1(self) -> None:
-        from biff.cli_session_select import SessionSelectionError
-
-        class _Boom:
-            def __call__(self, **_: object) -> Self:
-                return self
-
-            async def __aenter__(self) -> CliContext:
-                msg = "unknown session: nope"
-                raise SessionSelectionError(msg)
-
-            async def __aexit__(self, *_: object) -> None:
-                return None
-
-        with patch("biff.__main__.cli_session", new=_Boom()):
+        with _patched_daemon(_FakeDaemon(ValueError("unknown session: nope"))):
             result = runner.invoke(app, ["-s", "nope", "who"])
         assert result.exit_code == 1
         assert "unknown session: nope" in result.output

@@ -9434,3 +9434,52 @@ four modules and nothing else. The spec carries the table in `biffd.md`:
 **Consequence.** Two implementations of a systemd unit and a plist exist until
 the swap. biff's backends carry no legacy-unit or binary sweeps, which
 punt-service provides and biffd has no use for yet.
+
+## DES-099: The `biff` Product Commands Run as Clients of biffd
+
+**Date:** 2026-11-26
+**Status:** SETTLED
+**Topic:** Migration step 2 of DES-095: how `biff who`, `finger`, `write`, `read`,
+`plan`, `last`, `wall`, `mesg`, `tty` and `status` reach biffd.
+
+**Decision.** Each command asks the daemon to run the command by name and prints
+the reply. The process holds no relay connection.
+
+1. **Replies carry the engine's text.** A reply is `{data, error, text}`; `text`
+   is what the command rendered, so every client prints the same words and the
+   display pipeline of `biff mcp` is not rebuilt from JSON in each client.
+   Rejected: rendering text in each client from `data`, which copies about 1,200
+   lines of formatting and lets clients drift.
+2. **A reply fits one frame, rows and text together.** A `read` reply holds the
+   rows and the table rendered from them. `ReadBatcher` (`daemon/read_batch.py`)
+   binary-searches the longest prefix whose reply measures at most the read
+   budget, half the frame limit, so the frame's own fields always fit in the
+   other half. Work is `ceil(log2(n + 1))` renders plus one measured clip for a
+   first message that cannot fit alone. The first design shrank the room in a
+   loop and rendered 280 times for two messages; rejected as unbounded work.
+   Message user, tty and envelope fields are bounded where a message is
+   accepted, so a row has a known maximum size.
+3. **What only the calling process can do stays in it.** The plan-gate marker
+   is keyed on the caller's repository and harness session, and a bead id
+   expands against the caller's repository; a daemon has neither. The engine's
+   `plan` only sets the plan. `PlanMarker` (`plan_marker.py`) writes the marker,
+   and `DaemonCommand.plan` and `CallerPlan.set` call it. `tty` renames the
+   stored session record after the daemon reports the claimed name.
+4. **Session choice stays a client rule, without the relay.** `-s`/`BIFF_SESSION`
+   names a stored session; otherwise the repo's pointed session; otherwise a new
+   stored session whose tty name is the one the daemon claims for it. The daemon
+   creates the relay row from the hello.
+
+**Behavior changes.**
+
+- The harness-declared rung of the old five-rung ladder is dropped. It attached
+  to a harness session as a client only when the human user had a relay row for
+  it, which is rare (a `--user` override); a shell is now always a CLI session.
+- A `biff` command needs a running `biff daemon serve` until the autostart
+  nudge lands in the same migration.
+- Session sweep (lapse a stale stored session to dormant, expire it past
+  retention) is not run by these commands. It moves into the daemon with the
+  `session` verbs.
+
+**Consequence.** The REPL, `talk`, `watch` and the `session` verbs still run
+in-process; they move in the following steps of DES-095.

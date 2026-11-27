@@ -21,6 +21,7 @@
   "biff.cli_daemon_relay": "cli",
   "biff.cli_install": "cli",
   "biff.cli_key": "cli",
+  "biff.cli_daemon": "cli",
   "biff.cli_plan": "cli",
   "biff.cli_session": "cli",
   "biff.cli_session_drain": "cli",

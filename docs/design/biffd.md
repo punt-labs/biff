@@ -1,8 +1,11 @@
 # biffd: the Per-User Daemon
 
 Status: proposed design (DES-095). Migration step 1 is built: `biff daemon
-serve`, the frames and the session records below. Nothing routes through the
-daemon yet.
+serve`, the frames and the session records below. Step 2 is in progress
+(DES-099): the `biff` product commands (`who`, `finger`, `write`, `read`,
+`plan`, `last`, `wall`, `mesg`, `tty`, `status`) route through the daemon;
+`watch`, the `session` verbs, `talk` and the REPL, `biff mcp` and the hooks
+do not yet.
 
 `biffd` is one long-running process per operating-system user. It owns every
 connection and every piece of state that biff's clients would otherwise

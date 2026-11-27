@@ -45,6 +45,13 @@
 
 ### Changed
 
+- `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
+  and `status` run through biffd and need `biff daemon serve` running. They
+  print the same text as before. `plan` and `tty` still write the plan-gate
+  marker and rename the stored session in the calling process. A shell is
+  always a CLI session: the old rung that attached to a harness session as a
+  client is dropped, and stale stored sessions are no longer swept by these
+  commands (that moves into biffd).
 - biffd's replies carry the engine's display text (`text`) beside `data` and
   `error`, so a client prints the words the engine rendered instead of
   rebuilding them. A `read` reply's rows and text are fitted to one budget
