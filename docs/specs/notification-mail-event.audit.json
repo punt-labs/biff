@@ -1,0 +1,70 @@
+{
+  "specification": "docs/specs/notification-mail-event.tex",
+  "testDirectory": "tests/",
+  "timestamp": "2026-11-27T20:00:00Z",
+  "summary": {
+    "covered": 4,
+    "total": 8,
+    "percentage": 50,
+    "gaps": 4
+  },
+  "constraints": [
+    {
+      "text": "cover (k, n) <= 1 and cover = 1 iff n <= sentMark: at most one event per arrival",
+      "category": "invariant",
+      "source": "MailEventInv",
+      "coveredBy": "tests/test_channel_emitter.py::test_each_wall_key_is_announced_once; ::test_a_reconnect_announces_nothing_already_announced",
+      "confidence": "high"
+    },
+    {
+      "text": "sentMark k <= mark k: nothing is announced beyond the relay's mark",
+      "category": "invariant",
+      "source": "MailEventInv",
+      "coveredBy": "tests/test_channel_emitter.py::test_mail_is_detected_when_the_unread_count_is_flat; ::test_mail_read_before_the_send_is_not_announced",
+      "confidence": "high"
+    },
+    {
+      "text": "unreadN + readN = arrivedN: the arrivals reading is read-only",
+      "category": "invariant",
+      "source": "MailEventInv",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "ReadCommit: a mail arriving during the send survives it",
+      "category": "effect",
+      "source": "ReadCommit",
+      "coveredBy": "tests/test_channel_emitter.py::test_a_mail_arriving_during_the_send_survives_it",
+      "confidence": "high"
+    },
+    {
+      "text": "ReadBegin under the emitter lock: two wakes cannot both find an arrival newer",
+      "category": "precondition",
+      "source": "ReadBegin",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "PushWake: a daemon push of a mail or wall arrival wakes the same poll path",
+      "category": "effect",
+      "source": "PushWake",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "PollWake: the poll wakes every kind with or without a push",
+      "category": "effect",
+      "source": "PollWake",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "AG(sentMark < mark => EF sentMark = mark), AG(sentMark < mark & no wake => enabled(PollWake))",
+      "category": "invariant",
+      "source": "delivery",
+      "coveredBy": "tests/test_channel_emitter.py::test_a_reconnect_announces_mail_that_arrived_while_disconnected",
+      "confidence": "medium"
+    }
+  ],
+  "notes": "The daemon push for mail and wall is owed by the code PR; the emitter's own tests cover the existing poll path."
+}

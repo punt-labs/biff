@@ -1,0 +1,295 @@
+%
+% channel-check-perdelivery.tex  (FROZEN NEGATIVE CONTROL: do not edit)
+%
+% SendEvent fires on every delivery of the request, not once per request.
+%
+% Z Specification for the channel check: the request biff doctor sends to a
+% session, the one channel event it makes, and the acknowledgement the model
+% returns through the channel_ack tool (design-channels.md section 5, DES-087).
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+
+\begin{document}
+
+\title{Biff Channel Check: A Z Specification}
+\author{Request, Token, Event and Acknowledgement}
+\date{November 2026}
+\maketitle
+
+\section{Introduction}
+
+\texttt{biff doctor} proves, one session at a time, that channel events reach a
+model.  The session's server accepts a request that names a one-time reply
+subject, makes a fresh token, sends one channel event carrying it, and accepts
+the token back once through \texttt{channel\_ack}.  The server accepts at most one
+request a minute.  The check only reports: no operation below touches what is
+delivered, and the specification has no variable for delivery.
+
+\section{Basic Types}
+
+A \emph{token} is the 128-bit hex string of one check.  A \emph{subject} is a
+NATS subject.  The reply subject of a request is a fresh inbox name; a subject
+that is not an inbox is \emph{foreign}.
+
+\begin{zed}
+  [TOKEN, SUBJECT]
+\end{zed}
+
+\begin{zed}
+  Report ::= live | notAccepted
+\end{zed}
+
+\begin{axdef}
+  checkSeconds : \nat_1 \\
+  tickSeconds : \nat_1 \\
+  maxClock : \nat \\
+  inboxes : \power SUBJECT
+\where
+  checkSeconds = 60 \\
+  tickSeconds = 30 \\
+  maxClock = 120
+\end{axdef}
+
+The clock moves in steps of \emph{tickSeconds}, half a window, and stops at
+\emph{maxClock}: the bound that lets ProB exhaust the state space.
+
+\section{State}
+
+Time is a natural number of seconds.  At most one token is pending: a new
+accepted request retires the older one.  A token that was acknowledged is
+\emph{spent} and never matches again.  The times of accepted requests are
+recorded to state the once-a-minute bound as an invariant.
+
+\begin{schema}{CheckState}
+  clock : \nat \\
+  acceptedAt : \power \nat \\
+  pending : \power TOKEN \\
+  unsent : \power TOKEN \\
+  sent : \power TOKEN \\
+  spent : \power TOKEN \\
+  replyOf : TOKEN \pfun SUBJECT \\
+  delivered : TOKEN \pfun (0 \upto 2) \\
+  emitted : TOKEN \pfun (0 \upto 2) \\
+  relayed : TOKEN \pfun (0 \upto 2)
+\where
+  clock \leq maxClock \\
+  \# pending \leq 1 \\
+  unsent \subseteq pending \\
+  pending \cap spent = \emptyset \\
+  unsent \cap sent = \emptyset \\
+  pending \subseteq \dom replyOf \\
+  \ran replyOf \subseteq inboxes \\
+  \forall a, b : acceptedAt | a \neq b @ a + checkSeconds \leq b \lor b +
+    checkSeconds \leq a
+\end{schema}
+
+The predicates of $CheckState$ are, to ProZ, guards of every operation: a step
+that would break one is not enabled, and the model checker cannot report it.  The
+properties of the daemon hop are therefore stated in a schema of their own, which
+$Invariant$ installs as the checked state invariant, so that a step breaking one
+is enabled, reaches the bad state, and is reported.
+
+\begin{schema}{HopInv}
+  CheckState
+\where
+  \dom emitted = \dom delivered \\
+  \dom relayed = \dom delivered \\
+  \forall t : \dom emitted @ emitted~t \leq 1 \\
+  \forall t : \dom relayed @ relayed~t \leq 1 \\
+  \forall t : sent @ emitted~t = 1
+\end{schema}
+
+The token is single-use across the daemon hop: a request is turned into at most
+one channel event whatever the number of deliveries ($emitted~t \leq 1$), the
+acknowledgement is relayed to the doctor at most once ($relayed~t \leq 1$), and a
+token that was sent was emitted exactly once.
+
+\begin{schema}{Invariant}
+  HopInv
+\end{schema}
+
+\begin{schema}{Init}
+  CheckState~'
+\where
+  clock' = 0 \\
+  acceptedAt' = \emptyset \\
+  pending' = \emptyset \\
+  unsent' = \emptyset \\
+  sent' = \emptyset \\
+  spent' = \emptyset \\
+  replyOf' = \emptyset \\
+  delivered' = \emptyset \\
+  emitted' = \emptyset \\
+  relayed' = \emptyset
+\end{schema}
+
+\section{Operations}
+
+\subsection{Time}
+
+\begin{schema}{Tick}
+  \Delta CheckState
+\where
+  clock < maxClock \\
+  clock' = clock + tickSeconds \\
+  acceptedAt' = acceptedAt \\
+  pending' = pending \\
+  unsent' = unsent \\
+  sent' = sent \\
+  spent' = spent \\
+  replyOf' = replyOf \\
+  delivered' = delivered \\
+  emitted' = emitted \\
+  relayed' = relayed
+\end{schema}
+
+A session that is asked nothing is not stuck: it stays as it is.
+
+\begin{schema}{Idle}
+  \Xi CheckState
+\end{schema}
+
+\subsection{Request}
+
+A request is accepted when its reply is an inbox and no request was accepted in
+the last \emph{checkSeconds}.  Its token is fresh: never pending, sent or spent
+before.  It retires the older pending token.
+
+\begin{schema}{Request}
+  \Delta CheckState \\
+  reply? : SUBJECT \\
+  token? : TOKEN
+\where
+  reply? \in inboxes \\
+  \forall a : acceptedAt @ a + checkSeconds \leq clock \\
+  token? \notin pending \cup sent \cup spent \cup \dom replyOf \\
+  clock' = clock \\
+  acceptedAt' = acceptedAt \cup \{ clock \} \\
+  pending' = \{ token? \} \\
+  unsent' = \{ token? \} \\
+  sent' = sent \\
+  spent' = spent \\
+  replyOf' = \{ token? \mapsto reply? \} \\
+  delivered' = delivered \oplus \{ token? \mapsto 0 \} \\
+  emitted' = emitted \oplus \{ token? \mapsto 0 \} \\
+  relayed' = relayed \oplus \{ token? \mapsto 0 \}
+\end{schema}
+
+A request that names a foreign subject, or arrives inside the window, changes
+nothing and does not extend the window.
+
+\begin{schema}{RejectRequest}
+  \Xi CheckState \\
+  reply? : SUBJECT
+\where
+  reply? \notin inboxes \lor
+    (\exists a : acceptedAt @ clock < a + checkSeconds)
+\end{schema}
+
+\subsection{The daemon hop}
+
+With biffd the request does not reach the session's server directly.  The
+daemon publishes it, carrying the token, to the session's check subject, and the
+session's client receives it as an event frame.  Delivery is at least once: a
+reconnect redelivers a frame the client may already have seen.  $delivered~t$
+counts how many times the request for $t$ reached the client, and at most two are
+modelled.
+
+\begin{schema}{DeliverRequest}
+  \Delta CheckState \\
+  token? : TOKEN
+\where
+  token? \in pending \\
+  delivered~token? < 2 \\
+  clock' = clock \\
+  acceptedAt' = acceptedAt \\
+  pending' = pending \\
+  unsent' = unsent \\
+  sent' = sent \\
+  spent' = spent \\
+  replyOf' = replyOf \\
+  delivered' = delivered \oplus \{ token? \mapsto delivered~token? + 1 \} \\
+  emitted' = emitted \\
+  relayed' = relayed
+\end{schema}
+
+A request that reaches the client again does not make a second event: $SendEvent$
+needs the token in $unsent$ and takes it out, so $emitted~t \leq 1$ however
+often the frame is delivered.  The acknowledgement the model returns
+(\texttt{channel\_ack}) travels the other way, through the client to the daemon;
+the daemon relays it once, to the doctor's reply subject $replyOf~t$, and the
+token is spent: $relayed~t \leq 1$ however often the acknowledgement frame
+arrives.  The three counters, $delivered$, $emitted$ and $relayed$, are ghosts.
+
+\subsection{The one event}
+
+\begin{schema}{SendEvent}
+  \Delta CheckState \\
+  token? : TOKEN
+\where
+  token? \in pending \\
+  delivered~token? \geq 1 \\
+  clock' = clock \\
+  acceptedAt' = acceptedAt \\
+  pending' = pending \\
+  unsent' = unsent \setminus \{ token? \} \\
+  sent' = sent \cup \{ token? \} \\
+  spent' = spent \\
+  replyOf' = replyOf \\
+  delivered' = delivered \\
+  emitted' = emitted \oplus \{ token? \mapsto emitted~token? + 1 \} \\
+  relayed' = relayed
+\end{schema}
+
+\subsection{Acknowledgement}
+
+\begin{schema}{Acknowledge}
+  \Delta CheckState \\
+  token? : TOKEN \\
+  reply! : SUBJECT \\
+  report! : Report
+\where
+  token? \in pending \\
+  reply! = replyOf~token? \\
+  report! = live \\
+  clock' = clock \\
+  acceptedAt' = acceptedAt \\
+  pending' = pending \setminus \{ token? \} \\
+  unsent' = unsent \\
+  sent' = sent \\
+  spent' = spent \cup \{ token? \} \\
+  replyOf' = replyOf \\
+  delivered' = delivered \\
+  emitted' = emitted \\
+  relayed' = relayed \oplus \{ token? \mapsto relayed~token? + 1 \}
+\end{schema}
+
+A wrong or repeated token changes nothing and says so.
+
+\begin{schema}{RejectAck}
+  \Xi CheckState \\
+  token? : TOKEN \\
+  report! : Report
+\where
+  token? \notin pending \\
+  report! = notAccepted
+\end{schema}
+
+\section{What the implementation owes}
+
+\begin{description}
+\item[C1] \texttt{ChannelCheck.request} is \emph{Request} or
+  \emph{RejectRequest}; the clock is injected, so a test moves time without
+  sleeping.
+\item[C2] \texttt{ChannelEmitter} sends the event of \emph{SendEvent} once per
+  accepted request, and only with the client initialised.
+\item[C3] \texttt{ChannelCheck.acknowledge} is \emph{Acknowledge} or
+  \emph{RejectAck}, comparing in constant time.
+\item[C4] Nothing here writes to, or reads from, the arrival records or the
+  rate window: the check never changes delivery.
+\end{description}
+
+\end{document}

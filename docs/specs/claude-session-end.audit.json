@@ -1,0 +1,91 @@
+{
+  "specification": "docs/specs/claude-session-end.tex",
+  "testDirectory": "tests/",
+  "timestamp": "2026-11-27T20:00:00Z",
+  "summary": {
+    "covered": 3,
+    "total": 11,
+    "percentage": 27,
+    "gaps": 8
+  },
+  "constraints": [
+    {
+      "text": "rowPresent => recState /= rsNone: no row outlives its record (no BadOrphan)",
+      "category": "invariant",
+      "source": "EndInv",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "ttyOwner = tOld => recState /= rsNone",
+      "category": "invariant",
+      "source": "EndInv",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "newLive => ttyOwner = tNew: the old end's release never frees the new session's name",
+      "category": "invariant",
+      "source": "EndInv",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "outboxN + inboxN + shownN = issuedN: an end loses no mail",
+      "category": "invariant",
+      "source": "EndInv",
+      "coveredBy": "tests/test_daemon/test_read_delivery.py::test_mail_a_batch_left_behind_moves_with_the_session_when_it_ends (the remainder only; the held batch is owed)",
+      "confidence": "medium"
+    },
+    {
+      "text": "recState = rsEnding => endRun = currentRun: a replaced run cannot end the session",
+      "category": "invariant",
+      "source": "EndInv",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "EndOwnSession: a connection of the current run begins the end",
+      "category": "precondition",
+      "source": "EndOwnSession",
+      "coveredBy": "tests/test_daemon/test_session_store.py::TestEnd::test_end_live (CLI sessions)",
+      "confidence": "medium"
+    },
+    {
+      "text": "EndRefused: a connection of a replaced run changes nothing",
+      "category": "effect",
+      "source": "EndRefused",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "ExpireClaude: dormant, no connection, aged to retention begins the end",
+      "category": "precondition",
+      "source": "ExpireClaude",
+      "coveredBy": "tests/test_daemon/test_session_store.py::test_expire_dormant_removes_directory (CLI sessions)",
+      "confidence": "medium"
+    },
+    {
+      "text": "DeleteRow, ReleaseTty, AppendLogout, FileOutbox: each effect of an end, the record stays until all are done",
+      "category": "effect",
+      "source": "FinishEnd",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "NewHello: only after the old end is complete and its tty name free",
+      "category": "precondition",
+      "source": "NewHello",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    },
+    {
+      "text": "AG(dormant & age = maxAge => enabled(ExpireClaude)); AG(rsEnding => EF rsNone)",
+      "category": "invariant",
+      "source": "retention",
+      "coveredBy": "GAP: owed by the code PR",
+      "confidence": "high"
+    }
+  ],
+  "notes": "Docs-only change ahead of the code PRs: the clauses marked GAP are the test obligations those PRs carry. The CLI-session store tests cover the analogous transitions for CLI sessions only."
+}

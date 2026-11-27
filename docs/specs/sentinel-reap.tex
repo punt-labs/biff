@@ -835,4 +835,16 @@ permanently stuck once a process has gone, crashed or not.
     $SessionStore$ for the underlying storage model.
 \end{itemize}
 
+\subsection{When biffd owns the record}
+
+Both findings are about a record that lives in a process that is going away, and
+that no other process knows to look for.  With the record in biffd the question
+is asked again of a durable record and a daemon-owned end, in
+\texttt{claude-session-end.tex}: there a row, or a tty name, exists only while a
+record does or an end is in progress, so $BadOrphan$ is not a state
+($rowPresent = ztrue \Rightarrow recState \neq rsNone$ is a checked invariant),
+a retention expiry that forgot the row would reach it (the frozen variant
+\texttt{claude-session-end-orphan.tex} does, in eleven operations), and the reaper
+and its own-key skip have nothing left to race.
+
 \end{document}
