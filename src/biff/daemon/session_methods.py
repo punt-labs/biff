@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, cast, final
+from typing import TYPE_CHECKING, Self, final
 
 from biff.commands import CommandResult
+from biff.daemon.session_end import SessionEnd
 from biff.daemon.session_host import SessionHost
 from biff.daemon.session_pointer import CurrentPointer
 from biff.daemon.session_select import SessionSelector
@@ -35,9 +35,10 @@ class SessionMethods:
     method.  The repo pointer stays with the caller, so no verb writes it.
     """
 
-    __slots__ = ("_live", "_store", "_table")
+    __slots__ = ("_ender", "_live", "_store", "_table")
 
     _store: CliSessionStore
+    _ender: SessionEnd
     _live: SessionTable
     _table: dict[str, Handler]
 
@@ -50,11 +51,13 @@ class SessionMethods:
         self = super().__new__(cls)
         self._store = store
         self._live = live
+        self._ender = SessionEnd(live)
         self._table = {
             "session_new": self._new,
             "session_ls": self._ls,
             "session_use": self._use,
-            "session_end": self._end,
+            "session_end": self._ender.end_shell,
+            "end": self._ender.end,
         }
         return self
 
@@ -115,35 +118,3 @@ class SessionMethods:
         ref = p.text("ref")
         p.done()
         return await verbs.use(ref)
-
-    async def _end(
-        self, session: Session, verbs: SessionVerbs, p: Params
-    ) -> CommandResult:
-        """File the mail the session holds back in the relay, end it, retire it.
-
-        A consuming relay removed the mail the daemon fetched for the session, so
-        a batch whose reply was never confirmed exists only in its outbox.  It goes
-        back to the relay first, where ending drains it into the owner's mailbox
-        with the rest.  A message the relay refuses stops the end, with the mail
-        still held.  Connections attached to the ended session are told, so a
-        watcher does not keep listening at an address that no longer exists.
-        """
-        ref = p.text("ref")
-        p.done()
-        selector = verbs.host.selector
-        target = selector.lookup(ref).session_id
-        held = self._live.holding(target)
-        async with held.exclusive() if held is not None else nullcontext():
-            # A name can change hands while this waits for a read: end the session
-            # the caller named, and nothing else.
-            if selector.lookup(ref).session_id != target:
-                msg = f"session {ref} changed while waiting; nothing was ended"
-                raise ValueError(msg)
-            if held is not None:
-                await held.refile_held()
-            result = await verbs.end(target)
-            if held is not None:
-                held.mark_ended()
-        row = cast("dict[str, str]", result.json_data)
-        self._live.retire(row["id"], spare=session)
-        return result

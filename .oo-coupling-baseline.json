@@ -623,11 +623,11 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/session_methods.py": {
-    "efferent_coupling": 6.0,
+    "efferent_coupling": 7.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.821,
-    "avg_lcom": 0.821
+    "max_lcom": 0.81,
+    "avg_lcom": 0.81
   },
   "src/biff/daemon/session_pointer.py": {
     "efferent_coupling": 1.0,
@@ -651,11 +651,11 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/session_sweep.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 8.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.5,
-    "avg_lcom": 0.5
+    "max_lcom": 0.464,
+    "avg_lcom": 0.464
   },
   "src/biff/daemon/session_verbs.py": {
     "efferent_coupling": 3.0,
@@ -668,8 +668,8 @@
     "efferent_coupling": 14.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.719,
-    "avg_lcom": 0.359
+    "max_lcom": 0.714,
+    "avg_lcom": 0.482
   },
   "src/biff/daemon/subscription.py": {
     "efferent_coupling": 2.0,
