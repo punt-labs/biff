@@ -1,4 +1,4 @@
-"""Carry the plugin hook's tool-call stamp into the shared presence row."""
+"""Hand the plugin hook's tool-call stamp to the relay heartbeat."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ class HookActivity:
     The PostToolUse hook touches the stamp (the unread file's ``.active``
     sibling) on every tool call, biff's own or not, so an agent working in
     Bash and Edit for hours still reads as active to every other host.
-    :meth:`heartbeat` refreshes liveness, then writes the stamp's time to
-    ``last_tool_at`` only when it is newer, so a stale stamp never undoes a
-    later biff call.  A missing stamp or row is a no-op.
+    :meth:`heartbeat` passes the stamp's time to the relay heartbeat, which
+    advances ``last_tool_at`` inside its own read-modify-write, never backwards.
+    There is no second write to race a concurrent ``/plan``.
     """
 
     _relay: Relay
@@ -35,16 +35,8 @@ class HookActivity:
         return self
 
     async def heartbeat(self) -> None:
-        """Refresh ``last_active``, then carry the stamp into ``last_tool_at``."""
-        await self._relay.heartbeat(self._session_key)
-        touched = self._touched_at()
-        if touched is None:
-            return
-        session = await self._relay.get_session(self._session_key)
-        if session is not None and touched > session.last_tool_at:
-            await self._relay.update_session(
-                session.model_copy(update={"last_tool_at": touched})
-            )
+        """Refresh ``last_active`` and carry the stamp into ``last_tool_at``."""
+        await self._relay.heartbeat(self._session_key, self._touched_at())
 
     def _touched_at(self) -> datetime | None:
         if self._stamp is None:

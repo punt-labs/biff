@@ -64,7 +64,7 @@ async def test_heartbeat_warns_on_first_failure_and_on_recovery_only(
     outcomes = [OSError("disk"), OSError("disk"), None, OSError("disk"), None]
     stop = asyncio.Event()
 
-    async def heartbeat(_key: str) -> None:
+    async def heartbeat(_key: str, _last_tool_at: object = None) -> None:
         outcome = outcomes.pop(0)
         if not outcomes:
             stop.set()

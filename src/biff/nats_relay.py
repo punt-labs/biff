@@ -29,7 +29,7 @@ import ssl
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -1867,7 +1867,7 @@ class NatsRelay:
             self._heartbeat_missing_warned.add(session_key)
             logger.warning("Heartbeat found no session; skipping")
 
-    async def heartbeat(self, session_key: str) -> None:
+    async def heartbeat(self, session_key: str, at: datetime | None = None) -> None:
         """Update ``last_active`` for an existing session.
 
         If the session is missing from KV (expired, deleted, or not yet
@@ -1901,7 +1901,7 @@ class NatsRelay:
             logger.info("Corrupt session, skip heartbeat")
             return
         self._heartbeat_missing_warned.discard(session_key)
-        updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
+        updated = existing.beat(at)
         # Re-anchor to the current connection: the kv.get above may have let a
         # concurrent loop rebuild self._nc, leaving `kv` stale.  Fast path
         # returns cached handles, so `owner = self._nc` at _tracked entry

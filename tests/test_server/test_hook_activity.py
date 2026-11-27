@@ -14,7 +14,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from biff.models import BiffConfig
+from biff.models import BiffConfig, UserSession
 from biff.relay import LocalRelay
 from biff.server.app import _heartbeat_loop
 from biff.server.state import ServerState
@@ -67,6 +67,44 @@ async def _idle_seen_by_another_host(tmp_path: Path, key: str) -> timedelta:
     row = await viewer.get_session(key)
     assert row is not None
     return datetime.now(UTC) - row.last_tool_at
+
+
+class _CountsRowRewrites(LocalRelay):
+    """A relay that counts the whole-row rewrites a heartbeat tick makes.
+
+    A rewrite built from an earlier read can land after a concurrent ``/plan``
+    and put the old plan back, so a tick must not make one of its own.
+    """
+
+    rewrites = 0
+
+    async def update_session(self, session: UserSession) -> None:
+        self.rewrites += 1
+        await super().update_session(session)
+
+
+class TestCarryingTheStampLosesNoConcurrentWrite:
+    async def test_the_tick_makes_no_row_rewrite_of_its_own(
+        self, tmp_path: Path
+    ) -> None:
+        relay = _CountsRowRewrites(tmp_path / "relay")
+        state = create_state(
+            BiffConfig(user="kai", repo_name="r"),
+            tmp_path / "relay",
+            relay=relay,
+            hostname="keble",
+            pwd="/p",
+            unread_dir=tmp_path / "unread",
+        )
+        state.bind(SessionRouting(_SESSION_ID))
+        await update_current_session(state, plan="Investigating")
+        before = relay.rewrites
+        _stamp(tmp_path, datetime.now(UTC) + timedelta(seconds=5))
+        await state.heartbeat()
+        row = await LocalRelay(tmp_path / "relay").get_session(state.session_key)
+        assert row is not None
+        assert (relay.rewrites - before, row.plan) == (0, "Investigating")
+        assert row.last_tool_at > datetime.now(UTC)
 
 
 class TestHookObservedToolUse:
