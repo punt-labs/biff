@@ -188,6 +188,11 @@ class NostrDirectory:
             written.append(key)
 
     @staticmethod
+    def is_handle(text: str) -> bool:
+        """Return whether *text* is a well-formed handle."""
+        return _HANDLE_RE.fullmatch(text) is not None
+
+    @staticmethod
     def _check_handle(handle: str) -> None:
         if not _HANDLE_RE.fullmatch(handle):
             msg = f"invalid handle {handle!r}: use lowercase letters, digits, - and _"

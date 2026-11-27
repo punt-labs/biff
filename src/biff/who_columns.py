@@ -97,7 +97,7 @@ class WhoColumns:
         if not raw:
             return ""
         try:
-            Bech32Key.PUBLIC.decode(raw)
+            canonical = Bech32Key.PUBLIC.encode(Bech32Key.PUBLIC.decode(raw))
         except ValueError:
             return "?"
-        return Bech32Key.abbreviate(raw)
+        return Bech32Key.abbreviate(canonical)

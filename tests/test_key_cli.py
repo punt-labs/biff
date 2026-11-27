@@ -148,7 +148,7 @@ def test_key_show_verifies_an_attestation_with_the_keyring_unavailable(
     _keyring_unavailable(monkeypatch)
     result = runner.invoke(cli.app, ["key", "show", "claude"])
     assert result.exit_code == 0, result.output
-    assert "recorded on this machine" in result.output
+    assert "matches the owner key pinned on this machine" in result.output
     assert "valid until" in result.output
 
 

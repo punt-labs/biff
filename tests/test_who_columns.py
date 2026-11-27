@@ -26,6 +26,9 @@ def test_a_valid_npub_is_shortened() -> None:
         NPUB[:-1] + "q",
         "npub1nonsense",
         "not-an-npub-at-all-but-long-enough-to-clip",
+        "\x1b[31m" + NPUB,
+        "\x1b]0;title\x07" + NPUB,
+        NPUB + "\x1b[2J",
         "?",
     ],
 )

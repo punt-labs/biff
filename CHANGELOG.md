@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `biff key show` refuses a malformed published npub and neutralises every
+  string it prints or returns from the shared directory (npub, owner, handles,
+  ethos error text), so a published entry cannot write control sequences into
+  your terminal; the `biff who` NPUB column shows the canonical npub or `?`.
+- `biff key show` says what the owner pin proves: the pin is a file your user
+  can write, so a match is not proof against code running as you.
+
 ### Added
 
 - A `read` reply that carries mail asks the client to confirm it (`ack` frame,
