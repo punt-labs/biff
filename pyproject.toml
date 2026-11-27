@@ -346,6 +346,7 @@ prefixes = [
     "cli_session_pointer",
     "cli_session_select",
     "cli_session_store",
+    "cli_watch",
     "dispatch",
     "repl_display",
     "repl_notify",

@@ -4,6 +4,12 @@
 
 ### Added
 
+- `biff watch` subscribes to biffd and prints one JSON line per arrival
+  summary: `{"seq": 4, "kind": "mail", "data": {...}}`, with `kind` one of
+  `unread`, `mail`, `wall`, `degraded` and `recovered`. Lines carry counts and
+  the active wall, never a message body. It ends with exit 0 on Ctrl-C,
+  SIGTERM or a closed pipe, and with exit 1 when the connection to biffd is
+  lost.
 - `biff install` installs biffd as a user service (systemd user unit `biffd`,
   macOS LaunchAgent `com.punt-labs.biffd`) and `biff uninstall` removes it.
   `biff daemon install`, `uninstall`, `start`, `stop`, `restart` and `status`

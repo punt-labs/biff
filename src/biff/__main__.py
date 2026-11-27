@@ -44,6 +44,7 @@ from biff.cli_context import CliContext
 from biff.cli_daemon import Answer, DaemonCommand, ResultPrinter
 from biff.cli_key import KeyCli
 from biff.cli_session import cli_session, cli_session_host
+from biff.cli_watch import WatchCommand
 from biff.commands import CommandResult
 from biff.commands._session import update_current_session
 from biff.commands.session import SessionVerbs
@@ -1211,6 +1212,14 @@ def tty_cmd(
 def status() -> None:
     """Show connection state, session info, and pending messages."""
     _run(lambda d: d.call("status"))
+
+
+@app.command()
+def watch() -> None:
+    """Print one JSON line per arrival summary (mail, wall) until interrupted."""
+    raise typer.Exit(
+        code=asyncio.run(WatchCommand.watch_this_process(_user_override, _session_ref))
+    )
 
 
 app.add_typer(KeyCli.on_this_machine().typer_app(), name="key")

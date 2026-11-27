@@ -177,7 +177,7 @@ class DaemonCommand:
             ConnectionError: biffd is absent, cannot start, or sent an unreadable reply.
             DaemonError: biffd refused the request.
         """
-        client, _ = await self._open()
+        client, _ = await self.open()
         return await self._answer(client, method, params)
 
     async def plan(self, message: str) -> Answer:
@@ -199,7 +199,7 @@ class DaemonCommand:
 
     async def tty(self, name: str) -> Answer:
         """Name the session; keep the stored record in step or undo the rename."""
-        client, record = await self._open()
+        client, record = await self.open()
         answer = await self._answer(client, "tty", {"name": name})
         try:
             data = answer.data
@@ -232,7 +232,7 @@ class DaemonCommand:
             await client.request("tty", name=record.tty)
             raise
 
-    async def _open(self) -> tuple[DaemonClient, CliSessionRecord]:
+    async def open(self) -> tuple[DaemonClient, CliSessionRecord]:
         """Start biffd if down, connect as this session, and store it if new."""
         record, is_stored = await self._attach()
         await asyncio.to_thread(self._nudge)

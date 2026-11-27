@@ -9505,3 +9505,26 @@ the reply. The process holds no relay connection.
 and `talk` leave it in the PR that routes them through biffd (A3), and `watch`
 and the `session` verbs in the one before it (A2). The in-process path itself is
 deleted in the last PR of the migration.
+
+**`watch` (A2).** `biff watch` opens the same CLI session the other commands
+use (`DaemonCommand.open()`), subscribes, and prints each event as one JSON
+line `{"seq", "kind", "data"}` on stdout, flushed per line, and nothing else on
+stdout. An event carries counts and the active wall, never a message body; a
+watcher that wants bodies runs `biff read`. SIGINT, SIGTERM and a closed
+stdout end it with exit 0; a lost connection says `biffd connection lost:
+<reason>` on stderr and exits 1. Two watchers are two connections, and each
+gets every event.
+
+**Who owns session records (A2).** The daemon owns them. The `session` verbs
+(`new`, `ls`, `use`, `end`) become the daemon methods `session_new`,
+`session_ls`, `session_use` and `session_end`, each replying `{data, error,
+text}` like every other method. The client keeps only the repo pointer (which
+session this repository points at) and the `-s`/`BIFF_SESSION` name it sends
+as `ref`. Reason: with the records in two places, the CLI and the daemon both
+write them and the `store.lifecycle` locks exist to referee that race; one
+owner removes the race, and `session ls` shows what the daemon holds. The
+sweep (lapse a stored session to dormant past `LEASE`, expire it past
+`RETENTION`, release its relay row) runs in the daemon, once at start and on a
+timer. Rejected: the client keeps the records and the daemon only the relay
+rows, because the daemon must then trust a client's claim about which sessions
+exist.

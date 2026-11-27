@@ -289,6 +289,7 @@ Every slash command has a matching `biff` subcommand. The CLI works outside Clau
 | `biff mesg off` | Go do-not-disturb (`on` to accept messages again; `y`/`n` also work) |
 | `biff tty dev` | Name this session `dev` |
 | `biff status` | Connection state and unread count |
+| `biff watch` | Print one JSON line per arrival (unread count, mail, wall) until interrupted |
 | `biff talk kai "can you review?"` | Real-time conversation |
 
 Setup and maintenance commands:

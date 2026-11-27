@@ -2,53 +2,18 @@
 
 from __future__ import annotations
 
-import os
-import signal
-import subprocess
-import sys
-import time
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from biff.client.connection import ClientIdentity, DaemonClient
-from biff.run_dir import RunDir
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
     from pathlib import Path
 
+    from biff.run_dir import RunDir
+
 pytestmark = pytest.mark.subprocess
-
-_STARTUP_TIMEOUT = 15.0
-
-
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    """A git repository the daemon's own configuration loader can resolve."""
-    path = tmp_path / "work" / "demo"
-    path.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", str(path)], check=True)  # noqa: S603, S607
-    return path
-
-
-@pytest.fixture
-def run_dir(tmp_path: Path) -> Iterator[RunDir]:
-    env = {**os.environ, "HOME": str(tmp_path), "PUNT_TELEMETRY": "off"}
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "biff", "daemon", "serve", "--port", "0"],
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    run = RunDir(tmp_path / ".punt-labs" / "biff" / "run")
-    deadline = time.monotonic() + _STARTUP_TIMEOUT
-    while not run.port_path.exists():
-        assert time.monotonic() < deadline, "daemon never wrote its port file"
-        time.sleep(0.05)
-    yield run
-    proc.send_signal(signal.SIGTERM)
-    proc.wait(timeout=10)
 
 
 async def test_two_sessions_share_a_repository_through_the_real_daemon(

@@ -13,14 +13,14 @@
     "future_annotations": 1.0
   },
   "src/biff/__main__.py": {
-    "method_ratio": 0.127,
+    "method_ratio": 0.125,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.03,
+    "avg_params": 2.0,
     "max_complexity": 15.0,
-    "avg_complexity": 3.27,
-    "module_size": 1136.0,
+    "avg_complexity": 3.24,
+    "module_size": 1142.0,
     "classes_per_module": 3.0,
-    "class_to_func_ratio": 0.046,
+    "class_to_func_ratio": 0.045,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -424,6 +424,19 @@
     "module_size": 261.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.5,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/biff/cli_watch.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.25,
+    "max_complexity": 5.0,
+    "avg_complexity": 2.25,
+    "module_size": 90.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0

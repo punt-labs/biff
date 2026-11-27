@@ -6,7 +6,12 @@ exercising the full wire protocol, CLI argument parsing, and process lifecycle.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Generator
+import os
+import signal
+import subprocess
+import sys
+import time
+from collections.abc import AsyncIterator, Generator, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -14,6 +19,7 @@ import pytest
 from fastmcp.client.transports import StdioTransport
 from mcp import Client as MCPClient, StdioServerParameters
 
+from biff.run_dir import RunDir
 from biff.testing import NotificationTracker, RecordingClient, Transcript
 from biff.testing.caller import StampedClient
 
@@ -134,3 +140,37 @@ async def eric(
 ) -> RecordingClient:
     """Recording client for eric over subprocess."""
     return RecordingClient(client=eric_client, transcript=transcript, user="eric")
+
+
+# --- Real biffd process ---
+
+_DAEMON_STARTUP_TIMEOUT = 15.0
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    """A git repository the daemon's own configuration loader can resolve."""
+    path = tmp_path / "work" / "demo"
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)  # noqa: S603, S607
+    return path
+
+
+@pytest.fixture
+def run_dir(tmp_path: Path) -> Iterator[RunDir]:
+    """A real ``biff daemon serve`` process in a throwaway home directory."""
+    env = {**os.environ, "HOME": str(tmp_path), "PUNT_TELEMETRY": "off"}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "biff", "daemon", "serve", "--port", "0"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    run = RunDir(tmp_path / ".punt-labs" / "biff" / "run")
+    deadline = time.monotonic() + _DAEMON_STARTUP_TIMEOUT
+    while not run.port_path.exists():
+        assert time.monotonic() < deadline, "daemon never wrote its port file"
+        time.sleep(0.05)
+    yield run
+    proc.send_signal(signal.SIGTERM)
+    proc.wait(timeout=10)

@@ -31,6 +31,7 @@
   "biff.cli_session_pointer": "cli",
   "biff.cli_session_select": "cli",
   "biff.cli_session_store": "cli",
+  "biff.cli_watch": "cli",
   "biff.client": "client",
   "biff.client.connection": "client",
   "biff.client.environment": "client",
