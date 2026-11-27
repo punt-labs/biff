@@ -21,12 +21,13 @@ def _ignore() -> None:
 class Attachment:
     """A connection bound to one session for the length of the connection."""
 
-    __slots__ = ("_on_replaced", "_run", "_session", "_subscription")
+    __slots__ = ("_on_ended", "_on_replaced", "_run", "_session", "_subscription")
 
     _session: Session
     _run: str
     _subscription: asyncio.Task[None] | None
     _on_replaced: Callable[[], None]
+    _on_ended: Callable[[], None]
 
     def __new__(cls, session: Session, run: str) -> Self:
         """Attach to *session* as the run *run* ("" when the client claims none)."""
@@ -35,6 +36,7 @@ class Attachment:
         self._run = run
         self._subscription = None
         self._on_replaced = _ignore
+        self._on_ended = _ignore
         return self
 
     @property
@@ -51,6 +53,10 @@ class Attachment:
         """Call *callback* when a newer run replaces this connection's run."""
         self._on_replaced = callback
 
+    def on_ended(self, callback: Callable[[], None]) -> None:
+        """Call *callback* when the session this connection is bound to ends."""
+        self._on_ended = callback
+
     def replaced_by(self, run: str) -> bool:
         """Whether a hello for *run* replaces the run this connection claims."""
         return self._run not in ("", run)
@@ -59,6 +65,11 @@ class Attachment:
         """Release the subscription and tell the owner this run is over."""
         self.release_subscription()
         self._on_replaced()
+
+    def end(self) -> None:
+        """Release the subscription and tell the owner the session is over."""
+        self.release_subscription()
+        self._on_ended()
 
     def hold_subscription(self, task: asyncio.Task[None]) -> bool:
         """Keep *task* as this connection's subscription; refuse a second one."""

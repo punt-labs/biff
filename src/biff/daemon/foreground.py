@@ -16,6 +16,7 @@ from punt_observe.logging import Role
 
 from biff.daemon.environment import DaemonEnvironment
 from biff.daemon.handshake_log import HandshakeLog
+from biff.daemon.session_store import CliSessionStore
 from biff.logging_config import configure_logging
 from biff.run_dir import RunDir
 from biff.supervision.biffd import PERMANENT_EXIT_STATUS
@@ -76,7 +77,12 @@ class Foreground:
         # Loaded here, after the line above: the relay stack is most of biffd's
         # start-up time, and a daemon that is still importing it has said so.
         server = import_module("biff.daemon.server")
-        daemon = cast("BiffDaemon", server.BiffDaemon(run_dir=run_dir, port=self._port))
+        daemon = cast(
+            "BiffDaemon",
+            server.BiffDaemon(
+                run_dir=run_dir, port=self._port, sessions=CliSessionStore.default()
+            ),
+        )
         try:
             asyncio.run(daemon.run_foreground())
         except PermissionError as exc:

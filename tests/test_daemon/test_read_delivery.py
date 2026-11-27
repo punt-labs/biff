@@ -15,13 +15,13 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from biff.cli_session_drain import InboxDrain
 from biff.client.connection import DaemonError
 from biff.commands.inbox import Inbox
 from biff.daemon import connection as connection_module
 from biff.daemon.connection import ConnectionHandler
 from biff.daemon.methods import Methods
 from biff.daemon.outbox import Outbox
+from biff.daemon.session_drain import InboxDrain
 from biff.frame_reply import ErrorCode
 from biff.models import Message, UnreadSummary
 from biff.relay import LocalRelay

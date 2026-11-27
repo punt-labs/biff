@@ -9601,3 +9601,90 @@ the reply. The process holds no relay connection.
 and `talk` leave it in the PR that routes them through biffd (A3), and `watch`
 and the `session` verbs in the one before it (A2). The in-process path itself is
 deleted in the last PR of the migration.
+
+**`watch` (A2).** `biff watch` opens the same CLI session the other commands
+use (`DaemonCommand.open()`), subscribes, and prints each event as one JSON
+line `{"seq", "kind", "data"}` on stdout, flushed per line, and nothing else on
+stdout. An event carries counts and the active wall, never a message body; a
+watcher that wants bodies runs `biff read`. SIGINT, SIGTERM and a closed
+stdout end it with exit 0, and a reader that left is noticed every half second
+even with no event to print (`poll` reports an error on a pipe nobody reads); a lost connection says `biffd connection lost:
+<reason>` on stderr and exits 1. Two watchers are two connections, and each
+gets every event.
+
+**Who owns session records (A2).** The daemon owns them. The `session` verbs
+(`new`, `ls`, `use`, `end`) become the daemon methods `session_new`,
+`session_ls`, `session_use` and `session_end`, each replying `{data, error,
+text}` like every other method. The client keeps only the repo pointer (which
+session this repository points at) and the `-s`/`BIFF_SESSION` name it sends
+as `ref`. Reason: with the records in two places, the CLI and the daemon both
+write them and the `store.lifecycle` locks exist to referee that race; one
+owner removes the race, and `session ls` shows what the daemon holds. The
+sweep (lapse a stored session to dormant past `LEASE`, expire it past
+`RETENTION`, release its relay row) runs in the daemon, once at start and on a
+timer. Rejected: the client keeps the records and the daemon only the relay
+rows, because the daemon must then trust a client's claim about which sessions
+exist.
+
+Built as follows. The daemon methods `session_new`, `session_ls`,
+`session_use` and `session_end` (`daemon/session_methods.py`) run the existing
+`SessionVerbs` over the relay and repository of the session that asked. A verb
+raises `ValueError` for a refusal and the method turns it into a failed result,
+`Error: <reason>`. `new` and `use` no longer write the repo pointer: the reply
+names the session by `id` and `DaemonCommand.session_new` and `session_use`
+write the pointer, so the CLI is the one writer of it. A session verb runs as
+the invocation's session like every other command. In a repo with no session
+the invocation makes one to run as and `DaemonCommand` ends it before the verb
+runs, so `session ls` in a fresh repo lists nothing and the first name is free;
+`--repo` and `--as` select the repository and user the verbs act for.
+`SessionSweeper` (`daemon/session_sweep.py`) resolves each stored record's
+repository through the daemon's resolver, takes its relay from the pool, and
+runs `SessionHost.sweep_one`, so one sweep covers every repository the host
+has used; before, only the current repository's records were judged. A record
+whose repository no longer resolves is left alone and logged. A session a
+connection is attached to is renewed, not judged: a `biff watch` that runs for
+days would otherwise have its record expire under it, because the daemon's
+heartbeat refreshes the relay row and not the stored lease.
+
+Ending a session also retires it from the daemon: the mail the session's outbox
+held (a consuming relay removed it at fetch, so it exists nowhere else) is filed
+in the owner's mailbox, and every connection attached to it is closed with
+`session ended`, except those of the session that asked, whose connection ends
+with its command. A `watch` on the session shows `biffd connection lost:
+session ended`. A watcher that shares the asking session is not told.
+
+A `read` and an end (or an expiry) of the same session exclude each other
+(`Session.exclusive`): the read holds the session from its fetch to the merge into
+the outbox, the end holds it while it files the outbox back and drains the relay,
+so a read cannot fetch mail between the end's snapshot and its drain. A `read` that
+runs after the end is refused with `session_ended`. The sweep takes the same hold,
+and files back the outbox of a session it expires. `session use` only names a
+record and moves no mail, so it needs no hold. Retiring a session drops its
+entry in the table's lock map. `Session.exclusive` stops an end or an expiry from running between a read's
+fetch and its merge; it does not protect a read that is itself cancelled there (its
+connection closes) or a daemon that dies there, which `mail-refile.tex` still
+models as `SessionEndDuringRead` and PL-1753 tracks. An end names its target
+by session id before it waits and checks after the wait that the name still
+maps to that id; if it does not, it ends nothing and says the session changed. A generated session id is a valid tty name, so a stored CLI session may not be
+created or renamed to a name shaped like one (`cli-` and 16 hex digits;
+`CliSessionRecord.require_unaliased`), and a lookup takes an exact id match
+before any name match. The shape is defined once, in the session store. The
+shared `validate_tty_name` does not refuse it: an MCP session may have saved
+such an alias and keeps it on resume. The temporary session a verb makes to run as is
+deleted, not left ended, so `session ls --all` shows only sessions the user made.
+The session pointer module moved to `biff.daemon.session_pointer`; pi-tools'
+bridge imports the old path and must follow (PL-1756); there is no alias.
+
+The session store and its helpers moved from `biff/cli_session_*.py` and
+`biff/commands/session.py` into `biff/daemon/` (`session_store`, `session_lock`,
+`session_drain`, `session_host`, `session_select`, `session_pointer`,
+`session_verbs`). The daemon layer may not import the CLI layer, and relabelling
+the modules to the daemon layer is a layer policy change that must land alone, so
+the modules moved instead; two baselined violations (`commands.session` into the
+CLI) are gone.
+
+Still open for the next step: `DaemonCommand` itself reads and writes the same
+store (`attach`, `rename`, the draft it stores once biffd names it), so two
+writers remain, serialised by the store's per-session file lock. Removing the
+client's access needs the hello to carry the session name; that belongs with
+the PR that deletes the in-process path.

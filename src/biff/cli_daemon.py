@@ -12,11 +12,11 @@ from typing import TYPE_CHECKING, Protocol, Self, final
 
 from biff._stdlib import expand_bead_id
 from biff.cli_daemon_wire import UnreadableReplyError, WireResult
-from biff.cli_session_select import SessionSelector
-from biff.cli_session_store import CliSessionEndedError, CliSessionRecord
 from biff.client.connection import ClientIdentity, DaemonClient, DaemonError
 from biff.client.nudge import DaemonNudge
 from biff.config import load_cli_config
+from biff.daemon.session_select import SessionSelector
+from biff.daemon.session_store import CliSessionEndedError, CliSessionRecord
 from biff.plan_marker import PlanMarker
 from biff.run_dir import RunDir
 
@@ -136,7 +136,15 @@ class DaemonCommand:
     FAILURES = (ValueError, OSError, TimeoutError, DaemonError)
     """What a command fails with: a bad session, or an absent or refusing biffd."""
 
-    __slots__ = ("_cwd", "_nudge", "_ref", "_run_dir", "_selector", "_session_id")
+    __slots__ = (
+        "_bootstrapped",
+        "_cwd",
+        "_nudge",
+        "_ref",
+        "_run_dir",
+        "_selector",
+        "_session_id",
+    )
 
     _cwd: str
     _nudge: Callable[[], int]
@@ -144,6 +152,7 @@ class DaemonCommand:
     _run_dir: RunDir
     _selector: SessionSelector
     _session_id: str
+    _bootstrapped: bool
 
     def __new__(
         cls,
@@ -152,21 +161,29 @@ class DaemonCommand:
         session_ref: str | None,
         run_dir: RunDir,
         nudge: Callable[[], int],
+        repo: Path | None = None,
     ) -> Self:
-        """Resolve who this invocation is; *nudge* returns the port biffd answers on."""
+        """Resolve who this invocation is; *nudge* returns the port biffd answers on.
+
+        It runs in *repo* when given, else in the current directory.
+        """
         self = super().__new__(cls)
-        resolved = load_cli_config(user_override=user_override)
+        resolved = load_cli_config(user_override=user_override, start=repo)
         self._selector = SessionSelector.from_resolved(resolved)
         self._ref = session_ref
-        self._cwd = str(Path.cwd())
+        self._cwd = str((repo or Path.cwd()).absolute())
         self._run_dir = run_dir
         self._nudge = nudge
         self._session_id = ""
+        self._bootstrapped = False
         return self
 
     @classmethod
     def for_this_process(
-        cls, user_override: str | None, session_ref: str | None
+        cls,
+        user_override: str | None,
+        session_ref: str | None,
+        repo: Path | None = None,
     ) -> Self:
         """Return the invocation at the default run directory; biffd starts if down."""
         run_dir = RunDir.default()
@@ -179,6 +196,7 @@ class DaemonCommand:
             session_ref=session_ref,
             run_dir=run_dir,
             nudge=start_biffd,
+            repo=repo,
         )
 
     async def call(self, method: str, **params: JsonValue) -> Answer:
@@ -189,7 +207,7 @@ class DaemonCommand:
             ConnectionError: biffd is absent, cannot start, or sent an unreadable reply.
             DaemonError: biffd refused the request.
         """
-        client, _ = await self._open()
+        client, _ = await self.open()
         return await self._answer(client, method, params)
 
     async def plan(self, message: str) -> Answer:
@@ -211,12 +229,69 @@ class DaemonCommand:
 
     async def tty(self, name: str) -> Answer:
         """Name the session; keep the stored record in step or undo the rename."""
-        client, record = await self._open()
+        client, record = await self.open()
         answer = await self._answer(client, "tty", {"name": name})
         try:
             data = answer.data
             if not answer.result.error and isinstance(data, dict):
                 await self._rename_or_undo(client, record, str(data["tty"]))
+        except BaseException:
+            await answer.abandon()
+            raise
+        return answer
+
+    async def session_new(self, tty: str) -> Answer:
+        """Have biffd create a session, then point this repository at it.
+
+        The session is named *tty*, or the next free name when *tty* is empty.
+        """
+        return await self._pointing("session_new", {"tty": tty} if tty else {})
+
+    async def session_use(self, ref: str) -> Answer:
+        """Have biffd name the session *ref*, then point this repository at it."""
+        return await self._pointing("session_use", {"ref": ref})
+
+    async def session_ls(self, *, include_ended: bool) -> Answer:
+        """Have biffd list this host's sessions."""
+        return await self._verb("session_ls", {"include_ended": include_ended})
+
+    async def session_end(self, ref: str) -> Answer:
+        """Have biffd end the session *ref*."""
+        return await self._verb("session_end", {"ref": ref})
+
+    async def _verb(self, method: str, params: dict[str, JsonValue]) -> Answer:
+        """Run the session verb *method* as this repository's session.
+
+        A session this call made only to run as (the repository had none) is
+        ended and forgotten first: the verb then sees just the sessions the user made
+        (`ls --all` included), and a name the user asks for is not already taken.
+        """
+        client, record = await self.open()
+        try:
+            if self._bootstrapped:
+                ended = WireResult.parse(
+                    await client.request("session_end", ref=record.session_id)
+                )
+                if ended.error:
+                    raise ValueError(ended.text)
+                async with self._selector.store.lifecycle(record.session_id):
+                    self._selector.store.expire(record.session_id)
+        except BaseException:
+            await client.close()
+            raise
+        return await self._answer(client, method, params)
+
+    async def _pointing(self, method: str, params: dict[str, JsonValue]) -> Answer:
+        """Run the session verb *method*; point the repo at the session it names.
+
+        The pointer is this repository's, so biffd does not hold it.
+        """
+        answer = await self._verb(method, params)
+        try:
+            data = answer.data
+            if not answer.result.error and isinstance(data, dict):
+                sel = self._selector
+                sel.pointer.write(sel.repo_root, str(data["id"]))
         except BaseException:
             await answer.abandon()
             raise
@@ -244,7 +319,7 @@ class DaemonCommand:
             await client.request("tty", name=record.tty)
             raise
 
-    async def _open(self) -> tuple[DaemonClient, CliSessionRecord]:
+    async def open(self) -> tuple[DaemonClient, CliSessionRecord]:
         """Start biffd if down, connect as this session, and store it if new."""
         record, is_stored = await self._attach()
         port = await asyncio.to_thread(self._nudge)
@@ -265,6 +340,7 @@ class DaemonCommand:
             await client.close()
             raise
         self._session_id = record.session_id
+        self._bootstrapped = not is_stored
         return client, record
 
     async def _attach(self) -> tuple[CliSessionRecord, bool]:

@@ -351,6 +351,20 @@ class TestResumeReclaim:
 
         assert name == "tty5", "resume must reclaim the hinted alias, not tty1"
 
+    async def test_resume_keeps_a_saved_alias_shaped_like_a_cli_session_id(
+        self, tmp_path: Path
+    ) -> None:
+        """An MCP session may hold any alias it saved, including this shape."""
+        from biff.session_registry import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        await relay.set_session_tty_hint("kai", sid, "cli-0123456789abcdef")
+
+        _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "cli-0123456789abcdef"
+
     async def test_resume_reclaims_alias_still_held_by_same_session(
         self, tmp_path: Path
     ) -> None:

@@ -289,6 +289,7 @@ Every slash command has a matching `biff` subcommand. The CLI works outside Clau
 | `biff mesg off` | Go do-not-disturb (`on` to accept messages again; `y`/`n` also work) |
 | `biff tty dev` | Name this session `dev` |
 | `biff status` | Connection state and unread count |
+| `biff watch` | Print one JSON line per arrival (unread count, mail, wall) until interrupted |
 | `biff talk kai "can you review?"` | Real-time conversation |
 
 Setup and maintenance commands:
@@ -380,7 +381,7 @@ The shell logs your session in and out, keeps your presence current, and prints 
 
 ### Named sessions
 
-Commands from one shell share one durable session with one `ttyN`: the session, its presence row and its tty name outlive each `biff` process. A session unused for 8 hours goes dormant (name and inbox kept; the next command revives it), and a dormant session is removed after 3 days.
+Commands from one shell share one durable session with one `ttyN`: the session, its presence row and its tty name outlive each `biff` process. biffd keeps the session records. It sweeps them once at start and every 10 minutes: a session unused for 8 hours goes dormant (name and inbox kept; the next command revives it), and a dormant session is removed after 3 days.
 
 ```bash
 biff session new --tty main     # Create a session named "main" (errors if the name is taken)
@@ -390,7 +391,7 @@ biff session end main           # End it; unread mail moves to your user mailbox
 biff -s main write kai "hi"     # Run one command as session "main" (or set BIFF_SESSION)
 ```
 
-Without `-s`, a command runs as the first of: `BIFF_SESSION`; this repo's default (`biff session use`, or the last `session new`); a fresh session. A shell is always a CLI session, even when run from Claude Code. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
+Without `-s`, a command runs as the first of: `BIFF_SESSION`; this repo's default (`biff session use`, or the last `session new`); a fresh session. The `session` verbs run as that session too; in a repo with no session a verb makes one to run as and ends it before the verb runs, so `session ls` there lists nothing and `session new --tty tty1` may take the first name. A shell is always a CLI session, even when run from Claude Code. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
 
 ### Keys and agent attestation
 

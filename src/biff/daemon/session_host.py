@@ -9,12 +9,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from biff.cli_context import CliContext
-from biff.cli_session_drain import InboxDrain
-from biff.cli_session_select import SessionSelectionError, SessionSelector
-from biff.cli_session_store import (
-    CliSessionEndedError,
-    CliSessionRecord,
-)
+from biff.daemon.session_drain import InboxDrain
+from biff.daemon.session_select import SessionSelectionError, SessionSelector
+from biff.daemon.session_store import CliSessionEndedError, CliSessionRecord
 from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.relay import SESSION_TTL_SECONDS, Relay
 from biff.session_id import CLI_ROLE
@@ -77,15 +74,21 @@ class SessionHost:
             except (CliSessionEndedError, FileNotFoundError):
                 # Ended, or expired between the pointer read and the attach lock.
                 logger.info("pointed session %s unusable; creating one", pointed.tty)
-        return await self.attach(await self.create())
+        record = await self.create()
+        self.selector.pointer.write(self.selector.repo_root, record.session_id)
+        return await self.attach(record)
 
     async def create(self, tty: str | None = None) -> CliSessionRecord:
-        """Create a live session, reserve its name, register it, and point at it.
+        """Create a live session, reserve its name, and register it.
+
+        The caller decides whether the repo points at it.
 
         An exact *tty* that is taken raises ``ValueError`` and creates nothing.
         """
         if tty is not None and (error := validate_tty_name(tty)):
             raise ValueError(error)
+        if tty is not None:
+            CliSessionRecord.require_unaliased(tty)
         sel = self.selector
         draft = CliSessionRecord.new(
             tty="pending",
@@ -106,7 +109,6 @@ class SessionHost:
             await self.relay.release_tty_name(sel.user, name)
             raise
         await self._wtmp(record, "login")
-        sel.pointer.write(sel.repo_root, record.session_id)
         return record
 
     async def attach(self, record: CliSessionRecord) -> Attachment:
@@ -206,13 +208,14 @@ class SessionHost:
             ):
                 continue
             try:
-                await self._sweep_one(record.session_id)
+                await self.sweep_one(record.session_id)
             except Exception:
                 logger.warning(
                     "session sweep failed for %s", record.session_id, exc_info=True
                 )
 
-    async def _sweep_one(self, session_id: str) -> None:
+    async def sweep_one(self, session_id: str) -> None:
+        """Lapse *session_id* to dormant or expire it, judged on its current state."""
         store = self.selector.store
         async with store.lifecycle(session_id):
             try:

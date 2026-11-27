@@ -56,6 +56,10 @@ class Outbox:
             fetched = list(self._held.values())
         return sorted(fetched, key=lambda m: (m.timestamp, m.id))
 
+    def held(self) -> list[Message]:
+        """Return every message held, oldest first."""
+        return sorted(self._held.values(), key=lambda m: (m.timestamp, m.id))
+
     def forget(self, gone: Sequence[Message]) -> None:
         """Forget *gone*: it reached the client, or went back to the relay."""
         for message in gone:

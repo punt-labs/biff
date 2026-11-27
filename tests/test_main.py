@@ -123,7 +123,7 @@ class TestGlobalFlags:
         with _patched_daemon(daemon) as made:
             result = runner.invoke(app, ["--user", "github-actions", "who"])
         assert result.exit_code == 0
-        made.assert_called_once_with("github-actions", None)
+        made.assert_called_once_with("github-actions", None, None)
         assert daemon.calls == [("who", {})]
 
 
@@ -1030,19 +1030,19 @@ class TestSessionOption:
 
     def test_dash_s_passes_the_ref(self) -> None:
         made = self._made(["-s", "main", "who"])
-        made.assert_called_once_with(None, "main")
+        made.assert_called_once_with(None, "main", None)
 
     def test_env_var_is_equivalent(self) -> None:
         made = self._made(["who"], env={"BIFF_SESSION": "main"})
-        made.assert_called_once_with(None, "main")
+        made.assert_called_once_with(None, "main", None)
 
     def test_flag_beats_env(self) -> None:
         made = self._made(["-s", "a", "who"], env={"BIFF_SESSION": "b"})
-        made.assert_called_once_with(None, "a")
+        made.assert_called_once_with(None, "a", None)
 
     def test_absent_is_none(self) -> None:
         made = self._made(["who"], env={"BIFF_SESSION": ""})
-        made.assert_called_once_with(None, None)
+        made.assert_called_once_with(None, None, None)
 
     def test_bad_target_is_a_named_error_exit_1(self) -> None:
         with _patched_daemon(_FakeDaemon(ValueError("unknown session: nope"))):

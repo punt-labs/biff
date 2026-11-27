@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal, Self, cast, get_args
 
 from biff._stdlib import biff_data_dir
-from biff.cli_session_lock import SessionLock
+from biff.daemon.session_lock import SessionLock
 from biff.session_routing import ID_RE, MAX_ID_LENGTH, SessionIdError
 
 logger = logging.getLogger(__name__)
@@ -26,12 +26,14 @@ SessionState = Literal["live", "dormant", "ended"]
 CLI_ID_PREFIX = "cli-"
 """Reserved prefix: harness session ids never carry it, so a CLI id cannot
 collide with a Claude Code id in the shared sessions directory."""
+CLI_ID_HEX_CHARS = 16
+CLI_ID_RE = re.compile(rf"{CLI_ID_PREFIX}[0-9a-f]{{{CLI_ID_HEX_CHARS}}}")
+"""The shape of a generated CLI session id: the one definition, read by the id
+generator, the store's validation and the refusal of a name of that shape."""
 
 SCHEMA_VERSION = 1
-_ID_HEX_CHARS = 16
 _RECORD_FILE = "session.json"
 _LOCK_DIR = "locks"
-_CLI_ID_RE = re.compile(rf"{CLI_ID_PREFIX}[0-9a-f]{{{_ID_HEX_CHARS}}}")
 
 
 class CliSessionEndedError(ValueError):
@@ -73,7 +75,7 @@ class CliSessionRecord:
         _require_aware(now)
         return cls(
             version=SCHEMA_VERSION,
-            session_id=f"{CLI_ID_PREFIX}{secrets.token_hex(_ID_HEX_CHARS // 2)}",
+            session_id=f"{CLI_ID_PREFIX}{secrets.token_hex(CLI_ID_HEX_CHARS // 2)}",
             tty=tty,
             user=user,
             repo=repo,
@@ -159,10 +161,26 @@ class CliSessionRecord:
         _require_aware(now)
         return replace(self, state="ended", ended_at=now.astimezone(UTC))
 
+    @staticmethod
+    def require_unaliased(name: str) -> None:
+        """Refuse a display name shaped like a generated session id.
+
+        Such a name would alias that session's id, so a name and an id lookup
+        could reach different sessions.  This binds stored CLI sessions only; an
+        MCP session may hold any alias it saved.
+
+        Raises:
+            ValueError: *name* is shaped like a generated session id.
+        """
+        if CLI_ID_RE.fullmatch(name):
+            msg = f"tty name {name!r} looks like a session id; choose another name."
+            raise ValueError(msg)
+
     def renamed(self, tty: str) -> Self:
         """Return the record under a new display name; an ended record refuses."""
         if self.state == "ended":
             raise self.ended_error()
+        self.require_unaliased(tty)
         return replace(self, tty=tty)
 
     def ended_error(self) -> CliSessionEndedError:
@@ -190,9 +208,9 @@ class CliSessionStore:
 
     def create(self, record: CliSessionRecord) -> None:
         """Persist a new record; refuse an id that exists or is not a CLI id."""
-        if not _CLI_ID_RE.fullmatch(record.session_id):
+        if not CLI_ID_RE.fullmatch(record.session_id):
             msg = (
-                f"session_id must be {CLI_ID_PREFIX!r} plus {_ID_HEX_CHARS} "
+                f"session_id must be {CLI_ID_PREFIX!r} plus {CLI_ID_HEX_CHARS} "
                 f"hex characters, got {record.session_id!r}"
             )
             raise ValueError(msg)
@@ -226,7 +244,7 @@ class CliSessionStore:
             return ()
         records: list[CliSessionRecord] = []
         for d in self.root.iterdir():
-            if not _CLI_ID_RE.fullmatch(d.name):
+            if not CLI_ID_RE.fullmatch(d.name):
                 continue
             try:
                 records.append(self.read(d.name))

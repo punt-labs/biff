@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_context import CliContext
+from biff.commands.inbox import Inbox
 from biff.daemon.attachment import Attachment
 from biff.daemon.orgs import OrgRepos
 from biff.daemon.outbox import Outbox
@@ -19,6 +20,7 @@ from biff.daemon.session_key import SessionKey
 from biff.daemon.tasks import Supervised
 from biff.frame_reply import ErrorCode
 from biff.relay_errors import RELAY_ERRORS, RelayLog
+from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
@@ -57,12 +59,16 @@ class Session:
     __slots__ = (
         "_attachments",
         "_beat",
+        "_busy",
         "_context",
+        "_cwd",
         "_interval",
+        "_is_ended",
         "_log",
         "_orgs",
         "_outbox",
         "_presence",
+        "_queued",
         "_retired",
         "_run",
         "_session_id",
@@ -70,6 +76,7 @@ class Session:
     )
 
     _session_id: str
+    _cwd: str
     _target: RelayTarget
     _context: CliContext
     _presence: PresenceRow
@@ -81,11 +88,15 @@ class Session:
     _interval: float
     _beat: asyncio.Task[None] | None
     _log: RelayLog
+    _busy: asyncio.Lock
+    _queued: int
+    _is_ended: bool
 
     def __new__(
         cls,
         *,
         session_id: str,
+        cwd: str,
         target: RelayTarget,
         context: CliContext,
         presence: PresenceRow,
@@ -96,6 +107,7 @@ class Session:
         """Create the record of a registered session."""
         self = super().__new__(cls)
         self._session_id = session_id
+        self._cwd = cwd
         self._target = target
         self._context = context
         self._presence = presence
@@ -107,6 +119,9 @@ class Session:
         self._interval = heartbeat_interval
         self._beat = None
         self._log = RelayLog(logger)
+        self._busy = asyncio.Lock()
+        self._queued = 0
+        self._is_ended = False
         return self
 
     @classmethod
@@ -143,6 +158,7 @@ class Session:
         )
         return cls(
             session_id=hello.session_id,
+            cwd=hello.cwd,
             target=resolved.target,
             context=context,
             presence=presence,
@@ -155,6 +171,11 @@ class Session:
     def session_id(self) -> str:
         """The id the harness gave the session."""
         return self._session_id
+
+    @property
+    def cwd(self) -> str:
+        """The directory the client that registered the session runs in."""
+        return self._cwd
 
     @property
     def context(self) -> CliContext:
@@ -212,6 +233,55 @@ class Session:
     async def touch(self) -> None:
         """Count a command from a shell as activity on the session's presence row."""
         await self._presence.touch()
+
+    @asynccontextmanager
+    async def exclusive(self) -> AsyncGenerator[None]:
+        """Hold the session while mail moves in or out of its outbox.
+
+        A read holds it from the fetch to the merge into the outbox, and ending
+        or expiring the session holds it while it files the outbox back and drains
+        the relay, so neither can run between the other's steps.
+        """
+        self._queued += 1
+        try:
+            async with self._busy:
+                yield
+        finally:
+            self._queued -= 1
+
+    @property
+    def queued(self) -> int:
+        """How many callers hold :meth:`exclusive` or wait for it.
+
+        Nothing in the daemon reads it: a test waits for it to reach a number to
+        know a caller is parked at the hold, instead of guessing how long that takes.
+        """
+        return self._queued
+
+    @property
+    def is_ended(self) -> bool:
+        """Whether the session was ended; it answers no more reads."""
+        return self._is_ended
+
+    def mark_ended(self) -> None:
+        """Record that the session was ended."""
+        self._is_ended = True
+
+    async def refile_held(self) -> None:
+        """Give the relay back every message the outbox holds, one by one.
+
+        A consuming relay removed that mail at fetch, so while it is held here
+        it is out of reach of the drain that ends or expires the session.
+        """
+        inbox = Inbox(self._context, (), ())
+        for message in self._outbox.held():
+            if await inbox.refile(message):
+                self._outbox.forget([message])
+
+    def end_attachments(self) -> None:
+        """Tell every connection attached that the session ended."""
+        for held in tuple(self._attachments):
+            held.end()
 
     def attach(self, run: str) -> Attachment:
         """Attach a connection claiming *run*, starting a new run if it differs.
@@ -334,6 +404,24 @@ class SessionTable:
             if hello.client == "cli":
                 await session.touch()
             return session.attach(hello.main_agent_id)
+
+    def holding(self, session_id: str) -> Session | None:
+        """Return the shell session *session_id* if the daemon holds it."""
+        return self._sessions.get(SessionKey(session_id, CLI_ROLE))
+
+    def retire(self, session_id: str, *, spare: Session | None = None) -> None:
+        """Forget the shell session *session_id*, which was ended.
+
+        Every connection attached to it is told, except those of *spare*, the
+        session that asked: its connection ends with its command, after the
+        reply.
+        """
+        key = SessionKey(session_id, CLI_ROLE)
+        session = self._sessions.pop(key, None)
+        if self._users[key] == 0:
+            self._locks.pop(key, None)  # _guard drops it only while no session
+        if session is not None and session is not spare:
+            session.end_attachments()
 
     @asynccontextmanager
     async def _guard(self, key: SessionKey) -> AsyncGenerator[None]:

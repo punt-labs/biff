@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from biff.cli_session_store import (
+from biff.daemon.session_store import (
     CliSessionEndedError,
     CliSessionRecord,
     CliSessionStore,
@@ -494,7 +494,7 @@ class TestListSkipsUnreadableRecords:
         bad.mkdir()
         (bad / "session.json").write_text("{ not json")
 
-        with caplog.at_level("WARNING", logger="biff.cli_session_store"):
+        with caplog.at_level("WARNING", logger="biff.daemon.session_store"):
             listed = store.list()
 
         assert listed == (good,)
@@ -509,3 +509,13 @@ class TestListSkipsUnreadableRecords:
         path.write_text(path.read_text().replace('"version": 1', '"version": 99'))
 
         assert store.list() == (good,)
+
+
+def test_every_generated_session_id_is_refused_as_a_session_name() -> None:
+    """The id generator and the refusal of an id-shaped name share one pattern."""
+    for _ in range(50):
+        record = CliSessionRecord.new(
+            tty="t", user="kai", repo="r", repo_root="/r", hostname="h", now=T0
+        )
+        with pytest.raises(ValueError, match="looks like a session id"):
+            record.renamed(record.session_id)

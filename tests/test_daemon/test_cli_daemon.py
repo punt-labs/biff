@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -11,13 +10,13 @@ from typer.testing import CliRunner
 from biff.__main__ import app
 from biff.cli_daemon import DaemonCommand
 from biff.cli_daemon_wire import UnreadableReplyError
-from biff.cli_session_store import CliSessionStore
 from biff.client.connection import DaemonUnreachableError
 from biff.client.environment import UnsupportedOverrideError
 from biff.client.nudge import DaemonNudge
 from biff.commands import CommandResult
 from biff.daemon import methods as methods_module
 from biff.daemon.methods import Methods, Outcome
+from biff.daemon.session_store import CliSessionStore
 from biff.markers import has_plan_marker
 from biff.plugins.claude_code.hook import handle_pre_tool_use
 from biff.run_dir import RunDir
@@ -33,20 +32,6 @@ if TYPE_CHECKING:
     from biff.daemon.sessions import Session
     from biff.supervision.starter import StartOutcome
     from tests.test_daemon.conftest import Harness
-
-
-@pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A git repository the command runs in, with its own home directory."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    path = tmp_path / "work" / "demo"
-    path.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", str(path)], check=True)  # noqa: S603, S607
-    monkeypatch.chdir(path)
-    return path
 
 
 def _command(
@@ -315,7 +300,10 @@ def _run_cli(
     )
 
     def this_command(
-        cls: type[DaemonCommand], user: str | None, session: str | None
+        cls: type[DaemonCommand],
+        user: str | None,
+        session: str | None,
+        repo: Path | None = None,
     ) -> DaemonCommand:
         return command
 

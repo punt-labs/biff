@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from biff.cli_session_host import SessionHost
-from biff.cli_session_pointer import CurrentPointer
-from biff.cli_session_select import SessionSelectionError, SessionSelector
-from biff.cli_session_store import CliSessionEndedError, CliSessionStore
-from biff.commands.session import SessionVerbs
+from biff.daemon.session_host import SessionHost
+from biff.daemon.session_pointer import CurrentPointer
+from biff.daemon.session_select import SessionSelectionError, SessionSelector
+from biff.daemon.session_store import CliSessionEndedError, CliSessionStore
+from biff.daemon.session_verbs import SessionVerbs
 from biff.models import BiffConfig, Message
 from biff.relay import LocalRelay
 from biff.session_id import CLI_ROLE
@@ -46,20 +46,24 @@ class TestNew:
     async def test_auto_name(self, host: SessionHost) -> None:
         assert (await SessionVerbs(host).new(None)).text == "tty1"
 
+    async def test_a_name_shaped_like_a_session_id_is_refused(
+        self, host: SessionHost
+    ) -> None:
+        with pytest.raises(ValueError, match="looks like a session id"):
+            await SessionVerbs(host).new("cli-0123456789abcdef")
+        assert host.selector.store.list() == ()
+
     async def test_taken_name_is_an_error_with_no_fallback(
         self, host: SessionHost
     ) -> None:
         await SessionVerbs(host).new("main")
-        result = await SessionVerbs(host).new("main")
-        assert result.error
-        assert "already in use" in result.text
+        with pytest.raises(ValueError, match="already in use"):
+            await SessionVerbs(host).new("main")
         assert len(host.selector.store.list()) == 1
 
-    async def test_writes_the_pointer(self, host: SessionHost) -> None:
+    async def test_leaves_the_pointer_to_the_caller(self, host: SessionHost) -> None:
         await SessionVerbs(host).new("main")
-        pointed = host.selector.pointed()
-        assert pointed is not None
-        assert pointed.tty == "main"
+        assert host.selector.pointed() is None
 
 
 class TestLs:
@@ -95,12 +99,14 @@ class TestLs:
 
 
 class TestUse:
-    async def test_writes_the_pointer_only(self, host: SessionHost) -> None:
+    async def test_names_the_session_and_leaves_the_pointer(
+        self, host: SessionHost
+    ) -> None:
         a = await host.create("alpha")
-        await host.create("beta")  # beta is now the pointer
         result = await SessionVerbs(host).use("alpha")
         assert result.text == "alpha"
-        assert host.selector.pointer.read(host.selector.repo_root) == a.session_id
+        assert result.json_data == SessionVerbs._row(a)
+        assert host.selector.pointed() is None
         assert host.selector.store.read(a.session_id).state == "live"
 
     async def test_does_not_revive_a_dormant_session(self, host: SessionHost) -> None:

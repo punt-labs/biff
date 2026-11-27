@@ -105,10 +105,10 @@ class TestRenameKeepsTheStoredRecordInSync:
     async def test_rename_updates_the_record_the_next_attach_reads(
         self, tmp_path: Path
     ) -> None:
-        from biff.cli_session_host import SessionHost
-        from biff.cli_session_pointer import CurrentPointer
-        from biff.cli_session_select import SessionSelector
-        from biff.cli_session_store import CliSessionStore
+        from biff.daemon.session_host import SessionHost
+        from biff.daemon.session_pointer import CurrentPointer
+        from biff.daemon.session_select import SessionSelector
+        from biff.daemon.session_store import CliSessionStore
         from biff.models import BiffConfig
 
         root = tmp_path / "repo"

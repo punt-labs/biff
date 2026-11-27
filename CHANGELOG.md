@@ -4,6 +4,13 @@
 
 ### Added
 
+- `biff watch` subscribes to biffd and prints one JSON line per arrival
+  summary: `{"seq": 4, "kind": "mail", "data": {...}}`, with `kind` one of
+  `unread`, `mail`, `wall`, `degraded` and `recovered`. Lines carry counts and
+  the active wall, never a message body. It ends with exit 0 on Ctrl-C,
+  SIGTERM or a closed pipe, and with exit 1 when the connection to biffd is
+  lost. It also ends when its reader leaves, within half a second, even when
+  no event is waiting (`biff watch | head -n 1`).
 - `biff install` installs biffd as a user service (systemd user unit `biffd`,
   macOS LaunchAgent `com.punt-labs.biffd`) and `biff uninstall` removes it.
   `biff daemon install`, `uninstall`, `start`, `stop`, `restart` and `status`
@@ -102,6 +109,22 @@
 
 ### Changed
 
+- `biff session new`, `ls`, `use` and `end` run in biffd, which now owns the
+  session records. The CLI keeps only the repo pointer and the `-s` name. biffd
+  sweeps stale records once at start and every 10 minutes, for every repository
+  the host has used: a session idle for 8 hours goes dormant, and a dormant or
+  ended one is removed after 3 days with its relay row released. A session a
+  connection is attached to, such as a running `biff watch`, is renewed instead
+  of judged. Ending a session files the mail biffd held for it in your mailbox
+  and closes the connections attached to it with `session ended`. A session verb
+  runs as this repo's session; in a repo with none it makes one to run as and
+  ends it before the verb runs.
+  Ending a session waits for a read of it that is in flight and refuses later
+  reads with `session_ended`. The session pointer moved to
+  `biff.daemon.session_pointer`; pi-tools must follow, tracked in PL-1756.
+  `session new --tty` and a rename of a CLI session refuse a name shaped like a
+  generated session id (`cli-` and 16 hex digits), and a session looked up by
+  id is never confused with one named like it.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the
   same text as before. `plan` and `tty` still write the plan-gate

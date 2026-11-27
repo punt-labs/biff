@@ -13,11 +13,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from biff.cli_session_drain import InboxDrain
-from biff.cli_session_host import LEASE, RETENTION, SessionHost
-from biff.cli_session_pointer import CurrentPointer
-from biff.cli_session_select import SessionSelectionError, SessionSelector
-from biff.cli_session_store import (
+from biff.daemon.session_drain import InboxDrain
+from biff.daemon.session_host import LEASE, RETENTION, SessionHost
+from biff.daemon.session_pointer import CurrentPointer
+from biff.daemon.session_select import SessionSelectionError, SessionSelector
+from biff.daemon.session_store import (
     CliSessionEndedError,
     CliSessionRecord,
     CliSessionStore,
@@ -165,7 +165,9 @@ class TestResolve:
 
 
 class TestCreate:
-    async def test_registers_row_name_and_pointer(self, tmp_path: Path) -> None:
+    async def test_registers_row_and_name_and_leaves_the_pointer(
+        self, tmp_path: Path
+    ) -> None:
         host = _host(tmp_path)
         record = await host.create("main")
         key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
@@ -173,7 +175,7 @@ class TestCreate:
         assert row is not None
         assert row.tty_name == "main"
         assert await host.relay.get_tty_reservation_owner("kai", "main") == key
-        assert host.selector.pointer.read(host.selector.repo_root) == record.session_id
+        assert host.selector.pointer.read(host.selector.repo_root) is None
 
     async def test_taken_exact_name_errors_and_creates_nothing(
         self, tmp_path: Path
@@ -336,6 +338,7 @@ class TestKeyIsTheRecordsDerivedKey:
     ) -> None:
         host = _host(tmp_path)
         record = await host.create("demo1")
+        host.selector.pointer.write(host.selector.repo_root, record.session_id)
         expected = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
 
         first = await host.resolve(None)
@@ -354,6 +357,7 @@ class TestKeyIsTheRecordsDerivedKey:
         # That is a missing target, so the pointer rung must take over.
         host = _host(tmp_path)
         record = await host.create("demo1")
+        host.selector.pointer.write(host.selector.repo_root, record.session_id)
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "harness-1")
 
         attached = await host.resolve(None)

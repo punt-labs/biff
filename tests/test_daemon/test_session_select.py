@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from biff.cli_session_pointer import CurrentPointer
-from biff.cli_session_select import SessionSelectionError, SessionSelector
-from biff.cli_session_store import CliSessionRecord, CliSessionStore
+from biff.daemon.session_pointer import CurrentPointer
+from biff.daemon.session_select import SessionSelectionError, SessionSelector
+from biff.daemon.session_store import CliSessionRecord, CliSessionStore
 
 T0 = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
 
@@ -95,6 +96,15 @@ class TestLookup:
         rec = _make(sel, "main")
         assert sel.lookup("main") == rec
         assert sel.lookup(rec.session_id) == rec
+
+    def test_an_id_wins_over_a_live_session_named_like_it(self, tmp_path: Path) -> None:
+        sel = _selector(tmp_path)
+        original = _make(sel, "alpha")
+        alias = _make(sel, "beta")
+        # An alias made before such names were refused: written past the rename.
+        path = sel.store.root / alias.session_id / "session.json"
+        path.write_text(dataclasses.replace(alias, tty=original.session_id).to_json())
+        assert sel.lookup(original.session_id) == original
 
     def test_unknown(self, tmp_path: Path) -> None:
         with pytest.raises(SessionSelectionError, match="unknown session: x"):

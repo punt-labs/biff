@@ -46,6 +46,7 @@ _HELLO_TIMEOUT_SECONDS: Final = 5.0
 _HELLO_ID: Final = 0
 _MAX_CLOSE_REASON_BYTES: Final = 120
 _REPLACED_REASON: Final = "session replaced by a newer run; reconnect"
+_ENDED_REASON: Final = "session ended"
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,7 @@ class ConnectionHandler:
             await self._close(ws, _POLICY_VIOLATION, exc.reason)
             return
         attachment.on_replaced(partial(self._end_replaced, ws))
+        attachment.on_ended(partial(self._end_ended, ws))
         try:
             await self._serve(ws, attachment)
         except ConnectionClosed:
@@ -367,6 +369,12 @@ class ConnectionHandler:
         """Close the connection of a run a newer run has replaced."""
         Supervised.spawn(
             self._close(ws, _POLICY_VIOLATION, _REPLACED_REASON), "close replaced run"
+        )
+
+    def _end_ended(self, ws: ServerConnection) -> None:
+        """Close the connection of a session that was ended."""
+        Supervised.spawn(
+            self._close(ws, _POLICY_VIOLATION, _ENDED_REASON), "close ended session"
         )
 
     @staticmethod
