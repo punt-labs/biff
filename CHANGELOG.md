@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-11-26
+
 ### Added
 
 - A `read` reply that carries mail asks the client to confirm it (`ack` frame,
