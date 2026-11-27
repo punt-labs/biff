@@ -208,6 +208,8 @@ class TestWatchLiveness:
             await _until(lambda: bool(hits), "wake after the rebuild")
             # watchdog's own emitter thread logs while the observer is rebuilt
             logging.getLogger("watchdog.observers.inotify").error("emitter inactive")
+            # The mixed-logger case is only exercised if that record was captured.
+            assert any(r.name == "watchdog.observers.inotify" for r in caplog.records)
             noted = [
                 r
                 for r in caplog.records
