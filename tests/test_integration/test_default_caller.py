@@ -35,9 +35,7 @@ async def test_unstamped_tools_use_startup_presence_only_when_opted_in(
     )
     with (
         patch("biff.server.entrypoints.load_mcp_config", return_value=resolved),
-        patch(
-            "biff.server.transport_runtime.create_server", wraps=create_server
-        ) as factory,
+        patch("biff.server.mcp_assembly.create_server", wraps=create_server) as factory,
     ):
         server = McpServerOptions(
             user="devin" if enabled else None,

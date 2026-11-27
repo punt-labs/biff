@@ -9738,3 +9738,50 @@ the PR that deletes the in-process path.
 `__main__.py` no longer imports `cli_session`. The in-process path itself is
 deleted in the last PR of the migration (`biff wall` keeps its direct CI path). `_suppress_nats_noise` stays: `biff daemon serve` and
 `biff mcp` run NATS in the process the same callback configures.
+
+## DES-100: `biff mcp` Reads Through biffd Behind `mcp.transport`
+
+**Date:** 2026-11-27
+**Status:** SETTLED
+**Topic:** Migration step 4 of DES-095, first part: the opt-in setting, and the
+read-only tools (`who`, `finger`, `last`, `read_messages`) answered by biffd.
+
+**Decision.**
+
+1. **The setting.** `mcp.transport` in `config.yaml`, `inprocess` (the default)
+   or `daemon`; `BIFF_MCP_TRANSPORT` overrides it, an empty variable is absent. A
+   value that names neither is refused by name (`SystemExit`): falling back would
+   leave a person believing the daemon is in use. The setting and its override are
+   removed in the last PR of the migration, when the in-process server is deleted.
+2. **The oracle is the in-process text.** `tests/_mcp_golden.py` records what each
+   tool returns, and `plugin/hooks/suppress-output.sh` cuts the panel line and the
+   model's context from that text. A daemon-backed tool returns the reply's `text`
+   unchanged. The same golden conversation runs on both paths
+   (`tests/test_integration/test_mcp_text_golden.py`,
+   `tests/test_daemon/test_mcp_daemon_tools.py`). The tool list (names,
+   descriptions, parameter schemas, meta) is compared between the two servers.
+3. **One connection per session, opened on first use.** `DaemonLink` opens it at
+   the first request for a session id, starts biffd when it is down (as `biff`
+   does), and opens it again once, repeating the read, when it was lost. A biffd
+   that cannot be reached is a tool error carrying the nudge's own sentence.
+4. **`read_messages` is at-least-once.** The tool asks for the batch, returns its
+   text, and `AfterCall` (a FastMCP middleware) confirms the reply to biffd once
+   the tool has returned. A tool that raises confirms nothing. A confirmation
+   that fails is logged and the next call serves the mail again. In-process the
+   mail was marked read before the text was built.
+5. **Hybrid until B2.** With `daemon` set, the write and talk tools still use the
+   server's own relay, so the process holds a connection; only the reads move.
+   `update_current_session` stays in the read tools (it stamps `last_tool_at`); a
+   daemon method that touches the session on a request replaces it.
+
+**Layers.** `server` may import `client`, as `docs/design/biffd.md` says
+("Package layout"). The policy change landed alone, as oo-ratchet requires.
+`WireResult` moved to `client/wire_result.py` so that the server and the CLI
+share one reply type; the CLI's conversion to a `CommandResult` is
+`CommandReply.of` in `cli_daemon_wire.py`.
+
+**Rejected.** Replacing each in-process tool's `fn` after registration: it keeps
+the descriptions without copying them, but swaps a function behind a built tool.
+The descriptions live in `server/tools/_read_info.py` and both servers use them;
+the parameter documentation (the `Args:` blocks FastMCP reads) is copied until
+the in-process tools are deleted, and a test fails if the two diverge.

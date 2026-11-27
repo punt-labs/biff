@@ -4,6 +4,14 @@
 
 ### Added
 
+- `mcp.transport: daemon` in `.punt-labs/biff/config.yaml` (or
+  `BIFF_MCP_TRANSPORT=daemon`) makes `biff mcp` answer `who`, `finger`, `last`
+  and `read_messages` through biffd. The text is the same, character for
+  character. `read_messages` now tells biffd the mail was read only after the
+  tool has returned it, so a lost reply leaves the mail unread instead of
+  losing it. The default stays `inprocess`; the write and talk tools still use
+  the server's own relay until the next step. A value that names neither
+  transport stops the server with a message that names the setting.
 - `biff watch` subscribes to biffd and prints one JSON line per arrival
   summary: `{"seq": 4, "kind": "mail", "data": {...}}`, with `kind` one of
   `unread`, `mail`, `wall`, `degraded` and `recovered`. Lines carry counts and

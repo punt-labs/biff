@@ -220,6 +220,7 @@ prefixes = [
     "log_hint",
     "logging_config",
     "markers",
+    "mcp_transport",
     "nostr_attest",
     "nostr_bech32",
     "nostr_crypto",

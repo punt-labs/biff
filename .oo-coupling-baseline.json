@@ -916,6 +916,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/mcp_transport.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/models.py": {
     "efferent_coupling": 0.0,
     "public_names": 11.0,
@@ -1294,6 +1301,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/server/after_call.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/server/app.py": {
     "efferent_coupling": 13.0,
     "public_names": 2.0,
@@ -1406,6 +1420,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/server/daemon_tools.py": {
+    "efferent_coupling": 7.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.311,
+    "avg_lcom": 0.311
+  },
   "src/biff/server/display_queue.py": {
     "efferent_coupling": 0.0,
     "public_names": 2.0,
@@ -1440,6 +1461,20 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/biff/server/mcp_assembly.py": {
+    "efferent_coupling": 8.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/server/mcp_link.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 4.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.4,
+    "avg_lcom": 0.4
   },
   "src/biff/server/mcp_protocol.py": {
     "efferent_coupling": 1.0,
@@ -1638,7 +1673,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/server/transport_runtime.py": {
-    "efferent_coupling": 4.0,
+    "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
