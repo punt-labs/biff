@@ -170,7 +170,8 @@ async def test_biff_talk_fails_when_biffd_is_lost_mid_talk(
     await screen.shows("Waiting for")
     await harness.daemon.stop()
     assert await asyncio.wait_for(talk, timeout=5.0) is False
-    await screen.shows("biffd connection lost")
+    screen.refresh()
+    assert "biffd connection lost" in screen.err
 
 
 async def test_a_hangup_that_arrives_with_the_accept_ends_the_wait(

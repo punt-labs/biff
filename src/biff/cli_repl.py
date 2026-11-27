@@ -6,12 +6,14 @@ import logging
 from importlib.metadata import version as pkg_version
 from typing import TYPE_CHECKING, Self, final
 
+from biff._formatting import terminal_safe
 from biff.cli_console import PromptedConsole, Tick
 from biff.cli_daemon import DaemonCommand
 from biff.cli_link import DaemonLink
 from biff.cli_talk import TalkConversation
 from biff.cli_talk_outcome import TalkUnavailableError
 from biff.cli_talk_view import TalkView
+from biff.client.connection import ConnectionLostError
 from biff.commands import CommandResult
 from biff.dispatch import Call, available_commands, parse
 from biff.models import WallPost
@@ -216,6 +218,8 @@ class ReplSession:
         """Run *work*; a refusal or an absent biffd is a message, not the end."""
         try:
             await work
+        except ConnectionLostError as exc:
+            self._console.complain(terminal_safe(f"biffd connection lost: {exc}"))
         except DaemonCommand.FAILURES as exc:
             self._console.complain(f"Error: {exc}")
 
