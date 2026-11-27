@@ -4863,7 +4863,6 @@ the wedge. The regression test in ``tests/test_nats_reconnect.py``
 | ``EnsureConnected`` (from disconnected/connected; **not** halfOpen) | ``_ensure_connected``, ``_open_connection``, ``_provision``; fast-path ``_cached_handles`` | DES-019, DES-029 |
 | ``Disconnect`` (connected → disconnected) | ``disconnect()`` | DES-019 |
 | ``Close`` (→ closed; not from halfOpen) | ``close()`` | — |
-| ``ResetInfrastructure`` (clear cached handles) | ``reset_infrastructure()`` | DES-016 |
 | ``Request`` reqOk / reqTimeout (connected → connected / halfOpen) | ``get_unread_summary`` (``js.stream_info``), ``heartbeat``/``get_session`` (``kv.get``) | biff-tww |
 | ``WedgeDetected`` (halfOpen → reconnecting) | keepalive ``ping_interval=20``/``max_outstanding_pings=3`` → ``_on_disconnect`` clears handles | biff-tww, biff-wr3, DES-029 |
 | ``Reconnect`` (reconnecting → connected) | ``max_reconnect_attempts=-1`` auto-reconnect → ``_on_reconnect`` | DES-019, biff-wr3 |

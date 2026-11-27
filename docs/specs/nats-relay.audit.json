@@ -3,9 +3,9 @@
   "testDirectory": "tests/",
   "timestamp": "2026-11-26T16:00:00Z",
   "summary": {
-    "covered": 20,
-    "total": 32,
-    "percentage": 62
+    "covered": 19,
+    "total": 31,
+    "percentage": 61
   },
   "byCategory": {
     "invariant": {
@@ -13,8 +13,8 @@
       "total": 5
     },
     "effect": {
-      "covered": 13,
-      "total": 18
+      "covered": 12,
+      "total": 17
     },
     "precondition": {
       "covered": 5,
@@ -105,13 +105,6 @@
       "source": "EnsureConnected",
       "coveredBy": "tests/test_nats_reconnect.py:477",
       "confidence": "high"
-    },
-    {
-      "text": "ResetInfrastructure clears cached handles without changing transport state",
-      "category": "effect",
-      "source": "ResetInfrastructure",
-      "coveredBy": "tests/test_nats_reconnect.py:83",
-      "confidence": "medium"
     },
     {
       "text": "Subscribe guard subGen(k) < generation re-binds a stranded SUB",
