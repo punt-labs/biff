@@ -46,11 +46,11 @@ From the bottom up:
 import `kernel`, `wire`, `engine`, `render`, `commands` and `server`; no
 production layer may import it.
 
-`server` may import `client` because `biff mcp` becomes a client of biffd
-([biffd.md](biffd.md), "Package layout"). The allowance is temporary: the server
-still imports `engine` while the in-process server exists, and the last step of
-the migration deletes that path and the engine import with it, so that no
-client-side package imports `engine`.
+`server` imports `client` as `biff mcp` becomes a client of biffd
+([biffd.md](biffd.md), "Package layout"); that allowance is permanent. What ends
+is the server's import of `engine`: it stays while the in-process server exists,
+and the last step of the migration deletes that path, so that no client-side
+package imports `engine`.
 
 `cli` sits on top because it starts every other piece, including `biff mcp`,
 and it is the one place that knows which adapters exist.
