@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import secrets
 import tempfile
 from collections.abc import AsyncGenerator, Callable
@@ -18,20 +17,15 @@ from typing import Literal, Self, cast, get_args
 from biff._stdlib import biff_data_dir
 from biff.daemon.session_lock import SessionLock
 from biff.session_routing import ID_RE, MAX_ID_LENGTH, SessionIdError
+from biff.tty import CLI_ID_HEX_CHARS, CLI_ID_PREFIX, CLI_ID_RE
 
 logger = logging.getLogger(__name__)
 
 SessionState = Literal["live", "dormant", "ended"]
 
-CLI_ID_PREFIX = "cli-"
-"""Reserved prefix: harness session ids never carry it, so a CLI id cannot
-collide with a Claude Code id in the shared sessions directory."""
-
 SCHEMA_VERSION = 1
-_ID_HEX_CHARS = 16
 _RECORD_FILE = "session.json"
 _LOCK_DIR = "locks"
-_CLI_ID_RE = re.compile(rf"{CLI_ID_PREFIX}[0-9a-f]{{{_ID_HEX_CHARS}}}")
 
 
 class CliSessionEndedError(ValueError):
@@ -73,7 +67,7 @@ class CliSessionRecord:
         _require_aware(now)
         return cls(
             version=SCHEMA_VERSION,
-            session_id=f"{CLI_ID_PREFIX}{secrets.token_hex(_ID_HEX_CHARS // 2)}",
+            session_id=f"{CLI_ID_PREFIX}{secrets.token_hex(CLI_ID_HEX_CHARS // 2)}",
             tty=tty,
             user=user,
             repo=repo,
@@ -190,9 +184,9 @@ class CliSessionStore:
 
     def create(self, record: CliSessionRecord) -> None:
         """Persist a new record; refuse an id that exists or is not a CLI id."""
-        if not _CLI_ID_RE.fullmatch(record.session_id):
+        if not CLI_ID_RE.fullmatch(record.session_id):
             msg = (
-                f"session_id must be {CLI_ID_PREFIX!r} plus {_ID_HEX_CHARS} "
+                f"session_id must be {CLI_ID_PREFIX!r} plus {CLI_ID_HEX_CHARS} "
                 f"hex characters, got {record.session_id!r}"
             )
             raise ValueError(msg)
@@ -226,7 +220,7 @@ class CliSessionStore:
             return ()
         records: list[CliSessionRecord] = []
         for d in self.root.iterdir():
-            if not _CLI_ID_RE.fullmatch(d.name):
+            if not CLI_ID_RE.fullmatch(d.name):
                 continue
             try:
                 records.append(self.read(d.name))
