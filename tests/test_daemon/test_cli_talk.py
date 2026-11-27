@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
 from biff._formatting import HEADER_PREFIX
+from biff.cli_console import Tick
 from biff.cli_daemon import DaemonCommand
 from biff.cli_link import DaemonLink
 from biff.cli_talk import TalkConversation
@@ -241,3 +242,77 @@ async def test_the_wait_for_an_accept_reports_lines_the_queue_lost() -> None:
     await conversation._accepted("eric:tty2")
 
     assert any("2 talk lines were lost" in line for line in shown)
+
+
+async def test_biff_talk_fails_when_no_one_answers_and_sends_no_opening(
+    harness: Harness,
+    repo: Path,
+    bus: TalkBus,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert bus is not None
+    monkeypatch.setattr("biff.cli_talk.INVITE_WAIT_SECONDS", 0.3)
+    monkeypatch.setattr("biff.cli_console._WAKE_SECONDS", 0.1)
+    eric = await harness.connect("s-eric", "eric", cwd=str(repo))
+    status = cast("dict[str, dict[str, str]]", await eric.request("status"))
+    eric_at = f"eric:{status['data']['tty_name']}"
+    typist, screen = Typist(), Screen(capsys)
+    talked = await TalkConversation.alone(
+        _command(harness), eric_at, "the opening line", read=typist
+    )
+    screen.refresh()
+    assert talked is False  # biff talk exits 1
+    assert "timed out: no one answered" in screen.err
+    seen = _data(await eric.request("talk_read"))
+    assert seen["lines"] == []  # the opening line was never sent
+
+
+def _waiting(phase: str) -> TalkConversation:
+    """A conversation whose invite deadline has already passed."""
+    link = MagicMock()
+    link.pump.lost = ""
+    link.talk_read = AsyncMock(
+        return_value=TalkReading(
+            lines=(),
+            messages=(),
+            invites=(),
+            ended=False,
+            accept_published=True,
+            opening="",
+            opening_unsent=False,
+            dropped=0,
+            ready=True,
+            phase=phase,  # type: ignore[arg-type]
+            peer="eric:tty2",
+        )
+    )
+    link.talk_end = AsyncMock(return_value=MagicMock(error=False))
+    console = MagicMock()
+    console.say = lambda text="", *, end="\n": None
+    console.complain = MagicMock()
+    console.next = AsyncMock(return_value=Tick.IDLE)
+    return TalkConversation(
+        link=cast("DaemonLink", link),
+        console=console,
+        view=TalkView(ReplDisplay()),
+        prompt="you> ",
+    )
+
+
+async def test_an_acceptance_held_at_the_deadline_connects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("biff.cli_talk.INVITE_WAIT_SECONDS", 0.0)
+    conversation = _waiting("connected")
+    assert await conversation._await_accept("eric:tty2") is True
+    conversation._link.talk_end.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+async def test_no_acceptance_at_the_deadline_withdraws(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("biff.cli_talk.INVITE_WAIT_SECONDS", 0.0)
+    conversation = _waiting("inviting")
+    assert await conversation._await_accept("eric:tty2") is False
+    conversation._link.talk_end.assert_awaited_once()  # type: ignore[attr-defined]

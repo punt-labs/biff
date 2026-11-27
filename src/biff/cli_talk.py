@@ -43,7 +43,15 @@ class TalkConversation:
     ``biff talk`` runs it alone; both hand it the console they read from.
     """
 
-    __slots__ = ("_carried", "_console", "_link", "_lost", "_prompt", "_view")
+    __slots__ = (
+        "_carried",
+        "_console",
+        "_link",
+        "_lost",
+        "_prompt",
+        "_timed_out",
+        "_view",
+    )
 
     _link: DaemonLink
     _console: Console
@@ -51,6 +59,7 @@ class TalkConversation:
     _prompt: str
     _carried: tuple[WireMessage, ...]
     _lost: bool
+    _timed_out: bool
 
     def __new__(
         cls, *, link: DaemonLink, console: Console, view: TalkView, prompt: str
@@ -63,6 +72,7 @@ class TalkConversation:
         self._prompt = prompt
         self._carried = ()
         self._lost = False
+        self._timed_out = False
         return self
 
     @classmethod
@@ -100,8 +110,8 @@ class TalkConversation:
         An address that names someone with an invite to us accepts it; one that
         names the peer of a live talk sends *opening* as a line; any other
         invites.  Returns when the conversation is over: ``False`` if biffd
-        refused it or the connection to biffd was lost, ``True`` however else it
-        ended.
+        refused it, nobody answered the invite, or the connection to biffd was
+        lost; ``True`` however else it ended.
         """
         say = self._console.say
         outcome = await self._link.talk(to, opening)
@@ -114,11 +124,11 @@ class TalkConversation:
         await self._link.set_plan(f"talking to {peer}")
         try:
             if outcome.phase == "inviting" and not await self._await_accept(peer):
-                return not self._lost
+                return not (self._lost or self._timed_out)
             await self._converse(peer)
         finally:
             await self._link.set_plan("")
-        return not self._lost
+        return not (self._lost or self._timed_out)
 
     async def _await_accept(self, peer: str) -> bool:
         """Wait for *peer* to accept; return whether the talk connected.
@@ -137,7 +147,13 @@ class TalkConversation:
             while True:
                 got = await self._console.next(wake)
                 if loop.time() >= deadline:
-                    say(f"Talk with {peer} timed out: no one answered.")
+                    # An acceptance biffd already holds wins over the deadline.
+                    if await self._accepted(peer):
+                        return True
+                    self._console.complain(
+                        f"Talk with {peer} timed out: no one answered."
+                    )
+                    self._timed_out = True
                     await self._withdraw()
                     return False
                 if self._link.pump.lost:

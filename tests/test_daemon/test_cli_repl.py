@@ -520,5 +520,5 @@ async def test_an_invite_nobody_answers_times_out_and_is_withdrawn(
     monkeypatch.setattr("biff.cli_talk.INVITE_WAIT_SECONDS", 0.3)
     monkeypatch.setattr("biff.cli_console._WAKE_SECONDS", 0.1)
     talkers.repl.typist.type(f"talk {talkers.eric_at}")
-    await talkers.repl.screen.shows("timed out: no one answered")
+    await eventually(lambda: "timed out: no one answered" in _err(talkers.repl))
     await eventually(lambda: _withdrawn(talkers.bus))
