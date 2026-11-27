@@ -196,6 +196,12 @@ class UserSession(BaseModel):
     def _normalize_activity_timestamps(cls, v: datetime) -> datetime:
         return _ensure_utc(v)
 
+    def beat(self, last_tool_at: datetime | None = None) -> UserSession:
+        """Return this row heartbeated: alive now, last tool call never moved back."""
+        now = datetime.now(UTC)
+        newest = max(self.last_tool_at, last_tool_at or self.last_tool_at)
+        return self.model_copy(update={"last_active": now, "last_tool_at": newest})
+
     def is_live(self, *, now: datetime, ttl_seconds: float) -> bool:
         """Check whether the last heartbeat is recent enough to consider live.
 

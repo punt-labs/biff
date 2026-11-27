@@ -364,6 +364,13 @@
 
 ### Fixed
 
+- `/who` and `/finger` on another host no longer show a live session as hours
+  idle. Idle time advanced only when the session called a biff tool, so an
+  agent working in Bash and Edit read as idle to every other host, while its
+  own `/who` read 0m because `who` is itself a biff call. The plugin's
+  `unread-nudge.sh` hook now stamps `<session_id>.active` in the unread
+  directory on every prompt and tool call, and the server's heartbeat carries
+  that time into the shared `last_tool_at`. It only moves forward.
 - `read_messages` no longer loses mail when recording activity fails after the
   fetch: on NATS the fetch has already consumed the messages, so the result is
   returned and the failure is logged. A failed presence refresh no longer stops

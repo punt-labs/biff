@@ -155,8 +155,8 @@ class Relay(Protocol):
         """Return the user's registered sessions."""
         ...
 
-    async def heartbeat(self, session_key: str) -> None:
-        """Refresh the session liveness timestamp."""
+    async def heartbeat(self, session_key: str, at: datetime | None = None) -> None:
+        """Refresh liveness; advance ``last_tool_at`` to *at* if that is newer."""
         ...
 
     async def get_sessions(self) -> list[UserSession]:
@@ -299,7 +299,7 @@ class DormantRelay:
         """Return an empty result while disabled."""
         return []
 
-    async def heartbeat(self, session_key: str) -> None:
+    async def heartbeat(self, session_key: str, at: datetime | None = None) -> None:
         """Do nothing while disabled."""
 
     async def get_sessions(self) -> list[UserSession]:
@@ -584,7 +584,7 @@ class LocalRelay:
             if k.startswith(prefix) and not self._is_expired(s)
         ]
 
-    async def heartbeat(self, session_key: str) -> None:
+    async def heartbeat(self, session_key: str, at: datetime | None = None) -> None:
         """Update ``last_active`` for an existing session; skip if missing.
 
         Matches :meth:`NatsRelay.heartbeat`: a missing session (expired,
@@ -614,9 +614,7 @@ class LocalRelay:
                     logger.warning("Heartbeat found no session; skipping")
                 return
             self._heartbeat_missing_warned.discard(session_key)
-            sessions[session_key] = existing.model_copy(
-                update={"last_active": datetime.now(UTC)}
-            )
+            sessions[session_key] = existing.beat(at)
             self._write_sessions(sessions)
 
     async def get_sessions(self) -> list[UserSession]:

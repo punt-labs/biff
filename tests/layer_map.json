@@ -166,6 +166,7 @@
   "biff.server.display_queue": "server",
   "biff.server.entrypoints": "server",
   "biff.server.handshake_delivery": "server",
+  "biff.server.hook_activity": "server",
   "biff.server.launch": "server",
   "biff.server.mcp_protocol": "server",
   "biff.server.poller_health": "server",
