@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     import pytest
 
     from biff.supervision.backend import ServiceBackend
+    from biff.supervision.holder import Holder
     from biff.supervision.port import PortState
     from biff.supervision.spec import ServiceSpec
 
@@ -50,6 +51,15 @@ def port_is(monkeypatch: pytest.MonkeyPatch, state: PortState) -> None:
         return state
 
     monkeypatch.setattr(PortProbe, "state", report)
+
+
+def port_holder(monkeypatch: pytest.MonkeyPatch, holder: Holder | None) -> None:
+    """Make every ``PortProbe`` name *holder* as the program on its port."""
+
+    def named(self: PortProbe) -> Holder | None:
+        return holder
+
+    monkeypatch.setattr(PortProbe, "holder", named)
 
 
 def port_answers(monkeypatch: pytest.MonkeyPatch, *, answers: bool) -> None:

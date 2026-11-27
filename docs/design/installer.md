@@ -617,6 +617,21 @@ outcomes: done, failed, or no service manager.
   failure text and the rollback. This case was measured: on a Mac at load 175
   the new process logged `biffd starting` 37 s before it listened, longer than
   the 30 s wait.
+- **A refusal names its holder and leaves a trace.** When another program holds
+  the port, `install`, `start` and `restart` look it up with `lsof -nP
+  -iTCP:<port> -sTCP:LISTEN -Fpcn`, else `ss -ltnpH`, with no shell and a 2
+  second limit, and say `held by python3 (pid 4930), not biffd`. A tool that is
+  missing, hangs, is refused or names nothing adds nothing: the lookup never
+  fails the refusal and never guesses. The refusal is also written to `biff.log`
+  as one WARNING line with the port, the holder if known and the command, because
+  every biff process writes that log and a refusal that is only printed leaves no
+  record. (Under `biff daemon ...` the log's stderr handler also prints the line.)
+- **`stop` leaves launchd's plist, so `status` says so.** launchd's stop boots
+  the job out and keeps the plist; `status` then reads `installed: yes`,
+  `running: no` while `launchctl print` says it cannot find the service. The unit
+  line now reads `unit: <plist> (installed, not loaded)` for that state.
+- **biffd logs why it stops.** `biffd stopping: signal=SIGTERM pid=N` is written
+  when a stop signal arrives, before websockets' own `server closing`.
 - **A probe is not an error in the log.** A connect and close with no request
   fails websockets' handshake as a broken client does, and websockets logs both
   at ERROR with a traceback. biffd now logs a probe as one DEBUG line and a

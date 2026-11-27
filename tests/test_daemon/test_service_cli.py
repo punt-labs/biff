@@ -17,9 +17,11 @@ from biff.__main__ import app
 from biff.plugins.claude_code.claude_md import ClaudeMdImport
 from biff.run_dir import RunDir
 from biff.supervision.health import HealthProbe
+from biff.supervision.holder import Holder
 from biff.supervision.port import PortProbe
 from tests.test_supervision.fake_backend import (
     FakeBackend,
+    LoadedBackend,
     PiddedBackend,
     RaisingBackend,
 )
@@ -29,6 +31,7 @@ from tests.test_supervision.patching import (
     leftover_is,
     no_claude,
     port_answers,
+    port_holder,
     port_is,
 )
 
@@ -197,6 +200,64 @@ class TestDaemonControl:
         assert result.exit_code == 3
 
 
+class TestARefusedStartLeavesATrace:
+    """A refusal is written to biff.log as well as printed."""
+
+    @pytest.fixture
+    def log(self, home: Path) -> Path:
+        return home / ".punt-labs" / "biff" / "logs" / "biff.log"
+
+    def refusals(self, log: Path) -> list[str]:
+        return [line for line in log.read_text().splitlines() if "refused" in line]
+
+    @pytest.mark.parametrize("verb", ["start", "restart", "install"])
+    def test_one_warning_line_names_port_holder_and_command(
+        self,
+        backend: FakeBackend,
+        monkeypatch: pytest.MonkeyPatch,
+        log: Path,
+        verb: str,
+    ) -> None:
+        port_is(monkeypatch, "foreign")
+        port_holder(monkeypatch, Holder("python3", 4930))
+        backend.install()
+        result = runner.invoke(app, ["daemon", verb])
+        (line,) = self.refusals(log)
+        assert result.exit_code == 1
+        assert [
+            part
+            for part in (
+                "[WARNING]",
+                "8424",
+                "python3 (pid 4930)",
+                f"biff daemon {verb}",
+            )
+            if part not in line
+        ] == []
+
+    def test_an_unnamed_holder_is_not_guessed_in_the_log(
+        self,
+        backend: FakeBackend,
+        monkeypatch: pytest.MonkeyPatch,
+        log: Path,
+    ) -> None:
+        port_is(monkeypatch, "foreign")
+        port_holder(monkeypatch, None)
+        backend.install()
+        runner.invoke(app, ["daemon", "start"])
+        (line,) = self.refusals(log)
+        assert "pid" not in line
+
+    def test_the_terminal_message_names_the_holder_too(
+        self, backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        port_is(monkeypatch, "foreign")
+        port_holder(monkeypatch, Holder("python3", 4930))
+        backend.install()
+        result = runner.invoke(app, ["daemon", "start"])
+        assert "held by python3 (pid 4930)" in result.stderr
+
+
 class TestAStillStartingDaemon:
     """A slow start under load exits 4 with its own text, not 1 with a failure."""
 
@@ -237,6 +298,39 @@ class TestAStillStartingDaemon:
 
 
 class TestDaemonStatus:
+    def test_a_unit_that_is_not_loaded_says_so_on_the_unit_line(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=False)
+        host_has(monkeypatch, unit)
+        unit.install()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert f"unit: {unit.config_path()} (installed, not loaded)" in result.output
+
+    def test_a_loaded_unit_has_no_such_note(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=True)
+        host_has(monkeypatch, unit)
+        unit.install()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert "not loaded" not in result.output
+
+    def test_a_backend_with_no_notion_of_loading_has_no_such_note(
+        self, backend: FakeBackend
+    ) -> None:
+        backend.install()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert "not loaded" not in result.output
+
+    def test_an_uninstalled_unit_is_not_called_installed_not_loaded(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=False)
+        host_has(monkeypatch, unit)
+        result = runner.invoke(app, ["daemon", "status"])
+        assert "not loaded" not in result.output
+
     def test_not_installed(self, backend: FakeBackend) -> None:
         result = runner.invoke(app, ["daemon", "status"])
         assert (result.exit_code, "installed: no" in result.output) == (1, True)

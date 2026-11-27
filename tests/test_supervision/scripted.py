@@ -23,21 +23,28 @@ class ScriptedSupervisor:
     unmatched command succeeds with empty output.
     """
 
-    __slots__ = ("_calls", "_rules")
+    __slots__ = ("_calls", "_rules", "_timeouts")
 
     _calls: list[tuple[str, ...]]
+    _timeouts: list[float]
     _rules: list[tuple[tuple[str, ...], _Outcome]]
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
         self._calls = []
         self._rules = []
+        self._timeouts = []
         return self
 
     @property
     def calls(self) -> list[tuple[str, ...]]:
         """Every command run so far, in order."""
         return self._calls
+
+    @property
+    def timeouts(self) -> list[float]:
+        """The time limit each command was run with, in order."""
+        return self._timeouts
 
     def ran(self, *prefix: str) -> bool:
         """Return whether a command starting with *prefix* was run."""
@@ -67,9 +74,12 @@ class ScriptedSupervisor:
         self._rules.append((prefix, error))
         return self
 
-    def run(self, *argv: str) -> subprocess.CompletedProcess[str]:
+    def run(
+        self, *argv: str, timeout: float = 30.0
+    ) -> subprocess.CompletedProcess[str]:
         """Stand in for ``Supervisor.run``."""
         self._calls.append(argv)
+        self._timeouts.append(timeout)
         for prefix, outcome in self._rules:
             if argv[: len(prefix)] != prefix:
                 continue

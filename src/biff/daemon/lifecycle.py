@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final, Literal, Self, final
 
 from biff.run_dir import RunDir
 from biff.supervision.biffd import BIFFD_SPEC
+from biff.supervision.diagnosable import LoadReporting
 from biff.supervision.errors import (
     BinaryNotFoundError,
     PortConflictError,
@@ -151,10 +152,16 @@ class BiffdService:
         if self._manager is None:
             return [f"service manager: none ({self._absence()})"]
         backend = self._manager.backend
+        installed = backend.config_path().exists()
+        # launchd's stop boots the job out and keeps the plist: installed, not loaded.
+        unloaded = (
+            installed and isinstance(backend, LoadReporting) and not backend.is_loaded()
+        )
+        note = " (installed, not loaded)" if unloaded else ""
         return [
-            f"installed: {'yes' if backend.config_path().exists() else 'no'}",
+            f"installed: {'yes' if installed else 'no'}",
             f"running: {'yes' if backend.is_active() else 'no'}",
-            f"unit: {backend.config_path()}",
+            f"unit: {backend.config_path()}{note}",
         ]
 
     def _absence(self) -> str:

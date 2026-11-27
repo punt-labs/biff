@@ -76,6 +76,11 @@
 
 ### Fixed
 
+- A refused `biff daemon install`, `start` or `restart` (another program holds
+  biffd's port) names the program, `held by python3 (pid 4930), not biffd`, when
+  `lsof` or `ss` can say, and writes one WARNING line to `biff.log`.
+- `biff daemon status` reads `unit: <path> (installed, not loaded)` for a launchd
+  job that `stop` booted out, and biffd logs `biffd stopping: signal=... pid=...`.
 - A connect-and-close on biffd's port (a port probe) no longer writes an ERROR
   with a traceback to `biff.log`, and a real client's bad handshake is one
   WARNING line, written once: biffd's stderr handler, which a LaunchAgent

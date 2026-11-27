@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-__all__ = ["Diagnosable", "PidReporting"]
+__all__ = ["Diagnosable", "LoadReporting", "PidReporting"]
 
 
 @runtime_checkable
@@ -31,6 +31,20 @@ class PidReporting(Protocol):
 
     def main_pid(self) -> int | None:
         """Return the service's process id, or ``None`` when none is running.
+
+        Raises:
+            OSError: The supervisor program is missing or cannot be run.
+            subprocess.TimeoutExpired: The supervisor did not answer.
+        """
+        ...
+
+
+@runtime_checkable
+class LoadReporting(Protocol):
+    """A backend whose supervisor can have the job registered but not loaded."""
+
+    def is_loaded(self) -> bool:
+        """Return whether the supervisor has the job loaded, running or not.
 
         Raises:
             OSError: The supervisor program is missing or cannot be run.
