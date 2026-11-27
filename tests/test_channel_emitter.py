@@ -760,18 +760,24 @@ class TestTimer:
 
     async def test_the_timer_really_fires_and_sends(self, rig: _Rig) -> None:
         """O7: with a real clock, the one-shot sends the held event."""
+        # The interval must outlast anything a loaded runner does between the two
+        # checks, or the second one sends instead of being held and no timer arms.
         real = ChannelEmitter(
-            rig.source, lambda: None, limit=RateLimit(per_kind=0.05, limit=10, span=60)
+            rig.source, lambda: None, limit=RateLimit(per_kind=0.5, limit=10, span=60)
         )
         real.serve(rig.link)
         real.initialized()
         await rig.mail()
         await real.check()
+        await asyncio.sleep(0.1)  # a slow runner between the two checks
         await rig.mail()
         await real.check()
         assert real.is_timer_armed()
 
-        await asyncio.sleep(0.3)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5.0
+        while real.is_timer_armed() and loop.time() < deadline:
+            await asyncio.sleep(0.02)
 
         assert [m["count"] for m in rig.sink.metas] == ["1", "2"]
         assert not real.is_timer_armed()
