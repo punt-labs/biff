@@ -30,6 +30,9 @@ dependencies = [
     "watchdog>=7,<8",
     # The biffd listener and its client (docs/design/biffd.md).
     "websockets>=16,<17",
+    "keyring>=25,<26",
+    "cryptography>=46,<51",
+    "nostr-sdk>=0.45,<0.46",
 ]
 
 [project.optional-dependencies]
@@ -131,6 +134,8 @@ ignore = [
 "src/biff/cli_session.py" = ["T20"]
 "src/biff/installer.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/doctor.py" = ["T20", "FBT", "S603", "PLC0415"]
+"src/biff/keychain_vault.py" = ["S603"]
+"src/biff/nostr_directory.py" = ["S603"]
 "src/biff/plugins/claude_code/statusline.py" = ["S602", "T20"]
 "src/biff/server/tools/wall.py" = ["FBT"]
 "src/biff/mcp_server.py" = ["T20", "FBT"]
@@ -212,6 +217,10 @@ prefixes = [
     "log_hint",
     "logging_config",
     "markers",
+    "nostr_attest",
+    "nostr_bech32",
+    "nostr_crypto",
+    "nostr_event",
     "prob_gate",
     "run_dir",
     "session_id",
@@ -232,13 +241,21 @@ prefixes = [
     "ethos_team",
     "abandoned_canaries",
     "arrival_handler",
+    "deferred_vault",
     "directory_kqueue",
     "identity",
     "invite_expiry",
+    "key_store",
+    "key_vault",
+    "keychain_vault",
+    "owner_records",
+    "passphrase_vault",
+    "key_wiring",
     "local_watch",
     "nats_connection",
     "presence_liveness",
     "nats_relay",
+    "nostr_directory",
     "relay_errors",
     "changed_file",
     "channel_check_wire",
@@ -257,7 +274,7 @@ prefixes = [
 imports = ["kernel", "wire"]
 
 [tool.oo-ratchet.layers.render]
-prefixes = ["_formatting", "formatting"]
+prefixes = ["_formatting", "formatting", "who_columns"]
 imports = ["kernel", "wire", "engine"]
 
 [tool.oo-ratchet.layers.commands]
@@ -309,6 +326,7 @@ prefixes = [
     "__main__",
     "_cli_runtime",
     "cli_app",
+    "cli_key",
     "cli_session",
     "cli_session_drain",
     "cli_session_host",
@@ -337,7 +355,7 @@ imports = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not cli_multi_user and not nats_local and not nats_docker and not nats_hosted and not claude_channels and not stress and not quarantine'"
+addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not cli_multi_user and not nats_local and not nats_docker and not nats_hosted and not claude_channels and not keychain and not stress and not quarantine'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Per-test ceiling so a regression REPORTS (with every thread's stack
@@ -359,6 +377,7 @@ markers = [
     "nats_docker: marks tests that build and run the ghcr.io/punt-labs/biff-relay Docker image (run with -m nats_docker)",
     "nats_hosted: marks tests that require a hosted NATS account (run with -m nats_hosted)",
     "claude_channels: marks tests that drive a real interactive claude in tmux (run with -m claude_channels)",
+    "keychain: marks tests that use the real macOS keychain and raise a dialog (run by hand with -m keychain)",
     "stress: marks scale stress tests against hosted NATS (run with -m stress)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
     "vox: marks tests that manage vox mocking themselves (opts out of _silence_vox)",

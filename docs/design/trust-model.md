@@ -109,6 +109,23 @@ Until an agent cannot read its own key:
 
 Enforcement ships behind a switch and runs log-only during development.
 
+The owner-key prompt proves a person was present. It does not prove which
+process asked or what gets signed: an agent that can start `biff key attest`
+in the person's own shell could request a signature while the person is
+watching. Two checks narrow this. Before signing, `attest` derives the public
+key from the released secret and compares it with the key recorded when the
+owner key was created, so a swapped vault item signs nothing. On macOS, biff
+reads the keychain item's access list before every owner read and refuses an
+item that trusts an application: one click on "Always Allow" adds
+`/usr/bin/security` to that list, after which any process of the user reads
+the key with no dialog.
+
+Follow-up outside the first release: record the owner key under a
+`SecAccessControl` with a user-presence constraint, through a small native
+helper, so macOS itself requires Touch ID or the password for each signature
+and no "Always Allow" button exists. Until then the access-list check is the
+guard.
+
 ## 5. Agents act for their owner: NIP-OA attestation
 
 Biff creates the agent's key. The owner signs the agent's public key. The

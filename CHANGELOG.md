@@ -60,6 +60,50 @@
   Two repositories on one NATS server get two relays, each scoped to its own
   repository, so one repository's mail, presence and wall stay in its own
   namespace.
+- `biff key init`, `biff key agent`, `biff key attest` and `biff key show`:
+  each person and each agent gets one Nostr key (secp256k1, BIP-340 Schnorr).
+  The owner signs an agent's public key with a NIP-OA attestation that
+  expires (24 hours by default, 7 days with `--image`, or
+  `BIFF_ATTESTATION_HOURS`); a receiver checks the expiry on its own clock.
+  Private keys rest in the OS keyring, never in the repository or an ethos
+  ext file. The owner key sits behind a keychain item that trusts no
+  application (macOS) or a passphrase-encrypted file (Linux), and an agent
+  process cannot create it or sign with it. The keychain write sends the
+  secret to `security -i` on stdin, never on a command line. Signing and key
+  derivation run in `nostr-sdk` (Rust secp256k1); only verification, which
+  takes public inputs, is pure Python. Every agent key read is logged.
+  `biff key attest` refuses a released owner secret that is not the key
+  recorded at `biff key init`. On macOS the owner key's access list is read
+  before every use and an item that trusts an application (after "Always
+  Allow") is refused. The Linux passphrase is at least 12 characters,
+  confirmed twice, read only from `/dev/tty`, and sealed with scrypt at
+  N=2^17, with the parameters stored in the file. Publishing never overwrites
+  an unreadable file, and with ethos present a refusal is an error, never a
+  silent local copy. The `biff who` NPUB column shows `?` for an invalid
+  npub or a failed lookup.
+  Public keys and attestations go in the identity's ext `nostr` namespace,
+  or in `~/.punt-labs/biff/nostr.yaml` when ethos is absent. With ethos
+  present, reads use ethos alone, so an older local file cannot mix a stale
+  key into a current one.
+  `biff key init` run again after a failed first run finishes the setup with
+  the stored owner secret instead of stranding it. When this machine holds no
+  key for an agent, `biff key attest` signs the npub in the shared directory
+  only if the owner confirms it with `--npub`; the directory is
+  unauthenticated, so without the flag it prints the npub and signs nothing.
+  It refuses when the published npub differs from the local key. The first `biff key` command on a
+  machine records whether agent keys live in the OS keyring or in files
+  (`~/.punt-labs/biff/keys/agent-backend`); a later session that cannot reach
+  the keyring is an error, not a second key. The owner's public key is
+  recorded in the clear in `~/.punt-labs/biff/keys/owner/<handle>.pub`, so
+  `biff key show` verifies an attestation with no passphrase and no keyring;
+  `biff --json key show` carries the verdict. A recorded key that cannot be
+  read leaves the attestation unverified, and a corrupt one is invalid.
+- `biff who` adds an NPUB column with each user's short published npub. It is
+  the key published under that name, not proof the session holds it.
+  `biff key show` checks an attestation against the owner key recorded on this
+  machine and prints the owner's short npub; an owner with no recorded key is
+  labelled as published under that name only, and a directory key that
+  differs from the recorded one is invalid.
 
 ### Changed
 

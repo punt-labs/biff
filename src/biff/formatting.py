@@ -12,6 +12,7 @@ The primitive layer (``ColumnSpec``, ``format_table``, ``format_idle``,
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 
 from biff._formatting import (
@@ -32,7 +33,7 @@ from biff._stdlib import display_repo_name
 from biff.ethos_team import RoleEntry
 from biff.models import Message, SessionEvent, UserSession, WallPost
 from biff.presence_liveness import dead_sessions
-from biff.session_routing import ID_RE
+from biff.who_columns import WhoColumns
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,6 @@ __all__ = [
     "sanitized_sender",
     "terminal_safe",
     "visible_text",
-    "who_mgr",
 ]
 
 # Never wrap a talk body narrower than this, however long the sender
@@ -305,6 +305,7 @@ WHO_SPECS: list[ColumnSpec] = [
     ColumnSpec("NAME", min_width=10),
     ColumnSpec("K", min_width=1),
     ColumnSpec("MGR", min_width=3),
+    ColumnSpec("NPUB", min_width=4),
     ColumnSpec("REPO", min_width=4),
     ColumnSpec("IDLE", min_width=4),
     ColumnSpec("S", min_width=1),
@@ -332,44 +333,17 @@ def _format_who_kind(s: UserSession) -> str:
     return ""
 
 
-def who_mgr(s: UserSession) -> str:
-    """Return the biff-addressable human behind an agent row; blank otherwise.
-
-    Derived from the row's own captured data and stored nowhere: the first of
-    its ``owner_git`` (``BIFF_OWNER``, else ``git config user.name`` at
-    registration, not the effective author, which a provisioned host
-    overrides with the bot) and
-    ``launched_by`` (OS user) that is addressable and differs from the row's
-    own identity.  A full name such as ``Jane Doe`` is not addressable, so it
-    never fills the cell.  Humans get none.
-    """
-    if s.kind != "agent":
-        return ""
-    own = s.user.strip().casefold()
-    for candidate in (s.owner_git, s.launched_by):
-        name = candidate.strip()
-        if not name:
-            continue
-        if not ID_RE.fullmatch(name):
-            logger.debug("MGR candidate is not an addressable identity")
-            continue
-        if name.casefold() != own:
-            return name
-    return ""
-
-
-def _format_who_mgr(s: UserSession) -> str:
-    """Render :func:`who_mgr` as a neutralised, clipped fixed-column cell."""
-    return _truncate(terminal_safe(who_mgr(s))[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH)
-
-
-def format_who(sessions: list[UserSession]) -> str:
+def format_who(
+    sessions: list[UserSession], keys: Mapping[str, str] | None = None
+) -> str:
     """Build a columnar table matching BSD ``w(1)`` style.
 
     The NAME column renders exactly ``user:tty`` so agents can copy the
     address directly into ``/write``.  The MGR column, third after ``K``,
-    names the human behind an agent (see :func:`who_mgr`); it is blank for
-    human rows and hidden when no row has a value.
+    names the human behind an agent (see :meth:`WhoColumns.manager`); it is blank for
+    human rows and hidden when no row has a value.  The NPUB column shows the
+    short published (unverified) npub that *keys* (user handle to npub) holds
+    for the row's user, and is hidden when no row's user has one.
     P column shows ``+`` if the
     session has a plan, ``-`` otherwise.  Use ``/finger user`` to
     see the full plan text.
@@ -379,23 +353,21 @@ def format_who(sessions: list[UserSession]) -> str:
     same reason :func:`_format_who_name` routes through
     :func:`sanitized_address`.
     """
-    mgrs = [_format_who_mgr(s) for s in sessions]
-    show_mgr = any(mgrs)
+    hidden, extras = WhoColumns(keys).layout(sessions)
     rows: list[list[str]] = [
         [
             _format_who_name(s),
             _format_who_kind(s),
-            *([mgr] if show_mgr else []),
+            *extra,
             display_repo_name(s.repo) or "-",
             format_idle(s.last_tool_at),
             "+" if s.biff_enabled else "-",
             "+" if s.plan else "-",
             _truncate(terminal_safe(s.hostname), _MAX_LABEL_WIDTH) or "-",
         ]
-        for s, mgr in zip(sessions, mgrs, strict=True)
+        for s, extra in zip(sessions, extras, strict=True)
     ]
-    specs = WHO_SPECS if show_mgr else [c for c in WHO_SPECS if c.header != "MGR"]
-    return format_table(specs, rows)
+    return format_table([c for c in WHO_SPECS if c.header not in hidden], rows)
 
 
 def dead_sessions_summary(dead: list[UserSession]) -> str:
