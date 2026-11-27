@@ -1992,8 +1992,10 @@ layer (\texttt{nats-relay-passA-nowedge.tex},
 \texttt{nats-relay-xko-isconnected.tex},
 \texttt{nats-relay-kvwatch-noreconcile.tex}), not by the extended model.
 Restart recovery of unread mail is invariant~4 of DES-095 (stated in
-\texttt{session-model.tex}); invariant~5, that an attached client reaches a
-state that delivers pending arrivals, is the CTL formula checked here.  Mail that
+\texttt{session-model.tex}); invariant~5 is checked here only in its transport half: from any state with an
+attached client, a state with the relay $connected$, every subscription current and
+some client attached is reachable.  That the \emph{original} client receives its
+pending arrivals is not tracked by this model.  Mail that
 the daemon has fetched but not yet acknowledged is held in process memory and
 is outside the relay's unread count that the model keeps.  The first hello of a
 session reads the presence row through the relay before the client is
