@@ -656,7 +656,10 @@ async def test_a_feed_whose_connection_cannot_be_acquired_retries_and_recovers(
     relay.dial_fails = True  # get_nc itself raises
     relay.generation += 1  # the relay dialled a fresh client; the feeds must follow
     await _eventually(lambda: bus.subscriber_count(subject) == 0)
-    await _eventually(lambda: relay.failed_acquisitions >= 2)  # retried, not given up
+    key = subject.removeprefix("talk.notify.")
+    await _eventually(
+        lambda: relay.failed_acquisitions[key] >= 2
+    )  # eric's own feed retried
     relay.dial_fails = False
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
     await pair.say(pair.kai, pair.eric_at, "")

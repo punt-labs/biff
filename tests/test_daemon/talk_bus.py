@@ -113,7 +113,7 @@ class TalkBusRelay(LocalRelay):
         self.failed_dials: Counter[str] = Counter()  # per session key
         self.crash: Exception | None = None
         self.dial_fails = False
-        self.failed_acquisitions = 0
+        self.failed_acquisitions: Counter[str] = Counter()  # per session key
         bus.relays.append(self)
 
     @property
@@ -134,7 +134,11 @@ class TalkBusRelay(LocalRelay):
 
     async def get_nc(self) -> TalkClient:
         if self.dial_fails:  # acquiring the connection itself fails
-            self.failed_acquisitions += 1
+            # The caller is a feed task named "talk <session key>"; counting by
+            # that name keeps one feed's failures from standing for another's.
+            task = asyncio.current_task()
+            name = task.get_name() if task is not None else ""
+            self.failed_acquisitions[name.removeprefix("talk ")] += 1
             msg = "cannot acquire a connection"
             raise TimeoutError(msg)
         return self._bus
