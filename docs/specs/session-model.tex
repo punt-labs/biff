@@ -1690,7 +1690,9 @@ Reading consumes the session's unread mail --- read-once, one writer ---
 and every subscribed connection of that session is told the new, empty
 summary.  The reader need not be subscribed: a one-shot read is a request
 from a bound connection of the current run, as a call from a replaced run
-is refused ($RequestReplacedRun$).
+is refused ($RequestReplacedRun$).  The model abstracts the batching of a
+large inbox: one $ReadUnread$ consumes the whole count, where the daemon may
+deliver a batch and report a remaining count.
 
 %%--------------------------------------------------------------------
 \subsection{Detach and the end of a session}

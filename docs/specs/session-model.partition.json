@@ -1299,6 +1299,7 @@
           "class": "happy-path",
           "status": "accepted",
           "inputs": {
+            "c": "c1",
             "s": "s1"
           },
           "preState": {
@@ -1335,6 +1336,7 @@
           "class": "rejected",
           "status": "rejected",
           "inputs": {
+            "c": "c1",
             "s": "s1"
           },
           "preState": {
@@ -1348,13 +1350,14 @@
               "c1": "(s1,r1)"
             }
           },
-          "notes": "only a connection of the current run can end the session"
+          "notes": "only a connection of the current run can end the session: c1 is bound to replaced run r1"
         },
         {
           "id": 3,
           "class": "rejected",
           "status": "rejected",
           "inputs": {
+            "c": "c1",
             "s": "s1"
           },
           "preState": {
@@ -1363,7 +1366,7 @@
             ],
             "hello": {}
           },
-          "notes": "dormant record: no connection can send the hook"
+          "notes": "caller c1 is unbound (dormant record): precondition c in dom hello fails"
         },
         {
           "id": 4,
