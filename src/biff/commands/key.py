@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Self, final
 
+from biff._formatting import terminal_safe
 from biff.commands._result import CommandResult
+from biff.commands.attestation_verdict import AttestationVerdict
 from biff.key_store import (
     KeyExistsError,
     KeyNotFoundError,
@@ -30,8 +31,13 @@ _ALLOW_WARNING = (
 )
 
 
-_UNREADABLE = "recorded owner key unreadable in this session"
-_CONTRADICTS = "contradicts the owner key recorded on this machine"
+_UNREADABLE = "pinned owner key unreadable in this session"
+_CONTRADICTS = "contradicts the owner key pinned on this machine"
+_MATCHES_PIN = (
+    "matches the owner key pinned on this machine "
+    "(a file your user can write; not proof against code running as you)"
+)
+_NOT_PINNED = "not pinned on this machine"
 
 
 class InvalidLifetimeError(ValueError):
@@ -83,13 +89,13 @@ class KeyCommands:
         try:
             pubkey, created = self._owner_pubkey(owner)
         except _STORE_ERRORS as exc:
-            return CommandResult(text=str(exc), error=True)
+            return CommandResult(text=terminal_safe(str(exc)), error=True)
         npub = Bech32Key.PUBLIC.encode(pubkey)
         try:
             self._directory.publish(owner, {"npub": npub})
         except OSError as exc:
             text = (
-                f"owner key stored; publishing npub failed: {exc}; "
+                f"owner key stored; publishing npub failed: {terminal_safe(str(exc))}; "
                 "run `biff key init` again to retry"
             )
             return CommandResult(text=text, error=True)
@@ -102,12 +108,13 @@ class KeyCommands:
         try:
             npub = Bech32Key.PUBLIC.encode(self._store.agent_pubkey(handle))
         except _STORE_ERRORS as exc:
-            return CommandResult(text=str(exc), error=True)
+            return CommandResult(text=terminal_safe(str(exc)), error=True)
         vault = self._store.agent_vault_label
         try:
             self._directory.publish(handle, {"npub": npub})
         except OSError as exc:
-            text = f"agent key stored in {vault}; publishing npub failed: {exc}"
+            failure = terminal_safe(str(exc))
+            text = f"agent key stored in {vault}; publishing npub failed: {failure}"
             return CommandResult(text=text, error=True)
         return CommandResult(
             text=f"{handle} npub: {npub} (key in {vault})",
@@ -139,7 +146,7 @@ class KeyCommands:
             )
             agent_npub = Bech32Key.PUBLIC.encode(target)
         except _STORE_ERRORS as exc:
-            return CommandResult(text=str(exc), error=True)
+            return CommandResult(text=terminal_safe(str(exc)), error=True)
         try:
             self._directory.publish(
                 agent,
@@ -151,7 +158,9 @@ class KeyCommands:
                 },
             )
         except OSError as exc:
-            return CommandResult(text=f"attestation signed; {exc}", error=True)
+            return CommandResult(
+                text=terminal_safe(f"attestation signed; {exc}"), error=True
+            )
         expires = attestation.expires_at()
         text = f"{agent} attested by {owner} for {lifetime}h (until {_iso(expires)})"
         return CommandResult(
@@ -159,20 +168,42 @@ class KeyCommands:
         )
 
     def show(self, handle: str) -> CommandResult:
-        """Report *handle*'s published key and attestation state."""
+        """Report *handle*'s published key and attestation state.
+
+        Every string read from the directory is the publisher's own, so the
+        npub is decoded and re-encoded (a malformed one is refused) and every
+        other value is neutralised for the terminal before it reaches output.
+        """
         try:
             fields = self._directory.fields(handle)
             if "npub" not in fields:
                 return CommandResult(text=f"no key published for {handle}", error=True)
-            lines = [f"{handle}: {fields['npub']}"]
-            data: dict[str, object] = dict(fields)
+            npub = self._canonical_npub(handle, fields["npub"])
+            lines = [f"{terminal_safe(handle)}: {npub}"]
+            data: dict[str, object] = {
+                terminal_safe(k): terminal_safe(v) for k, v in fields.items()
+            }
+            if len(data) != len(fields):
+                msg = f"the directory entry for {handle} has conflicting field names"
+                raise PublishedKeyError(msg)
+            data["npub"] = npub
             if "auth_sig" in fields:
                 verdict = self._attestation_verdict(fields)
                 lines.append(f"  {verdict.text}")
                 data["attestation"] = verdict.as_json()
         except (OSError, ValueError, VaultError) as exc:
-            return CommandResult(text=str(exc), error=True)
+            return CommandResult(text=terminal_safe(str(exc)), error=True)
         return CommandResult(text="\n".join(lines), json_data=data)
+
+    @staticmethod
+    def _canonical_npub(handle: str, published: str) -> str:
+        """Return *published* decoded and re-encoded, or refuse a malformed npub."""
+        try:
+            return Bech32Key.PUBLIC.encode(Bech32Key.PUBLIC.decode(published))
+        except ValueError as exc:
+            shown = terminal_safe(published)[:24]
+            msg = f"the npub published for {handle} is malformed ({shown!r}): {exc}"
+            raise PublishedKeyError(msg) from exc
 
     def _owner_pubkey(self, owner: str) -> tuple[bytes, bool]:
         """Return the owner's public key and whether this call created the key."""
@@ -240,7 +271,10 @@ class KeyCommands:
     def _owner_standing(self, owner: str, published: bytes) -> str | None:
         """Say how the published owner key stands here; ``None`` if it contradicts.
 
-        The key recorded on this machine is the anchor the agent cannot write.
+        The key pinned on this machine is a file the agent process cannot reach
+        through the directory, but any code running as your user can write it, so
+        a match proves the directory agrees with the file, not that no one at your
+        user changed both.
         An owner never set up here is published under that name only.  A vault
         this session cannot open leaves the attestation unverified, never
         valid: ``show`` reads public data and must work without the private
@@ -251,12 +285,12 @@ class KeyCommands:
         try:
             recorded = self._store.owner_pubkey(owner)
         except KeyNotFoundError:
-            return "not recorded on this machine: published under that name only"
+            return _NOT_PINNED
         except CorruptKeyError:
             return None
         except VaultError:
             return _UNREADABLE
-        return "recorded on this machine" if recorded == published else None
+        return _MATCHES_PIN if recorded == published else None
 
     def _published_pubkey(self, agent: str) -> bytes | None:
         npub = self._directory.npub(agent)
@@ -292,6 +326,10 @@ class KeyCommands:
         rewrites its namespace cannot name a key it controls.
         """
         owner = fields.get("owner", "")
+        if owner and not NostrDirectory.is_handle(owner):
+            shown = terminal_safe(owner)
+            text = f"authorized by @{shown}: invalid; the owner is not a handle"
+            return AttestationVerdict(shown, "invalid", "", text)
         owner_npub = self._directory.npub(owner) if owner else None
         if owner_npub is None:
             text = f"authorized by @{owner or '?'}: no published key for the owner"
@@ -302,7 +340,7 @@ class KeyCommands:
             if standing is None:
                 text = (
                     f"authorized by @{owner}: invalid; the key published for "
-                    f"@{owner} is not the owner key recorded on this machine"
+                    f"@{owner} is not the owner key pinned on this machine"
                 )
                 return AttestationVerdict(owner, "invalid", _CONTRADICTS, text)
             if standing == _UNREADABLE:
@@ -315,33 +353,35 @@ class KeyCommands:
                 fields["auth_sig"],
             )
             agent = Bech32Key.PUBLIC.decode(fields["npub"]).hex()
-            expiry = _iso(attestation.expires_at())
-            if attestation.is_live(agent, now=int(self._clock())):
-                text = f"authorized by {who}: valid until {expiry}"
-                return AttestationVerdict(owner, "valid", standing, text)
-            if attestation.signature_is_valid(agent):
-                text = f"authorized by {who}: expired {expiry}"
-                return AttestationVerdict(owner, "expired", standing, text)
+            timed = self._timeliness(attestation, agent, (owner, who, standing))
+            if timed is not None:
+                return timed
         except (KeyError, ValueError):
             pass
         return AttestationVerdict(
             owner, "invalid", "", f"authorized by @{owner}: invalid"
         )
 
+    def _timeliness(
+        self, attestation: OwnerAttestation, agent: str, parts: tuple[str, str, str]
+    ) -> AttestationVerdict | None:
+        """Return the verdict for a signed attestation, else ``None``.
 
-@final
-@dataclass(frozen=True, slots=True)
-class AttestationVerdict:
-    """What ``biff key show`` concluded about an agent's attestation."""
-
-    owner: str
-    state: str
-    standing: str
-    text: str
-
-    def as_json(self) -> dict[str, str]:
-        """Return the verdict as ``biff --json key show`` reports it."""
-        return {"owner": self.owner, "state": self.state, "standing": self.standing}
+        *parts* is the owner handle, how the owner is shown and the owner key's
+        standing.  Only a match with the local pin counts as pinned.
+        """
+        owner, who, standing = parts
+        live = attestation.is_live(agent, now=int(self._clock()))
+        if not live and not attestation.signature_is_valid(agent):
+            return None
+        return AttestationVerdict.signed(
+            owner,
+            who,
+            standing,
+            _iso(attestation.expires_at()),
+            live=live,
+            pinned=standing == _MATCHES_PIN,
+        )
 
 
 def _iso(timestamp: int | None) -> str:

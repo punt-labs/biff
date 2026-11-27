@@ -37,3 +37,21 @@ def test_decode_rejects_bad_checksum() -> None:
 def test_decode_npub_rejects_nsec_prefix() -> None:
     with pytest.raises(ValueError, match="npub"):
         Bech32Key.PUBLIC.decode(_NSEC)
+
+
+def test_decode_accepts_an_all_uppercase_npub() -> None:
+    assert Bech32Key.PUBLIC.decode(_NPUB.upper()) == _PUBLIC
+
+
+def test_decode_rejects_a_mixed_case_npub() -> None:
+    mixed = _NPUB[:10] + _NPUB[10:].upper()
+    with pytest.raises(ValueError, match="mixed case"):
+        Bech32Key.PUBLIC.decode(mixed)
+
+
+def test_decode_rejects_a_non_ascii_lookalike() -> None:
+    # KELVIN SIGN lowercases to an ASCII "k", which is in the bech32 alphabet.
+    lookalike = _NPUB.replace("k", chr(0x212A), 1)
+    assert lookalike.lower() == _NPUB
+    with pytest.raises(ValueError, match="ASCII"):
+        Bech32Key.PUBLIC.decode(lookalike)

@@ -34,6 +34,7 @@
   "biff.commands._result": "commands",
   "biff.commands._session": "commands",
   "biff.commands._talk_relay": "commands",
+  "biff.commands.attestation_verdict": "commands",
   "biff.commands.finger": "commands",
   "biff.commands.inbox": "commands",
   "biff.commands.key": "commands",

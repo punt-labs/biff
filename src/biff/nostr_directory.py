@@ -188,8 +188,13 @@ class NostrDirectory:
             written.append(key)
 
     @staticmethod
+    def is_handle(text: str) -> bool:
+        """Return whether *text* is a well-formed handle."""
+        return _HANDLE_RE.fullmatch(text) is not None
+
+    @staticmethod
     def _check_handle(handle: str) -> None:
-        if not _HANDLE_RE.fullmatch(handle):
+        if not NostrDirectory.is_handle(handle):
             msg = f"invalid handle {handle!r}: use lowercase letters, digits, - and _"
             raise ValueError(msg)
 
@@ -280,7 +285,7 @@ class SessionKeys:
     def _collect(directory: NostrDirectory, users: tuple[str, ...]) -> dict[str, str]:
         found: dict[str, str] = {}
         for handle in users:
-            if not _HANDLE_RE.fullmatch(handle):
+            if not NostrDirectory.is_handle(handle):
                 logger.debug("who user is not a valid handle; no key lookup")
                 continue
             try:

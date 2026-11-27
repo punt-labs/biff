@@ -23,6 +23,10 @@ from biff.passphrase_vault import PassphraseFileVault
 from tests._memory_vault import MemoryVault
 
 NOW = 1_800_000_000
+PINNED_STANDING = (
+    "matches the owner key pinned on this machine "
+    "(a file your user can write; not proof against code running as you)"
+)
 NPUB_RE = re.compile(r"npub1[a-z0-9]{58}")
 
 
@@ -33,11 +37,11 @@ class _Ethos:
         self.data: dict[str, dict[str, str]] = {}
         self.refuse = False
         self.unreachable = False
+        self.failure = "ethos ext get failed (exit 3): store corrupt"
 
     def get(self, handle: str) -> dict[str, str]:
         if self.unreachable:
-            msg = "ethos ext get failed (exit 3): store corrupt"
-            raise OSError(msg)
+            raise OSError(self.failure)
         return dict(self.data.get(handle, {}))
 
     def set(self, handle: str, key: str, value: str) -> None:
@@ -498,12 +502,21 @@ def test_show_says_when_the_owner_key_is_recorded_on_this_machine(
     rig = _Rig(tmp_path)
     rig.commands.init("jfreeman")
     rig.commands.attest("jfreeman", "claude", hours=1)
-    assert "recorded on this machine" in rig.commands.show("claude").text
+    assert (
+        "matches the owner key pinned on this machine"
+        in rig.commands.show("claude").text
+    )
 
 
-def test_show_says_when_the_owner_key_is_only_published(tmp_path: Path) -> None:
+def _unpinned_owner_rig(tmp_path: Path, *, pin_someone_else: bool = False) -> _Rig:
+    """An agent attested by an owner this machine holds no pin for.
+
+    With *pin_someone_else* the machine pins a different owner first, so a test
+    can show that a pin for one owner does not vouch for another.
+    """
     rig = _Rig(tmp_path)
-    rig.commands.init("jfreeman")
+    if pin_someone_else:
+        rig.commands.init("jfreeman")
     rig.commands.agent("claude")
     stranger = bytes([7]) * 32
     rig.directory.publish(
@@ -511,9 +524,58 @@ def test_show_says_when_the_owner_key_is_only_published(tmp_path: Path) -> None:
     )
     rig.directory.publish("claude", {"owner": "mallory"})
     _forge(rig, "claude", stranger)
+    return rig
+
+
+def test_show_says_when_the_owner_key_is_only_published(tmp_path: Path) -> None:
+    rig = _unpinned_owner_rig(tmp_path, pin_someone_else=True)
     text = rig.commands.show("claude").text
-    assert "not recorded on this machine" in text
+    assert "not pinned on this machine" in text
     assert "npub1" in text
+
+
+def test_an_unpinned_owner_is_never_reported_valid(tmp_path: Path) -> None:
+    rig = _unpinned_owner_rig(tmp_path)
+    text = rig.commands.show("claude").text
+    attestation = cast("dict[str, str]", _show_json(rig)["attestation"])
+    assert attestation["state"] == "unpinned"
+    assert "not pinned on this machine" in text
+    assert "nothing local confirms that key" in text
+    assert "valid until" in text
+
+
+def test_an_unpinned_owner_with_an_expired_attestation_is_unpinned_expired(
+    tmp_path: Path,
+) -> None:
+    rig = _unpinned_owner_rig(tmp_path)
+    later = rig.later(NOW + 7200).show("claude")
+    data = cast("dict[str, object]", later.json_data)
+    verdict = cast("dict[str, str]", data["attestation"])
+    assert verdict["state"] == "unpinned-expired"
+    assert "expired" in later.text
+    assert "nothing local confirms that key" in later.text
+
+
+def test_a_pinned_expired_attestation_is_expired_in_json(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    later = rig.later(NOW + 7200).show("claude")
+    data = cast("dict[str, object]", later.json_data)
+    verdict = cast("dict[str, str]", data["attestation"])
+    assert verdict["state"] == "expired"
+    assert verdict["standing"].startswith(
+        "matches the owner key pinned on this machine"
+    )
+    assert "expired" in later.text
+
+
+def test_a_pinned_matching_owner_is_still_valid_in_json(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    attestation = cast("dict[str, str]", _show_json(rig)["attestation"])
+    assert attestation["state"] == "valid"
 
 
 def test_show_names_the_owner_key_it_checked(tmp_path: Path) -> None:
@@ -536,7 +598,7 @@ def test_show_is_unverified_when_the_recorded_owner_key_is_unavailable(
     assert not result.error
     assert (
         "authorized by @jfreeman: unverified, "
-        "recorded owner key unreadable in this session"
+        "pinned owner key unreadable in this session"
     ) in result.text
     assert "valid until" not in result.text
 
@@ -583,7 +645,7 @@ def test_show_verifies_on_a_headless_linux_machine_without_a_prompt(
     text = KeyCommands(sealed_store(forbidden), directory, lambda: float(NOW)).show(
         "claude"
     )
-    assert "recorded on this machine" in text.text
+    assert "matches the owner key pinned on this machine" in text.text
     assert "valid until" in text.text
 
 
@@ -601,7 +663,7 @@ def test_show_json_carries_the_owner_key_verdict(tmp_path: Path) -> None:
     assert data["attestation"] == {
         "owner": "jfreeman",
         "state": "valid",
-        "standing": "recorded on this machine",
+        "standing": PINNED_STANDING,
     }
 
 
@@ -651,3 +713,92 @@ def test_show_stays_unverified_when_the_owner_record_is_permission_denied(
         record.chmod(0o600)
     assert "unverified" in text
     assert "valid until" not in text
+
+
+def test_a_matching_pin_says_what_it_proves_and_its_limit(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    text = rig.commands.show("claude").text
+    assert "matches the owner key pinned on this machine" in text
+    assert "not proof against code running as you" in text
+    assert "recorded on this machine" not in text
+
+
+HOSTILE = ("\x1b[31m", "\x1b]0;title\x07")
+
+
+def _controls(text: str) -> list[str]:
+    """Return every character a terminal would act on (newline is layout)."""
+    return [ch for ch in text if not ch.isprintable() and ch != "\n"]
+
+
+def _strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        items = cast("dict[object, object]", value)
+        return [s for k, v in items.items() for s in (*_strings(k), *_strings(v))]
+    return []
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_show_refuses_a_malformed_npub_without_echoing_control_characters(
+    tmp_path: Path, hostile: str
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.directory.publish("claude", {"npub": f"{hostile}npub1nonsense"})
+    result = rig.commands.show("claude")
+    assert result.error
+    assert "malformed" in result.text
+    assert _controls(result.text) == []
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_show_neutralises_an_owner_handle_with_control_characters(
+    tmp_path: Path, hostile: str
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    rig.directory.publish("claude", {"owner": f"{hostile}jfreeman"})
+    result = rig.commands.show("claude")
+    assert _controls(result.text) == []
+    assert "invalid" in result.text
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_show_json_strings_carry_no_control_characters(
+    tmp_path: Path, hostile: str
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    rig.directory.publish("claude", {"note": f"{hostile}red", "owner": f"{hostile}x"})
+    data = rig.commands.show("claude").json_data
+    assert isinstance(data, dict)
+    assert all(_controls(s) == [] for s in _strings(cast("dict[object, object]", data)))
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_show_neutralises_a_hostile_ethos_failure(tmp_path: Path, hostile: str) -> None:
+    rig = _Rig(tmp_path)
+    rig.ethos.unreachable = True
+    rig.ethos.failure = f"ethos failed: {hostile}spoof"
+    result = rig.commands.show("claude")
+    assert result.error
+    assert _controls(result.text) == []
+
+
+def test_show_refuses_field_names_that_collide_once_neutralised(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    rig.directory.publish("claude", {"owner\x1b": "mallory"})
+    result = rig.commands.show("claude")
+    assert result.error
+    assert "conflicting field names" in result.text
+    assert result.json_data is None
+    assert "authorized by" not in result.text
