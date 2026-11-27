@@ -131,7 +131,8 @@ MCP server code. Phase 2 (`biff install`) installs the Claude Code plugin via `c
 biff@punt-labs --scope user` (see the current `install_cmd` in
 `src/biff/__main__.py`). MCP server registration is not a separate step —
 it's part of what the plugin itself declares in `plugin.json`'s
-`mcpServers`, loaded automatically once the plugin is installed.
+`mcpServers`, loaded automatically once the plugin is installed. Phase 2 also
+installs biffd's user service before the plugin (INS-012).
 
 ### Why Two Phases
 
@@ -390,7 +391,8 @@ URL and no explicit auth is configured (`_resolve_relay_fields` in
 
 1. **Uninstall plugin** — `claude plugin uninstall biff@punt-labs --scope user` (skipped with a message if `claude` isn't on PATH; a failure here doesn't skip the rest).
 2. **Remove this clone's git hooks** — `_remove_repo_git_hooks()`. Only this checkout's `.git/hooks` dispatchers; the committed marker and CI workflow are repo policy, untouched here (`biff disable` owns those).
-3. **User-scope teardown** — `UserScope().uninstall()` always runs, regardless of whether step 1 succeeded, so a failed or skipped plugin uninstall never strands the `@`-import: removes the `@~/.punt-labs/biff/CLAUDE.md` line from `~/.claude/CLAUDE.md`. The deposited guide file itself is left in place, dormant (INS-010's §2.9).
+3. **Remove biffd's service** — `_uninstall_service()` stops and removes the unit or LaunchAgent that `biff install` registered (INS-012); a host with no service manager has nothing to remove, and a failure here fails the command after the steps below have run.
+4. **User-scope teardown** — `UserScope().uninstall()` always runs, regardless of whether step 1 succeeded, so a failed or skipped plugin uninstall never strands the `@`-import: removes the `@~/.punt-labs/biff/CLAUDE.md` line from `~/.claude/CLAUDE.md`. The deposited guide file itself is left in place, dormant (INS-010's §2.9).
 
 `biff uninstall-statusline` is separate (as install is): restores the
 stashed original `statusLine`, deletes the stash file.
@@ -535,3 +537,79 @@ The `.punt-labs/biff/enabled` presence marker (§2.7 + `integration.md` L0) has 
 ### Rejected
 
 Repointing the doctor check at the repo-scope guide: left out of this change; the existing `Enabled` check covers repo state.
+
+## INS-012: biffd Is a User Service Installed by `biff install`
+
+**Date:** 2026-11-26
+**Status:** SETTLED; the supervision library is a stand-in until punt-service is published
+**Topic:** How the biffd daemon (DES-095, `docs/design/biffd.md` "Supervision") is installed, started and checked
+
+### Design
+
+`biff install` provisions the home tree, installs biffd's service, then installs
+the plugin. `biff uninstall` removes the service with the plugin and the clone's
+hooks. `biff daemon install`, `uninstall`, `start`, `stop`, `restart` and
+`status` act on the service alone. All of them go through `BiffdService`
+(`src/biff/daemon/lifecycle.py`), which turns each result into one of three
+outcomes: done, failed, or no service manager.
+
+- **Linux:** a systemd user unit `biffd.service` in `~/.config/systemd/user`,
+  `Restart=on-failure` because the spec sets `restart_on_crash_only`, so a crash
+  restarts biffd and a clean `biff daemon stop` stays stopped. **macOS:** the
+  LaunchAgent `com.punt-labs.biffd` with `KeepAlive` set to `SuccessfulExit: false`.
+- **The executable** is `biffd`, a second console script that runs `biff daemon
+  serve`. The unit's `ExecStart` is `~/.local/bin/biffd`, the path `uv tool
+  install` creates; install fails naming that path when it is missing.
+- **Port guard.** Install refuses when another program holds port 8424; a
+  running biffd on it is fine.
+- **No service manager** (a container, or a Linux login with no systemd user
+  session): `biff install` says biffd is not supervised and succeeds;
+  `biff daemon install`, `start`, `stop`, `restart` exit 3 with the same text,
+  so a bootstrap can tell "no manager" from 1, a manager that refused.
+- **A manager that exists and does not answer** (`systemctl` is installed and
+  `systemctl --user show-environment` fails, as in a container that ships
+  systemd without running it) is reported with systemctl's own words on stderr.
+  `biff install` still exits 0, because that container is the case with no
+  manager to supervise biffd; `biff daemon install`, `start`, `stop` and
+  `restart` exit 3.
+- **Install proves itself.** After registering the unit, install waits up to five
+  seconds for `/health` and fails if biffd does not answer, so `Type=simple`
+  "active" is never taken for "working". A step that fails, or a daemon that
+  never answers, removes the unit and disables it again; `uninstall` deletes the unit only after systemd reports
+  the service stopped, and a supervisor failure is an error, never ignored.
+- **A failed service install** does not skip the plugin step, because nothing
+  routes through biffd yet, but it fails the command with exit 1.
+
+The client autostart nudge (`biff.client.nudge.DaemonNudge`) is the one call a
+client makes before it connects: `/health` for one second, start the unit or a
+detached `biffd`, poll for five seconds, then raise `DaemonNotInstalledError` or
+`DaemonDidNotStartError` with the two messages in `biffd.md`. With a service
+manager, "installed" means the unit file exists, whatever else is on `PATH`;
+without one it means a `biffd` executable on `PATH` or in `~/.local/bin`.
+
+`biff doctor` gains seven biffd lines (unit, running, port, health, token,
+version, relay), each naming its repair command. While the unit is not
+installed they are informational (`required=False`) and a line says so, so a
+machine that has not run `biff install` since upgrading still passes. Once the
+unit is installed, a version mismatch and a port held by another program fail
+`biff doctor`. The relay line only says relay connections are not reported yet:
+the one way to ask biffd opens a session, and a session opened by doctor takes
+part in mail routing. A supervisor that hangs or a file that cannot be read is a
+failed line, never a traceback.
+
+### Why a stand-in library
+
+`punt-service` (`lux/packages/punt-service`) is not on PyPI, and a path or git
+dependency would break `uv tool install punt-biff`. `biff.supervision` holds a
+`ServiceSpec` and `ServiceBackend` protocol with the same fields and methods,
+and its own systemd and launchd backends. When punt-service is published,
+`systemd`, `launchd`, `host` and `runner` are replaced by its backends; the
+spec, protocol, manager, nudge, CLI and doctor stay.
+
+### Rejected
+
+- *A system-level unit.* It needs `sudo` (DES-095).
+- *Making the doctor lines required now.* They would fail every existing
+  install until its owner re-ran `biff install`.
+- *Letting a failed service install abort `biff install`.* It strands the
+  plugin step for a daemon nothing uses yet.

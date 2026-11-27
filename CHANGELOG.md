@@ -2,6 +2,57 @@
 
 ## [Unreleased]
 
+### Added
+
+- `biff install` installs biffd as a user service (systemd user unit `biffd`,
+  macOS LaunchAgent `com.punt-labs.biffd`) and `biff uninstall` removes it.
+  `biff daemon install`, `uninstall`, `start`, `stop`, `restart` and `status`
+  manage the service alone. A new `biffd` executable runs the daemon in the
+  foreground, as the unit executes it. A crash restarts biffd; a clean stop
+  stays stopped. A host with no service manager, such as a container, reports
+  that and exits 3; `biff install` still succeeds there.
+- `biff doctor` checks biffd in seven lines: unit installed, process running,
+  port owner, `/health`, token file mode, daemon version against client
+  version, and relay (reported as not available yet: asking biffd opens a
+  session, which would take part in mail routing). Each failing line names the command that
+  repairs it. They are informational until the daemon is the default path.
+- `biff.client.nudge.DaemonNudge` starts biffd for a client that finds it
+  down: it checks `/health` for one second, starts the unit or a detached
+  `biffd`, and polls for five seconds. It raises `DaemonNotInstalledError`
+  (`biffd is not installed. Run: biff install`) or `DaemonDidNotStartError`
+  (`biffd is installed but did not start within 5 seconds. Run: biff daemon
+  status, then biff doctor`). Nothing calls it yet.
+- biffd exits with status 78 when no restart can cure its failure (port taken,
+  run directory not private) and writes the reason to
+  `~/.punt-labs/biff/logs/biff.log`. The unit does not restart on 78, limits a
+  crash loop to five starts a minute, and passes `--port 8424` explicitly; the
+  LaunchAgent writes its output to the same log and throttles restarts to 30
+  seconds.
+- `biff install` and `biff daemon install` prove biffd answers `/health`
+  before they report success, remove the unit when a step fails or the daemon
+  never answers, and carry the
+  supervisor's stderr into the error. `biff uninstall` removes the unit only
+  after the service is stopped and disabled. A hung or unwritable service
+  manager is an error message, not a traceback, and does not skip the rest of
+  uninstall. `biffd` is found on `PATH` as well as in `~/.local/bin`.
+- `biff doctor` fails on a version mismatch or a port held by another program
+  once biffd's unit is installed; otherwise its biffd lines are advisory and say
+  so. A client that finds a stale `serve.port` also tries 8424.
+- `biff install` and the `install.sh` bootstrap install the service; `biff
+  daemon install` refuses to register a unit while a biffd it does not
+  supervise answers on the port. The unit file follows `XDG_CONFIG_HOME`, and
+  `biffd` is found beside the running interpreter as well as in
+  `~/.local/bin` and on `PATH`. On macOS the service needs a GUI session; over
+  SSH without one, install says why. `biff uninstall` fails, naming the
+  command to run, when a unit file exists and the service manager cannot be
+  reached.
+- `biff daemon status` prints relay connections and attached clients as not
+  reported yet, because biffd has no method that returns them.
+- The service code lives in `biff.supervision` behind a `ServiceBackend`
+  protocol that mirrors punt-service, which is not yet on PyPI. Moving to
+  punt-service replaces `biff.supervision.systemd`, `launchd`, `host` and
+  `runner` with its backends; no other module changes.
+
 ## [1.26.0] - 2026-11-26
 
 ### Added
