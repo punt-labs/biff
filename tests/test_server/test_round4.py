@@ -314,8 +314,12 @@ class TestAnnouncingADebtWakesThePoller:
 
 
 class TestADebtInsideTheHandshakeWindowWakesOnce:
+    @pytest.mark.parametrize("startup_delay", [0.0, 0.6])
     async def test_one_wake_at_the_window_end_and_no_ticks(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        startup_delay: float,
     ) -> None:
         monkeypatch.setattr(channel, "HANDSHAKE_WINDOW", 2.5)
         link = ChannelLink()
@@ -327,11 +331,19 @@ class TestADebtInsideTheHandshakeWindowWakesOnce:
         started = loop.time()
         flushes: list[float] = []
         real_flush = type(delivery).flush_owed
+        real_start = _descriptions._AlwaysOnSubs.start
+
+        async def slow_start(self: object) -> None:
+            # The poller's startup (its watch thread, its subscriptions) takes as
+            # long as it takes; a loaded machine makes it longer.
+            await asyncio.sleep(startup_delay)
+            await real_start(self)  # type: ignore[arg-type]
 
         async def spy(self: object) -> None:
             flushes.append(loop.time() - started)
             await real_flush(delivery)
 
+        monkeypatch.setattr(_descriptions._AlwaysOnSubs, "start", slow_start)
         monkeypatch.setattr(type(delivery), "flush_owed", spy)
         state = _state(tmp_path)
         task = asyncio.create_task(_REAL_POLL(create_server(state), state))
@@ -340,8 +352,14 @@ class TestADebtInsideTheHandshakeWindowWakesOnce:
         with suppress(asyncio.CancelledError):
             await task
 
-        early = [t for t in flushes if 0.3 < t < 2.3]
-        at_end = [t for t in flushes if 2.3 <= t < 2.9]
+        # The first flush is the poller's own first pass, which comes when its
+        # startup (a watch thread, the subscriptions) ends: that time is the
+        # machine's, not the product's, so the first pass is set aside by its
+        # place in the sequence rather than by a clock bound.
+        first_pass, *later = flushes
+        assert first_pass < 2.3  # startup ended inside the window
+        early = [t for t in later if t < 2.3]
+        at_end = [t for t in later if 2.3 <= t < 2.9]
         assert early == []  # no recheck inside the window
         assert len(at_end) == 1  # one wake, when the window ends
 
