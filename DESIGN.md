@@ -4172,12 +4172,18 @@ auth, poll interval); it no longer carries an `enabled` key.
   `http://<gateway>/github/owner/repo`; the extra route segment fails the
   two-part check and the checkout name was used, putting container
   sessions in a different repo namespace than host sessions.
-  **Decision:** `get_repo_slug` parses the raw fetch URL: the first
-  non-empty `remote.origin.url` value (`git config --get-all`), because
-  git fetches from the first URL. Verified on Git 2.43.0: an empty entry
-  is skipped and does not reset the list (`git remote get-url origin`
-  returns the first non-empty value); a test asks git itself as the oracle.
-  Any reset semantics of a newer Git are not modeled. It runs and parses the expanded
+  **Decision:** `get_repo_slug` parses the raw fetch URL, the first
+  usable `remote.origin.url` value (`git config --get-all`), because git
+  fetches from the first URL. An empty entry differs by Git version:
+  Git 2.43.0 (okinos, the agent image) does not reset the list, so
+  `git remote get-url origin` returns the first entry; Git 2.56.1 (CI)
+  does, so it returns the first entry after the empty one. The rule lets
+  Git decide: with no empty line in the raw list the first line is the
+  answer (the versions cannot differ, no extra subprocess); otherwise
+  `n` is the entry count of `git remote get-url --all origin` (Git's own
+  effective list), the last `n` raw entries are kept, and the first
+  non-empty one is the URL. Tests use Git's effective list as the oracle
+  and simulate both versions. It runs and parses the expanded
   `git remote get-url origin` only when the raw value does not parse (a
   shorthand such as `gh:owner/repo`), so the common case costs one git
   subprocess. This supersedes the expand-first approach of the

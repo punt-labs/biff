@@ -10,15 +10,12 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from biff import _stdlib
 from biff._stdlib import get_repo_slug
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 _GATEWAY = "http://192.168.20.102:8081/github/"
 
@@ -45,6 +42,15 @@ def _git_stdout(path: Path, *args: str) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def _git_stdout_lines(path: Path, *args: str) -> list[str]:
+    return subprocess.run(  # noqa: S603
+        ["git", "-C", str(path), *args],  # noqa: S607
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
 
 
 def _git(path: Path, *args: str) -> None:
@@ -113,18 +119,60 @@ def test_raw_value_that_parses_wins_over_a_different_expansion(
     assert get_repo_slug(repo) == "team/project"
 
 
-def test_empty_url_entry_agrees_with_what_git_fetches_from(
-    tmp_path: Path, gateway_rewrite: None
+_EX = "https://example.org/team/"
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        pytest.param(["first", "", "b"], id="empty-in-the-middle"),
+        pytest.param(["", "first"], id="empty-first"),
+        pytest.param(["first", "", "b", "c"], id="reset-then-two-urls"),
+        pytest.param(["first", ""], id="empty-last"),
+    ],
+)
+def test_empty_url_entry_agrees_with_git(
+    tmp_path: Path, gateway_rewrite: None, entries: list[str]
 ) -> None:
-    # Git itself is the oracle for the empty entry: on Git 2.43 the empty value
-    # is skipped and the first non-empty URL is the fetch URL.
-    repo = _repo_with_origin(tmp_path / "repo", "https://example.org/team/first.git")
-    _git(repo, "config", "--add", "remote.origin.url", "")
-    _git(repo, "config", "--add", "remote.origin.url", "https://example.org/team/b.git")
-    fetch_url = _git_stdout(repo, "remote", "get-url", "origin")
+    # Git decides what an empty remote.origin.url entry means: Git 2.43 keeps the
+    # earlier entries, Git 2.56 treats it as a reset.  The oracle is Git's own
+    # effective list (`remote get-url --all`): its first non-empty entry.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    for name in entries:
+        _git(
+            repo,
+            "config",
+            "--add",
+            "remote.origin.url",
+            f"{_EX}{name}.git" if name else "",
+        )
+    effective = _git_stdout_lines(repo, "remote", "get-url", "--all", "origin")
+    fetch_url = next((u for u in effective if u), "")
     expected = _stdlib._parse_repo_slug(fetch_url)  # pyright: ignore[reportPrivateUsage]
-    assert expected is not None
     assert get_repo_slug(repo) == expected
+
+
+@pytest.mark.parametrize(
+    ("effective", "slug"),
+    [
+        pytest.param(["a", "", "b"], "team/a", id="git-2.43-keeps-earlier-entries"),
+        pytest.param(["b"], "team/b", id="git-2.56-reset-drops-earlier-entries"),
+    ],
+)
+def test_effective_list_decides_what_an_empty_entry_means(
+    monkeypatch: pytest.MonkeyPatch, effective: list[str], slug: str
+) -> None:
+    # Both Git behaviors, simulated, so the 2.56 branch is covered on a 2.43 host.
+    def fake(_root: Path, *args: str) -> list[str]:
+        if args[:2] == ("config", "--get-all"):
+            return [f"{_EX}a.git", "", f"{_EX}b.git"]
+        assert args == ("remote", "get-url", "--all", "origin")
+        return [f"{_EX}{n}.git" if n else "" for n in effective]
+
+    monkeypatch.setattr(_stdlib, "_git_lines", fake)
+    assert get_repo_slug(Path()) == slug
 
 
 def test_expansion_is_not_computed_when_the_raw_url_parses(
