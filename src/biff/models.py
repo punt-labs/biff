@@ -49,7 +49,9 @@ def _is_utc(tz: tzinfo) -> bool:
 
 PLAN_MAX_LENGTH = 512
 """Longest accepted plan; matches ``Message.body`` and ``WallPost.text``."""
-_PARTY_MAX_LENGTH = 128  # a session id's limit: the longest user or tty name
+_USER_MAX_LENGTH = 128  # the longest user name a message names
+_ID_MAX_LENGTH = 128  # a session id's limit, so the longest tty a message names
+_ADDRESS_MAX_LENGTH = _USER_MAX_LENGTH + 1 + _ID_MAX_LENGTH  # ``user:tty``
 _ENVELOPE_MAX_LENGTH = 256  # one encryption-envelope field of a message
 
 _PLAN_TEXT: TypeAdapter[str] = TypeAdapter(
@@ -94,9 +96,9 @@ class Message(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     id: uuid.UUID = Field(default_factory=_new_id)
-    from_user: str = Field(min_length=1, max_length=_PARTY_MAX_LENGTH)
-    from_tty: str = Field(default="", max_length=_PARTY_MAX_LENGTH)  # sender's tty name
-    to_user: str = Field(min_length=1, max_length=_PARTY_MAX_LENGTH)
+    from_user: str = Field(min_length=1, max_length=_USER_MAX_LENGTH)
+    from_tty: str = Field(default="", max_length=_ID_MAX_LENGTH)  # sender's tty name
+    to_user: str = Field(min_length=1, max_length=_ADDRESS_MAX_LENGTH)  # user[:tty]
     body: str = Field(min_length=1, max_length=512)
     timestamp: datetime = Field(default_factory=_utc_now)
     read: bool = False

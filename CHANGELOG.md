@@ -46,8 +46,8 @@
 ### Changed
 
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
-  and `status` run through biffd and need `biff daemon serve` running. They
-  print the same text as before. `plan` and `tty` still write the plan-gate
+  and `status` run through biffd, starting it first when it is down. They print the
+  same text as before. `plan` and `tty` still write the plan-gate
   marker and rename the stored session in the calling process. A shell is
   always a CLI session: the old rung that attached to a harness session as a
   client is dropped, and stale stored sessions are no longer swept by these
@@ -58,8 +58,14 @@
   (half the frame limit) with bounded work, so a full batch can no longer
   exceed a frame and wedge the inbox. `plan` in biffd no longer writes the
   plan-gate marker, which belongs to the calling process.
-- A message's `from_user`, `from_tty`, `to_user` (128 characters) and its
-  encryption-envelope fields (256) are bounded where a message is accepted.
+- A message's `from_user` (128 characters), `from_tty` (128), `to_user` (257,
+  `user:tty`) and encryption-envelope fields (256) are bounded where a message is
+  accepted. A stored message that fails validation is logged at ERROR with its id
+  and kept in the mailbox file.
+- `biff read` shows `N more unread; run biff read again` when a batch leaves mail
+  behind (with `--json`, `{"messages": [...], "more": N}` in that case), and
+  confirms mail read only after it was printed, so a closed pipe or an
+  unreadable reply loses nothing.
 
 ## [1.26.0] - 2026-11-26
 

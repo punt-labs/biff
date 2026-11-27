@@ -13,9 +13,17 @@ from biff.formatting import format_read
 if TYPE_CHECKING:
     from biff.models import Message
 
-__all__ = ["ReadBatch", "ReadBatcher"]
+__all__ = ["FLOOR_BYTES", "ReadBatch", "ReadBatcher"]
 
 _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+
+FLOOR_BYTES = 8_192
+"""The size no single clipped message exceeds, with every field at its bound.
+
+The worst case measures 8,160 bytes (every name field full, each character one
+that JSON writes in six bytes).  A budget below this may be exceeded by a lone
+message; any budget the daemon runs with is far above it.
+"""
 
 _ENVELOPE_BYTES = 512
 """What a reply adds around its messages: ids, keys, the ``more`` count."""
@@ -37,15 +45,17 @@ class ReadBatcher:
     """Chooses how much mail one ``read`` reply carries.
 
     The reply holds the rows and the table text rendered from them, in one
-    frame, so the budget covers both.  A returned reply measures at most the
-    budget, which is at most half the frame limit, so the frame's own fields
-    (id, type, version, ``more``) always fit in the other half.
+    frame, so the budget covers both.  For a budget of at least
+    :data:`FLOOR_BYTES` a returned reply measures at most the budget, which is
+    at most half the frame limit, so the frame's own fields (id, type, version,
+    ``more``) always fit in the other half.  Below the floor a lone message may
+    exceed the budget, since it cannot be made smaller than one clipped message.
 
     The work is bounded whatever the mail is: rows alone pre-select the
     candidates in one linear pass with no rendering, then a binary search
     renders ``ceil(log2(n + 1))`` times to find the longest prefix that fits,
     and a first message that cannot fit alone is clipped in one measured step
-    and rendered at most three more times.
+    and rendered at most four more times.
     """
 
     __slots__ = ("_budget",)

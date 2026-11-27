@@ -7,12 +7,14 @@ import itertools
 import logging
 import os
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Final, Self, final
 
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from biff.client.environment import ClientEnvironment
+from biff.client.held_reply import HeldReply
 from biff.frame_ack import Ack
 from biff.frame_base import MAX_FRAME_BYTES, PROTOCOL_VERSION
 from biff.frame_client import ClientType, Hello, Request, Subscribe
@@ -313,21 +315,34 @@ class DaemonClient:
         return self._events.qsize() - (1 if self._lost else 0)
 
     async def request(self, method: str, **params: JsonValue) -> JsonValue:
-        """Run *method* in the daemon and return its result.
+        """Run *method*, confirm its result at once, and return it (see below)."""
+        held = await self._hold(method, params)
+        await held.confirm()
+        return held.result
+
+    async def request_held(self, method: str, **params: JsonValue) -> HeldReply:
+        """Run *method* and return its result with the confirmation still unsent.
+
+        A caller that must use the result before the daemon may count it
+        delivered (mail marked read) confirms it afterwards with
+        :meth:`HeldReply.confirm`.  A reply never confirmed leaves its effect
+        undone, so a result that cannot be shown loses nothing.
 
         Raises:
             DaemonError: The daemon refused the request.
             RequestTimeoutError: No reply arrived within the request timeout.
             ConnectionLostError: The connection closed before the reply arrived.
         """
+        return await self._hold(method, params)
+
+    async def _hold(self, method: str, params: dict[str, JsonValue]) -> HeldReply:
         reply = await self._roundtrip(
             lambda i: Request(id=i, method=method, params=params), method
         )
         if reply.error is not None:
             raise DaemonError(reply.error.code, reply.error.message)
-        if reply.needs_ack:
-            await self._confirm(reply.id)
-        return reply.result
+        confirm = partial(self._confirm, reply.id) if reply.needs_ack else None
+        return HeldReply(reply.result, confirm)
 
     async def subscribe(self) -> None:
         """Ask for the arrival subscription; read it with :meth:`next_event`.

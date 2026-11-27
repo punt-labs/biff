@@ -18,6 +18,8 @@ from biff.models import (
     truncate_plan,
     validate_plan,
 )
+from biff.session_routing import MAX_ID_LENGTH
+from biff.tty import build_session_key
 
 
 class TestMessage:
@@ -61,6 +63,23 @@ class TestMessage:
         fields = {"from_user": "kai", "to_user": "eric", "body": "hello"}
         with pytest.raises(ValidationError):
             Message.model_validate({**fields, field: "x" * 100_000})
+
+    def test_the_longest_legal_addresses_are_accepted(self) -> None:
+        """A user of 128 characters and a session id of 128 form a legal address."""
+        user, session_id = "u" * 128, "s" * 128
+        msg = Message(
+            from_user=user,
+            from_tty=session_id,
+            to_user=build_session_key(user, session_id),
+            body="hello",
+        )
+        assert len(msg.to_user) == 257
+
+    def test_a_tty_is_bounded_by_the_session_id_limit(self) -> None:
+        fields = {"from_user": "kai", "to_user": "eric", "body": "hello"}
+        Message.model_validate({**fields, "from_tty": "t" * MAX_ID_LENGTH})
+        with pytest.raises(ValidationError):
+            Message.model_validate({**fields, "from_tty": "t" * (MAX_ID_LENGTH + 1)})
 
     def test_frozen(self) -> None:
         msg = Message(from_user="kai", to_user="eric", body="hello")

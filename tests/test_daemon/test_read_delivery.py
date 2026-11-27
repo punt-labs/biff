@@ -125,6 +125,20 @@ async def test_undelivered_mail_stays_unread_across_two_reads(
     assert _bodies(await kai.request("read")) == []
 
 
+async def test_a_held_reply_marks_mail_read_only_when_confirmed(
+    harness: Harness,
+) -> None:
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="not yet")
+    held = await kai.request_held("read")
+    assert _bodies(held.result) == ["not yet"]
+    again = await kai.request_held("read")  # nothing confirmed: still unread
+    assert _bodies(again.result) == ["not yet"]
+    await again.confirm()
+    assert _bodies(await kai.request("read")) == []
+
+
 async def test_a_sent_reply_consumes_the_mail_it_carried(harness: Harness) -> None:
     kai = await harness.connect("s-kai", "kai")
     eric = await harness.connect("s-eric", "eric")

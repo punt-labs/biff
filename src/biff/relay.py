@@ -31,12 +31,12 @@ import os
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import IO, Protocol
 
 from pydantic import ValidationError
 
+from biff.mailbox_line import MailboxLine
 from biff.models import (
     Message,
     SessionEvent,
@@ -507,26 +507,15 @@ class LocalRelay:
         """Mark messages as read in the user's broadcast mailbox."""
         self._mark_read(self._user_inbox_path(user), ids)
 
-    _warn_once = staticmethod(lru_cache(maxsize=1024)(logger.warning))  # per line
-
     @staticmethod
     def _lines(path: Path) -> list[str]:
         """Return the lines of *path*, or none if it does not exist."""
         return path.read_text().splitlines() if path.exists() else []
 
     @staticmethod
-    def _parsed(line: str) -> Message | None:
-        """Parse one mailbox line; an unparseable one is warned about once."""
-        try:
-            return Message.model_validate_json(line) if line.strip() else None
-        except (ValidationError, ValueError):
-            LocalRelay._warn_once("Skipping malformed line: %s", line.strip()[:80])
-            return None
-
-    @staticmethod
     def _marked(line: str, ids: set[uuid.UUID]) -> str:
         """Return *line* with its message marked read if it is one of *ids*."""
-        msg = LocalRelay._parsed(line)
+        msg = MailboxLine.parse(line)
         if msg and msg.id in ids:
             return msg.model_copy(update={"read": True}).model_dump_json()
         return line
@@ -864,7 +853,7 @@ class LocalRelay:
     def _read_inbox_file(path: Path) -> list[Message]:
         """Read all messages from an inbox file."""
         lines = LocalRelay._lines(path)
-        return [m for m in map(LocalRelay._parsed, lines) if m is not None]
+        return [m for m in map(MailboxLine.parse, lines) if m is not None]
 
     def _read_inbox(self, session_key: str) -> list[Message]:
         """Read all messages from a session's TTY inbox."""

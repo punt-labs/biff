@@ -209,10 +209,11 @@ class TestMailboxesKeepWhatTheyCannotParse:
         mailbox = tmp_path / "userinbox-kai.jsonl"
         junk = f"{{not json {uuid.uuid4()}\n"
         mailbox.write_text(mailbox.read_text() + junk)
-        with caplog.at_level(logging.WARNING, logger="biff.relay"):
+        with caplog.at_level(logging.ERROR, logger="biff.mailbox_line"):
             for _ in range(5):
                 await relay.fetch_user_inbox("kai")
-        assert len([r for r in caplog.records if "malformed" in r.getMessage()]) == 1
+        failed = [r for r in caplog.records if "fails validation" in r.getMessage()]
+        assert len(failed) == 1
 
 
 class TestRecoveryIsProven:

@@ -9457,29 +9457,51 @@ the reply. The process holds no relay connection.
    other half. Work is `ceil(log2(n + 1))` renders plus one measured clip for a
    first message that cannot fit alone. The first design shrank the room in a
    loop and rendered 280 times for two messages; rejected as unbounded work.
-   Message user, tty and envelope fields are bounded where a message is
-   accepted, so a row has a known maximum size.
+   Message fields are bounded where a message is accepted, so a row has a known
+   maximum size: a user name 128 characters, a tty 128 (a session id's limit), an
+   address `user:tty` 257 (the two limits and the colon), an envelope field 256.
+   A reply is never smaller than one clipped message, so `FLOOR_BYTES` (8,192)
+   states the budget below which a lone message may exceed it; the daemon runs
+   at 512 KiB.
 3. **What only the calling process can do stays in it.** The plan-gate marker
    is keyed on the caller's repository and harness session, and a bead id
    expands against the caller's repository; a daemon has neither. The engine's
    `plan` only sets the plan. `PlanMarker` (`plan_marker.py`) writes the marker,
    and `DaemonCommand.plan` and `CallerPlan.set` call it. `tty` renames the
-   stored session record after the daemon reports the claimed name.
+   stored session record after the daemon reports the claimed name, and puts the
+   relay name back through the same connection when the record refuses it.
 4. **Session choice stays a client rule, without the relay.** `-s`/`BIFF_SESSION`
    names a stored session; otherwise the repo's pointed session; otherwise a new
    stored session whose tty name is the one the daemon claims for it. The daemon
-   creates the relay row from the hello.
+   creates the relay row from the hello. A new session is drafted in memory and
+   stored only once the daemon has named it, so a command that never reaches
+   biffd leaves no record and no pointer.
+5. **A result is confirmed after it was shown.** A `read` reply carries mail the
+   daemon marks read on the client's confirmation. `DaemonClient.request_held`
+   returns the result with the confirmation unsent; `Answer.deliver` shows the
+   result, flushes, and only then confirms. A reply that does not parse (a
+   daemon older than this biff lacks `text`; the client says so and names `biff
+   daemon restart`), or output that cannot be written (a closed pipe), leaves
+   the mail unread. Fields a newer daemon adds are ignored.
+6. **A backlog is said aloud.** A `read` batch that leaves mail behind prints
+   `N more unread; run biff read again`; with `--json` the output is
+   `{"messages": [...], "more": N}` in that case only, a bare list otherwise.
+7. **A daemon that is down is started.** Before connecting, the command calls
+   `DaemonNudge.for_host(run_dir).ensure_running()` on a worker thread. It exits
+   1 with `biffd is not installed. Run: biff install` or `biffd is installed but
+   did not start within 5 seconds. Run: biff daemon status, then biff doctor`.
 
 **Behavior changes.**
 
 - The harness-declared rung of the old five-rung ladder is dropped. It attached
   to a harness session as a client only when the human user had a relay row for
   it, which is rare (a `--user` override); a shell is now always a CLI session.
-- A `biff` command needs a running `biff daemon serve` until the autostart
-  nudge lands in the same migration.
 - Session sweep (lapse a stale stored session to dormant, expire it past
   retention) is not run by these commands. It moves into the daemon with the
   `session` verbs.
 
-**Consequence.** The REPL, `talk`, `watch` and the `session` verbs still run
-in-process; they move in the following steps of DES-095.
+**Consequence.** The REPL and `talk` still open an in-process session through
+`cli_session` in `__main__.py`, as do `watch` and the `session` verbs; the REPL
+and `talk` leave it in the PR that routes them through biffd (A3), and `watch`
+and the `session` verbs in the one before it (A2). The in-process path itself is
+deleted in the last PR of the migration.

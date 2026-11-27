@@ -41,7 +41,7 @@ import biff.commands.talk as talk_commands
 from biff._cli_runtime import CliInvocation
 from biff.cli_app import CliApp
 from biff.cli_context import CliContext
-from biff.cli_daemon import DaemonCommand
+from biff.cli_daemon import Answer, DaemonCommand, ResultPrinter
 from biff.cli_key import KeyCli
 from biff.cli_session import cli_session, cli_session_host
 from biff.commands import CommandResult
@@ -1103,30 +1103,23 @@ async def _repl() -> None:
 # prints the text or JSON and sets the exit code.
 
 
-def _run(
-    call: Callable[[DaemonCommand], Awaitable[CommandResult]],
-) -> None:
+def _run(call: Callable[[DaemonCommand], Awaitable[Answer]]) -> None:
     """Run one command as a client of biffd; print its text or JSON."""
 
     async def _inner() -> None:
         try:
             command = DaemonCommand.for_this_process(_user_override, _session_ref)
-            result = await call(command)
+            answer = await call(command)
+            await answer.deliver(
+                ResultPrinter(json_output=_json_output, quiet=_quiet_output)
+            )
         except DaemonCommand.FAILURES as exc:
             if _json_output:
                 _print_json({"error": str(exc)})
             else:
                 print(f"Error: {exc}", file=sys.stderr)
             raise typer.Exit(code=1) from None
-
-        if _json_output:
-            data = result.json_data if result.json_data is not None else result.text
-            _print_json(data)
-        elif result.error:
-            print(result.text, file=sys.stderr)
-        elif not _quiet_output:
-            print(result.text)
-        if result.error:
+        if answer.result.error:
             raise typer.Exit(code=1)
 
     asyncio.run(_inner())

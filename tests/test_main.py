@@ -7,6 +7,7 @@ import io
 import logging
 import subprocess
 import sys
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -65,6 +66,16 @@ _RESOLVED = ResolvedConfig(
 # ---------------------------------------------------------------------------
 
 
+class _FakeAnswer:
+    """Stands in for ``Answer``: shows its result, as biffd's would."""
+
+    def __init__(self, result: CommandResult) -> None:
+        self.result = result
+
+    async def deliver(self, show: Callable[[CommandResult], None]) -> None:
+        show(self.result)
+
+
 class _FakeDaemon:
     """Stands in for ``DaemonCommand``: records what the CLI asked biffd."""
 
@@ -72,19 +83,19 @@ class _FakeDaemon:
         self.calls: list[tuple[str, dict[str, object]]] = []
         self._outcome = outcome
 
-    async def _answer(self, method: str, params: dict[str, object]) -> CommandResult:
+    async def _answer(self, method: str, params: dict[str, object]) -> _FakeAnswer:
         self.calls.append((method, params))
         if isinstance(self._outcome, Exception):
             raise self._outcome
-        return self._outcome
+        return _FakeAnswer(self._outcome)
 
-    async def call(self, method: str, **params: object) -> CommandResult:
+    async def call(self, method: str, **params: object) -> _FakeAnswer:
         return await self._answer(method, params)
 
-    async def plan(self, message: str) -> CommandResult:
+    async def plan(self, message: str) -> _FakeAnswer:
         return await self._answer("plan", {"message": message})
 
-    async def tty(self, name: str) -> CommandResult:
+    async def tty(self, name: str) -> _FakeAnswer:
         return await self._answer("tty", {"name": name})
 
 
