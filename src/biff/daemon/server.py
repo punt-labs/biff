@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import signal
 import time
 from dataclasses import dataclass
@@ -172,6 +173,7 @@ class BiffDaemon:
             body = {
                 "version": pkg_version("punt-biff"),
                 "uptime_seconds": round(time.monotonic() - self._started, 3),
+                "pid": os.getpid(),
             }
             response = connection.respond(HTTPStatus.OK, json.dumps(body))
             # respond() stamps text/plain; setting would add a second header.

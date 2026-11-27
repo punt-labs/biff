@@ -61,6 +61,7 @@
   "biff.daemon.connection": "daemon",
   "biff.daemon.environment": "daemon",
   "biff.daemon.foreground": "daemon",
+  "biff.daemon.handshake_log": "daemon",
   "biff.daemon.lifecycle": "daemon",
   "biff.daemon.methods": "daemon",
   "biff.daemon.orgs": "daemon",

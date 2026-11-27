@@ -331,7 +331,9 @@ class TestHostStarter:
 
 class _Health(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        body = json.dumps({"version": "9.9.9", "uptime_seconds": 1.5}).encode()
+        body = json.dumps(
+            {"version": "9.9.9", "uptime_seconds": 1.5, "pid": 77}
+        ).encode()
         self.send_response(200 if self.path == "/health" else 404)
         self.end_headers()
         self.wfile.write(body)
@@ -361,4 +363,4 @@ class TestForHost:
 
     def test_health_probe_reads_version_and_uptime(self, health_port: int) -> None:
         health = HealthProbe(health_port).fetch(1.0)
-        assert (health.version, health.uptime_seconds) == ("9.9.9", 1.5)
+        assert (health.version, health.uptime_seconds, health.pid) == ("9.9.9", 1.5, 77)

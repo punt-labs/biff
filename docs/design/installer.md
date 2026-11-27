@@ -597,11 +597,35 @@ outcomes: done, failed, or no service manager.
   wait was (not how long biffd ran: it may have exited early and been
   restarted), whether the supervisor shows biffd running now (slow to start, or
   restarted after an exit) or not (it exited or never started, so read
-  `biff.log`), and the supervisor's own report: the state, run count and last
-  exit code from `launchctl print gui/<uid>/<label>` on macOS, which prints the
-  exit code after the program, arguments and environment; the first eight lines
+  `biff.log`), and the supervisor's own report: the state, run count, pid and
+  last exit code from the job's own block of `launchctl print
+  gui/<uid>/<label>` on macOS (its nested `coalition` and `endpoints` blocks
+  repeat `state` and `active count` and are skipped); the first eight lines
   of `systemctl --user status` on Linux. All of it is read before the rollback,
   which still removes the unit.
+- **A slow start under load is not a failure.** When the wait lapses and the
+  supervisor shows biffd running as a pid whose own `biffd starting` line is in
+  `biff.log` (read from the log's last megabyte), the command says `still
+  starting after N seconds (machine load average X); it is running, not
+  crashed` and exits 4. It is not 3, which means no service manager: the
+  bootstrap answers 3 by telling the user to start a foreground biffd, which
+  would compete for the port with the one the service is starting. `install.sh`
+  treats 4 as a note. `install`
+  keeps the service in that case and says so; it removes it only for the
+  failures it always did. A supervisor that does not show biffd running, no
+  startup line for that pid, or a pid the supervisor cannot name keeps the
+  failure text and the rollback. This case was measured: on a Mac at load 175
+  the new process logged `biffd starting` 37 s before it listened, longer than
+  the 30 s wait.
+- **A probe is not an error in the log.** A connect and close with no request
+  fails websockets' handshake as a broken client does, and websockets logs both
+  at ERROR with a traceback. biffd now logs a probe as one DEBUG line and a
+  client that sent anything else, including a partial request or LF-only line
+  endings, as one WARNING line with its reason, no traceback. The record had also been written twice: the daemon's stderr
+  handler and its file handler both took it, and under a LaunchAgent stderr is
+  `biff.log`. biffd now sends only CRITICAL to stderr.
+- **`biff daemon status` prints the pid** that `/health` reports, which is
+  biffd's own `os.getpid()`; a biffd older than the field prints no pid line.
 - **start and restart refuse a port the service does not hold.** A foreground
   biffd answers `/health` too, so `start` and `restart` apply the install
   guard first: a biffd the service does not supervise, or another program, on

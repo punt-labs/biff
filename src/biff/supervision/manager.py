@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self, final
 
 from biff.supervision.errors import (
     PortConflictError,
     ServiceActionFailedError,
     ServiceNotInstalledError,
+    ServiceStillStartingError,
 )
 from biff.supervision.evidence import SupervisorEvidence
 from biff.supervision.health_wait import HealthWait
@@ -80,8 +82,12 @@ class ServiceManager:
         self._refuse_other_holder("install")
         exec_display = " ".join(self._spec.resolve_exec_args())
         up_to_date = self._backend.install()
-        evidence = SupervisorEvidence(self._backend)
+        evidence = self._evidence()
         if not self._port.wait_until_answering(wait):
+            if evidence.is_starting():
+                raise ServiceStillStartingError(
+                    self._still_starting("install", wait, kept=True)
+                )
             # What the supervisor knows must be read before the rollback removes it.
             seen = evidence.describe()
             detail = (
@@ -102,6 +108,20 @@ class ServiceManager:
         if warning := self._backend.linger_warning():
             lines.append(warning)
         return os.linesep.join(lines)
+
+    def _evidence(self) -> SupervisorEvidence:
+        """Start the clock and name the log for a service just started."""
+        return SupervisorEvidence(self._backend, Path(self._spec.log_path).expanduser())
+
+    def _still_starting(self, action: str, wait: float, *, kept: bool = False) -> str:
+        """Say that a running service has not answered yet; it is not a failure."""
+        left = "It was left installed. " if kept else ""
+        return (
+            f"{self._spec.display_name} {action}: still starting after {wait:g} "
+            f"seconds (machine load average {os.getloadavg()[0]:.1f}); it is "
+            f"running, not crashed. {left}Run: {self._spec.cli_name} "
+            f"{self._spec.cli_verb} status"
+        )
 
     def _refuse_other_holder(self, action: str) -> None:
         """Refuse *action* while a program outside the service holds the port.
@@ -196,9 +216,11 @@ class ServiceManager:
 
     def _require_answering(self, action: str, wait: float) -> None:
         """Return once the service answers ``/health``; raise after *wait* seconds."""
-        evidence = SupervisorEvidence(self._backend)
+        evidence = self._evidence()
         if self._port.wait_until_answering(wait):
             return
+        if evidence.is_starting():
+            raise ServiceStillStartingError(self._still_starting(action, wait))
         detail = (
             f"the supervisor accepted it, but it does not answer /health on port "
             f"{self._spec.health_port} within {wait:g} seconds. "

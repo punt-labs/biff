@@ -207,6 +207,12 @@ class LaunchdBackend:
             "launchctl", "print", self._target, keys=_DIAGNOSIS_KEYS
         )
 
+    def main_pid(self) -> int | None:
+        """Return the job's pid from ``launchctl print``, or ``None`` without one."""
+        result = Supervisor.run("launchctl", "print", self._target)
+        pid = Supervisor.top_level_fields(result.stdout).get("pid", "")
+        return int(pid) if pid.isdecimal() else None
+
     def linger_warning(self) -> str:
         """Return no warning: a LaunchAgent survives logout of the shell."""
         return ""

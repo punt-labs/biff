@@ -15,6 +15,7 @@ import typer
 from punt_observe.logging import Role
 
 from biff.daemon.environment import DaemonEnvironment
+from biff.daemon.handshake_log import HandshakeLog
 from biff.logging_config import configure_logging
 from biff.run_dir import RunDir
 from biff.supervision.biffd import PERMANENT_EXIT_STATUS
@@ -50,7 +51,10 @@ class Foreground:
                 on stderr and in the log, and the exit status is the one a unit is
                 told not to restart.
         """
-        configure_logging(Role.DAEMON)
+        # Only CRITICAL goes to stderr: under a LaunchAgent stderr is biff.log, and
+        # every WARNING the file handler wrote was written a second time.
+        configure_logging(Role.DAEMON, stderr_level="CRITICAL")
+        HandshakeLog.install()
         run_dir = RunDir.default()
         # The first line biffd writes: under a service manager nothing else says
         # that it was started, or by which interpreter, before it listens.

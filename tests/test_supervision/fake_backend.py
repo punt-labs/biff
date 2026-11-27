@@ -206,3 +206,22 @@ class DiagnosableBackend(FakeBackend):
         """Return the scripted report, noting whether the unit still exists."""
         self._seen.append(self.config_path().exists())
         return self._report
+
+
+class PiddedBackend(DiagnosableBackend):
+    """A backend whose supervisor also knows the service's pid, as both real ones do."""
+
+    __slots__ = ("_pid",)
+
+    # None: the supervisor shows no process, as for a job that is not running.
+    _pid: int | None
+
+    def __new__(cls, config_path: Path, *, pid: int | None, alive: bool = True) -> Self:
+        """Show the service running as *pid*, or not running with ``alive=False``."""
+        self = super().__new__(cls, config_path, "state = running", alive=alive)
+        self._pid = pid
+        return self
+
+    def main_pid(self) -> int | None:
+        """Return the scripted pid."""
+        return self._pid

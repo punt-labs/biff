@@ -186,6 +186,14 @@ class SystemdBackend:
             self._unit,
         )
 
+    def main_pid(self) -> int | None:
+        """Return the unit's ``MainPID``, or ``None`` when systemd shows 0."""
+        result = Supervisor.run(
+            "systemctl", "--user", "show", "-p", "MainPID", "--value", self._unit
+        )
+        pid = result.stdout.strip()
+        return int(pid) if pid.isdecimal() and int(pid) > 0 else None
+
     def linger_warning(self) -> str:
         """Warn that the unit stops at logout unless linger is enabled.
 
