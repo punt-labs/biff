@@ -1,4 +1,4 @@
-"""The optional MGR and KEY columns of the ``/who`` table."""
+"""The optional MGR and NPUB columns of the ``/who`` table."""
 
 from __future__ import annotations
 
@@ -24,8 +24,10 @@ _MAX_LABEL_CHARS = _MAX_LABEL_WIDTH * 4
 class WhoColumns:
     """Cells for the ``/who`` columns that appear only when some row has one.
 
-    MGR names the human behind an agent.  KEY shows a short npub for each row
-    whose user has published one.  An empty cell means the row has no value;
+    MGR names the human behind an agent.  NPUB shows a short npub for each row
+    whose user has published one.  It is the key published under that name and
+    nothing more: no proof that the session holds it, so it is not an
+    authenticity mark.  An empty cell means the row has no value;
     the table drops a column whose every cell is empty.
     """
 
@@ -45,7 +47,7 @@ class WhoColumns:
         """Return the headers to hide and, per session, the cells that remain."""
         columns = {
             "MGR": [self._mgr_cell(s) for s in sessions],
-            "KEY": [self._key_cell(self._keys.get(s.user, "")) for s in sessions],
+            "NPUB": [self._key_cell(self._keys.get(s.user, "")) for s in sessions],
         }
         hidden = {header for header, cells in columns.items() if not any(cells)}
         shown = [cells for header, cells in columns.items() if header not in hidden]
@@ -98,4 +100,4 @@ class WhoColumns:
             Bech32Key.PUBLIC.decode(raw)
         except ValueError:
             return "?"
-        return f"{raw[:10]}…{raw[-5:]}"
+        return Bech32Key.abbreviate(raw)

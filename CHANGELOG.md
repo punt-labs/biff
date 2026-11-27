@@ -79,22 +79,27 @@
   confirmed twice, read only from `/dev/tty`, and sealed with scrypt at
   N=2^17, with the parameters stored in the file. Publishing never overwrites
   an unreadable file, and with ethos present a refusal is an error, never a
-  silent local copy. The `biff who` KEY column shows `?` for an invalid
+  silent local copy. The `biff who` NPUB column shows `?` for an invalid
   npub or a failed lookup.
   Public keys and attestations go in the identity's ext `nostr` namespace,
   or in `~/.punt-labs/biff/nostr.yaml` when ethos is absent. With ethos
   present, reads use ethos alone, so an older local file cannot mix a stale
   key into a current one.
   `biff key init` run again after a failed first run finishes the setup with
-  the stored owner secret instead of stranding it. `biff key attest` signs the
-  npub already published for an agent when this machine holds no key for it,
-  so an owner on a laptop can attest an agent image, and it refuses when the
-  published npub differs from the local key. The first `biff key` command on a
+  the stored owner secret instead of stranding it. When this machine holds no
+  key for an agent, `biff key attest` signs the npub in the shared directory
+  only if the owner confirms it with `--npub`; the directory is
+  unauthenticated, so without the flag it prints the npub and signs nothing.
+  It refuses when the published npub differs from the local key. The first `biff key` command on a
   machine records whether agent keys live in the OS keyring or in files
   (`~/.punt-labs/biff/keys/agent-backend`); a later session that cannot reach
   the keyring is an error, not a second key.
-- `biff who` adds a KEY column with each user's short npub when one is
-  published.
+- `biff who` adds an NPUB column with each user's short published npub. It is
+  the key published under that name, not proof the session holds it.
+  `biff key show` checks an attestation against the owner key recorded on this
+  machine and prints the owner's short npub; an owner with no recorded key is
+  labelled as published under that name only, and a directory key that
+  differs from the recorded one is invalid.
 
 ### Changed
 

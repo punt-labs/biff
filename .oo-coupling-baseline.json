@@ -269,8 +269,8 @@
     "efferent_coupling": 6.0,
     "public_names": 6.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.222,
-    "avg_lcom": 0.222
+    "max_lcom": 0.267,
+    "avg_lcom": 0.267
   },
   "src/biff/commands/last.py": {
     "efferent_coupling": 4.0,

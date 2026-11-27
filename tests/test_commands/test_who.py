@@ -172,7 +172,8 @@ class TestWhoKeyColumn:
         self._publish(home, "kai", npub)
         await relay.update_session(UserSession(user="kai", tty="abc12345"))
         result = await who(ctx)
-        assert "KEY" in result.text
+        assert "NPUB" in result.text
+        assert "KEY" not in result.text
         assert "npub180cvv…jh6w6" in result.text
         assert npub not in result.text
 
@@ -186,4 +187,4 @@ class TestWhoKeyColumn:
         monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
         await relay.update_session(UserSession(user="kai", tty="abc12345"))
         result = await who(ctx)
-        assert "KEY" not in result.text
+        assert "NPUB" not in result.text

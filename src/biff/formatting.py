@@ -305,7 +305,7 @@ WHO_SPECS: list[ColumnSpec] = [
     ColumnSpec("NAME", min_width=10),
     ColumnSpec("K", min_width=1),
     ColumnSpec("MGR", min_width=3),
-    ColumnSpec("KEY", min_width=3),
+    ColumnSpec("NPUB", min_width=4),
     ColumnSpec("REPO", min_width=4),
     ColumnSpec("IDLE", min_width=4),
     ColumnSpec("S", min_width=1),
@@ -341,9 +341,9 @@ def format_who(
     The NAME column renders exactly ``user:tty`` so agents can copy the
     address directly into ``/write``.  The MGR column, third after ``K``,
     names the human behind an agent (see :meth:`WhoColumns.manager`); it is blank for
-    human rows and hidden when no row has a value.  The KEY column shows the
-    short npub that *keys* (user handle to npub) holds for the row's user, and
-    is hidden when no row's user has one.
+    human rows and hidden when no row has a value.  The NPUB column shows the
+    short published (unverified) npub that *keys* (user handle to npub) holds
+    for the row's user, and is hidden when no row's user has one.
     P column shows ``+`` if the
     session has a plan, ``-`` otherwise.  Use ``/finger user`` to
     see the full plan text.

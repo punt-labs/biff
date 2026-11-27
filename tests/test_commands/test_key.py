@@ -10,6 +10,7 @@ import yaml
 
 from biff.commands.key import KeyCommands
 from biff.key_store import CallerKind, KeyStore
+from biff.nostr_attest import OwnerAttestation
 from biff.nostr_bech32 import Bech32Key
 from biff.nostr_crypto import NostrCrypto
 from biff.nostr_directory import NostrDirectory
@@ -365,16 +366,18 @@ def test_attest_signs_the_published_key_not_a_replacement(tmp_path: Path) -> Non
     rig = _Rig(tmp_path)
     rig.commands.init("jfreeman")
     published = _published_elsewhere(rig, "claude")
-    result = rig.commands.attest("jfreeman", "claude", image=True)
+    npub = Bech32Key.PUBLIC.encode(published)
+    result = rig.commands.attest("jfreeman", "claude", image=True, npub=npub)
     assert not result.error, result.text
-    assert rig.directory.npub("claude") == Bech32Key.PUBLIC.encode(published)
+    assert rig.directory.npub("claude") == npub
 
 
 def test_attest_of_a_published_key_creates_no_local_agent_key(tmp_path: Path) -> None:
     rig = _Rig(tmp_path)
     rig.commands.init("jfreeman")
-    _published_elsewhere(rig, "claude")
-    rig.commands.attest("jfreeman", "claude", image=True)
+    published = _published_elsewhere(rig, "claude")
+    npub = Bech32Key.PUBLIC.encode(published)
+    rig.commands.attest("jfreeman", "claude", image=True, npub=npub)
     assert ("biff-agent", "claude") not in rig.agent_vault.items
 
 
@@ -384,7 +387,8 @@ def test_attestation_of_a_published_key_verifies_against_that_key(
     rig = _Rig(tmp_path)
     rig.commands.init("jfreeman")
     published = _published_elsewhere(rig, "claude")
-    rig.commands.attest("jfreeman", "claude", hours=1)
+    npub = Bech32Key.PUBLIC.encode(published)
+    rig.commands.attest("jfreeman", "claude", hours=1, npub=npub)
     assert "valid until" in rig.commands.show("claude").text
     assert rig.directory.fields("claude")["npub"] == Bech32Key.PUBLIC.encode(published)
 
@@ -401,3 +405,111 @@ def test_attest_refuses_when_the_local_key_differs_from_the_published_one(
     assert "differs" in result.text
     assert rig.directory.npub("claude") == Bech32Key.PUBLIC.encode(published)
     assert "auth_sig" not in rig.directory.fields("claude")
+
+
+def test_attest_of_a_directory_key_without_npub_refuses_and_signs_nothing(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    published = _published_elsewhere(rig, "claude")
+    result = rig.commands.attest("jfreeman", "claude", hours=1)
+    assert result.error
+    assert Bech32Key.PUBLIC.encode(published) in result.text
+    assert "--npub" in result.text
+    assert "auth_sig" not in rig.directory.fields("claude")
+
+
+def test_attest_of_a_directory_key_with_a_different_npub_refuses(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    published = _published_elsewhere(rig, "claude")
+    other = Bech32Key.PUBLIC.encode(NostrCrypto().public_key(bytes([5]) * 32))
+    result = rig.commands.attest("jfreeman", "claude", hours=1, npub=other)
+    assert result.error
+    assert Bech32Key.PUBLIC.encode(published) in result.text
+    assert "auth_sig" not in rig.directory.fields("claude")
+
+
+def test_attest_with_a_malformed_npub_refuses(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    _published_elsewhere(rig, "claude")
+    result = rig.commands.attest("jfreeman", "claude", hours=1, npub="npub1nope")
+    assert result.error
+    assert "auth_sig" not in rig.directory.fields("claude")
+
+
+def test_attest_of_a_local_key_needs_no_npub(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.agent("claude")
+    assert not rig.commands.attest("jfreeman", "claude", hours=1).error
+
+
+def test_attest_of_a_local_key_refuses_a_different_npub(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.agent("claude")
+    other = Bech32Key.PUBLIC.encode(NostrCrypto().public_key(bytes([5]) * 32))
+    assert rig.commands.attest("jfreeman", "claude", hours=1, npub=other).error
+
+
+def _forge(rig: _Rig, agent: str, secret: bytes) -> None:
+    """Publish an attestation of *agent* signed by *secret*, as an attacker would."""
+    agent_hex = Bech32Key.PUBLIC.decode(rig.directory.fields(agent)["npub"]).hex()
+    forged = OwnerAttestation.mint(secret, agent_hex, now=NOW, lifetime_seconds=3600)
+    rig.directory.publish(
+        agent,
+        {"auth_conditions": forged.conditions, "auth_sig": forged.signature},
+    )
+
+
+def test_show_rejects_an_owner_key_swapped_in_the_directory(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.agent("claude")
+    attacker = bytes([7]) * 32
+    rig.directory.publish(
+        "jfreeman",
+        {"npub": Bech32Key.PUBLIC.encode(NostrCrypto().public_key(attacker))},
+    )
+    rig.directory.publish("claude", {"owner": "jfreeman"})
+    _forge(rig, "claude", attacker)
+    text = rig.commands.show("claude").text
+    assert "invalid" in text
+    assert "valid until" not in text
+
+
+def test_show_says_when_the_owner_key_is_recorded_on_this_machine(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    assert "recorded on this machine" in rig.commands.show("claude").text
+
+
+def test_show_says_when_the_owner_key_is_only_published(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.agent("claude")
+    stranger = bytes([7]) * 32
+    rig.directory.publish(
+        "mallory", {"npub": Bech32Key.PUBLIC.encode(NostrCrypto().public_key(stranger))}
+    )
+    rig.directory.publish("claude", {"owner": "mallory"})
+    _forge(rig, "claude", stranger)
+    text = rig.commands.show("claude").text
+    assert "not recorded on this machine" in text
+    assert "npub1" in text
+
+
+def test_show_names_the_owner_key_it_checked(tmp_path: Path) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    owner_npub = Bech32Key.PUBLIC.encode(rig.store.owner_pubkey("jfreeman"))
+    assert Bech32Key.abbreviate(owner_npub) in rig.commands.show("claude").text

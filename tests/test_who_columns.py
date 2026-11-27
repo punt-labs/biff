@@ -35,4 +35,4 @@ def test_an_invalid_or_failed_lookup_renders_a_question_mark(bad: str) -> None:
 
 def test_a_user_with_no_key_has_a_blank_cell_and_hides_the_column() -> None:
     hidden, _ = WhoColumns({}).layout([UserSession(user="jim", tty="a")])
-    assert "KEY" in hidden
+    assert "NPUB" in hidden

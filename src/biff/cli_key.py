@@ -76,6 +76,12 @@ class KeyCli:
         ctx: typer.Context,
         agent: Annotated[str, typer.Argument(help="The agent's handle, e.g. claude")],
         owner: Annotated[str | None, typer.Option(help="Your handle")] = None,
+        npub: Annotated[
+            str | None,
+            typer.Option(
+                help="Confirm an agent key read from the directory (not held here)"
+            ),
+        ] = None,
         hours: Annotated[
             int | None, typer.Option(help="Lifetime; default 24, or 168 with --image")
         ] = None,
@@ -86,7 +92,7 @@ class KeyCli:
     ) -> None:
         """Sign an agent's key as its owner; you must be present to approve."""
         result = self._commands().attest(
-            self._owner(ctx, owner), agent, hours=hours, image=image
+            self._owner(ctx, owner), agent, hours=hours, image=image, npub=npub
         )
         self._emit(ctx, result)
 

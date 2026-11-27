@@ -55,6 +55,11 @@ class Bech32Key:
             raise ValueError(msg)
         return data
 
+    @staticmethod
+    def abbreviate(text: str) -> str:
+        """Clip *text* to its first ten and last five characters."""
+        return f"{text[:10]}…{text[-5:]}"
+
     def _hrp_expand(self) -> list[int]:
         return [ord(c) >> 5 for c in self._hrp] + [0] + [ord(c) & 31 for c in self._hrp]
 

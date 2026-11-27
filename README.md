@@ -398,10 +398,13 @@ Each person and each agent has one Nostr key. You sign each agent's public key, 
 biff key init                          # Create your owner key; prints your npub
 biff key agent claude                  # Create an agent's key; publishes its npub
 biff key attest claude --hours 24      # Sign the agent's key as its owner (you must be present)
+biff key attest claude --npub npub1... # Confirm a key read from the directory (an agent image's)
 biff key show claude                   # The agent's key and the state of its attestation
 ```
 
-`biff who` shows a KEY column with each user's short npub when one is published.
+When this machine holds the agent's key, `attest` signs it. When only the shared directory has it (an agent image holds the key), `attest` prints the npub and refuses until you pass `--npub` with that same value: the directory is unauthenticated, so you confirm the key out of band first.
+
+`biff who` shows an NPUB column with each user's short published npub. It is the key published under that name, not proof that the session holds it. `biff key show` checks an attestation against the owner key recorded on this machine when there is one, and says so; for any other owner it says the key is only published.
 
 Private keys never enter the repository or an ethos ext file. Agent keys rest in the OS keyring. Your owner key rests in a macOS keychain item that trusts no application, or on Linux in a file sealed by a passphrase that biff reads only from `/dev/tty`. An agent process cannot create the owner key or sign with it.
 

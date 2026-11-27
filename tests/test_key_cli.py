@@ -79,3 +79,8 @@ def test_key_attest_then_show_reports_the_owner() -> None:
     assert attested.exit_code == 0, attested.output
     assert "authorized by @jfreeman" in shown.output
     assert "valid until" in shown.output
+
+
+def test_key_attest_help_documents_the_npub_confirmation() -> None:
+    result = runner.invoke(cli.app, ["key", "attest", "--help"])
+    assert "--npub" in result.output

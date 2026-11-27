@@ -116,11 +116,16 @@ class KeyCommands:
         *,
         hours: int | None = None,
         image: bool = False,
+        npub: str | None = None,
     ) -> CommandResult:
-        """Sign *agent*'s key as *owner*; the owner must be present."""
+        """Sign *agent*'s key as *owner*; the owner must be present.
+
+        *npub* is the owner's confirmation of a key that comes from the shared
+        directory, which anyone able to write it could have changed.
+        """
         try:
             lifetime = self._lifetime_hours(hours, image=image)
-            target = self._attestation_target(agent)
+            target = self._attestation_target(agent, npub)
             attestation = self._store.attest(
                 owner,
                 target,
@@ -157,7 +162,7 @@ class KeyCommands:
             lines = [f"{handle}: {fields['npub']}"]
             if "auth_sig" in fields:
                 lines.append(f"  {self._attestation_line(fields)}")
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, VaultError) as exc:
             return CommandResult(text=str(exc), error=True)
         return CommandResult(text="\n".join(lines), json_data=dict(fields))
 
@@ -168,15 +173,17 @@ class KeyCommands:
         except KeyExistsError:
             return self._store.owner_pubkey(owner), False
 
-    def _attestation_target(self, agent: str) -> bytes:
+    def _attestation_target(self, agent: str, npub: str | None) -> bytes:
         """Return the key to attest: the agent's own, wherever it is kept.
 
         An agent image holds its key and publishes the npub; the owner signs
-        from another machine that has no secret for it.  That published key is
-        what gets signed, and nothing is minted.  Only an agent with no key
-        anywhere gets a new one, and a published key that is not the local key
-        is a conflict the owner must settle, never a silent replacement.
+        from another machine that has no secret for it.  The directory is
+        unauthenticated, so a key read from it is signed only when the owner
+        names the same npub with ``--npub``.  A key on this machine, or one
+        minted here, needs no confirmation.  A published key that is not the
+        local key is a conflict the owner must settle, never a replacement.
         """
+        confirmed = self._confirmed_pubkey(npub)
         local = self._store.existing_agent_pubkey(agent)
         published = self._published_pubkey(agent)
         if local is not None and published is not None and local != published:
@@ -187,8 +194,47 @@ class KeyCommands:
             )
             raise PublishedKeyError(msg)
         if local is not None:
+            self._require_confirmation_matches(confirmed, local, agent)
             return local
-        return published if published is not None else self._store.agent_pubkey(agent)
+        if published is None:
+            if confirmed is not None:
+                msg = f"no npub is published for {agent}, so there is no key to confirm"
+                raise PublishedKeyError(msg)
+            return self._store.agent_pubkey(agent)
+        if confirmed != published:
+            shown = Bech32Key.PUBLIC.encode(published)
+            msg = (
+                f"the npub published for {agent} is {shown}; nothing was signed. "
+                "The directory is not authenticated: check that this is the key "
+                f"your agent holds, then run again with `--npub {shown}`"
+            )
+            raise PublishedKeyError(msg)
+        return published
+
+    @staticmethod
+    def _confirmed_pubkey(npub: str | None) -> bytes | None:
+        if npub is None:
+            return None
+        try:
+            return Bech32Key.PUBLIC.decode(npub)
+        except ValueError as exc:
+            msg = f"--npub is not a valid npub: {exc}"
+            raise PublishedKeyError(msg) from exc
+
+    @staticmethod
+    def _require_confirmation_matches(
+        confirmed: bytes | None, local: bytes, agent: str
+    ) -> None:
+        if confirmed is not None and confirmed != local:
+            msg = f"--npub is not the key held here for {agent}; nothing was signed"
+            raise PublishedKeyError(msg)
+
+    def _recorded_owner(self, owner: str) -> bytes | None:
+        """Return the owner key recorded here, or ``None`` for an owner never set up."""
+        try:
+            return self._store.owner_pubkey(owner)
+        except KeyNotFoundError:
+            return None
 
     def _published_pubkey(self, agent: str) -> bytes | None:
         npub = self._directory.npub(agent)
@@ -228,17 +274,29 @@ class KeyCommands:
         if owner_npub is None:
             return f"authorized by @{owner or '?'}: no published key for the owner"
         try:
+            published_owner = Bech32Key.PUBLIC.decode(owner_npub)
+            pinned = self._recorded_owner(owner)
+            if pinned is not None and pinned != published_owner:
+                return (
+                    f"authorized by @{owner}: invalid; the key published for "
+                    f"@{owner} is not the owner key recorded on this machine"
+                )
+            who = f"@{owner} ({Bech32Key.abbreviate(owner_npub)}, " + (
+                "recorded on this machine)"
+                if pinned is not None
+                else "not recorded on this machine: published under that name only)"
+            )
             attestation = OwnerAttestation(
-                Bech32Key.PUBLIC.decode(owner_npub).hex(),
+                published_owner.hex(),
                 fields["auth_conditions"],
                 fields["auth_sig"],
             )
             agent = Bech32Key.PUBLIC.decode(fields["npub"]).hex()
             expiry = _iso(attestation.expires_at())
             if attestation.is_live(agent, now=int(self._clock())):
-                return f"authorized by @{owner}: valid until {expiry}"
+                return f"authorized by {who}: valid until {expiry}"
             if attestation.signature_is_valid(agent):
-                return f"authorized by @{owner}: expired {expiry}"
+                return f"authorized by {who}: expired {expiry}"
         except (KeyError, ValueError):
             pass
         return f"authorized by @{owner}: invalid"
