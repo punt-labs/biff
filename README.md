@@ -381,7 +381,7 @@ The shell logs your session in and out, keeps your presence current, and prints 
 
 ### Named sessions
 
-Commands from one shell share one durable session with one `ttyN`: the session, its presence row and its tty name outlive each `biff` process. A session unused for 8 hours goes dormant (name and inbox kept; the next command revives it), and a dormant session is removed after 3 days.
+Commands from one shell share one durable session with one `ttyN`: the session, its presence row and its tty name outlive each `biff` process. biffd keeps the session records. It sweeps them once at start and every 10 minutes: a session unused for 8 hours goes dormant (name and inbox kept; the next command revives it), and a dormant session is removed after 3 days.
 
 ```bash
 biff session new --tty main     # Create a session named "main" (errors if the name is taken)
@@ -391,7 +391,7 @@ biff session end main           # End it; unread mail moves to your user mailbox
 biff -s main write kai "hi"     # Run one command as session "main" (or set BIFF_SESSION)
 ```
 
-Without `-s`, a command runs as the first of: `BIFF_SESSION`; the Claude Code session it is run from (`CLAUDE_CODE_SESSION_ID`, as a client of that session, creating nothing); this repo's default (`biff session use`, or the last `session new`); a fresh session. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
+Without `-s`, a command runs as the first of: `BIFF_SESSION`; this repo's default (`biff session use`, or the last `session new`); a fresh session. The `session` verbs run as that session too, so a verb in a repo with no session makes one first. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
 
 ### Keys and agent attestation
 

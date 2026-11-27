@@ -19,7 +19,10 @@ from biff.daemon.connection import ConnectionHandler, DaemonCore
 from biff.daemon.methods import READ_BUDGET_BYTES, Methods
 from biff.daemon.relays import RelayPool
 from biff.daemon.resolver import DiskResolver
+from biff.daemon.session_methods import SessionMethods
+from biff.daemon.session_sweep import SessionSweeper
 from biff.daemon.sessions import SessionTable
+from biff.daemon.tasks import Supervised
 from biff.frame_base import MAX_FRAME_BYTES
 
 if TYPE_CHECKING:
@@ -27,6 +30,7 @@ if TYPE_CHECKING:
 
     from biff.daemon.relays import RelayFactory
     from biff.daemon.resolver import SessionResolver
+    from biff.daemon.session_store import CliSessionStore
     from biff.daemon.sessions import SessionStatus
     from biff.run_dir import RunDir
 
@@ -40,6 +44,7 @@ POLL_SECONDS = 1.0
 ATTACH_SECONDS = 10.0
 REQUEST_SECONDS = 30.0
 ORG_REFRESH_SECONDS = 600.0
+SESSION_SWEEP_SECONDS = 600.0
 
 
 @dataclass(frozen=True)
@@ -54,19 +59,32 @@ class DaemonStatus:
 class BiffDaemon:
     """One per-user daemon: owns the listener, the relays and the sessions."""
 
-    __slots__ = ("_core", "_port", "_run_dir", "_server", "_started")
+    __slots__ = (
+        "_core",
+        "_port",
+        "_run_dir",
+        "_server",
+        "_started",
+        "_sweep_interval",
+        "_sweep_task",
+        "_sweeper",
+    )
 
     _run_dir: RunDir
     _port: int
     _core: DaemonCore
     _server: Server | None
     _started: float
+    _sweeper: SessionSweeper
+    _sweep_interval: float
+    _sweep_task: asyncio.Task[None] | None
 
     def __new__(
         cls,
         *,
         run_dir: RunDir,
         port: int,
+        sessions: CliSessionStore,
         resolver: SessionResolver | None = None,
         relay_factory: RelayFactory | None = None,
         heartbeat_interval: float = HEARTBEAT_SECONDS,
@@ -75,8 +93,12 @@ class BiffDaemon:
         request_timeout: float = REQUEST_SECONDS,
         read_budget: int = READ_BUDGET_BYTES,
         org_refresh_interval: float = ORG_REFRESH_SECONDS,
+        session_sweep_interval: float = SESSION_SWEEP_SECONDS,
     ) -> Self:
         """Create a daemon that will listen on *port* (0 picks a free one).
+
+        *sessions* holds the CLI session records the daemon owns; it sweeps them
+        once at start and every *session_sweep_interval* seconds after.
 
         The resolver and relay factory default to the repository configuration
         on disk and the relay it selects; tests inject their own.
@@ -84,14 +106,16 @@ class BiffDaemon:
         self = super().__new__(cls)
         self._run_dir = run_dir
         self._port = port
+        resolver = resolver or DiskResolver()
+        pool = RelayPool(relay_factory or RelayPool.selecting())
         self._core = DaemonCore(
-            resolver=resolver or DiskResolver(),
-            pool=RelayPool(relay_factory or RelayPool.selecting()),
+            resolver=resolver,
+            pool=pool,
             sessions=SessionTable(
                 heartbeat_interval=heartbeat_interval,
                 org_refresh_interval=org_refresh_interval,
             ),
-            methods=Methods(read_budget),
+            methods=Methods(SessionMethods(sessions), read_budget),
             seq=count(1),
             poll_interval=poll_interval,
             attach_timeout=attach_timeout,
@@ -99,6 +123,9 @@ class BiffDaemon:
         )
         self._server = None
         self._started = 0.0
+        self._sweeper = SessionSweeper(sessions, resolver, pool)
+        self._sweep_interval = session_sweep_interval
+        self._sweep_task = None
         return self
 
     @property
@@ -128,7 +155,12 @@ class BiffDaemon:
         self._port = self._server.sockets[0].getsockname()[1]
         self._started = time.monotonic()
         self._run_dir.write_port(self._port)
+        self._sweep_task = Supervised.spawn(self._sweep_forever(), "session sweep")
         logger.info("biffd listening on %s:%d", _LOOPBACK, self._port)
+
+    async def sweep_sessions(self) -> None:
+        """Lapse stale stored sessions and expire those past retention, once."""
+        await self._sweeper.sweep()
 
     async def stop(self) -> None:
         """Stop listening, close the relays and remove this daemon's port file.
@@ -138,6 +170,10 @@ class BiffDaemon:
         this daemon's port, so a late stop cannot erase its replacement's record.
         """
         server, self._server = self._server, None
+        sweep, self._sweep_task = self._sweep_task, None
+        if sweep is not None:
+            sweep.cancel()
+            await asyncio.gather(sweep, return_exceptions=True)
         try:
             if server is not None:
                 server.close()
@@ -163,6 +199,12 @@ class BiffDaemon:
             await stop.wait()
         finally:
             await self.stop()
+
+    async def _sweep_forever(self) -> None:
+        """Sweep at start, then every interval, for as long as the daemon runs."""
+        while True:
+            await self._sweeper.sweep()
+            await asyncio.sleep(self._sweep_interval)
 
     def _process_request(
         self, connection: ServerConnection, request: Request

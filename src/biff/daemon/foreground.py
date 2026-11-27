@@ -13,6 +13,7 @@ from punt_observe.logging import Role
 
 from biff.daemon.environment import DaemonEnvironment
 from biff.daemon.server import BiffDaemon
+from biff.daemon.session_store import CliSessionStore
 from biff.logging_config import configure_logging
 from biff.run_dir import RunDir
 from biff.supervision.biffd import PERMANENT_EXIT_STATUS
@@ -53,7 +54,11 @@ class Foreground:
                 "each session resolves its own",
                 err=True,
             )
-        daemon = BiffDaemon(run_dir=RunDir.default(), port=self._port)
+        daemon = BiffDaemon(
+            run_dir=RunDir.default(),
+            port=self._port,
+            sessions=CliSessionStore.default(),
+        )
         try:
             asyncio.run(daemon.run_foreground())
         except PermissionError as exc:

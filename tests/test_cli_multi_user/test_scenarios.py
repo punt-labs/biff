@@ -123,8 +123,8 @@ class TestSessionCleanup:
         from unittest.mock import patch
 
         from biff.cli_session import cli_session, cli_session_host
-        from biff.commands.session import SessionVerbs
         from biff.config import ResolvedConfig
+        from biff.daemon.session_verbs import SessionVerbs
         from biff.models import BiffConfig
 
         resolved = ResolvedConfig(

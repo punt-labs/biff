@@ -12,11 +12,11 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff._stdlib import expand_bead_id
 from biff.cli_daemon_wire import UnreadableReplyError, WireResult
-from biff.cli_session_select import SessionSelector
-from biff.cli_session_store import CliSessionEndedError, CliSessionRecord
 from biff.client.connection import ClientIdentity, DaemonClient, DaemonError
 from biff.client.nudge import DaemonNudge
 from biff.config import load_cli_config
+from biff.daemon.session_select import SessionSelector
+from biff.daemon.session_store import CliSessionEndedError, CliSessionRecord
 from biff.plan_marker import PlanMarker
 from biff.run_dir import RunDir
 
@@ -140,13 +140,17 @@ class DaemonCommand:
         session_ref: str | None,
         run_dir: RunDir,
         nudge: Callable[[], None],
+        repo: Path | None = None,
     ) -> Self:
-        """Resolve who this invocation is; *nudge* returns once biffd answers."""
+        """Resolve who this invocation is; *nudge* returns once biffd answers.
+
+        It runs in *repo* when given, else in the current directory.
+        """
         self = super().__new__(cls)
-        resolved = load_cli_config(user_override=user_override)
+        resolved = load_cli_config(user_override=user_override, start=repo)
         self._selector = SessionSelector.from_resolved(resolved)
         self._ref = session_ref
-        self._cwd = str(Path.cwd())
+        self._cwd = str((repo or Path.cwd()).absolute())
         self._run_dir = run_dir
         self._nudge = nudge
         self._session_id = ""
@@ -154,7 +158,10 @@ class DaemonCommand:
 
     @classmethod
     def for_this_process(
-        cls, user_override: str | None, session_ref: str | None
+        cls,
+        user_override: str | None,
+        session_ref: str | None,
+        repo: Path | None = None,
     ) -> Self:
         """Return the invocation at the default run directory; biffd starts if down."""
         run_dir = RunDir.default()
@@ -167,6 +174,7 @@ class DaemonCommand:
             session_ref=session_ref,
             run_dir=run_dir,
             nudge=start_biffd,
+            repo=repo,
         )
 
     async def call(self, method: str, **params: JsonValue) -> Answer:
@@ -205,6 +213,33 @@ class DaemonCommand:
             data = answer.data
             if not answer.result.error and isinstance(data, dict):
                 await self._rename_or_undo(client, record, str(data["tty"]))
+        except BaseException:
+            await answer.abandon()
+            raise
+        return answer
+
+    async def session_new(self, tty: str) -> Answer:
+        """Have biffd create a session, then point this repository at it.
+
+        The session is named *tty*, or the next free name when *tty* is empty.
+        """
+        return await self._pointing("session_new", {"tty": tty} if tty else {})
+
+    async def session_use(self, ref: str) -> Answer:
+        """Have biffd name the session *ref*, then point this repository at it."""
+        return await self._pointing("session_use", {"ref": ref})
+
+    async def _pointing(self, method: str, params: dict[str, JsonValue]) -> Answer:
+        """Run the session verb *method*; point the repo at the session it names.
+
+        The pointer is this repository's, so biffd does not hold it.
+        """
+        answer = await self.call(method, **params)
+        try:
+            data = answer.data
+            if not answer.result.error and isinstance(data, dict):
+                sel = self._selector
+                sel.pointer.write(sel.repo_root, str(data["id"]))
         except BaseException:
             await answer.abandon()
             raise

@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from biff.cli_session_pointer import CurrentPointer
-from biff.cli_session_select import SessionSelectionError, SessionSelector
-from biff.cli_session_store import CliSessionRecord, CliSessionStore
+from biff.daemon.session_pointer import CurrentPointer
+from biff.daemon.session_select import SessionSelectionError, SessionSelector
+from biff.daemon.session_store import CliSessionRecord, CliSessionStore
 
 T0 = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
 

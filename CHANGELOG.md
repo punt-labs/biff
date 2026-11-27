@@ -51,6 +51,13 @@
 
 ### Changed
 
+- `biff session new`, `ls`, `use` and `end` run in biffd, which now owns the
+  session records. The CLI keeps only the repo pointer and the `-s` name. biffd
+  sweeps stale records once at start and every 10 minutes, for every repository
+  the host has used: a session idle for 8 hours goes dormant, and a dormant or
+  ended one is removed after 3 days with its relay row released. Like every
+  other command, a session verb runs as this repo's session, so in a repo with
+  no session it makes one first.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the
   same text as before. `plan` and `tty` still write the plan-gate

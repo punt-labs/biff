@@ -26,9 +26,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from biff.cli_context import CliContext
-from biff.cli_session_host import SessionHost
-from biff.cli_session_select import SessionSelector
 from biff.config import ResolvedConfig, load_cli_config
+from biff.daemon.session_host import SessionHost
+from biff.daemon.session_select import SessionSelector
 from biff.nats_relay import NatsRelay
 from biff.relay_select import RelaySelector
 from biff.tty import get_hostname, get_pwd

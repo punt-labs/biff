@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
-from biff.cli_session_pointer import CurrentPointer
-from biff.cli_session_store import CliSessionRecord, CliSessionStore
 from biff.config import ResolvedConfig
+from biff.daemon.session_pointer import CurrentPointer
+from biff.daemon.session_store import CliSessionRecord, CliSessionStore
 from biff.tty import get_hostname
 
 

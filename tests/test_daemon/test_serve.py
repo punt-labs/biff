@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from biff.daemon.server import BiffDaemon
+from biff.daemon.session_store import CliSessionStore
 from biff.run_dir import RunDir
 
 if TYPE_CHECKING:
@@ -44,8 +45,15 @@ def run_dir(tmp_path: Path) -> RunDir:
 
 
 @pytest.fixture
-async def daemon(run_dir: RunDir) -> AsyncIterator[BiffDaemon]:
-    daemon = BiffDaemon(run_dir=run_dir, port=0)
+def sessions(tmp_path: Path) -> CliSessionStore:
+    return CliSessionStore(tmp_path / "sessions")
+
+
+@pytest.fixture
+async def daemon(
+    run_dir: RunDir, sessions: CliSessionStore
+) -> AsyncIterator[BiffDaemon]:
+    daemon = BiffDaemon(run_dir=run_dir, port=0, sessions=sessions)
     await daemon.start()
     yield daemon
     await daemon.stop()
@@ -88,19 +96,23 @@ async def test_port_file_names_the_bound_port(
     assert run_dir.read_port() == daemon.port
 
 
-async def test_clean_shutdown_removes_the_port_file(run_dir: RunDir) -> None:
-    daemon = BiffDaemon(run_dir=run_dir, port=0)
+async def test_clean_shutdown_removes_the_port_file(
+    run_dir: RunDir, sessions: CliSessionStore
+) -> None:
+    daemon = BiffDaemon(run_dir=run_dir, port=0, sessions=sessions)
     await daemon.start()
     await daemon.stop()
     assert not run_dir.port_path.exists()
 
 
-async def test_token_survives_a_restart(run_dir: RunDir) -> None:
-    first = BiffDaemon(run_dir=run_dir, port=0)
+async def test_token_survives_a_restart(
+    run_dir: RunDir, sessions: CliSessionStore
+) -> None:
+    first = BiffDaemon(run_dir=run_dir, port=0, sessions=sessions)
     await first.start()
     token = run_dir.read_token()
     await first.stop()
-    second = BiffDaemon(run_dir=run_dir, port=0)
+    second = BiffDaemon(run_dir=run_dir, port=0, sessions=sessions)
     await second.start()
     try:
         assert run_dir.read_token() == token

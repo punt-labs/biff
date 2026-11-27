@@ -1,12 +1,12 @@
-"""``biff session`` — create, list, select and end named CLI sessions."""
+"""The ``session`` verbs: create, list, select and end named CLI sessions."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from biff.cli_session_host import SessionHost
-from biff.cli_session_store import CliSessionRecord
 from biff.commands._result import CommandResult
+from biff.daemon.session_host import SessionHost
+from biff.daemon.session_store import CliSessionRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,12 +16,8 @@ class SessionVerbs:
     host: SessionHost
 
     async def new(self, tty: str | None) -> CommandResult:
-        """Create a session, reserve its name, point the repo at it."""
-        try:
-            record = await self.host.create(tty)
-        except ValueError as exc:
-            msg = f"Error: {exc}"
-            return CommandResult(text=msg, json_data={"error": msg}, error=True)
+        """Create a session and reserve its name; the caller points the repo at it."""
+        record = await self.host.create(tty)
         return CommandResult(text=record.tty, json_data=self._row(record))
 
     async def ls(self, *, include_ended: bool) -> CommandResult:
@@ -47,10 +43,8 @@ class SessionVerbs:
         return CommandResult(text="\n".join([header, *lines]), json_data=rows)
 
     async def use(self, ref: str) -> CommandResult:
-        """Make *ref* the repo's default session; no attach, no state change."""
-        sel = self.host.selector
-        record = sel.explicit(ref)
-        sel.pointer.write(sel.repo_root, record.session_id)
+        """Name the session *ref* for the caller to point at; no state change."""
+        record = self.host.selector.explicit(ref)
         return CommandResult(text=record.tty, json_data=self._row(record))
 
     async def end(self, ref: str) -> CommandResult:

@@ -12,6 +12,7 @@ from pydantic_core import to_jsonable_python
 
 from biff import commands
 from biff.commands.inbox import Inbox
+from biff.daemon.params import Params
 from biff.daemon.read_batch import ReadBatcher
 from biff.daemon.refusal import RefusalError
 from biff.frame_base import MAX_FRAME_BYTES
@@ -23,10 +24,11 @@ if TYPE_CHECKING:
 
     from biff.cli_context import CliContext
     from biff.commands import CommandResult
+    from biff.daemon.session_methods import SessionMethods
     from biff.daemon.sessions import Session
     from biff.models import Message
 
-__all__ = ["READ_BUDGET_BYTES", "Acknowledge", "Methods", "Outcome", "Params"]
+__all__ = ["READ_BUDGET_BYTES", "Acknowledge", "Methods", "Outcome"]
 
 logger = logging.getLogger(__name__)
 
@@ -56,98 +58,26 @@ class Outcome:
 
 
 @final
-class Params:
-    """A request's params, read by name and checked to be fully consumed.
-
-    A method reads every param it accepts and then calls :meth:`done`, so a
-    param it does not know, such as another session's key, is refused instead
-    of silently ignored.
-    """
-
-    __slots__ = ("_method", "_raw", "_seen")
-
-    _method: str
-    _raw: dict[str, JsonValue]
-    _seen: set[str]
-
-    def __new__(cls, method: str, raw: dict[str, JsonValue]) -> Self:
-        """Wrap *raw*, the params of a request for *method*."""
-        self = super().__new__(cls)
-        self._method = method
-        self._raw = raw
-        self._seen = set()
-        return self
-
-    def text(self, name: str, default: str | None = None) -> str:
-        """Return the string param *name*, or *default* when absent.
-
-        Raises:
-            RefusalError: The param is absent with no default, or not a string.
-        """
-        self._seen.add(name)
-        if name not in self._raw:
-            if default is None:
-                raise self._invalid(f"{name} is required")
-            return default
-        value = self._raw[name]
-        if not isinstance(value, str):
-            raise self._invalid(f"{name} must be a string")
-        return value
-
-    def integer(self, name: str, default: int) -> int:
-        """Return the integer param *name*, or *default* when absent.
-
-        Raises:
-            RefusalError: The param is not an integer.
-        """
-        self._seen.add(name)
-        value = self._raw.get(name, default)
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise self._invalid(f"{name} must be an integer")
-        return value
-
-    def flag(self, name: str, *, default: bool) -> bool:
-        """Return the boolean param *name*, or *default* when absent.
-
-        Raises:
-            RefusalError: The param is not a boolean.
-        """
-        self._seen.add(name)
-        value = self._raw.get(name, default)
-        if not isinstance(value, bool):
-            raise self._invalid(f"{name} must be a boolean")
-        return value
-
-    def done(self) -> None:
-        """Refuse any param the method did not read.
-
-        Raises:
-            RefusalError: A param is present that the method does not accept.
-        """
-        unknown = sorted(set(self._raw) - self._seen)
-        if unknown:
-            raise self._invalid(f"unknown param {', '.join(unknown)}")
-
-    def _invalid(self, why: str) -> RefusalError:
-        return RefusalError.of(ErrorCode.INVALID_PARAMS, f"{self._method}: {why}")
-
-
-@final
 class Methods:
     """Dispatches a method name to its command object."""
 
-    __slots__ = ("_read_budget", "_table")
+    __slots__ = ("_read_budget", "_sessions", "_table")
 
     _table: dict[str, Handler]
+    _sessions: SessionMethods
     _read_budget: int
 
-    def __new__(cls, read_budget: int = READ_BUDGET_BYTES) -> Self:
+    def __new__(
+        cls, sessions: SessionMethods, read_budget: int = READ_BUDGET_BYTES
+    ) -> Self:
         """Create the table of every served method.
 
-        *read_budget* is the most mail, in bytes of JSON, one ``read`` reply
-        carries; the rest stays unread for the next ``read``.
+        *sessions* serves the ``session_*`` methods.  *read_budget* is the most
+        mail, in bytes of JSON, one ``read`` reply carries; the rest stays
+        unread for the next ``read``.
         """
         self = super().__new__(cls)
+        self._sessions = sessions
         self._read_budget = read_budget
         self._table = {
             "who": Methods._who,
@@ -165,7 +95,7 @@ class Methods:
     @property
     def names(self) -> tuple[str, ...]:
         """The served method names."""
-        return ("read", *self._table)
+        return ("read", *self._table, *self._sessions.names)
 
     async def call(
         self, session: Session, method: str, raw: dict[str, JsonValue]
@@ -183,11 +113,17 @@ class Methods:
         ctx = session.context
         if method == "read":
             return await self._read(session, Params(method, raw))
+        if method in self._sessions.names:
+            result = await self._sessions.call(session, method, Params(method, raw))
+            return self._outcome(result)
         handler = self._table.get(method)
         if handler is None:
             msg = f"unknown method {method!r}; served: {', '.join(self.names)}"
             raise RefusalError.of(ErrorCode.UNKNOWN_METHOD, msg)
-        result = await handler(ctx, Params(method, raw))
+        return self._outcome(await handler(ctx, Params(method, raw)))
+
+    @staticmethod
+    def _outcome(result: CommandResult) -> Outcome:
         data = _JSON.validate_python(to_jsonable_python(result.json_data))
         return Outcome({"data": data, "error": result.error, "text": result.text})
 

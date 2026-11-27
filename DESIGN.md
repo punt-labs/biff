@@ -9528,3 +9528,33 @@ sweep (lapse a stored session to dormant past `LEASE`, expire it past
 timer. Rejected: the client keeps the records and the daemon only the relay
 rows, because the daemon must then trust a client's claim about which sessions
 exist.
+
+Built as follows. The daemon methods `session_new`, `session_ls`,
+`session_use` and `session_end` (`daemon/session_methods.py`) run the existing
+`SessionVerbs` over the relay and repository of the session that asked. A verb
+raises `ValueError` for a refusal and the method turns it into a failed result,
+`Error: <reason>`. `new` and `use` no longer write the repo pointer: the reply
+names the session by `id` and `DaemonCommand.session_new` and `session_use`
+write the pointer, so the CLI is the one writer of it. A session verb runs as
+the invocation's session like every other command, which means a verb in a repo
+with no session makes one first (`session ls` in a fresh repo lists it);
+`--repo` and `--as` select the repository and user that session belongs to.
+`SessionSweeper` (`daemon/session_sweep.py`) resolves each stored record's
+repository through the daemon's resolver, takes its relay from the pool, and
+runs `SessionHost.sweep_one`, so one sweep covers every repository the host
+has used; before, only the current repository's records were judged. A record
+whose repository no longer resolves is left alone and logged.
+
+The session store and its helpers moved from `biff/cli_session_*.py` and
+`biff/commands/session.py` into `biff/daemon/` (`session_store`, `session_lock`,
+`session_drain`, `session_host`, `session_select`, `session_pointer`,
+`session_verbs`). The daemon layer may not import the CLI layer, and relabelling
+the modules to the daemon layer is a layer policy change that must land alone, so
+the modules moved instead; two baselined violations (`commands.session` into the
+CLI) are gone.
+
+Still open for the next step: `DaemonCommand` itself reads and writes the same
+store (`attach`, `rename`, the draft it stores once biffd names it), so two
+writers remain, serialised by the store's per-session file lock. Removing the
+client's access needs the hello to carry the session name; that belongs with
+the PR that deletes the in-process path.

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal, Self, cast, get_args
 
 from biff._stdlib import biff_data_dir
-from biff.cli_session_lock import SessionLock
+from biff.daemon.session_lock import SessionLock
 from biff.session_routing import ID_RE, MAX_ID_LENGTH, SessionIdError
 
 logger = logging.getLogger(__name__)

@@ -58,6 +58,7 @@ class Session:
         "_attachments",
         "_beat",
         "_context",
+        "_cwd",
         "_interval",
         "_log",
         "_orgs",
@@ -70,6 +71,7 @@ class Session:
     )
 
     _session_id: str
+    _cwd: str
     _target: RelayTarget
     _context: CliContext
     _presence: PresenceRow
@@ -86,6 +88,7 @@ class Session:
         cls,
         *,
         session_id: str,
+        cwd: str,
         target: RelayTarget,
         context: CliContext,
         presence: PresenceRow,
@@ -96,6 +99,7 @@ class Session:
         """Create the record of a registered session."""
         self = super().__new__(cls)
         self._session_id = session_id
+        self._cwd = cwd
         self._target = target
         self._context = context
         self._presence = presence
@@ -143,6 +147,7 @@ class Session:
         )
         return cls(
             session_id=hello.session_id,
+            cwd=hello.cwd,
             target=resolved.target,
             context=context,
             presence=presence,
@@ -155,6 +160,11 @@ class Session:
     def session_id(self) -> str:
         """The id the harness gave the session."""
         return self._session_id
+
+    @property
+    def cwd(self) -> str:
+        """The directory the client that registered the session runs in."""
+        return self._cwd
 
     @property
     def context(self) -> CliContext:

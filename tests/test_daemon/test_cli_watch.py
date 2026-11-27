@@ -6,10 +6,7 @@ import asyncio
 import json
 import os
 import signal
-import subprocess
 from typing import TYPE_CHECKING, cast
-
-import pytest
 
 from biff.cli_daemon import DaemonCommand
 from biff.cli_watch import WatchCommand
@@ -18,23 +15,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    import pytest
+
     from tests.test_daemon.conftest import Harness
 
 _WAIT = 5.0
-
-
-@pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A git repository the command runs in, with its own home directory."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    path = tmp_path / "work" / "demo"
-    path.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", str(path)], check=True)  # noqa: S603, S607
-    monkeypatch.chdir(path)
-    return path
 
 
 class Lines:

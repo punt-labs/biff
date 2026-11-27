@@ -6,11 +6,16 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from biff.daemon.methods import Methods, Params
+from biff.daemon.methods import Methods
+from biff.daemon.params import Params
 from biff.daemon.refusal import RefusalError
+from biff.daemon.session_methods import SessionMethods
+from biff.daemon.session_store import CliSessionStore
 from biff.frame_reply import ErrorCode
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pydantic import JsonValue
 
 
@@ -59,8 +64,9 @@ def test_refusals_carry_the_invalid_params_code() -> None:
     assert caught.value.reply_error.code is ErrorCode.INVALID_PARAMS
 
 
-def test_every_command_object_is_a_method() -> None:
-    assert set(Methods().names) == {
+def test_every_command_object_is_a_method(tmp_path: Path) -> None:
+    methods = Methods(SessionMethods(CliSessionStore(tmp_path)))
+    assert set(methods.names) == {
         "who",
         "finger",
         "write",
@@ -71,4 +77,8 @@ def test_every_command_object_is_a_method() -> None:
         "mesg",
         "tty",
         "status",
+        "session_new",
+        "session_ls",
+        "session_use",
+        "session_end",
     }

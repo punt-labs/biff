@@ -43,11 +43,9 @@ from biff.cli_app import CliApp
 from biff.cli_context import CliContext
 from biff.cli_daemon import Answer, DaemonCommand, ResultPrinter
 from biff.cli_key import KeyCli
-from biff.cli_session import cli_session, cli_session_host
+from biff.cli_session import cli_session
 from biff.cli_watch import WatchCommand
-from biff.commands import CommandResult
 from biff.commands._session import update_current_session
-from biff.commands.session import SessionVerbs
 from biff.config import find_git_root
 from biff.doctor import installed_plugin_version
 from biff.formatting import format_talk_end, format_talk_line
@@ -1104,12 +1102,22 @@ async def _repl() -> None:
 # prints the text or JSON and sets the exit code.
 
 
-def _run(call: Callable[[DaemonCommand], Awaitable[Answer]]) -> None:
-    """Run one command as a client of biffd; print its text or JSON."""
+def _run(
+    call: Callable[[DaemonCommand], Awaitable[Answer]],
+    *,
+    user: str | None = None,
+    repo: Path | None = None,
+) -> None:
+    """Run one command as a client of biffd; print its text or JSON.
+
+    It runs as *user* and in *repo* when given, else as the invocation's own.
+    """
 
     async def _inner() -> None:
         try:
-            command = DaemonCommand.for_this_process(_user_override, _session_ref)
+            command = DaemonCommand.for_this_process(
+                user or _user_override, _session_ref, repo
+            )
             answer = await call(command)
             await answer.deliver(
                 ResultPrinter(json_output=_json_output, quiet=_quiet_output)
@@ -1230,38 +1238,6 @@ app.add_typer(KeyCli.on_this_machine().typer_app(), name="key")
 # ---------------------------------------------------------------------------
 
 
-def _run_session_verb(
-    verb: Callable[[SessionVerbs], Awaitable[CommandResult]],
-    *,
-    user: str | None = None,
-    repo: Path | None = None,
-) -> None:
-    """Run a ``session`` verb against the relay without attaching to a session."""
-
-    async def _inner() -> None:
-        try:
-            async with cli_session_host(
-                user_override=user or _user_override, start=repo
-            ) as handle:
-                result = await verb(SessionVerbs(handle.host))
-        except ValueError as exc:
-            if _json_output:
-                _print_json({"error": str(exc)})
-            else:
-                print(f"Error: {exc}", file=sys.stderr)
-            raise typer.Exit(code=1) from None
-        if _json_output:
-            _print_json(result.json_data)
-        elif result.error:
-            print(result.text, file=sys.stderr)
-        elif not _quiet_output:
-            print(result.text)
-        if result.error:
-            raise typer.Exit(code=1)
-
-    asyncio.run(_inner())
-
-
 @session_app.command("new")
 def session_new(
     tty: Annotated[
@@ -1278,7 +1254,7 @@ def session_new(
     ] = None,
 ) -> None:
     """Create a session and make it this repo's default."""
-    _run_session_verb(lambda verbs: verbs.new(tty), user=as_user, repo=repo)
+    _run(lambda d: d.session_new(tty or ""), user=as_user, repo=repo)
 
 
 @session_app.command("ls")
@@ -1289,7 +1265,7 @@ def session_ls(
     ] = False,
 ) -> None:
     """List this host's sessions."""
-    _run_session_verb(lambda verbs: verbs.ls(include_ended=all_flag))
+    _run(lambda d: d.call("session_ls", include_ended=all_flag))
 
 
 @session_app.command("use")
@@ -1297,7 +1273,7 @@ def session_use(
     name: Annotated[str, typer.Argument(help="Session name or id")],
 ) -> None:
     """Make a session this repo's default without attaching to it."""
-    _run_session_verb(lambda verbs: verbs.use(name))
+    _run(lambda d: d.session_use(name))
 
 
 @session_app.command("end")
@@ -1305,7 +1281,7 @@ def session_end(
     name: Annotated[str, typer.Argument(help="Session name or id")],
 ) -> None:
     """End a session; its unread mail moves to your user mailbox."""
-    _run_session_verb(lambda verbs: verbs.end(name))
+    _run(lambda d: d.call("session_end", ref=name))
 
 
 # ---------------------------------------------------------------------------

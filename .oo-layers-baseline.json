@@ -11,10 +11,6 @@
   "biff.commands.finger": [
     "biff.server.tools._session"
   ],
-  "biff.commands.session": [
-    "biff.cli_session_host",
-    "biff.cli_session_store"
-  ],
   "biff.commands.wall": [
     "biff.server.tools.wall"
   ],

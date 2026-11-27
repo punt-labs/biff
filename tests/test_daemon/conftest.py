@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, final
@@ -12,6 +13,7 @@ from biff.client.connection import ClientIdentity, DaemonClient
 from biff.daemon.relays import ResolvedSession
 from biff.daemon.resolver import ResolveError
 from biff.daemon.server import BiffDaemon
+from biff.daemon.session_store import CliSessionStore
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
@@ -88,6 +90,7 @@ class Harness:
     daemon: BiffDaemon
     run_dir: RunDir
     factory: CountingFactory
+    sessions: CliSessionStore
     clients: list[DaemonClient] = field(default_factory=list[DaemonClient])
 
     async def connect(
@@ -115,12 +118,30 @@ class Harness:
 
 
 @pytest.fixture
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A git repository the command runs in, with its own home directory."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    path = tmp_path / "work" / "test"
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)  # noqa: S603, S607
+    monkeypatch.chdir(path)
+    return path
+
+
+@pytest.fixture
 async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
     run_dir = RunDir(tmp_path / "run")
     factory = CountingFactory()
+    # The path ``CliSessionStore.default()`` names when a test sets HOME to
+    # ``tmp_path / "home"``, so a client and the daemon share one store.
+    sessions = CliSessionStore(tmp_path / "home" / ".punt-labs" / "biff" / "sessions")
     daemon = BiffDaemon(
         run_dir=run_dir,
         port=0,
+        sessions=sessions,
         resolver=FakeResolver(tmp_path / "relays"),
         relay_factory=factory,
         heartbeat_interval=0.05,
@@ -131,7 +152,7 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
         org_refresh_interval=0.05,
     )
     await daemon.start()
-    env = Harness(daemon=daemon, run_dir=run_dir, factory=factory)
+    env = Harness(daemon=daemon, run_dir=run_dir, factory=factory, sessions=sessions)
     yield env
     for connected in env.clients:
         await connected.close()

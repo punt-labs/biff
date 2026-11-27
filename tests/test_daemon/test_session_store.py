@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from biff.cli_session_store import (
+from biff.daemon.session_store import (
     CliSessionEndedError,
     CliSessionRecord,
     CliSessionStore,
@@ -494,7 +494,7 @@ class TestListSkipsUnreadableRecords:
         bad.mkdir()
         (bad / "session.json").write_text("{ not json")
 
-        with caplog.at_level("WARNING", logger="biff.cli_session_store"):
+        with caplog.at_level("WARNING", logger="biff.daemon.session_store"):
             listed = store.list()
 
         assert listed == (good,)

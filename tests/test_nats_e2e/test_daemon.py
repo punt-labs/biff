@@ -16,6 +16,7 @@ from biff.client.connection import ClientIdentity, DaemonClient
 from biff.daemon.connection import ConnectionHandler
 from biff.daemon.relays import ResolvedSession
 from biff.daemon.server import BiffDaemon
+from biff.daemon.session_store import CliSessionStore
 from biff.models import BiffConfig
 from biff.run_dir import RunDir
 
@@ -70,6 +71,7 @@ async def nats_daemon(nats_server: str, tmp_path: Path) -> AsyncIterator[_Daemon
     daemon = BiffDaemon(
         run_dir=run_dir,
         port=0,
+        sessions=CliSessionStore(tmp_path / "sessions"),
         resolver=_Resolver(nats_server, tmp_path / "data"),
         read_budget=4000,
         attach_timeout=_WAIT,
