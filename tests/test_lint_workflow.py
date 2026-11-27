@@ -30,6 +30,23 @@ def _step_script() -> str:
     return str(step["run"])
 
 
+def _answers_only_for(sha: str, pulls: str) -> str:
+    """A ``gh`` stub that returns *pulls* for *sha*'s endpoint, else fails."""
+    endpoint = f"repos/punt-labs/biff/commits/{sha}/pulls"
+    return (
+        'case "$*" in\n'
+        f"  *\"{endpoint}\"*) echo '{pulls}' ;;\n"
+        '  *) echo "unexpected gh arguments: $*" >&2; exit 1 ;;\n'
+        "esac"
+    )
+
+
+def _split_bases(stdout: str) -> tuple[str, str]:
+    """Return the make arguments before ``LAYERS_BASE``, and its value."""
+    before, _, layers = stdout.partition(" LAYERS_BASE=")
+    return before, layers
+
+
 def _stub(directory: Path, name: str, body: str) -> None:
     path = directory / name
     path.write_text(f"#!/bin/sh\n{body}\n")
@@ -61,17 +78,25 @@ def _run_step(
 
 
 def test_a_labelled_merge_allows_the_layers_widening(tmp_path: Path) -> None:
-    result = _run_step(tmp_path, sha=MERGE, gh_body=f"echo '{PULLS}'")
+    result = _run_step(tmp_path, sha=MERGE, gh_body=_answers_only_for(MERGE, PULLS))
     assert result.returncode == 0, result.stderr
-    assert ALLOW in result.stdout
-    assert (
-        "make check-oo check-coupling check-suppressions check-layers" in result.stdout
-    )
+    others, layers = _split_bases(result.stdout)
+    assert ALLOW in layers
+    assert ALLOW not in others
+    assert "make check-oo check-coupling check-suppressions check-layers" in others
 
 
 def test_the_prs_head_commit_does_not_allow_it(tmp_path: Path) -> None:
-    result = _run_step(tmp_path, sha=HEAD, gh_body=f"echo '{PULLS}'")
+    result = _run_step(tmp_path, sha=HEAD, gh_body=_answers_only_for(HEAD, PULLS))
     assert result.returncode == 0, result.stderr
+    assert ALLOW not in result.stdout
+
+
+def test_the_step_asks_about_the_pushed_commit(tmp_path: Path) -> None:
+    """A stub that answers only for another commit makes the lookup fail."""
+    result = _run_step(tmp_path, sha=MERGE, gh_body=_answers_only_for(HEAD, PULLS))
+    assert result.returncode == 0, result.stderr
+    assert "::warning::" in result.stdout
     assert ALLOW not in result.stdout
 
 
