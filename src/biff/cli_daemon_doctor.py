@@ -164,12 +164,12 @@ class DaemonChecks:
                 return self._fail(
                     name,
                     f"the service manager does not answer ({self._host.reason}); "
-                    "biffd starts on demand when a client needs it",
+                    "biffd is not supervised here (start it with: biff daemon serve)",
                 )
             return self._pass(
                 name,
-                "no service manager here; biffd starts on demand when a client "
-                "needs it",
+                "no service manager here; biffd is not supervised (start it with: "
+                "biff daemon serve)",
             )
         path = backend.config_path()
         if path.exists():

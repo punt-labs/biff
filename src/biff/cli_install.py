@@ -21,7 +21,7 @@ class MachineScope:
         """Create biff's home tree and install biffd's service.
 
         Returns whether the service install failed.  A host with no service
-        manager is not a failure, because biffd then starts on demand; a manager
+        manager is not a failure, though biffd is then unsupervised; a manager
         that exists and does not answer is printed to stderr with its reason, and
         also is not, because a container that ships systemctl without running
         systemd is the same case.

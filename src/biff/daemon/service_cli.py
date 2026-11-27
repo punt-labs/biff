@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, final
 
 import typer
 
-from biff.daemon.lifecycle import BiffdService
+from biff.daemon.lifecycle import NO_MANAGER_EXIT, BiffdService
 
 if TYPE_CHECKING:
     from biff.daemon.lifecycle import Outcome
@@ -55,12 +55,12 @@ class ServiceCommands:
     def _report(outcome: Outcome, *, idle_ok: bool = False) -> None:
         """Print *outcome* and exit 1 unless it succeeded.
 
-        A host with no service manager has nothing to act on, which only counts
-        as success when *idle_ok* says an absent service is the goal.
+        A host with no service manager has nothing to act on and exits 3, which
+        only counts as success when *idle_ok* says an absent service is the goal.
+        A manager that refused exits 1.
         """
-        failed = outcome.status == "failed" or (
-            outcome.status in ("no_manager", "unreachable") and not idle_ok
-        )
+        unmanaged = outcome.status in ("no_manager", "unreachable") and not idle_ok
+        failed = outcome.status == "failed" or unmanaged
         typer.echo(outcome.message, err=failed)
         if failed:
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=NO_MANAGER_EXIT if unmanaged else 1)

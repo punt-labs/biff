@@ -160,12 +160,16 @@ done
 
 # --- biffd service (biff install does the same) ---
 
+# Exit 3 means this host has no usable service manager (a container): a note.
+# Any other failure is real, so it fails the script after the plugin step ran.
 info "Installing the biffd service..."
-if "$BINARY" daemon install < /dev/null; then
-  ok "biffd service installed"
-else
-  warn "biffd service not installed; biff starts it on demand (see: biff daemon status)"
-fi
+SERVICE_STATUS=0
+"$BINARY" daemon install < /dev/null || SERVICE_STATUS=$?
+case "$SERVICE_STATUS" in
+  0) ok "biffd service installed" ;;
+  3) warn "no service manager here; biffd is not supervised (start it: biff daemon serve)" ;;
+  *) warn "biffd service not installed (see: biff daemon status, biff doctor)" ;;
+esac
 
 # --- Steps 4-6: Claude Code plugin (skipped in CLI-only mode) ---
 
@@ -225,6 +229,12 @@ info "Verifying installation..."
 printf '\n'
 "$BINARY" doctor || true
 printf '\n'
+
+# A real service failure fails the script, after the plugin and doctor ran.
+case "$SERVICE_STATUS" in
+  0|3) ;;
+  *) fail "The biffd service was not installed; fix it with: biff daemon install" ;;
+esac
 
 # --- Done ---
 

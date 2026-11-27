@@ -95,11 +95,11 @@ class TestDaemonInstall:
         assert "biffd running." in result.output
         assert str(backend.config_path()) in result.output
 
-    def test_install_without_a_manager_fails_and_names_the_alternative(
+    def test_install_without_a_manager_exits_3_and_names_the_alternative(
         self, no_manager: None
     ) -> None:
         result = runner.invoke(app, ["daemon", "install"])
-        assert (result.exit_code, "biff daemon serve" in result.output) == (1, True)
+        assert (result.exit_code, "biff daemon serve" in result.output) == (3, True)
 
     def test_install_without_the_executable_names_it(
         self, backend: FakeBackend, tmp_path: Path
@@ -153,7 +153,7 @@ class TestDaemonControl:
         self, no_manager: None, verb: str
     ) -> None:
         result = runner.invoke(app, ["daemon", verb])
-        assert result.exit_code == 1
+        assert result.exit_code == 3
 
 
 class TestDaemonStatus:
@@ -204,7 +204,7 @@ class TestBiffInstall:
         self, no_manager: None
     ) -> None:
         result = runner.invoke(app, ["install"])
-        assert (result.exit_code, "starts on demand" in result.output) == (0, True)
+        assert (result.exit_code, "biff daemon serve" in result.output) == (0, True)
 
     def test_install_reports_a_failed_service_install_and_exits_1(
         self, backend: FakeBackend, tmp_path: Path
@@ -287,13 +287,13 @@ class TestAnUnreachableManagerIsNotAbsent:
         assert result.exit_code == 0
         assert "Failed to connect to bus" in result.stderr
 
-    def test_the_daemon_command_exits_1_with_the_reason(
+    def test_the_daemon_command_exits_3_with_the_reason(
         self, home: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         host_unreachable(monkeypatch, self.REASON)
         result = runner.invoke(app, ["daemon", "install"])
         assert (result.exit_code, "Failed to connect to bus" in result.output) == (
-            1,
+            3,
             True,
         )
 

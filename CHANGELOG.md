@@ -10,7 +10,7 @@
   manage the service alone. A new `biffd` executable runs the daemon in the
   foreground, as the unit executes it. A crash restarts biffd; a clean stop
   stays stopped. A host with no service manager, such as a container, reports
-  that and starts biffd on demand instead.
+  that and exits 3; `biff install` still succeeds there.
 - `biff doctor` checks biffd in seven lines: unit installed, process running,
   port owner, `/health`, token file mode, daemon version against client
   version, and relay (reported as not available yet: asking biffd opens a

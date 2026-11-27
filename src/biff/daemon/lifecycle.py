@@ -22,13 +22,17 @@ from biff.supervision.port import PortProbe
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-__all__ = ["BiffdService", "Outcome"]
+__all__ = ["NO_MANAGER_EXIT", "BiffdService", "Outcome"]
 
 _HEALTH_SECONDS: Final = 1.0
 NO_MANAGER: Final = (
-    "no service manager on this host (systemd --user or launchd); biffd starts "
-    "on demand when a client needs it, or run it yourself: biff daemon serve"
+    "no service manager on this host (systemd --user or launchd); biffd is not "
+    "supervised here, so start it yourself: biff daemon serve"
 )
+NO_MANAGER_EXIT: Final = 3
+"""Exit status of a service command on a host with no usable manager, apart from
+1, a manager that refused: a bootstrap treats the first as a note, the second as
+a failure."""
 NOT_REPORTED: Final = "not reported by biffd yet"
 
 

@@ -218,7 +218,7 @@ class TestWithoutAServiceManager:
         self, run_dir: RunDir, biffd_port: int
     ) -> None:
         unit = checks(None, run_dir, biffd_port)["biffd unit"]
-        assert (unit.passed, "starts on demand" in unit.message) == (True, True)
+        assert (unit.passed, "biff daemon serve" in unit.message) == (True, True)
 
     def test_running_means_health_answers(
         self, run_dir: RunDir, biffd_port: int

@@ -50,6 +50,8 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     binary.write_text("#!/bin/sh\n")
     binary.chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
+    # A CI runner sets XDG_CONFIG_HOME; the unit directory must follow HOME here.
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
     monkeypatch.setattr(sys, "executable", str(tmp_path / "py" / "python"))
     return tmp_path

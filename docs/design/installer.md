@@ -563,14 +563,15 @@ outcomes: done, failed, or no service manager.
 - **Port guard.** Install refuses when another program holds port 8424; a
   running biffd on it is fine.
 - **No service manager** (a container, or a Linux login with no systemd user
-  session): `biff install` prints that biffd starts on demand and succeeds;
-  `biff daemon install`, `start`, `stop`, `restart` exit 1 with the same text.
+  session): `biff install` says biffd is not supervised and succeeds;
+  `biff daemon install`, `start`, `stop`, `restart` exit 3 with the same text,
+  so a bootstrap can tell "no manager" from 1, a manager that refused.
 - **A manager that exists and does not answer** (`systemctl` is installed and
   `systemctl --user show-environment` fails, as in a container that ships
   systemd without running it) is reported with systemctl's own words on stderr.
-  `biff install` still exits 0, because that container is the case biffd's
-  on-demand start exists for; `biff daemon install`, `start`, `stop` and
-  `restart` exit 1.
+  `biff install` still exits 0, because that container is the case with no
+  manager to supervise biffd; `biff daemon install`, `start`, `stop` and
+  `restart` exit 3.
 - **Install proves itself.** After registering the unit, install waits up to five
   seconds for `/health` and fails if biffd does not answer, so `Type=simple`
   "active" is never taken for "working". A step that fails, or a daemon that
