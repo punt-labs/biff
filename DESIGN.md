@@ -9660,7 +9660,12 @@ so a read cannot fetch mail between the end's snapshot and its drain. A `read` t
 runs after the end is refused with `session_ended`. The sweep takes the same hold,
 and files back the outbox of a session it expires. `session use` only names a
 record and moves no mail, so it needs no hold. Retiring a session drops its
-entry in the table's lock map. The temporary session a verb makes to run as is
+entry in the table's lock map. `Session.exclusive` stops an end or an expiry from running between a read's
+fetch and its merge; it does not protect a read that is itself cancelled there (its
+connection closes) or a daemon that dies there, which `mail-refile.tex` still
+models as `SessionEndDuringRead` and PL-1753 tracks. An end names its target
+by session id before it waits and checks after the wait that the name still
+maps to that id; if it does not, it ends nothing and says the session changed. The temporary session a verb makes to run as is
 deleted, not left ended, so `session ls --all` shows only sessions the user made.
 The session pointer module moved to `biff.daemon.session_pointer`; pi-tools'
 bridge imports the old path and must follow (PL-1756); there is no alias.

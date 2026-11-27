@@ -130,11 +130,18 @@ class SessionMethods:
         """
         ref = p.text("ref")
         p.done()
-        held = self._live.holding(verbs.host.selector.lookup(ref).session_id)
+        selector = verbs.host.selector
+        target = selector.lookup(ref).session_id
+        held = self._live.holding(target)
         async with held.exclusive() if held is not None else nullcontext():
+            # A name can change hands while this waits for a read: end the session
+            # the caller named, and nothing else.
+            if selector.lookup(ref).session_id != target:
+                msg = f"session {ref} changed while waiting; nothing was ended"
+                raise ValueError(msg)
             if held is not None:
                 await held.refile_held()
-            result = await verbs.end(ref)
+            result = await verbs.end(target)
             if held is not None:
                 held.mark_ended()
         row = cast("dict[str, str]", result.json_data)

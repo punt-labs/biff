@@ -497,3 +497,70 @@ async def test_the_sweep_waits_for_a_session_with_a_read_in_flight(
         assert not sweep.done()
     await asyncio.wait_for(sweep, timeout=_WAIT)
     await client.close()
+
+
+async def test_an_end_that_waited_for_a_read_leaves_a_session_that_took_the_name(
+    harness: Harness,
+) -> None:
+    harness.factory.relay_type = GatedRelay
+    GatedRelay.fetched, GatedRelay.release = asyncio.Event(), asyncio.Event()
+    GatedRelay.armed = asyncio.Event()
+    kai = await harness.connect("s-kai")
+    await _call(kai, "session_new", tty="alpha")
+    (old,) = (r for r in harness.sessions.list() if r.tty == "alpha")
+    reader = await harness.connect(old.session_id, "kai")
+    relay = ConsumingRelay(harness.factory.built[0])
+    await relay.deliver(
+        Message(from_user="eric", from_tty="t", to_user=_key(old), body="busy")
+    )
+    reading = asyncio.create_task(reader.request_held("read"))
+    await asyncio.wait_for(GatedRelay.fetched.wait(), timeout=_WAIT)
+    ending = asyncio.create_task(_call(kai, "session_end", ref="alpha"))
+    await asyncio.sleep(0.1)  # the end has resolved "alpha" and waits for the read
+    renamer = await harness.connect(old.session_id, "kai")
+    await renamer.request("tty", name="beta")
+    harness.sessions.rename(old.session_id, "beta")  # what the CLI does after
+    await _call(kai, "session_new", tty="alpha")  # a new session takes the name
+    GatedRelay.release.set()
+    reply = await asyncio.wait_for(ending, timeout=_WAIT)
+    GatedRelay.armed = None
+    await asyncio.gather(reading, return_exceptions=True)
+    (new,) = (r for r in harness.sessions.list() if r.tty == "alpha")
+    assert reply["error"] is True
+    assert "changed" in str(reply["text"])
+    assert (
+        harness.sessions.read(new.session_id).state,
+        harness.sessions.read(old.session_id).state,
+    ) == ("live", "live")
+
+
+async def test_the_sweep_files_a_dormant_sessions_held_mail_before_it_expires_it(
+    sweeping: tuple[BiffDaemon, CliSessionStore, CountingFactory], run_dir: RunDir
+) -> None:
+    daemon, store, factory = sweeping
+    factory.relay_type = ConsumingRelay
+    held = _stored(store, "gone", "dormant", timedelta(minutes=1))
+    await daemon.start()
+    client = await DaemonClient.connect(
+        run_dir=run_dir,
+        port=daemon.port,
+        identity=ClientIdentity(
+            client="cli", session_id=held.session_id, cwd="/work/repo", user="kai"
+        ),
+    )
+    relay = ConsumingRelay(factory.built[0])
+    await relay.deliver(
+        Message(from_user="eric", from_tty="t", to_user=_key(held), body="unconfirmed")
+    )
+    unconfirmed = await client.request_held("read")  # fetched, never confirmed
+    assert unconfirmed.result is not None
+    await client.close()
+    session = daemon._core.sessions.holding(held.session_id)
+    assert session is not None
+    await _eventually(lambda: session.is_dormant)
+    old = datetime.now(UTC) - RETENTION - timedelta(minutes=1)
+    path = store.root / held.session_id / "session.json"
+    path.write_text(replace(held, state="dormant", last_attached_at=old).to_json())
+    await daemon.sweep_sessions()
+    assert store.list() == ()
+    assert [m.body for m in await relay.fetch_user_inbox("kai")] == ["unconfirmed"]
