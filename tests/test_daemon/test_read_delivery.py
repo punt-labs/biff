@@ -222,3 +222,29 @@ async def test_a_reply_over_the_frame_limit_is_a_named_error_and_loses_nothing(
         if not _more(result):
             break
     assert len(received) == 6
+
+
+async def test_a_batch_filled_to_the_budget_fits_one_frame_with_its_text(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rendered text rides in the same frame as the rows, so it is budgeted.
+
+    The budget is half the frame limit, as in production.  Rows alone filling
+    the budget would leave the table text, about as large again, to overflow.
+    """
+    frame_limit = 20_000
+    monkeypatch.setattr(connection_module, "MAX_FRAME_BYTES", frame_limit)
+    harness.daemon._core.methods._read_budget = frame_limit // 2
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    # Wide characters: the table is wider in bytes than the JSON rows it renders.
+    sent = [f"{n:03d}" + "日" * 300 for n in range(40)]
+    for body in sent:
+        await eric.request("write", to="kai", message=body)
+    received: list[str] = []
+    for _ in range(40):
+        result = await kai.request("read")  # a frame over the limit raises here
+        received += _bodies(result)
+        if not _more(result):
+            break
+    assert received == sent

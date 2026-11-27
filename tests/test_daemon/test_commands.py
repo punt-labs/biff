@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from biff.client.connection import DaemonError
+from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
 
 if TYPE_CHECKING:
@@ -183,3 +185,15 @@ async def test_a_proxy_in_the_environment_is_not_used_for_the_loopback_daemon(
     monkeypatch.setenv(variable, "http://127.0.0.1:1")  # nothing listens there
     kai = await harness.connect("s-kai", "kai")
     assert cast("dict[str, object]", await kai.request("who"))["error"] is False
+
+
+async def test_last_with_a_huge_count_is_clamped_and_fits_one_frame(
+    harness: Harness,
+) -> None:
+    """The engine clamps ``count`` to 100 entries, which bounds data and text."""
+    for n in range(3):
+        await harness.connect(f"s-{n}", "kai")
+    client = await harness.connect("s-eric", "eric")
+    result = cast("dict[str, object]", await client.request("last", count=10**9))
+    assert len(_rows(result)) <= 100
+    assert len(json.dumps(result).encode()) < MAX_FRAME_BYTES

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from functools import partial
@@ -13,8 +14,8 @@ from pydantic_core import to_jsonable_python
 from biff import commands
 from biff.commands.inbox import Inbox
 from biff.daemon.refusal import RefusalError
-from biff.frame_base import MAX_FRAME_BYTES
 from biff.formatting import format_read
+from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
 from biff.relay_errors import RELAY_ERRORS
 
@@ -36,10 +37,10 @@ type Handler = Callable[[CliContext, Params], Awaitable[CommandResult]]
 type Acknowledge = Callable[[], Awaitable[None]]
 
 READ_BUDGET_BYTES = MAX_FRAME_BYTES // 2
-"""The most mail one ``read`` reply carries, in bytes of JSON.
+"""The most one ``read`` reply carries, rows and rendered text together, in bytes.
 
-Half the frame limit leaves room for the reply's envelope and for the length
-of text the JSON escapes add, so a batch can never be refused by the client.
+Half the frame limit leaves the other half for the frame's own fields, so a
+batch can never be refused by the client.
 """
 
 _ENVELOPE_BYTES = 512
@@ -209,11 +210,7 @@ class Methods:
         p.done()
         inbox = await Inbox.unread(session.context)
         pending = session.outbox.merge(inbox.messages)
-        batch = self._batch(pending)
-        data = _JSON.validate_python(
-            to_jsonable_python([m.model_dump(mode="json") for m in batch])
-        )
-        text = format_read(batch) if batch else "No new messages."
+        batch, data, text = self._fit(pending)
         result: dict[str, JsonValue] = {"data": data, "error": False, "text": text}
         # The backlog summary is a hint for ``more``; a relay that fails to report
         # it must not sink a batch that was already fetched and is deliverable.
@@ -228,16 +225,41 @@ class Methods:
             return Outcome(result)
         return Outcome(result, partial(self._delivered, session, inbox, batch))
 
-    def _batch(self, pending: list[Message]) -> list[Message]:
-        """Take messages from the front of *pending* while they fit the budget."""
+    def _fit(self, pending: list[Message]) -> tuple[list[Message], JsonValue, str]:
+        """Return the batch, its rows and its text, as one reply that fits the budget.
+
+        The text is the table the rows render as, and it travels in the same
+        frame, so the budget covers rows and text together.  Bound: the loop
+        ends only with ``rows + text + envelope <= read_budget``, which is at
+        most half the frame limit, so the reply's own fields (id, type, version,
+        ``more``) always fit in the other half.  Each pass shrinks the room by
+        at least a byte, so it ends; at the room of one clipped message the reply
+        is as small as a reply can be, and a budget below that has no solution.
+        """
+        room = self._read_budget
+        while True:
+            batch = self._batch(pending, room)
+            rows = [m.model_dump(mode="json") for m in batch]
+            data = _JSON.validate_python(to_jsonable_python(rows))
+            text = format_read(batch) if batch else "No new messages."
+            reply = {"data": data, "error": False, "text": text}
+            size = len(json.dumps(reply, ensure_ascii=False).encode())
+            if size <= self._read_budget or room <= _ENVELOPE_BYTES:
+                return batch, data, text
+            # Text and rows grow together, so scale the room, not subtract.
+            room = min(room - 1, room * self._read_budget // size)
+
+    @staticmethod
+    def _batch(pending: list[Message], room: int) -> list[Message]:
+        """Take messages from the front of *pending* while their rows fit *room*."""
         batch: list[Message] = []
         used = _ENVELOPE_BYTES
         for message in pending:
             size = len(message.model_dump_json().encode()) + 1  # the comma
-            if not batch and used + size > self._read_budget:
-                message = self._clip(message, self._read_budget - used)
+            if not batch and used + size > room:
+                message = Methods._clip(message, room - used)
                 size = len(message.model_dump_json().encode()) + 1
-            elif used + size > self._read_budget:
+            elif used + size > room:
                 break
             batch.append(message)
             used += size
