@@ -68,6 +68,7 @@
   "biff.daemon.subscription": "daemon",
   "biff.daemon.tasks": "daemon",
   "biff.data": "kernel",
+  "biff.deferred_vault": "engine",
   "biff.directory_kqueue": "engine",
   "biff.dispatch": "cli",
   "biff.doctor": "service",

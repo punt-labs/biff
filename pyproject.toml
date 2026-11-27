@@ -241,6 +241,7 @@ prefixes = [
     "ethos_team",
     "abandoned_canaries",
     "arrival_handler",
+    "deferred_vault",
     "directory_kqueue",
     "identity",
     "invite_expiry",

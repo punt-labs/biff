@@ -252,7 +252,7 @@
     "avg_params": 1.7,
     "max_complexity": 6.0,
     "avg_complexity": 1.7,
-    "module_size": 97.0,
+    "module_size": 98.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
@@ -496,10 +496,10 @@
   "src/biff/commands/key.py": {
     "method_ratio": 0.929,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.71,
-    "max_complexity": 10.0,
+    "avg_params": 1.79,
+    "max_complexity": 8.0,
     "avg_complexity": 3.93,
-    "module_size": 244.0,
+    "module_size": 243.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 0.75,
     "init_violations": 0.0,
@@ -908,6 +908,19 @@
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 0.0
+  },
+  "src/biff/deferred_vault.py": {
+    "method_ratio": 0.857,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.86,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.14,
+    "module_size": 33.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 0.5,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/biff/directory_kqueue.py": {
     "method_ratio": 1.0,

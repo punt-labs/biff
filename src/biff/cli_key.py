@@ -13,6 +13,7 @@ import typer
 from biff.commands import CommandResult
 from biff.commands.key import KeyCommands
 from biff.config import find_git_root
+from biff.deferred_vault import deferred_vaults
 from biff.identity import resolve_human_identity
 from biff.key_store import CallerKind, KeyStore
 from biff.key_wiring import machine_vaults
@@ -107,7 +108,7 @@ class KeyCli:
     @staticmethod
     def _machine_commands() -> KeyCommands:
         """Build the commands for this process, this machine and this clock."""
-        owner_vault, agent_vault = machine_vaults(Path.home())
+        owner_vault, agent_vault = deferred_vaults(lambda: machine_vaults(Path.home()))
         store = KeyStore(owner_vault, agent_vault, CallerKind.current())
         return KeyCommands(store, NostrDirectory.for_repo(find_git_root()), time.time)
 

@@ -229,12 +229,21 @@ class KeyCommands:
             msg = f"--npub is not the key held here for {agent}; nothing was signed"
             raise PublishedKeyError(msg)
 
-    def _recorded_owner(self, owner: str) -> bytes | None:
-        """Return the owner key recorded here, or ``None`` for an owner never set up."""
+    def _owner_standing(self, owner: str, published: bytes) -> str | None:
+        """Say how the published owner key stands here; ``None`` if it contradicts.
+
+        The key recorded on this machine is the anchor the agent cannot write.
+        An owner never set up here, or a vault this session cannot open, leaves
+        the published key unchecked and says so: ``show`` reads public data and
+        must work without the private vaults.
+        """
         try:
-            return self._store.owner_pubkey(owner)
+            recorded = self._store.owner_pubkey(owner)
         except KeyNotFoundError:
-            return None
+            return "not recorded on this machine: published under that name only"
+        except VaultError:
+            return "recorded owner key unreadable in this session"
+        return "recorded on this machine" if recorded == published else None
 
     def _published_pubkey(self, agent: str) -> bytes | None:
         npub = self._directory.npub(agent)
@@ -275,17 +284,13 @@ class KeyCommands:
             return f"authorized by @{owner or '?'}: no published key for the owner"
         try:
             published_owner = Bech32Key.PUBLIC.decode(owner_npub)
-            pinned = self._recorded_owner(owner)
-            if pinned is not None and pinned != published_owner:
+            standing = self._owner_standing(owner, published_owner)
+            if standing is None:
                 return (
                     f"authorized by @{owner}: invalid; the key published for "
                     f"@{owner} is not the owner key recorded on this machine"
                 )
-            who = f"@{owner} ({Bech32Key.abbreviate(owner_npub)}, " + (
-                "recorded on this machine)"
-                if pinned is not None
-                else "not recorded on this machine: published under that name only)"
-            )
+            who = f"@{owner} ({Bech32Key.abbreviate(owner_npub)}, {standing})"
             attestation = OwnerAttestation(
                 published_owner.hex(),
                 fields["auth_conditions"],

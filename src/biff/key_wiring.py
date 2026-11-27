@@ -114,6 +114,7 @@ class TtyPassphrase:
 
 DEFAULT_ASK = TtyPassphrase()
 
+
 _KEYRING_BACKEND = "keyring"
 _FILE_BACKEND = "file"
 

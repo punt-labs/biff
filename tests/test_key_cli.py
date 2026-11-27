@@ -10,7 +10,10 @@ from typer.testing import CliRunner
 
 import biff.__main__ as cli
 from biff import cli_key, key_store
-from biff.key_vault import SecretVault
+from biff.key_vault import SecretVault, VaultError
+from biff.nostr_bech32 import Bech32Key
+from biff.nostr_crypto import NostrCrypto
+from biff.nostr_directory import NostrDirectory
 from biff.passphrase_vault import PassphraseFileVault
 from tests._memory_vault import MemoryVault
 
@@ -84,3 +87,46 @@ def test_key_attest_then_show_reports_the_owner() -> None:
 def test_key_attest_help_documents_the_npub_confirmation() -> None:
     result = runner.invoke(cli.app, ["key", "attest", "--help"])
     assert "--npub" in result.output
+
+
+def _keyring_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(_home: Path) -> tuple[SecretVault, SecretVault]:
+        msg = "agent keys live in the OS keyring, which is not available"
+        raise VaultError(msg)
+
+    monkeypatch.setattr(cli_key, "machine_vaults", refuse)
+
+
+def _publish_claude(tmp_path: Path) -> str:
+    npub = Bech32Key.PUBLIC.encode(NostrCrypto().public_key(bytes([3]) * 32))
+    local = tmp_path / "home" / ".punt-labs" / "biff" / "nostr.yaml"
+    NostrDirectory(None, local).publish("claude", {"npub": npub})
+    return npub
+
+
+def test_key_show_works_when_the_recorded_keyring_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npub = _publish_claude(tmp_path)
+    _keyring_unavailable(monkeypatch)
+    result = runner.invoke(cli.app, ["key", "show", "claude"])
+    assert result.exit_code == 0, result.output
+    assert npub in result.output
+
+
+def test_key_agent_still_refuses_when_the_recorded_keyring_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _keyring_unavailable(monkeypatch)
+    result = runner.invoke(cli.app, ["key", "agent", "claude"])
+    assert result.exit_code == 1
+    assert "OS keyring" in result.output
+
+
+def test_key_init_still_refuses_when_the_recorded_keyring_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _keyring_unavailable(monkeypatch)
+    result = runner.invoke(cli.app, ["key", "init", "--owner", "jfreeman"])
+    assert result.exit_code == 1
+    assert "OS keyring" in result.output

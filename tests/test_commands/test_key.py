@@ -513,3 +513,15 @@ def test_show_names_the_owner_key_it_checked(tmp_path: Path) -> None:
     rig.commands.attest("jfreeman", "claude", hours=1)
     owner_npub = Bech32Key.PUBLIC.encode(rig.store.owner_pubkey("jfreeman"))
     assert Bech32Key.abbreviate(owner_npub) in rig.commands.show("claude").text
+
+
+def test_show_still_reports_when_the_recorded_owner_key_cannot_be_read(
+    tmp_path: Path,
+) -> None:
+    rig = _Rig(tmp_path)
+    rig.commands.init("jfreeman")
+    rig.commands.attest("jfreeman", "claude", hours=1)
+    rig.agent_vault.fail_get = True
+    result = rig.commands.show("claude")
+    assert not result.error
+    assert "unreadable in this session" in result.text
