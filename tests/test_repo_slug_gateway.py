@@ -113,17 +113,18 @@ def test_raw_value_that_parses_wins_over_a_different_expansion(
     assert get_repo_slug(repo) == "team/project"
 
 
-def test_empty_url_entry_resets_the_list(tmp_path: Path, gateway_rewrite: None) -> None:
-    repo = _repo_with_origin(tmp_path / "repo", "https://github.com/old/discarded.git")
+def test_empty_url_entry_agrees_with_what_git_fetches_from(
+    tmp_path: Path, gateway_rewrite: None
+) -> None:
+    # Git itself is the oracle for the empty entry: on Git 2.43 the empty value
+    # is skipped and the first non-empty URL is the fetch URL.
+    repo = _repo_with_origin(tmp_path / "repo", "https://example.org/team/first.git")
     _git(repo, "config", "--add", "remote.origin.url", "")
-    _git(
-        repo,
-        "config",
-        "--add",
-        "remote.origin.url",
-        "https://github.com/team/project.git",
-    )
-    assert get_repo_slug(repo) == "team/project"
+    _git(repo, "config", "--add", "remote.origin.url", "https://example.org/team/b.git")
+    fetch_url = _git_stdout(repo, "remote", "get-url", "origin")
+    expected = _stdlib._parse_repo_slug(fetch_url)  # pyright: ignore[reportPrivateUsage]
+    assert expected is not None
+    assert get_repo_slug(repo) == expected
 
 
 def test_expansion_is_not_computed_when_the_raw_url_parses(

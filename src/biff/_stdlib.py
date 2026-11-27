@@ -56,9 +56,9 @@ def _parse_repo_slug(url: str) -> str | None:
 def get_repo_slug(repo_root: Path) -> str | None:
     """Resolve ``owner/repo`` from the origin remote.
 
-    The raw fetch URL is parsed first: it is the first ``remote.origin.url``
-    value after the last empty one (git treats an empty value as a reset of
-    the list), and it is the canonical clone URL even when
+    The raw fetch URL is parsed first: it is the first non-empty
+    ``remote.origin.url`` value (verified on Git 2.43, where an empty entry
+    is skipped), and it is the canonical clone URL even when
     ``url.<base>.insteadOf`` rewrites it (an agent container rewrites
     github remotes through a gateway whose URL carries an extra route
     segment that would hide the slug).  Only when the raw value does not
@@ -75,11 +75,8 @@ def get_repo_slug(repo_root: Path) -> str | None:
 
 
 def _fetch_url(lines: list[str]) -> str:
-    """Return the first URL after the last empty line, or ``""`` when none remain."""
-    urls: list[str] = []
-    for line in lines:
-        urls = [*urls, line] if line else []
-    return urls[0] if urls else ""
+    """Return the first non-empty line, or ``""`` when there is none."""
+    return next((line for line in lines if line), "")
 
 
 def _git_lines(repo_root: Path, *args: str) -> list[str]:
