@@ -43,24 +43,27 @@ DID_NOT_START: Final = (
 class ScriptedProbe:
     """Answers ``/health`` only after it has been asked *after* times."""
 
-    __slots__ = ("_after", "_asked")
+    __slots__ = ("_after", "_asked", "_port")
 
     _after: int
     _asked: int
+    _port: int
 
-    def __new__(cls, after: int) -> Self:
+    def __new__(cls, after: int, *, port: int = 8424) -> Self:
+        """Answer on *port* once asked more than *after* times."""
         self = super().__new__(cls)
         self._after = after
         self._asked = 0
+        self._port = port
         return self
 
     @property
     def asked(self) -> int:
         return self._asked
 
-    def answers(self, timeout: float) -> bool:
+    def live_port(self, timeout: float) -> int | None:
         self._asked += 1
-        return self._asked > self._after
+        return self._port if self._asked > self._after else None
 
 
 @final
@@ -158,6 +161,26 @@ class TestEnsureRunning:
         run_dir.write_port(1)  # a crash left a port nothing listens on
         spec = dataclasses.replace(BIFFD_SPEC, health_port=health_port)
         DaemonNudge.for_host(run_dir, spec).ensure_running()
+
+    def test_it_returns_the_port_that_answered_not_the_stale_record(
+        self, tmp_path: Path, health_port: int
+    ) -> None:
+        run_dir = RunDir(tmp_path / "run")
+        run_dir.write_port(1)  # a custom port nothing listens on any more
+        spec = dataclasses.replace(BIFFD_SPEC, health_port=health_port)
+        assert DaemonNudge.for_host(run_dir, spec).ensure_running() == health_port
+
+    def test_it_returns_the_recorded_port_when_that_one_answers(
+        self, tmp_path: Path, health_port: int
+    ) -> None:
+        run_dir = RunDir(tmp_path / "run")
+        run_dir.write_port(health_port)  # a --port override that is healthy
+        spec = dataclasses.replace(BIFFD_SPEC, health_port=1)
+        assert DaemonNudge.for_host(run_dir, spec).ensure_running() == health_port
+
+    def test_a_daemon_that_comes_up_after_a_start_returns_its_port(self) -> None:
+        probe = ScriptedProbe(after=3, port=9001)
+        assert nudge(probe, ScriptedStarter("launched")).ensure_running() == 9001
 
     def test_the_two_failures_are_distinct_types(self) -> None:
         assert not issubclass(DaemonNotInstalledError, DaemonDidNotStartError)
@@ -334,7 +357,7 @@ class TestForHost:
     ) -> None:
         run_dir = RunDir(tmp_path / "run")
         run_dir.write_port(health_port)
-        DaemonNudge.for_host(run_dir).ensure_running()
+        assert DaemonNudge.for_host(run_dir).ensure_running() == health_port
 
     def test_health_probe_reads_version_and_uptime(self, health_port: int) -> None:
         health = HealthProbe(health_port).fetch(1.0)

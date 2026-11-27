@@ -176,6 +176,16 @@ class SystemdBackend:
         result = Supervisor.run("systemctl", "--user", "is-active", self._unit)
         return result.stdout.strip() == "active"
 
+    def diagnosis(self) -> str:
+        """Return the first lines of ``systemctl --user status`` for the unit."""
+        return Supervisor.excerpt(
+            "systemctl",
+            "--user",
+            "status",
+            "--no-pager",
+            self._unit,
+        )
+
     def linger_warning(self) -> str:
         """Warn that the unit stops at logout unless linger is enabled.
 

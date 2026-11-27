@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,8 @@ from typer.testing import CliRunner
 from biff.__main__ import app
 from biff.plugins.claude_code.claude_md import ClaudeMdImport
 from biff.run_dir import RunDir
+from biff.supervision.health import HealthProbe
+from biff.supervision.port import PortProbe
 from tests.test_supervision.fake_backend import FakeBackend, RaisingBackend
 from tests.test_supervision.patching import (
     host_has,
@@ -30,6 +33,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 runner = CliRunner()
+_REAL_WAIT = PortProbe.wait_until_answering  # captured before any test patches it
 
 
 @pytest.fixture
@@ -129,6 +133,37 @@ class TestDaemonControl:
     def test_start_before_install_names_the_repair(self, backend: FakeBackend) -> None:
         result = runner.invoke(app, ["daemon", "start"])
         assert (result.exit_code, "biff daemon install" in result.output) == (1, True)
+
+    @pytest.mark.parametrize("verb", ["start", "restart"])
+    def test_a_slow_start_says_on_stderr_that_it_is_waiting(
+        self, backend: FakeBackend, monkeypatch: pytest.MonkeyPatch, verb: str
+    ) -> None:
+        # Real wait loop, a biffd that answers only after 0.4 s, notice after 0.1 s.
+        monkeypatch.setattr(PortProbe, "wait_until_answering", _REAL_WAIT)
+        monkeypatch.setattr(PortProbe, "NOTICE_AFTER_SECONDS", 0.1)
+        begun = time.monotonic()
+
+        def answers(self: HealthProbe, timeout: float) -> bool:
+            return time.monotonic() - begun > 0.4
+
+        monkeypatch.setattr(HealthProbe, "answers", answers)
+        backend.install()
+        result = runner.invoke(app, ["daemon", verb])
+        assert result.exit_code == 0, result.output
+        assert result.stderr.count("still waiting for biffd to answer /health") == 1
+
+    def test_a_quick_start_prints_no_waiting_line(
+        self, backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(PortProbe, "wait_until_answering", _REAL_WAIT)
+
+        def answers(self: HealthProbe, timeout: float) -> bool:
+            return True
+
+        monkeypatch.setattr(HealthProbe, "answers", answers)
+        backend.install()
+        result = runner.invoke(app, ["daemon", "start"])
+        assert (result.exit_code, result.stderr) == (0, "")
 
     @pytest.mark.parametrize("verb", ["start", "stop", "restart"])
     def test_control_verbs_reach_the_supervisor(

@@ -18,6 +18,16 @@ if TYPE_CHECKING:
 __all__ = ["LaunchdBackend"]
 
 _THROTTLE_SECONDS = 30
+# The ``launchctl print`` keys that say what became of the job.
+_DIAGNOSIS_KEYS = (
+    "active count",
+    "state",
+    "runs",
+    "pid",
+    "immediate reason",
+    "last exit code",
+    "last exit status",
+)
 
 
 @final
@@ -186,6 +196,16 @@ class LaunchdBackend:
         """Return whether launchd reports the job running."""
         result = Supervisor.run("launchctl", "print", self._target)
         return result.returncode == 0 and "state = running" in result.stdout
+
+    def diagnosis(self) -> str:
+        """Return the state, run count and last exit code from ``launchctl print``.
+
+        ``launchctl`` prints the exit code after the job's program, arguments and
+        environment, so the first lines would not hold it.
+        """
+        return Supervisor.excerpt(
+            "launchctl", "print", self._target, keys=_DIAGNOSIS_KEYS
+        )
 
     def linger_warning(self) -> str:
         """Return no warning: a LaunchAgent survives logout of the shell."""

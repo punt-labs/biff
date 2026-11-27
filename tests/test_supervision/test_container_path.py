@@ -102,3 +102,19 @@ def test_with_the_executable_the_nudge_starts_biffd_detached(
     result = _run(home, port)
     assert (result.returncode, result.stdout.strip()) == (0, "answers"), result.stderr
     assert HealthProbe(port).answers(1.0)
+
+
+def test_the_biffd_executable_loads_the_relay_stack_after_it_logs() -> None:
+    """The startup line must be possible before the slow imports run."""
+    probe = (
+        "import sys, biff.daemon.app;"
+        "print('biff.daemon.server' in sys.modules, 'nats' in sys.modules)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    assert result.stdout.split() == ["False", "False"]

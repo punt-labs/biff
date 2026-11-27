@@ -16,21 +16,29 @@ if TYPE_CHECKING:
 class FakePort:
     """Reports a fixed port state, and whether biffd ever answers ``/health``."""
 
-    __slots__ = ("_answers", "_state")
+    __slots__ = ("_answers", "_state", "_waits")
 
     _state: PortState
     _answers: bool
+    _waits: list[float]
 
     def __new__(cls, state: PortState, *, answers: bool) -> Self:
         self = super().__new__(cls)
         self._state = state
         self._answers = answers
+        self._waits = []
         return self
+
+    @property
+    def waits(self) -> list[float]:
+        """The number of seconds each wait for ``/health`` was allowed."""
+        return self._waits
 
     def state(self) -> PortState:
         return self._state
 
     def wait_until_answering(self, seconds: float) -> bool:
+        self._waits.append(seconds)
         return self._answers
 
 
@@ -166,3 +174,35 @@ class FailingUninstall(FakeBackend):
 
     def uninstall(self) -> None:
         raise ServiceActionFailedError("systemctl refused to disable the unit")
+
+
+class DiagnosableBackend(FakeBackend):
+    """A backend that also reports what its supervisor shows, as launchd's does."""
+
+    __slots__ = ("_alive", "_report", "_seen")
+
+    _report: str
+    _alive: bool
+    _seen: list[bool]
+
+    def __new__(cls, config_path: Path, report: str, *, alive: bool = True) -> Self:
+        """Report *report*; show the service running unless ``alive`` is false."""
+        self = super().__new__(cls, config_path)
+        self._report = report
+        self._alive = alive
+        self._seen = []
+        return self
+
+    def is_active(self) -> bool:
+        """Return the scripted state, whatever was installed."""
+        return self._alive
+
+    @property
+    def unit_present_when_asked(self) -> list[bool]:
+        """Whether the unit still existed at each call to ``diagnosis``."""
+        return self._seen
+
+    def diagnosis(self) -> str:
+        """Return the scripted report, noting whether the unit still exists."""
+        self._seen.append(self.config_path().exists())
+        return self._report

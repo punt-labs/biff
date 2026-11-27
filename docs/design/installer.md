@@ -572,11 +572,49 @@ outcomes: done, failed, or no service manager.
   `biff install` still exits 0, because that container is the case with no
   manager to supervise biffd; `biff daemon install`, `start`, `stop` and
   `restart` exit 3.
-- **Install proves itself.** After registering the unit, install waits up to five
-  seconds for `/health` and fails if biffd does not answer, so `Type=simple`
-  "active" is never taken for "working". A step that fails, or a daemon that
-  never answers, removes the unit and disables it again; `uninstall` deletes the unit only after systemd reports
-  the service stopped, and a supervisor failure is an error, never ignored.
+- **Install proves itself.** After registering the unit, install waits for
+  `/health` and fails if biffd does not answer, so `Type=simple` "active" is
+  never taken for "working". `daemon start` and `restart` wait the same way but
+  leave the unit installed when biffd does not answer. A step that fails, or a
+  daemon that never answers, removes the unit and disables it again;
+  `uninstall` deletes the unit only after systemd reports the service stopped,
+  and a supervisor failure is an error, never ignored.
+- **The health wait is 30 seconds and `BIFF_DAEMON_HEALTH_WAIT` sets it.** The
+  first value, 5 seconds, failed on a macOS laptop at a load average of 150 to
+  229: launchd had spawned biffd, never saw it exit, and the install's own
+  rollback removed it 5.25 seconds later. Spawn to first `/health` answer was
+  measured on a 24-core Linux machine with `biffd --port N`: 0.75 s warm, 1.77 s
+  with the bytecode cache deleted; with 24 busy loops (load average 79 on that
+  shared machine) 0.99 to 2.34 s warm and 1.38 s cold. biffd imports its relay
+  stack before it listens, so the time grows with CPU contention and with
+  Python 3.14's cold imports; 30 seconds is more than ten times the worst
+  measured value. The variable takes seconds above 0 and at most 600; anything
+  else fails the command with the variable named, before the service is touched.
+  The nudge keeps 5 seconds: it blocks a client's own call, the longest measured
+  start under load (2.34 s) fits, and its error names the commands that find out
+  why. A client that must wait longer starts biffd with `biff daemon start`.
+- **A timeout says what the supervisor knew.** The error reports how long the
+  wait was (not how long biffd ran: it may have exited early and been
+  restarted), whether the supervisor shows biffd running now (slow to start, or
+  restarted after an exit) or not (it exited or never started, so read
+  `biff.log`), and the supervisor's own report: the state, run count and last
+  exit code from `launchctl print gui/<uid>/<label>` on macOS, which prints the
+  exit code after the program, arguments and environment; the first eight lines
+  of `systemctl --user status` on Linux. All of it is read before the rollback,
+  which still removes the unit.
+- **start and restart refuse a port the service does not hold.** A foreground
+  biffd answers `/health` too, so `start` and `restart` apply the install
+  guard first: a biffd the service does not supervise, or another program, on
+  the port is refused with the command to run after stopping it.
+- **A long wait says so.** After 3 seconds without an answer, `install`,
+  `start` and `restart` print one line to stderr, so a person does not think a
+  command that waits up to 30 seconds has hung.
+- **biffd logs its own start.** Its first line in `biff.log` after logging is
+  configured gives version, pid, port, run directory and interpreter; a second
+  says when it listens. The relay stack is imported after the first line, not
+  before it (`biff.daemon` imports nothing at package level), so a daemon that
+  is still loading has said it started. Under a service manager they are the
+  only record that biffd ran at all.
 - **A failed service install** does not skip the plugin step, because nothing
   routes through biffd yet, but it fails the command with exit 1.
 

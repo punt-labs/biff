@@ -21,7 +21,9 @@
   `biffd`, and polls for five seconds. It raises `DaemonNotInstalledError`
   (`biffd is not installed. Run: biff install`) or `DaemonDidNotStartError`
   (`biffd is installed but did not start within 5 seconds. Run: biff daemon
-  status, then biff doctor`). Nothing calls it yet.
+  status, then biff doctor`). `ensure_running()` returns the port that
+  answered, which differs from the recorded one after a crash on a `--port`
+  override. Nothing calls it yet.
 - biffd exits with status 78 when no restart can cure its failure (port taken,
   run directory not private) and writes the reason to
   `~/.punt-labs/biff/logs/biff.log`. The unit does not restart on 78, limits a
@@ -48,10 +50,29 @@
   reached.
 - `biff daemon status` prints relay connections and attached clients as not
   reported yet, because biffd has no method that returns them.
+- `biff daemon install`, `start` and `restart` wait 30 seconds, not 5, for
+  `/health`; `BIFF_DAEMON_HEALTH_WAIT` (seconds, above 0, at most 600) sets the
+  wait. `start` and `restart` now wait for `/health` too, and refuse, as
+  `install` does, a port held by a biffd the service does not supervise. A
+  timeout says how long the wait was, whether the supervisor shows biffd
+  running now, and the supervisor's report (state, run count and last exit code
+  from `launchctl print`; the first lines of `systemctl --user status`). The
+  client nudge keeps its 5 seconds. A wait longer than 3 seconds prints one
+  `still waiting for biffd to answer /health` line to stderr.
+- biffd writes `biffd starting: version=... pid=... port=... run_dir=...
+  python=...` to `~/.punt-labs/biff/logs/biff.log` before it loads the relay
+  stack, and `biffd listening on 127.0.0.1:<port>` once it listens. `biff.daemon`
+  no longer re-exports `BiffDaemon`; import it from `biff.daemon.server`.
 - The service code lives in `biff.supervision` behind a `ServiceBackend`
   protocol that mirrors punt-service, which is not yet on PyPI. Moving to
   punt-service replaces `biff.supervision.systemd`, `launchd`, `host` and
   `runner` with its backends; no other module changes.
+
+### Fixed
+
+- A service failure message no longer runs its last sentence into the pointer
+  to the log (`... biff daemon serve See ~/.punt-labs/...`): the pointer is its
+  own sentence.
 
 ## [1.26.0] - 2026-11-26
 

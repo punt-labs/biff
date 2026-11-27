@@ -137,6 +137,7 @@ def _clear_claude_session_env(  # pyright: ignore[reportUnusedFunction]
 _AMBIENT_BIFF_SETTINGS = (
     "BIFF_ATTESTATION_HOURS",
     "BIFF_CHANNEL_MODE",
+    "BIFF_DAEMON_HEALTH_WAIT",
     "BIFF_OWNER",
     "BIFF_USER",
     "BIFF_RELAY_NKEYS_SEED",

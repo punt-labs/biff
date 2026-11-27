@@ -67,12 +67,16 @@ class BiffdService:
         return self
 
     @classmethod
-    def for_host(cls) -> Self:
-        """Return the service on this host's service manager."""
+    def for_host(cls, notice: Callable[[str], None]) -> Self:
+        """Return the service on this host's service manager.
+
+        *notice* hears the one line a long wait for ``/health`` earns, such as
+        ``typer.echo`` writing to stderr.
+        """
         host = ServiceHost.detect(BIFFD_SPEC)
         if host.backend is None:
             return cls(None, host)
-        port = PortProbe(BIFFD_SPEC.health_port)
+        port = PortProbe(BIFFD_SPEC.health_port, notice)
         return cls(ServiceManager(BIFFD_SPEC, host.backend, port), host)
 
     def install(self) -> Outcome:
