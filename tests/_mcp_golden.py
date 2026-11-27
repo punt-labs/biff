@@ -19,6 +19,7 @@ from biff.nostr_directory import NostrDirectory
 from biff.relay import LocalRelay
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from pathlib import Path
 
     import pytest
@@ -278,15 +279,25 @@ class HistoryRelay(LocalRelay):
     """A local relay that keeps session history, as the NATS relay does.
 
     ``LocalRelay`` persists none, so ``last`` over it always says there is no
-    history; a table with rows needs a relay that remembers.
+    history; a table with rows needs a relay that remembers.  Events come back
+    most recent first, as ``NatsRelay.get_wtmp`` returns them
+    (``nats_relay.py``, "most recent first").
+
+    The server stamps its own session's events with the wall clock, which would
+    make a table depend on the calendar.  Those events, and only those, take the
+    time of *clock* instead; every other event keeps the time it came with.
     """
 
-    def __init__(self, data_dir: Path, events: tuple[SessionEvent, ...] = ()) -> None:
+    def __init__(self, data_dir: Path, *, own_key: str, clock: datetime) -> None:
         super().__init__(data_dir)
-        self._events = list(events)
+        self._own_key = own_key
+        self._clock = clock
+        self._events: list[SessionEvent] = []
 
     async def append_wtmp(self, event: SessionEvent) -> None:
-        """Remember *event*."""
+        """Remember *event*, its time the injected clock's when it is the server's."""
+        if event.session_key == self._own_key:
+            event = event.model_copy(update={"timestamp": self._clock})
         self._events.append(event)
 
     async def get_wtmp(

@@ -8,7 +8,6 @@ serving the tools (a thin client of biffd) must reproduce.
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -126,53 +125,76 @@ def _event(
     )
 
 
-async def test_last_prints_a_table_when_there_is_history(tmp_path: Path) -> None:
-    """One finished session, one that is still logged in, and one that is gone."""
+_HEADER = (
+    "▶  NAME        REPO               HOST       LOGIN             "
+    "LOGOUT            DURATION"
+)
+_ERIC = (
+    "   eric:tty1   _test-integration  test-host  Fri Nov 20 09:00  "
+    "Fri Nov 20 10:30  1:30    "
+)
+_GHOST = (
+    "   ghost:tty2  _test-integration  test-host  Fri Nov 20 08:00  "
+    "gone              -       "
+)
+
+
+def _live(login: str) -> str:
+    return (
+        f"   kai:tty1    _test-integration  test-host  {login}  "
+        "still logged in   -       "
+    )
+
+
+@pytest.mark.parametrize(
+    ("now", "login", "rank"),
+    [
+        pytest.param(
+            datetime(2026, 12, 1, 9, 15, tzinfo=UTC), "Tue Dec 01 09:15", 0, id="after"
+        ),
+        pytest.param(
+            datetime(2026, 11, 20, 8, 30, tzinfo=UTC),
+            "Fri Nov 20 08:30",
+            1,
+            id="same-day",
+        ),
+        pytest.param(
+            datetime(2026, 1, 5, 7, 0, tzinfo=UTC), "Mon Jan 05 07:00", 2, id="before"
+        ),
+    ],
+)
+async def test_last_prints_the_same_table_whatever_the_date(
+    tmp_path: Path, now: datetime, login: str, rank: int
+) -> None:
+    """A finished session, a live one, and one that is gone, under three clocks.
+
+    The server's own login takes the injected time, so the table cannot depend
+    on the calendar; where it falls among the seeded rows is the one thing the
+    date changes, and ``rank`` says where.  The ghost's login arrives after the
+    server attached: at attach, ``_close_orphaned_logins`` would close it.
+    """
     config = BiffConfig(user="kai", repo_name="_test-integration")
-    relay = HistoryRelay(tmp_path)
+    probe = create_state(config, tmp_path / "probe", hostname="test-host")
+    key = bound_to(probe).session_key
+    relay = HistoryRelay(tmp_path, own_key=key, clock=now)
     state = bound_to(create_state(config, tmp_path, relay=relay, hostname="test-host"))
-    at = datetime(2026, 11, 20, tzinfo=UTC)
-    for event in (
-        _event("eric:e1", "login", "eric", "tty1", at.replace(hour=9)),
-        _event("eric:e1", "logout", "eric", "tty1", at.replace(hour=10, minute=30)),
-        _event("ghost:g1", "login", "ghost", "tty2", at.replace(hour=8)),
-        _event(state.session_key, "login", "kai", "kaitty", at.replace(hour=11)),
-    ):
-        await relay.append_wtmp(event)
+    assert state.session_key == key
     async with StampedClient(FastMCPTransport(create_server(state))) as client:
         kai = RecordingClient(client=client, transcript=Transcript(title=""))
+        await kai.call("who")  # attaches the session
+        at = datetime(2026, 11, 20, tzinfo=UTC)
+        for event in (
+            _event("eric:e1", "login", "eric", "tty1", at.replace(hour=9)),
+            _event("eric:e1", "logout", "eric", "tty1", at.replace(hour=10, minute=30)),
+            _event("ghost:g1", "login", "ghost", "tty2", at.replace(hour=8)),
+        ):
+            await relay.append_wtmp(event)
 
         text = await kai.call("last")
 
-    # The server's own login is stamped now; the seeded events have fixed dates.
-    stamped_now = re.compile(
-        r"(?<=test-host  )(?!Fri Nov 20 )"
-        r"[A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}"
-    )
-    assert stamped_now.sub("<NOW>", text) == "\n".join(
-        [
-            (
-                "▶  NAME        REPO               HOST       LOGIN             "
-                "LOGOUT            DURATION"
-            ),
-            (
-                "   kai:tty1    _test-integration  test-host  <NOW>  "
-                "still logged in   -       "
-            ),
-            (
-                "   kai:kaitty  _test-integration  test-host  Fri Nov 20 11:00  "
-                "still logged in   -       "
-            ),
-            (
-                "   eric:tty1   _test-integration  test-host  Fri Nov 20 09:00  "
-                "Fri Nov 20 10:30  1:30    "
-            ),
-            (
-                "   ghost:tty2  _test-integration  test-host  Fri Nov 20 08:00  "
-                "Fri Nov 20 08:00  0:00    "
-            ),
-        ]
-    )
+    rows = [_ERIC, _GHOST]
+    rows.insert(rank, _live(login))
+    assert text == "\n".join([_HEADER, *rows])
 
 
 async def test_channel_ack_refuses_a_token_it_never_issued(tmp_path: Path) -> None:
