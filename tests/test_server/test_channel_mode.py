@@ -608,11 +608,14 @@ class TestMcpEntry:
 
         with (
             patch(
-                "biff.server.transport_runtime.create_server",
+                "biff.server.mcp_assembly.create_server",
                 return_value=ChannelServer[object]("biff"),
             ),
             patch("biff.server.launch.StateBlueprint.build"),
-            patch("biff.server.entrypoints.load_mcp_config"),
+            patch(
+                "biff.server.entrypoints.load_mcp_config",
+                return_value=MagicMock(repo_root=None),
+            ),
             patch.object(ChannelServer, "serve_channel_stdio", serve_channel),
             patch.object(ChannelServer, "run", run),
         ):
@@ -1252,14 +1255,14 @@ class TestTheFlagDoesNotLeakIntoConfigLoadSubprocesses:
                 check=True,
             )
             seen.append(out.stdout.strip())
-            return MagicMock()
+            return MagicMock(repo_root=None)
 
         async def serve_channel(_self: ChannelServer[object]) -> None:
             return None
 
         with (
             patch(
-                "biff.server.transport_runtime.create_server",
+                "biff.server.mcp_assembly.create_server",
                 return_value=ChannelServer[object]("biff"),
             ),
             patch("biff.server.launch.StateBlueprint.build"),

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
+from biff.commands.unread_fetch import UnreadFetch
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -40,8 +42,7 @@ class Inbox:
     @classmethod
     async def unread(cls, ctx: CliContext) -> Self:
         """Fetch the session's unread mail without marking any of it read."""
-        tty = await ctx.relay.fetch(ctx.session_key)
-        user = await ctx.relay.fetch_user_inbox(ctx.user)
+        tty, user = await UnreadFetch.of(ctx)
         return cls(ctx, tty, user)
 
     @property
@@ -61,17 +62,14 @@ class Inbox:
         return (await relay.get_unread_summary(self._ctx.session_key)).count
 
     async def refile(self, message: Message) -> bool:
-        """File *message* in the relay again; say whether the relay held it before.
+        """File *message* in the relay again; say whether it was filed.
 
         A relay that consumes mail when it is fetched holds none of it afterwards,
         so mail a read could not deliver goes back, where ending the session or a
         read from another process finds it.  A relay that keeps unread mail is
         left alone: filing the message again would copy it.
         """
-        if not self._ctx.relay.consumes_on_fetch:
-            return False
-        await self._ctx.relay.deliver(message.refiled())
-        return True
+        return await UnreadFetch.refile(self._ctx, message)
 
     async def mark_read(self, delivered: Sequence[Message]) -> None:
         """Mark *delivered*, and only those messages, read."""

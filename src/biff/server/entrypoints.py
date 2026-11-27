@@ -54,9 +54,7 @@ class McpServerOptions:
             ),
         )
 
-        return McpServerBuilder(
-            resolved, self.user, self.transport, toggle
-        ).create_server()
+        return McpServerBuilder(resolved, self, toggle).create_server()
 
     def _observed_server(self, ctx: typer.Context) -> ChannelServer[ServerState]:
         invocation = ctx.find_object(McpInvocation)

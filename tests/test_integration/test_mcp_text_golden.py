@@ -14,27 +14,25 @@ from typing import TYPE_CHECKING
 import pytest
 from fastmcp.client.transports import FastMCPTransport
 
-from biff.models import BiffConfig, SessionEvent
+from biff.models import BiffConfig
 from biff.nostr_directory import NostrDirectory
 from biff.server.app import create_server
 from biff.server.tools import register_channel_tools
 from biff.server.tools.channel_ack import NOT_ACCEPTED
 from biff.testing import RecordingClient, Transcript
 from biff.testing.caller import StampedClient, bound_to
-from tests._mcp_golden import STEPS, HistoryRelay, Step, isolate_machine, normalise
+from tests._mcp_golden import (
+    STEPS,
+    HistoryRelay,
+    differences,
+    isolate_machine,
+    last_table,
+    normalise,
+)
 from tests._state import create_state
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def _differences(steps: tuple[Step, ...], actual: list[str]) -> list[str]:
-    """Name each step whose normalised text is not its golden text."""
-    return [
-        f"{step.user} {step.tool} {step.args}:\n  want {step.text!r}\n  got  {got!r}"
-        for step, text in zip(steps, actual, strict=True)
-        if (got := normalise(text, step.volatile)) != step.text
-    ]
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +46,7 @@ async def test_every_tool_returns_its_golden_text(
     clients = {"kai": kai, "eric": eric}
     actual = [await clients[s.user].call(s.tool, **s.args) for s in STEPS]
 
-    assert _differences(STEPS, actual) == []
+    assert differences(STEPS, actual) == []
 
 
 @pytest.mark.parametrize("index", range(len(STEPS)))
@@ -56,7 +54,7 @@ def test_a_one_character_change_in_any_golden_text_is_caught(index: int) -> None
     step = STEPS[index]
     changed = step.text[:-1] + ("." if step.text[-1] != "." else "!")
 
-    assert _differences((step,), [changed]) != []
+    assert differences((step,), [changed]) != []
 
 
 class TestTheClockIsNormalisedWithinABand:
@@ -110,42 +108,6 @@ class TestThePlanMarkerAndTheKeysStayOffThisMachine:
         assert (tmp_path / "machine" / "nostr.yaml").is_file()
 
 
-def _event(
-    session_key: str, event: str, user: str, tty_name: str, when: datetime
-) -> SessionEvent:
-    return SessionEvent(
-        session_key=session_key,
-        event=event,
-        user=user,
-        tty=session_key.partition(":")[2],
-        tty_name=tty_name,
-        hostname="test-host",
-        repo="_test-integration",
-        timestamp=when,
-    )
-
-
-_HEADER = (
-    "▶  NAME        REPO               HOST       LOGIN             "
-    "LOGOUT            DURATION"
-)
-_ERIC = (
-    "   eric:tty1   _test-integration  test-host  Fri Nov 20 09:00  "
-    "Fri Nov 20 10:30  1:30    "
-)
-_GHOST = (
-    "   ghost:tty2  _test-integration  test-host  Fri Nov 20 08:00  "
-    "gone              -       "
-)
-
-
-def _live(login: str) -> str:
-    return (
-        f"   kai:tty1    _test-integration  test-host  {login}  "
-        "still logged in   -       "
-    )
-
-
 @pytest.mark.parametrize(
     ("now", "login", "rank"),
     [
@@ -182,19 +144,11 @@ async def test_last_prints_the_same_table_whatever_the_date(
     async with StampedClient(FastMCPTransport(create_server(state))) as client:
         kai = RecordingClient(client=client, transcript=Transcript(title=""))
         await kai.call("who")  # attaches the session
-        at = datetime(2026, 11, 20, tzinfo=UTC)
-        for event in (
-            _event("eric:e1", "login", "eric", "tty1", at.replace(hour=9)),
-            _event("eric:e1", "logout", "eric", "tty1", at.replace(hour=10, minute=30)),
-            _event("ghost:g1", "login", "ghost", "tty2", at.replace(hour=8)),
-        ):
-            await relay.append_wtmp(event)
+        await relay.seed_other_sessions()
 
         text = await kai.call("last")
 
-    rows = [_ERIC, _GHOST]
-    rows.insert(rank, _live(login))
-    assert text == "\n".join([_HEADER, *rows])
+    assert text == last_table(login, rank)
 
 
 async def test_channel_ack_refuses_a_token_it_never_issued(tmp_path: Path) -> None:
