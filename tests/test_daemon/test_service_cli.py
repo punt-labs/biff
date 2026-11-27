@@ -304,8 +304,23 @@ class TestDaemonStatus:
         unit = LoadedBackend(home / "units" / "biffd.service", loaded=False)
         host_has(monkeypatch, unit)
         unit.install()
+        unit.stop()
         result = runner.invoke(app, ["daemon", "status"])
         assert f"unit: {unit.config_path()} (installed, not loaded)" in result.output
+
+    def test_a_running_unit_is_never_called_not_loaded(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # One snapshot decides: a job that is running is loaded, so the second
+        # question is not asked and the two status lines cannot disagree.
+        unit = LoadedBackend(home / "units" / "biffd.service", loaded=False)
+        host_has(monkeypatch, unit)
+        unit.install()
+        result = runner.invoke(app, ["daemon", "status"])
+        assert ("running: yes" in result.output, "not loaded" in result.output) == (
+            True,
+            False,
+        )
 
     def test_a_loaded_unit_has_no_such_note(
         self, home: Path, monkeypatch: pytest.MonkeyPatch

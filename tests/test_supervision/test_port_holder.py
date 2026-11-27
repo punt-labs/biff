@@ -33,14 +33,14 @@ class TestLsof:
     def test_asks_lsof_for_that_port_with_no_shell(
         self, script: ScriptedSupervisor
     ) -> None:
-        script.answer("lsof", out="p1\ncx\n")
+        script.answer("lsof", out="p1\ncx\nn127.0.0.1:8424\n")
         PortHolder.find(8424)
         assert script.calls == [LSOF]
 
     def test_the_lookup_has_a_two_second_limit(
         self, script: ScriptedSupervisor
     ) -> None:
-        script.answer("lsof", out="p1\ncx\n")
+        script.answer("lsof", out="p1\ncx\nn127.0.0.1:8424\n")
         PortHolder.find(8424)
         assert script.timeouts == [2.0]
 
@@ -79,7 +79,78 @@ class TestFallbackToSs:
         assert script.calls[-1] == ("ss", "-ltnpH", "sport = :8424")
 
 
+class TestOnlyAListenerOnTheProbedAddressIsNamed:
+    """The probe connects to 127.0.0.1; a listener elsewhere is not its holder."""
+
+    def test_lsof_skips_an_ipv6_loopback_listener_listed_first(
+        self, script: ScriptedSupervisor
+    ) -> None:
+        script.answer(
+            "lsof",
+            out="p10\ncother\nn[::1]:8424\np11\ncpython3\nn127.0.0.1:8424\n",
+        )
+        assert PortHolder.find(8424) == Holder("python3", 11)
+
+    def test_lsof_names_nothing_when_only_another_address_listens(
+        self, script: ScriptedSupervisor
+    ) -> None:
+        script.answer("lsof", out="p10\ncother\nn[::1]:8424\n")
+        script.answer("ss", out="")
+        assert PortHolder.find(8424) is None
+
+    @pytest.mark.parametrize("endpoint", ["*:8424", "[::]:8424", "0.0.0.0:8424"])
+    def test_lsof_keeps_a_wildcard_listener_that_covers_the_address(
+        self, script: ScriptedSupervisor, endpoint: str
+    ) -> None:
+        script.answer("lsof", out=f"p12\ncwild\nn{endpoint}\n")
+        assert PortHolder.find(8424) == Holder("wild", 12)
+
+    def test_lsof_reads_every_endpoint_of_a_process(
+        self, script: ScriptedSupervisor
+    ) -> None:
+        script.answer("lsof", out="p13\ncboth\nn[::1]:8424\nn127.0.0.1:8424\n")
+        assert PortHolder.find(8424) == Holder("both", 13)
+
+    def test_ss_skips_an_ipv6_loopback_listener_listed_first(
+        self, script: ScriptedSupervisor
+    ) -> None:
+        script.raises("lsof", error=FileNotFoundError("lsof"))
+        script.answer(
+            "ss",
+            out=(
+                'LISTEN 0 5 [::1]:8424 [::]:* users:(("other",pid=10,fd=3))\n'
+                'LISTEN 0 5 127.0.0.1:8424 0.0.0.0:* users:(("python3",pid=11,fd=3))\n'
+            ),
+        )
+        assert PortHolder.find(8424) == Holder("python3", 11)
+
+    def test_ss_names_nothing_when_only_another_address_listens(
+        self, script: ScriptedSupervisor
+    ) -> None:
+        script.raises("lsof", error=FileNotFoundError("lsof"))
+        script.answer(
+            "ss", out='LISTEN 0 5 [::1]:8424 [::]:* users:(("o",pid=10,fd=3))\n'
+        )
+        assert PortHolder.find(8424) is None
+
+
 class TestNeverGuessesAndNeverFails:
+    def test_a_name_cut_inside_a_character_is_no_holder(
+        self, script: ScriptedSupervisor
+    ) -> None:
+        cut = UnicodeDecodeError("utf-8", b"\xe3", 0, 1, "unexpected end of data")
+        script.raises("lsof", error=cut)
+        script.raises("ss", error=cut)
+        assert PortHolder.find(8424) is None
+
+    def test_a_cut_name_from_lsof_still_lets_ss_answer(
+        self, script: ScriptedSupervisor
+    ) -> None:
+        cut = UnicodeDecodeError("utf-8", b"\xe3", 0, 1, "unexpected end of data")
+        script.raises("lsof", error=cut)
+        script.answer("ss", out=SS_LINE)
+        assert PortHolder.find(8424) == Holder("python3", 4930)
+
     def test_no_tool_at_all_is_no_holder(self, script: ScriptedSupervisor) -> None:
         script.raises("lsof", error=FileNotFoundError("lsof"))
         script.raises("ss", error=FileNotFoundError("ss"))
@@ -110,6 +181,7 @@ class TestNeverGuessesAndNeverFails:
         assert PortHolder.find(8424) is None
 
 
+@pytest.mark.subprocess
 class TestARealListener:
     @pytest.fixture
     def listener(self) -> Iterator[int]:

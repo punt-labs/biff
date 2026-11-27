@@ -153,14 +153,20 @@ class BiffdService:
             return [f"service manager: none ({self._absence()})"]
         backend = self._manager.backend
         installed = backend.config_path().exists()
+        running = backend.is_active()
         # launchd's stop boots the job out and keeps the plist: installed, not loaded.
+        # A running job is loaded, so only a job that is not running is asked: the
+        # lines then come from one answer and cannot disagree.
         unloaded = (
-            installed and isinstance(backend, LoadReporting) and not backend.is_loaded()
+            installed
+            and not running
+            and isinstance(backend, LoadReporting)
+            and not backend.is_loaded()
         )
         note = " (installed, not loaded)" if unloaded else ""
         return [
             f"installed: {'yes' if installed else 'no'}",
-            f"running: {'yes' if backend.is_active() else 'no'}",
+            f"running: {'yes' if running else 'no'}",
             f"unit: {backend.config_path()}{note}",
         ]
 
