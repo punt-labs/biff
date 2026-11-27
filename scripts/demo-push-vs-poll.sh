@@ -4,10 +4,11 @@ set -euo pipefail
 # One-command demo: push beats poll for broadcast message detection
 # (biff-5ex, DES-062). Runs the tier-3b comparison test against the real
 # ghcr.io/punt-labs/biff-relay image and points the operator at the
-# printed comparison table and the saved transcript.
+# printed comparison table and the saved transcript. Only the unperturbed
+# `prompt` case is the demo; the `late-sub` case stays in the test suite.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TRANSCRIPT_FILE="${REPO_ROOT}/tests/transcripts/test_push_beats_poll_against_real_relay.txt"
+TRANSCRIPT_FILE="${REPO_ROOT}/tests/transcripts/test_push_beats_poll_against_real_relay_prompt.txt"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Error: docker is not installed on this host — this demo needs Docker to build and run the real biff-relay image." >&2
@@ -23,7 +24,7 @@ echo "Building biff-relay from docker/ and running the push-vs-poll demo..."
 echo
 
 cd "$REPO_ROOT"
-uv run pytest -m nats_docker tests/test_relay_image/test_push_demo.py -v -s
+uv run pytest -m nats_docker tests/test_relay_image/test_push_demo.py -k prompt -v -s
 
 echo
 echo "Demo complete. The comparison table is above; the same run also"
