@@ -15,6 +15,7 @@ from biff.commands.inbox import Inbox
 from biff.daemon.params import Params
 from biff.daemon.read_batch import ReadBatcher
 from biff.daemon.refusal import RefusalError
+from biff.daemon.talk_methods import TalkMethods
 from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
 from biff.relay_errors import RELAY_ERRORS
@@ -89,6 +90,9 @@ class Methods:
             "mesg": Methods._mesg,
             "tty": Methods._tty,
             "status": Methods._status,
+            "talk": TalkMethods.talk,
+            "talk_read": TalkMethods.talk_read,
+            "talk_end": TalkMethods.talk_end,
         }
         return self
 
@@ -116,6 +120,10 @@ class Methods:
         if method in self._sessions.names:
             result = await self._sessions.call(session, method, Params(method, raw))
             return self._outcome(result)
+        if method in TalkMethods.GATED and not await session.talk.ready(
+            TalkMethods.READY_SECONDS
+        ):
+            return self._outcome(TalkMethods.NOT_READY)
         handler = self._table.get(method)
         if handler is None:
             msg = f"unknown method {method!r}; served: {', '.join(self.names)}"

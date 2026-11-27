@@ -148,9 +148,12 @@ class PendingInvite:
         for the direct-record path where the frame is recorded on arrival.
         """
         return cls(
-            user=notif.nfrom,
+            # A sender whose name is not printable fails the key check below.
+            user=terminal_safe(notif.nfrom),
             session_key=notif.nfrom_key,
-            tty=notif.nfrom_tty,
+            # The display tty is shown and echoed back in an accept; the sender
+            # chose it, so only its printable characters are kept.
+            tty=terminal_safe(notif.nfrom_tty),
             arrived=time.monotonic() if arrived is None else arrived,
         )
 
@@ -333,11 +336,11 @@ class QueuedNotification:
 
 @dataclass(frozen=True, slots=True)
 class AgentDrain:
-    """Result of an MCP agent-mode drain (non-modal front-end).
+    """Result of a drain of the whole talk queue, as biffd and the MCP read it.
 
-    The MCP server is not modal like the REPL, so it drains the whole
-    queue in one pass: invites are recorded, an accept from the invited
-    session connects us, messages are surfaced, and an end resets to idle.
+    A read is not modal: it drains the whole queue in one pass.  Invites are
+    recorded, an accept from the invited session connects us, messages are
+    surfaced, and an end resets to idle.
     The connect and reset happen as side effects on the ``TalkState`` during
     the pass; this snapshot carries only what the front-end renders — the
     pending invites and the surfaced messages.

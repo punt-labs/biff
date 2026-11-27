@@ -11,6 +11,15 @@
   SIGTERM or a closed pipe, and with exit 1 when the connection to biffd is
   lost. It also ends when its reader leaves, within half a second, even when
   no event is waiting (`biff watch | head -n 1`).
+- biffd runs talk. The methods `talk`, `talk_read` and `talk_end` accept an
+  invite, send a line or invite, read what arrived, and end the conversation.
+  The daemon holds each session's talk queue (bounded at 100 frames, oldest
+  dropped) and one NATS subscription that feeds it while a client is attached,
+  and re-subscribes when the relay dials a new client. A subscribed client gets
+  a `talk_invite`, `talk_accept`, `talk_line` or `talk_end` event as the frame
+  arrives; the event names the sender and how many frames wait and never carries
+  the text, which the client pulls with `talk_read`.
+
 - `biff install` installs biffd as a user service (systemd user unit `biffd`,
   macOS LaunchAgent `com.punt-labs.biffd`) and `biff uninstall` removes it.
   `biff daemon install`, `uninstall`, `start`, `stop`, `restart` and `status`
@@ -125,6 +134,24 @@
   `session new --tty` and a rename of a CLI session refuse a name shaped like a
   generated session id (`cli-` and 16 hex digits), and a session looked up by
   id is never confused with one named like it.
+- `biff` (the interactive shell) and `biff talk` run as clients of biffd and hold
+  no relay connection. Mail, walls and talk arrive as events on one standing
+  connection; a talk line costs one round trip after its notice. `biff talk` is
+  now a real talk (invite, accept, lines, end) instead of durable mail, so the
+  peer must accept; it exits 1 when the relay carries no talk. A hang-up is sent
+  however the shell or `biff talk` ends, and biffd hangs up a talk whose last
+  client left without doing so: the peer gets the end frame and the session is
+  idle again. `biff talk` exits 1 when the connection to biffd is lost. An
+  invite's opening line is sent as a normal line once the invite is accepted;
+  `talk` to someone whose invite is unread accepts it; a queue that overflows
+  reports how many lines it lost. A talk call waits up to 2 seconds for the relay to confirm the session's
+  subscription and answers "not ready" if it has not; attaching and every
+  command that does not talk never wait on it. `talk bob:tty2` invites tty2 even when
+  tty1 has an unread invite, and a hang-up sends `end` as well as the withdrawal so
+  a peer that already accepted is freed. `talk_read` returns what biffd holds even while the subscription is unconfirmed and
+  says so in `ready`, and the shell reads again until it is; an invite nobody answers
+  times out after five minutes and is withdrawn; Ctrl-D during a talk ends the shell instead of leaving it waiting.
+  The MCP `talk_read` text is unchanged.
 - `biff who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`
   and `status` run through biffd, starting it first when it is down. They print the
   same text as before. `plan` and `tty` still write the plan-gate

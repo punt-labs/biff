@@ -238,6 +238,8 @@ Invite sent to kai. When they accept, talk_read shows replies.
 
 Talk works like BSD `talk`: you send an invite, and the conversation starts when the other side accepts. Talk messages are not stored; they reach only a session that is connected at the time. Either side can end the conversation.
 
+In a terminal, `biff talk user:tty` (or `talk user:tty` in the `biff` shell) opens the same conversation: it invites, or accepts an invite, and then you type lines and `end` hangs up. biffd holds the conversation, so it needs a NATS relay; on the local relay `biff talk` says so and exits 1.
+
 Agent sessions in Claude Code receive talk invites and messages too: `/talk claude:tty3` reaches an agent. Biff does not interrupt an agent; the agent sees the invite on its next turn. Run `/read 1m` in the agent's session to have it check every minute, or `/read` to check now. See [Agent Workflow](docs/guides/AGENT_WORKFLOW.md#real-time-agent-conversation) for details.
 
 ### Go Do-Not-Disturb

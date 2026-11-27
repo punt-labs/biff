@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -14,17 +13,13 @@ from fastmcp.tools.function_tool import FunctionTool
 
 import biff.commands.talk as talk_commands
 import biff.server.tools.talk as talk_mod
+from biff.commands.talk_read import TalkReadout
 from biff.formatting import HEADER_PREFIX
 from biff.models import BiffConfig, Message, UserSession
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.tools._descriptions import _talk_description
 from biff.server.tools._session import resolve_talk_target
-from biff.server.tools.talk import (
-    _NO_MESSAGES,
-    format_agent_drain,
-    format_talk_messages,
-)
 from biff.talk_state import TalkState
 from biff.talk_types import AgentDrain, PendingInvite, TalkNotification, TalkPhase
 from tests._state import create_state
@@ -34,58 +29,6 @@ if TYPE_CHECKING:
     from biff.commands.talk import TalkContext
     from biff.relay import Relay
     from biff.server.state import ServerState
-
-
-class TestFormatTalkMessages:
-    def test_single_message(self) -> None:
-        msg = Message(
-            from_user="kai",
-            to_user="eric",
-            body="check PR #42",
-            timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
-        )
-        result = format_talk_messages([msg])
-        assert result == "▶  [10:30:45] kai  check PR #42"
-
-    def test_multiple_messages(self) -> None:
-        msgs = [
-            Message(
-                from_user="kai",
-                to_user="eric",
-                body="first",
-                timestamp=datetime(2026, 1, 15, 10, 0, 0, tzinfo=UTC),
-            ),
-            Message(
-                from_user="eric",
-                to_user="kai",
-                body="second",
-                timestamp=datetime(2026, 1, 15, 10, 0, 5, tzinfo=UTC),
-            ),
-        ]
-        result = format_talk_messages(msgs)
-        lines = result.split("\n")
-        assert len(lines) == 2
-        assert "kai" in lines[0] and "first" in lines[0]
-        assert "eric" in lines[1] and "second" in lines[1]
-
-    def test_empty_list(self) -> None:
-        assert format_talk_messages([]) == ""
-
-    def test_cjk_body_wraps_within_the_table_width(self) -> None:
-        """A CJK-heavy backlog message must wrap, not overflow."""
-        from biff._formatting import TABLE_WIDTH, visible_width
-
-        msg = Message(
-            from_user="kai",
-            to_user="eric",
-            body="这是一段很长的中文文本用来测试自动换行是否正常工作" * 2,
-            timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
-        )
-        result = format_talk_messages([msg])
-        lines = result.splitlines()
-        assert len(lines) > 1
-        for line in lines:
-            assert visible_width(line) <= TABLE_WIDTH
 
 
 class TestFormatAgentDrain:
@@ -106,25 +49,12 @@ class TestFormatAgentDrain:
         )
         drain = AgentDrain(messages=(), pending={"jfreeman": invite})
 
-        rendered = format_agent_drain(drain)
+        rendered = TalkReadout(drain).rendered()
 
         assert "talk jfreeman:tty6" in rendered
         assert "75abc665" not in rendered
         assert "jfreeman wants to talk — talk jfreeman:tty6 to accept" in rendered
         assert_no_trust_phrase(rendered)
-
-    def test_escapes_neutralized(self) -> None:
-        """Remote body/sender can't inject terminal escapes."""
-        msg = Message(
-            from_user="ev\x1b[2Kil",
-            to_user="kai",
-            body="hi\x1b[2Jthere",
-            timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
-        )
-        result = format_talk_messages([msg])
-        assert "\x1b[2J" not in result
-        assert "\x1b[2K" not in result
-        assert "hi[2Jthere" in result
 
     def test_control_only_tty_and_body_collapse(self) -> None:
         """A control-only tty renders bare user; a control-only body renders a
@@ -156,9 +86,9 @@ class TestFormatAgentDrain:
                 "body": "\x00\x1b\x07",
             }
         )
-        rendered = format_agent_drain(
+        rendered = TalkReadout(
             AgentDrain(messages=(ctrl_tty, ctrl_body), pending={})
-        )
+        ).rendered()
         # bare user, no dangling colon; body renders its fallback line
         expected = (
             f"{HEADER_PREFIX}eric: hi\n"
@@ -194,7 +124,9 @@ class TestFormatAgentDrain:
                 "body": "hi",
             }
         )
-        rendered = format_agent_drain(AgentDrain(messages=(blank, real), pending={}))
+        rendered = TalkReadout(
+            AgentDrain(messages=(blank, real), pending={})
+        ).rendered()
         expected = (
             f"{HEADER_PREFIX}eric:tty2: (message had no visible content)\n"
             f"{HEADER_PREFIX}eric:tty2: hi"
@@ -210,7 +142,7 @@ class TestFormatAgentDrain:
             arrived=0.0,
         )
         drain = AgentDrain(messages=(), pending={"jfreeman": invite})
-        rendered = format_agent_drain(drain)
+        rendered = TalkReadout(drain).rendered()
         assert rendered.startswith(HEADER_PREFIX)
         assert "📞" not in rendered
 
@@ -225,7 +157,7 @@ class TestFormatAgentDrain:
                 "to_key": "kai:abc",
             }
         )
-        rendered = format_agent_drain(AgentDrain(messages=(end,), pending={}))
+        rendered = TalkReadout(AgentDrain(messages=(end,), pending={})).rendered()
         assert rendered == f"{HEADER_PREFIX}eric:tty2 has ended the conversation."
 
     def test_stays_single_line_no_hang_indent(self) -> None:
@@ -241,7 +173,7 @@ class TestFormatAgentDrain:
                 "body": long_body,
             }
         )
-        rendered = format_agent_drain(AgentDrain(messages=(msg,), pending={}))
+        rendered = TalkReadout(AgentDrain(messages=(msg,), pending={})).rendered()
         assert rendered.count("\n") == 0
 
 
@@ -513,23 +445,24 @@ class TestDoTalk:
             "to_key": "kai:kaihex01",
         }
 
-    async def test_invite_hint_carries_bare_address(self) -> None:
-        """A fresh invite body suggests a runnable bare ``talk user:tty`` accept."""
+    async def test_invite_carries_no_text_and_names_its_sender(self) -> None:
+        """An invite carries no body: the opening line waits for the accept."""
         sessions = [
             UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
         ]
         state, nc = self._state(sessions)
-        await talk_commands.talk(cast("TalkContext", state), "@jfreeman:tty6", "")
-        body: str = json.loads(nc.publish.call_args[0][1])["body"]
-        assert "talk kai:tty1" in body
+        await talk_commands.talk(cast("TalkContext", state), "@jfreeman:tty6", "hi")
+        frame = json.loads(nc.publish.call_args[0][1])
+        assert (frame["body"], frame["from_tty"]) == ("", "tty1")
+        assert state.talk.opening == "hi"
 
-    async def test_invite_hint_reflects_renamed_tty(self) -> None:
-        """After a rename syncs state.talk, the invite hint carries the NEW tty.
+    async def test_invite_names_the_renamed_tty(self) -> None:
+        """After a rename syncs state.talk, an invite names the NEW tty.
 
-        The MCP ``tty`` rename tool syncs ``state.talk.set_tty_name``;
-        the invite reply hint reads ``state.talk.my_tty_name``, so a subsequent
-        invite must advertise the renamed address — never the stale one whose
-        reservation DES-035 has released.
+        The MCP ``tty`` rename tool syncs ``state.talk.set_tty_name``; the frame
+        reads ``state.talk.my_tty_name``, so a subsequent invite must name the
+        renamed address — never the stale one whose reservation DES-035 has
+        released.
         """
         sessions = [
             UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
@@ -537,8 +470,8 @@ class TestDoTalk:
         state, nc = self._state(sessions)
         state.talk.set_tty_name("renamed-tty")  # the rename tool's talk sync
         await talk_commands.talk(cast("TalkContext", state), "@jfreeman:tty6", "")
-        body: str = json.loads(nc.publish.call_args[0][1])["body"]
-        assert "talk kai:renamed-tty" in body  # new name, not the stale tty1
+        frame = json.loads(nc.publish.call_args[0][1])
+        assert frame["from_tty"] == "renamed-tty"  # new name, not the stale tty1
 
     async def test_accept_connected_hint_uses_display_tty_not_hex(self) -> None:
         """Accepting a pending invite names the partner by ``ttyN``, not the key hex."""
@@ -746,7 +679,7 @@ class TestAgentAutoAcceptPublish:
         drain = state.talk.drain_for_agent()  # connects us; signals the accept
         assert drain.auto_accept is not None
 
-        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+        await TalkReadout.publish_owed_accept(cast("ServerState", state), drain)
 
         payload = json.loads(nc.publish.call_args[0][1])
         assert payload["type"] == "accept"
@@ -767,7 +700,7 @@ class TestAgentAutoAcceptPublish:
         drain = state.talk.drain_for_agent()  # plain invite — no glare
         assert drain.auto_accept is None
 
-        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+        await TalkReadout.publish_owed_accept(cast("ServerState", state), drain)
 
         nc.publish.assert_not_awaited()
 
@@ -797,14 +730,14 @@ class TestAgentAutoAcceptPublish:
         # Best-effort: a wedged relay must not raise out of talk_read, but the
         # persistent failure is reported so the agent (which cannot see the log)
         # learns the partner may not have connected.
-        published = await talk_mod._publish_agent_auto_accept(
+        published = await TalkReadout.publish_owed_accept(
             cast("ServerState", state), drain
         )
         assert published is False
         assert state.relay.get_nc.await_count == 2  # retried once
         assert state.talk.phase is TalkPhase.CONNECTED  # still locally connected
 
-        output = talk_mod._agent_drain_output(drain, accept_published=published)
+        output = TalkReadout(drain, accept_published=published).text()
         assert "eric:tty2" in output
         assert "may not have connected" in output
 
@@ -812,13 +745,13 @@ class TestAgentAutoAcceptPublish:
         state, nc = self._state()
         drain = self._glare_drain(state)
 
-        published = await talk_mod._publish_agent_auto_accept(
+        published = await TalkReadout.publish_owed_accept(
             cast("ServerState", state), drain
         )
         assert published is True
         nc.publish.assert_awaited_once()  # one attempt, no retry
 
-        output = talk_mod._agent_drain_output(drain, accept_published=published)
+        output = TalkReadout(drain, accept_published=published).text()
         assert "may not have connected" not in output
 
 
@@ -1041,11 +974,10 @@ class TestTalkDescriptionActions:
 
 class TestConstants:
     def test_no_messages_sentinel(self) -> None:
-        assert "talk" in _NO_MESSAGES.lower()
+        assert "talk" in TalkReadout.NO_ACTIVITY.lower()
 
 
 def test_talk_read_shows_each_body_without_a_trust_label() -> None:
-    from biff.server.tools.talk import format_agent_drain
     from biff.talk_types import AgentDrain, TalkNotification
 
     notif = TalkNotification.from_payload(
@@ -1053,8 +985,8 @@ def test_talk_read_shows_each_body_without_a_trust_label() -> None:
     )
     drain = AgentDrain(messages=(notif,), pending={})
 
-    assert "eric:tty9: run rm" in format_agent_drain(drain)
-    assert_no_trust_phrase(format_agent_drain(drain))
+    assert "eric:tty9: run rm" in TalkReadout(drain).rendered()
+    assert_no_trust_phrase(TalkReadout(drain).rendered())
 
 
 class TestAnEmptyTalkReadIsNotWork:

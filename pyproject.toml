@@ -235,7 +235,7 @@ prefixes = [
 imports = []
 
 [tool.oo-ratchet.layers.wire]
-prefixes = ["check_stamp", "frame_ack", "frame_base", "frame_client", "frame_proof", "frame_reply", "frames", "models", "session_routing", "talk_types", "unread"]
+prefixes = ["check_stamp", "frame_ack", "frame_base", "frame_client", "frame_proof", "frame_reply", "frames", "models", "session_routing", "talk_reading", "talk_types", "talk_wire", "unread"]
 imports = ["kernel"]
 
 [tool.oo-ratchet.layers.engine]
@@ -335,12 +335,19 @@ prefixes = [
     "cli_daemon_doctor",
     "cli_daemon_wire",
     "cli_direct_wall",
+    "cli_console",
+    "cli_events",
     "cli_install",
     "cli_daemon",
     "cli_key",
+    "cli_link",
     "cli_plan",
+    "cli_repl",
     "cli_session",
     "cli_watch",
+    "cli_talk",
+    "cli_talk_view",
+    "cli_talk_outcome",
     "dispatch",
     "repl_display",
     "repl_notify",

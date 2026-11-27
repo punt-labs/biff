@@ -255,5 +255,19 @@
   "biff.usage": "kernel",
   "biff.user_scope": "kernel",
   "biff.who_columns": "render",
-  "biff.wtmp_reader": "engine"
+  "biff.wtmp_reader": "engine",
+  "biff.commands.talk_read": "commands",
+  "biff.daemon.talk_feed": "daemon",
+  "biff.daemon.talk_notices": "daemon",
+  "biff.daemon.talk_channel": "daemon",
+  "biff.daemon.talk_methods": "daemon",
+  "biff.cli_console": "cli",
+  "biff.cli_events": "cli",
+  "biff.cli_link": "cli",
+  "biff.cli_repl": "cli",
+  "biff.cli_talk": "cli",
+  "biff.cli_talk_view": "cli",
+  "biff.cli_talk_outcome": "cli",
+  "biff.talk_reading": "wire",
+  "biff.talk_wire": "wire"
 }

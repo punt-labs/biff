@@ -24,7 +24,7 @@ from biff.commands._result import CommandResult
 from biff.commands._talk_relay import publish_failure, resolve_target
 from biff.formatting import format_talk_echo
 from biff.talk_types import MAX_BODY_LEN, TalkPhase
-from biff.tty import format_address, parse_address
+from biff.tty import parse_address
 
 if TYPE_CHECKING:
     from biff.models import BiffConfig
@@ -143,9 +143,9 @@ async def invite(
     """Start a fresh invite to *user*, refusing to clobber a live talk.
 
     An idle session publishes an invite; a non-idle phase to a *different* peer
-    refuses rather than abandon the live talk with no end frame.  The invite body
-    carries a runnable ``talk me:ttyN`` reply hint (canonical bare address, no
-    ``@``) unless *message* supplies an opening line.
+    refuses rather than abandon the live talk with no end frame.  The invite
+    carries no text: *message*, the opening line, waits in the talk state and is
+    sent as a normal line once the partner has accepted (:func:`send_opening`).
     """
     talk_state = ctx.talk
     if talk_state.phase is not TalkPhase.IDLE:
@@ -157,12 +157,10 @@ async def invite(
             error=True,
         )
     talk_state.begin_invite(
-        partner=user, partner_tty=resolve_tty, partner_key=relay_key
+        partner=user, partner_tty=resolve_tty, partner_key=relay_key, opening=message
     )
-    reply_to = format_address(ctx.config.user, talk_state.my_tty_name)
-    invite_body = message or f"wants to talk — reply with: talk {reply_to}"
     try:
-        await talk_state.send_invite(to_key=relay_key, body=invite_body)
+        await talk_state.send_invite(to_key=relay_key)
     except (NatsError, TimeoutError, OSError):
         # The invite publish failed transiently; roll the phase back to idle so
         # the session is not stranded in a phantom INVITING state with no peer.
@@ -215,6 +213,27 @@ async def send_line(
     )
 
 
+async def send_opening(ctx: TalkContext) -> str:
+    """Send the opening line an accepted invite was waiting to carry.
+
+    Returns the line sent, or the empty string when there was none, the talk is
+    not connected yet, or the publish failed.  A line that could not be sent
+    stays held, so the next read tries again and the caller can tell from
+    ``ctx.talk.opening`` that it is still owed.
+    """
+    talk_state = ctx.talk
+    line = talk_state.opening
+    if not line or talk_state.phase is not TalkPhase.CONNECTED:
+        return ""
+    try:
+        await talk_state.send_message(to_key=talk_state.partner_key, body=line)
+    except (NatsError, TimeoutError, OSError) as exc:
+        logger.info("talk opening failed: %s", publish_failure(exc))
+        return ""
+    talk_state.clear_opening()
+    return line
+
+
 async def end_or_cancel(ctx: TalkContext) -> CommandResult:
     """Close the active talk session (talk.tex LocalEnd).
 
@@ -235,11 +254,14 @@ async def end_or_cancel(ctx: TalkContext) -> CommandResult:
     partner, partner_key = talk_state.partner, talk_state.partner_key
     was_inviting = talk_state.phase is TalkPhase.INVITING
     talk_state.reset()
-    send = talk_state.send_withdraw if was_inviting else talk_state.send_end
     # The publish is a no-op on a non-NATS relay (``TalkState._publish`` guards
     # the transport), so it is issued unconditionally — no relay-type gate here.
     try:
-        await send(to_key=partner_key)
+        if was_inviting:
+            await talk_state.send_withdraw(to_key=partner_key)
+            # The peer may have accepted already, with its accept still unread
+            # here: it is connected then, and only an end frame frees it.
+        await talk_state.send_end(to_key=partner_key)
     except (NatsError, TimeoutError, OSError) as exc:
         # INFO, not WARNING: the CLI raises the stderr handler to WARNING,
         # so a WARNING here would dump this best-effort-publish traceback
@@ -300,6 +322,7 @@ async def talk(ctx: TalkContext, to: str, message: str) -> CommandResult:
     than accepted against the stale key (CR-3 TOCTOU).
     """
     talk_state = ctx.talk
+    talk_state.absorb_idle_invites()
     user, tty = parse_address(to)
 
     # Peek, do not consume yet: resolving the target can fail (offline, ambiguous
@@ -307,13 +330,17 @@ async def talk(ctx: TalkContext, to: str, message: str) -> CommandResult:
     # longer be accepted.  Consume only once resolution succeeds.
     pending = talk_state.pending_invites.get(user)
     resolve_user, resolve_tty = (user, tty)
-    if pending is not None:
+    if pending is not None and not tty:
         resolve_user, _, resolve_tty = pending.session_key.partition(":")
     try:
         relay_key, display = await resolve_target(ctx, resolve_user, resolve_tty)
     except ValueError as exc:
         return CommandResult(text=str(exc), error=True)
 
+    if pending is not None and relay_key != pending.session_key:
+        # The address names another session than the one that invited, by its
+        # current name, so a rename of the inviter does not hide its invite.
+        pending = None
     if pending is not None:
         # Re-peek after the resolve await (which yields to the loop): the
         # always-on talk subscription or the TTL sweep can supersede or withdraw
