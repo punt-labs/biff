@@ -1,10 +1,13 @@
-"""The one place that runs a supervisor command."""
+"""The one place that starts a process on behalf of the service manager."""
 
 from __future__ import annotations
 
 import logging
 import subprocess
-from typing import Final, final
+from typing import TYPE_CHECKING, Final, final
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 __all__ = ["Supervisor"]
 
@@ -15,7 +18,7 @@ _TIMEOUT_SECONDS: Final = 30.0
 
 @final
 class Supervisor:
-    """Runs ``systemctl`` or ``launchctl`` and reports what they answered."""
+    """Runs ``systemctl``, ``launchctl``, ``claude`` and a detached ``biffd``."""
 
     @staticmethod
     def run(*argv: str) -> subprocess.CompletedProcess[str]:
@@ -45,3 +48,30 @@ class Supervisor:
                 result.stderr.strip(),
             )
         return result.returncode == 0
+
+    @staticmethod
+    def run_visible(*argv: str) -> int:
+        """Run *argv* on the user's terminal with no time limit; return its exit code.
+
+        For a program that talks to the user, such as ``claude plugin install``.
+
+        Raises:
+            FileNotFoundError: The program is not installed.
+        """
+        return subprocess.run(argv, check=False).returncode
+
+    @staticmethod
+    def spawn_detached(argv: Sequence[str]) -> None:
+        """Start *argv* in its own session, detached from this process's terminal.
+
+        The child outlives this process.  Its streams go nowhere: a daemon writes
+        its diagnostics to its own log.
+        """
+        subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )

@@ -1457,15 +1457,12 @@ def _remove_repo_git_hooks() -> None:
 def install_cmd() -> None:
     """Install biff via the punt-labs marketplace (machine scope; no repo writes)."""
     import shutil
-    import subprocess
 
-    from biff._stdlib import provision_home
+    from biff.cli_install import MachineScope
+    from biff.supervision.runner import Supervisor
 
-    try:
-        provision_home()
-    except (OSError, RuntimeError) as exc:
-        print(f"Could not create biff's home directory: {exc}", file=sys.stderr)
-        raise typer.Exit(code=1) from exc
+    # A failed service install must not strand the plugin: nothing uses biffd yet.
+    service_failed = MachineScope.provision()
 
     claude = shutil.which("claude")
     if not claude:
@@ -1474,13 +1471,13 @@ def install_cmd() -> None:
         # (install-cli-only.md, matching install.sh's --no-plugin path). No
         # "restart Claude Code" line — there's no plugin.
         print("Installed (CLI-only). Claude Code not found; plugin step skipped.")
-        return
+        raise typer.Exit(code=int(service_failed))
 
-    result = subprocess.run(  # noqa: S603
-        [claude, "plugin", "install", _PLUGIN_ID, "--scope", "user"],
-        check=False,
+    code = Supervisor.run_visible(
+        claude, "plugin", "install", _PLUGIN_ID, "--scope", "user"
     )
-    if result.returncode != 0:
+    # Bitwise or: a claude killed by a signal has a negative return code.
+    if code | service_failed:
         raise typer.Exit(code=1)
     print("Installed. Restart Claude Code to activate.")
 
@@ -1488,9 +1485,9 @@ def install_cmd() -> None:
 @app.command()
 def doctor() -> None:
     """Check biff installation health."""
-    from biff.doctor import Diagnostics
+    from biff.cli_daemon_doctor import DaemonDiagnostics
 
-    code = Diagnostics(CliInvocation.plugin_registry(), _user_override).run()
+    code = DaemonDiagnostics(CliInvocation.plugin_registry(), _user_override).run()
     if code != 0:
         raise typer.Exit(code=code)
 
@@ -1499,18 +1496,16 @@ def doctor() -> None:
 def uninstall_cmd() -> None:
     """Uninstall biff: remove the plugin, this clone's git hooks, and the import."""
     import shutil
-    import subprocess
 
+    from biff.cli_install import MachineScope
+    from biff.supervision.runner import Supervisor
     from biff.user_scope import USER_IMPORT_LINE, UserScope
 
     plugin_failed = False
     claude = shutil.which("claude")
     if claude:
-        result = subprocess.run(  # noqa: S603
-            [claude, "plugin", "uninstall", _PLUGIN_ID, "--scope", "user"],
-            check=False,
-        )
-        plugin_failed = result.returncode != 0
+        uninstall_args = (claude, "plugin", "uninstall", _PLUGIN_ID, "--scope", "user")
+        plugin_failed = Supervisor.run_visible(*uninstall_args) != 0
     else:
         print("claude CLI not found; skipping plugin uninstall.")
 
@@ -1519,6 +1514,7 @@ def uninstall_cmd() -> None:
     # marker/CI workflow are repo policy — left untouched; `biff disable` owns
     # those (it also removes this clone's hooks).
     _remove_repo_git_hooks()
+    plugin_failed |= MachineScope.deprovision()
 
     # Legacy strip (§2.6): older releases wrote a user-scope @-import. It is
     # removed here opportunistically and ALWAYS runs — never gated on the plugin
@@ -1529,7 +1525,7 @@ def uninstall_cmd() -> None:
 
     if plugin_failed:
         # Surface the plugin failure — but only after the cleanup above ran.
-        print("Warning: 'claude plugin uninstall' failed; user-scope import removed.")
+        print("Warning: a removal step failed (see above); user-scope import removed.")
         raise typer.Exit(code=1)
     if claude is None:
         # Mirror install's CLI-only messaging: never imply the plugin was

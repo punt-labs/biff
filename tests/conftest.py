@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from biff.server.tools._descriptions import _reset_session
+from tests.test_supervision.patching import host_has
 from tools.test_quarantine import (
     pytest_collection_modifyitems as pytest_collection_modifyitems,
 )
@@ -56,6 +57,19 @@ def _restore_logging() -> Iterator[None]:  # pyright: ignore[reportUnusedFunctio
 def disable_usage_capture(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never write usage to the operator's store from ordinary tests."""
     monkeypatch.setenv("PUNT_TELEMETRY", "off")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_service_manager(  # pyright: ignore[reportUnusedFunction]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never let a test register a unit with the developer's systemd or launchd.
+
+    ``biff install`` and the ``biff daemon`` commands act on whatever
+    ``ServiceHost`` finds; with none, they report the host as manager-less.
+    A test that needs a manager patches ``ServiceHost.backend`` itself.
+    """
+    host_has(monkeypatch, None)
 
 
 _AMBIENT_GIT_REPOSITORY = (

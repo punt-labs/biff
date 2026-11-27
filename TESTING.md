@@ -140,6 +140,7 @@ another. The Docker-image tier (biff-kmv) shipped alongside this doc update.
 | 3d (subset) | `stress` | Same as `nats_hosted` — scale stress tests specifically (`tests/test_hosted_nats/test_stress.py`) |
 | 4 | `sdk` | `ANTHROPIC_API_KEY` |
 | 5 | `claude_channels` | `tmux`, `nats-server` and a logged-in interactive `claude` |
+| Manual | `systemd_user` | Linux with a running systemd user manager (`systemctl --user show-environment` exits 0). The test registers a uniquely named throwaway unit for biffd in `~/.config/systemd/user`, runs the real daemon under it, and removes both. Run with `make test-systemd`; no default run selects it |
 | Manual | `keychain` | macOS and a person at the screen: the tests use the real keychain and raise a dialog. Run by hand with `pytest -m keychain`; no default run selects them |
 
 `cli_multi_user` and `nats_local` both need a bare `nats-server` binary,

@@ -65,6 +65,7 @@ handoff-runtime = ["uv_build==0.13.9"]
 
 [project.scripts]
 biff = "biff.__main__:app"
+biffd = "biff.daemon.app:biffd_app"
 biff-hook = "biff.plugins.claude_code._hook_runtime:main"
 
 [project.urls]
@@ -135,7 +136,7 @@ ignore = [
 "src/biff/installer.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/doctor.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/supervision/runner.py" = ["S603"]
-"src/biff/supervision/detached.py" = ["S603"]
+"tests/test_supervision/test_container_path.py" = ["S603"]
 "src/biff/keychain_vault.py" = ["S603"]
 "src/biff/nostr_directory.py" = ["S603"]
 "src/biff/plugins/claude_code/statusline.py" = ["S602", "T20"]
@@ -329,6 +330,9 @@ prefixes = [
     "__main__",
     "_cli_runtime",
     "cli_app",
+    "cli_daemon_doctor",
+    "cli_daemon_relay",
+    "cli_install",
     "cli_key",
     "cli_session",
     "cli_session_drain",
@@ -358,7 +362,7 @@ imports = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not cli_multi_user and not nats_local and not nats_docker and not nats_hosted and not claude_channels and not keychain and not stress and not quarantine'"
+addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not cli_multi_user and not nats_local and not nats_docker and not nats_hosted and not claude_channels and not keychain and not systemd_user and not stress and not quarantine'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Per-test ceiling so a regression REPORTS (with every thread's stack
@@ -381,6 +385,7 @@ markers = [
     "nats_hosted: marks tests that require a hosted NATS account (run with -m nats_hosted)",
     "claude_channels: marks tests that drive a real interactive claude in tmux (run with -m claude_channels)",
     "keychain: marks tests that use the real macOS keychain and raise a dialog (run by hand with -m keychain)",
+    "systemd_user: marks tests that register a real unit with the systemd user manager (run with -m systemd_user)",
     "stress: marks scale stress tests against hosted NATS (run with -m stress)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
     "vox: marks tests that manage vox mocking themselves (opts out of _silence_vox)",

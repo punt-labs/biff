@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, final
 
-from biff.daemon.cli import daemon_app
+from biff.daemon.app import daemon_app
 from biff.plugins.claude_code._hook_cli import HookAwareCli
 from biff.server.entrypoints import McpServerOptions
 

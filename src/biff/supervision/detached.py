@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
+
+from biff.supervision.runner import Supervisor
 
 if TYPE_CHECKING:
     from biff.supervision.spec import ServiceSpec
@@ -39,16 +40,5 @@ class DetachedDaemon:
         return installed if installed.exists() else None
 
     def launch(self, binary: Path, port: int) -> None:
-        """Start *binary* on *port*, detached from this process and its terminal.
-
-        The child gets its own session, so it outlives this process; it writes
-        its diagnostics to the biff log, not to our streams.
-        """
-        subprocess.Popen(
-            [str(binary), "--port", str(port)],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
+        """Start *binary* on *port*, detached from this process and its terminal."""
+        Supervisor.spawn_detached([str(binary), "--port", str(port)])

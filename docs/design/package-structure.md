@@ -31,7 +31,7 @@ From the bottom up:
 
 | Package | Holds | May import |
 |---------|-------|------------|
-| `kernel` | Small helpers with no biff dependencies: session ids, locks, chunking, logging setup, usage counters, NATS connection helpers; the bundled data files and the ProB gate script (`prob_gate`), which imports nothing from biff | nothing in biff |
+| `kernel` | Small helpers with no biff dependencies: session ids, locks, chunking, logging setup, usage counters, NATS connection helpers; the bundled data files and the ProB gate script (`prob_gate`), which imports nothing from biff; `supervision`, the service manager that installs, starts and probes biffd and uses only the standard library | nothing in biff |
 | `wire` | The data types biff passes around: messages, sessions, talk records, session routing, unread summaries | `kernel` |
 | `engine` | The relays (local and NATS), talk state, session registry, identity, configuration, tty names; the arrival summaries and the `DeliverySink` interface they are handed to | `kernel`, `wire` |
 | `render` | Text formatting that both the command line and the MCP server print: tables, `finger` output, message lists | `kernel`, `wire`, `engine` |

@@ -9403,3 +9403,34 @@ widen it. It is tracked as PL-1704.
 hosts. A harness other than Claude Code has no such hook and still reads idle
 until it calls a biff tool. The Z models (`session-model.tex`) do not yet state
 this transition; extending them is follow-up work.
+
+## DES-098: biffd's Service Runs Through a Stand-In for punt-service
+
+**Date:** 2026-11-26
+**Status:** SETTLED until punt-service is published
+**Topic:** How biffd is installed, started and checked while punt-service
+(DES-095 item 2) is not on PyPI. Detail: `docs/design/installer.md` INS-012.
+
+**Problem.** DES-095 names `punt-service` for install, start, stop and diagnosis.
+Its newest release is unpublished: `uv pip install punt-service` finds nothing,
+and a path or git dependency on `../lux` would break `uv tool install punt-biff`
+and the marketplace plugin.
+
+**Decision.** `biff.supervision` holds a `ServiceSpec` and a `ServiceBackend`
+protocol with punt-service's field and method names, plus systemd and launchd
+backends written for biffd. Every caller depends on the spec, the protocol and
+`ServiceManager`, never on a backend class, so adopting punt-service replaces
+four modules and nothing else. The spec carries the table in `biffd.md`:
+`health_port` 8424, `restart_on_crash_only` true, log `~/.punt-labs/biff/logs/biff.log`.
+
+**Rejected.**
+
+- *Vendoring lux's package.* A copy drifts from the library that lux, quarry and
+  vox are meant to share.
+- *A path or git dependency.* It breaks both release channels.
+- *Waiting for the release.* The nudge, the doctor lines and the CLI do not
+  depend on which library supplies the backends, so they ship now.
+
+**Consequence.** Two implementations of a systemd unit and a plist exist until
+the swap. biff's backends carry no legacy-unit or binary sweeps, which
+punt-service provides and biffd has no use for yet.

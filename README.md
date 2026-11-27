@@ -295,14 +295,16 @@ Setup and maintenance commands:
 
 | Command | What it does |
 |---------|--------------|
-| `biff install` | Install the Claude Code plugin for your user account; changes nothing in any repo |
+| `biff install` | Install the Claude Code plugin and biffd's user service for your user account; changes nothing in any repo |
 | `biff enable` | Turn biff on for the current repo (see [Setup](#setup)) |
 | `biff disable` | Turn biff off for the current repo and remove what `enable` added |
 | `biff doctor` | Check the installation |
 | `biff daemon serve` | Run biffd, the per-user daemon, in the foreground (not yet used by other commands) |
+| `biff daemon install`, `uninstall` | Install or remove biffd's user service alone (systemd user unit, macOS LaunchAgent) |
+| `biff daemon start`, `stop`, `restart`, `status` | Control the service; `status` shows whether it is installed and running, and its version |
 | `biff install-statusline` | Add biff to your Claude Code status line |
 | `biff uninstall-statusline` | Restore your original status line |
-| `biff uninstall` | Remove the plugin and this clone's biff git hooks |
+| `biff uninstall` | Remove the plugin, biffd's service and this clone's biff git hooks |
 | `biff mcp` | Start the MCP server over stdio (the plugin runs this) |
 | `biff serve` | Start the MCP server over HTTP (default `127.0.0.1:8419`) |
 | `biff version` | Print the package version, and the plugin version if installed |

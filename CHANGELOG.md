@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Added
+
+- `biff install` installs biffd as a user service (systemd user unit `biffd`,
+  macOS LaunchAgent `com.punt-labs.biffd`) and `biff uninstall` removes it.
+  `biff daemon install`, `uninstall`, `start`, `stop`, `restart` and `status`
+  manage the service alone. A new `biffd` executable runs the daemon in the
+  foreground, as the unit executes it. A crash restarts biffd; a clean stop
+  stays stopped. A host with no service manager, such as a container, reports
+  that and starts biffd on demand instead.
+- `biff doctor` checks biffd in seven lines: unit installed, process running,
+  port owner, `/health`, token file mode, daemon version against client
+  version, and relay connection. Each failing line names the command that
+  repairs it. They are informational until the daemon is the default path.
+- `biff.client.nudge.DaemonNudge` starts biffd for a client that finds it
+  down: it checks `/health` for one second, starts the unit or a detached
+  `biffd`, and polls for five seconds. It raises `DaemonNotInstalledError`
+  (`biffd is not installed. Run: biff install`) or `DaemonDidNotStartError`
+  (`biffd is installed but did not start within 5 seconds. Run: biff daemon
+  status, then biff doctor`). Nothing calls it yet.
+- The service code lives in `biff.supervision` behind a `ServiceBackend`
+  protocol that mirrors punt-service, which is not yet on PyPI. Moving to
+  punt-service replaces `biff.supervision.systemd`, `launchd`, `host` and
+  `runner` with its backends; no other module changes.
+
 ## [1.26.0] - 2026-11-26
 
 ### Added
