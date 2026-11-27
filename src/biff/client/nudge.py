@@ -1,13 +1,14 @@
 """Start biffd when a client finds it down, and say why when it cannot.
 
 A caller runs ``DaemonNudge.for_host(run_dir).ensure_running()`` before it
-connects.  The call is blocking.  ``for_host`` asks the service manager whether it
-answers; ``ensure_running`` spends one second to see that biffd is down, then the
-supervisor's answer to "start", then five seconds waiting for ``/health``.  That is
-about six seconds when the supervisor answers at once.  A hung ``systemctl`` is cut
-off after 30 seconds, and two such calls (discovery and start) bound the worst
-case at 66.  A caller with a tighter limit, such as a hook, runs both in a thread
-it can abandon: ``await asyncio.to_thread(...)``.  Every failure is a
+connects, and connects to the port that returns.  The call is blocking.
+``for_host`` asks the service manager whether it answers; ``ensure_running``
+spends one second to see that biffd is down, then the supervisor's answer to
+"start", then five seconds waiting for ``/health``.  That is about six seconds
+when the supervisor answers at once.  A hung ``systemctl`` is cut off after 30
+seconds, and two such calls (discovery and start) bound the worst case at 66.  A
+caller with a tighter limit, such as a hook, runs both in a thread it can
+abandon: ``await asyncio.to_thread(...)``.  Every failure is a
 ``ConnectionError``.
 """
 
@@ -66,10 +67,13 @@ class DaemonPortFileError(ConnectionError):
 
 
 class Probe(Protocol):
-    """Asks whether biffd answers; ``HealthProbes`` is the real one."""
+    """Asks where biffd answers; ``HealthProbes`` is the real one."""
 
-    def answers(self, timeout: float) -> bool:
-        """Return whether ``/health`` answers within *timeout* seconds."""
+    def live_port(self, timeout: float) -> int | None:
+        """Return the port where ``/health`` answers within *timeout*, or ``None``.
+
+        ``None`` is the absence the nudge reports, not a failure.
+        """
         ...
 
 
@@ -133,16 +137,19 @@ class DaemonNudge:
             raise DaemonPortFileError(msg) from exc
         return cls(HealthProbes(recorded, spec.health_port), HostStarter.for_host(spec))
 
-    def ensure_running(self) -> None:
-        """Return once biffd answers ``/health``, starting it if it does not.
+    def ensure_running(self) -> int:
+        """Return the port biffd answers on, starting biffd if it does not.
+
+        The port is the one that answered ``/health``: it can differ from the
+        recorded one, which a crash on a ``--port`` override leaves stale.
 
         Raises:
             DaemonNotInstalledError: There is nothing to start.
             DaemonStartFailedError: Starting biffd failed, with the reason.
             DaemonDidNotStartError: biffd was started and did not answer in time.
         """
-        if self._probe.answers(_CONNECT_SECONDS):
-            return
+        if (port := self._probe.live_port(_CONNECT_SECONDS)) is not None:
+            return port
         try:
             outcome = self._starter.start()
         except ServiceActionFailedError as exc:
@@ -151,8 +158,8 @@ class DaemonNudge:
             raise DaemonNotInstalledError(_NOT_INSTALLED)
         deadline = time.monotonic() + self._patience
         while time.monotonic() < deadline:
-            if self._probe.answers(_CONNECT_SECONDS):
-                return
+            if (port := self._probe.live_port(_CONNECT_SECONDS)) is not None:
+                return port
             if note := self._starter.exit_note():
                 raise DaemonStartFailedError(f"{note}. {_DIAGNOSE}")
             time.sleep(self._interval)

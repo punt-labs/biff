@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import TYPE_CHECKING, Final, Protocol, Self, final
+from typing import TYPE_CHECKING, Protocol, Self, final
 
 from biff.supervision.errors import (
     PortConflictError,
     ServiceActionFailedError,
     ServiceNotInstalledError,
 )
+from biff.supervision.evidence import SupervisorEvidence
+from biff.supervision.health_wait import HealthWait
 
 if TYPE_CHECKING:
     from biff.supervision.backend import ServiceBackend
@@ -18,8 +20,6 @@ if TYPE_CHECKING:
     from biff.supervision.spec import ServiceSpec
 
 __all__ = ["PortWatcher", "ServiceManager"]
-
-_HEALTH_WAIT_SECONDS: Final = 5.0
 
 
 class PortWatcher(Protocol):
@@ -71,9 +71,12 @@ class ServiceManager:
             PortConflictError: A program other than biffd holds the port.
             BinaryNotFoundError: The executable is not installed.
             ServiceActionFailedError: The supervisor refused, or the service was
-                registered and does not answer ``/health`` within five seconds.
+                registered and does not answer ``/health`` within the health wait
+                (``BIFF_DAEMON_HEALTH_WAIT``, 30 seconds by default), or that
+                variable is not a number of seconds.
         """
         port = self._spec.health_port
+        wait = HealthWait.from_environ(os.environ).seconds
         state = self._port.state()
         lsof = f"lsof -nP -iTCP:{port} -sTCP:LISTEN"
         if state == "foreign":
@@ -92,10 +95,13 @@ class ServiceManager:
             raise PortConflictError(msg)
         exec_display = " ".join(self._spec.resolve_exec_args())
         up_to_date = self._backend.install()
-        if not self._port.wait_until_answering(_HEALTH_WAIT_SECONDS):
+        evidence = SupervisorEvidence(self._backend)
+        if not self._port.wait_until_answering(wait):
+            # What the supervisor knows must be read before the rollback removes it.
+            seen = evidence.describe("before it was removed")
             detail = (
                 f"registered, but it does not answer /health on port {port} within "
-                f"{_HEALTH_WAIT_SECONDS:g} seconds. {self._remove_after_failure()} "
+                f"{wait:g} seconds. {seen} {self._remove_after_failure()} "
                 f"To see why, run it in the foreground: {self._spec.cli_name} "
                 f"{self._spec.cli_verb} serve"
             )
@@ -138,11 +144,14 @@ class ServiceManager:
 
         Raises:
             ServiceNotInstalledError: No unit is installed.
-            ServiceActionFailedError: The supervisor refused.
+            ServiceActionFailedError: The supervisor refused, or the service does
+                not answer ``/health`` within the health wait.
         """
         self._require_installed()
+        wait = HealthWait.from_environ(os.environ).seconds
         if not self._backend.start():
             raise ServiceActionFailedError(self._spec.failure_message("start"))
+        self._require_answering("start", wait)
         return f"{self._spec.display_name} started."
 
     def stop(self) -> str:
@@ -160,12 +169,28 @@ class ServiceManager:
 
         Raises:
             ServiceNotInstalledError: No unit is installed.
-            ServiceActionFailedError: The supervisor refused.
+            ServiceActionFailedError: The supervisor refused, or the service does
+                not answer ``/health`` within the health wait.
         """
         self._require_installed()
+        wait = HealthWait.from_environ(os.environ).seconds
         if not self._backend.restart():
             raise ServiceActionFailedError(self._spec.failure_message("restart"))
+        self._require_answering("restart", wait)
         return f"{self._spec.display_name} restarted."
+
+    def _require_answering(self, action: str, wait: float) -> None:
+        """Return once the service answers ``/health``; raise after *wait* seconds."""
+        evidence = SupervisorEvidence(self._backend)
+        if self._port.wait_until_answering(wait):
+            return
+        detail = (
+            f"the supervisor accepted it, but it does not answer /health on port "
+            f"{self._spec.health_port} within {wait:g} seconds. "
+            f"{evidence.describe('so far')} Run: {self._spec.cli_name} "
+            f"{self._spec.cli_verb} status, then biff doctor"
+        )
+        raise ServiceActionFailedError(self._spec.failure_message(action, detail))
 
     def _require_installed(self) -> None:
         if not self._backend.config_path().exists():

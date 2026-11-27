@@ -187,6 +187,13 @@ class LaunchdBackend:
         result = Supervisor.run("launchctl", "print", self._target)
         return result.returncode == 0 and "state = running" in result.stdout
 
+    def diagnosis(self) -> str:
+        """Return the first lines of ``launchctl print`` for the job.
+
+        They hold its state and its last exit status.
+        """
+        return Supervisor.excerpt("launchctl", "print", self._target)
+
     def linger_warning(self) -> str:
         """Return no warning: a LaunchAgent survives logout of the shell."""
         return ""

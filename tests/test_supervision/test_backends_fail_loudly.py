@@ -58,11 +58,6 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-@pytest.fixture
-def script(monkeypatch: pytest.MonkeyPatch) -> ScriptedSupervisor:
-    return ScriptedSupervisor().install(monkeypatch)
-
-
 def installed_unit(home: Path) -> Path:
     path = home / ".config" / "systemd" / "user" / "biffd.service"
     path.parent.mkdir(parents=True)

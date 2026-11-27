@@ -1532,9 +1532,23 @@
     "max_lcom": 0.667,
     "avg_lcom": 0.667
   },
+  "src/biff/supervision/diagnosable.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/supervision/errors.py": {
     "efferent_coupling": 0.0,
     "public_names": 4.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/supervision/evidence.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -1545,6 +1559,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.667,
     "avg_lcom": 0.584
+  },
+  "src/biff/supervision/health_wait.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/biff/supervision/host.py": {
     "efferent_coupling": 2.0,
@@ -1557,15 +1578,15 @@
     "efferent_coupling": 2.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.648,
-    "avg_lcom": 0.648
+    "max_lcom": 0.642,
+    "avg_lcom": 0.642
   },
   "src/biff/supervision/manager.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 3.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.022,
-    "avg_lcom": 0.022
+    "max_lcom": 0.018,
+    "avg_lcom": 0.018
   },
   "src/biff/supervision/port.py": {
     "efferent_coupling": 1.0,
@@ -1599,8 +1620,8 @@
     "efferent_coupling": 2.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.451,
-    "avg_lcom": 0.451
+    "max_lcom": 0.438,
+    "avg_lcom": 0.438
   },
   "src/biff/talk_latch.py": {
     "efferent_coupling": 0.0,

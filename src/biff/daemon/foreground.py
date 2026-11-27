@@ -6,6 +6,8 @@ import asyncio
 import errno
 import logging
 import os
+import sys
+from importlib.metadata import version as pkg_version
 from typing import Self, final
 
 import typer
@@ -46,6 +48,17 @@ class Foreground:
                 told not to restart.
         """
         configure_logging(Role.DAEMON)
+        run_dir = RunDir.default()
+        # The first line biffd writes: under a service manager nothing else says
+        # that it was started, or by which interpreter, before it listens.
+        logger.info(
+            "biffd starting: version=%s pid=%d port=%d run_dir=%s python=%s",
+            pkg_version("punt-biff"),
+            os.getpid(),
+            self._port,
+            run_dir.path,
+            sys.executable,
+        )
         removed = DaemonEnvironment.scrub(os.environ)
         if removed:
             typer.echo(
@@ -53,7 +66,7 @@ class Foreground:
                 "each session resolves its own",
                 err=True,
             )
-        daemon = BiffDaemon(run_dir=RunDir.default(), port=self._port)
+        daemon = BiffDaemon(run_dir=run_dir, port=self._port)
         try:
             asyncio.run(daemon.run_foreground())
         except PermissionError as exc:

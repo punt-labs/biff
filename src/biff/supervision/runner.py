@@ -18,6 +18,7 @@ __all__ = ["Supervisor"]
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS: Final = 30.0
+_EXCERPT_LINES: Final = 8
 
 
 @final
@@ -52,6 +53,21 @@ class Supervisor:
                 result.stderr.strip(),
             )
         return result.returncode == 0
+
+    @staticmethod
+    def excerpt(*argv: str) -> str:
+        """Run *argv* and return the first eight lines of what it printed.
+
+        A supervisor reports "not running" with a non-zero exit, so the exit
+        status is not read; stderr stands in when stdout is empty.
+
+        Raises:
+            OSError: The program is missing or cannot be run.
+            subprocess.TimeoutExpired: The supervisor did not answer in 30 seconds.
+        """
+        result = Supervisor.run(*argv)
+        text = result.stdout.strip() or result.stderr.strip() or "no output"
+        return "\n".join(text.splitlines()[:_EXCERPT_LINES])
 
     @staticmethod
     def require(spec: ServiceSpec, action: str, *argv: str) -> None:

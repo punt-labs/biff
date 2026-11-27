@@ -46,10 +46,16 @@ class ServiceSpec:
     beside_interpreter: bool
 
     def failure_message(self, action: str, detail: str = "") -> str:
-        """Describe a refused supervisor *action*, with *detail*, and name the log."""
-        why = f": {detail}" if detail else "."
+        """Describe a refused supervisor *action*, with *detail*, and name the log.
+
+        The pointer to the log is its own sentence: a detail that ends in a word,
+        such as a command or a supervisor's stderr, gets its full stop here.
+        """
+        said = detail.rstrip().rstrip(".!?")
+        why = f": {said}" if said else ""
         return (
-            f"{self.display_name} {action} failed{why} See {self.log_path} for details."
+            f"{self.display_name} {action} failed{why}. "
+            f"See {self.log_path} for details."
         )
 
     def resolve_exec_args(self) -> list[str]:
