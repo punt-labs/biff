@@ -490,10 +490,10 @@ async def test_the_startup_read_is_retried_until_the_subscription_is_confirmed(
     status = await holder.status()
     eric = await _eric(harness, repo)
     await eric.request("talk", to=f"kai:{status['tty_name']}", message="")
-    await asyncio.sleep(0.1)  # the invite is held at kai
     bus.flush_gate = asyncio.Event()
+    before = bus.total_subscribers()
     bus.relays[0].generation += 1  # kai resubscribes; the server has not confirmed
-    await asyncio.sleep(0.2)
+    await eventually(lambda: bus.total_subscribers() < before)
     readiness: list[bool] = []
     real = DaemonLink.talk_read
 

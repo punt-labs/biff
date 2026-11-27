@@ -266,7 +266,7 @@ async def test_a_failed_resubscribe_is_retried_and_the_feed_survives(
     relay = bus.relays[0]
     relay.down = True
     relay.generation += 1  # the client was replaced and the next dial fails
-    await asyncio.sleep(0.2)  # several ticks fail
+    await _eventually(lambda: relay.failed_dials >= 2)  # several ticks fail
     relay.down = False
     # Frames are ephemeral: one sent before the feed subscribes again is lost.
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
@@ -281,7 +281,7 @@ async def test_a_session_attached_while_the_relay_is_down_subscribes_when_it_ret
     await _tty(kai)  # the relay is built and answering
     bus.relays[0].down = True
     third = await harness.connect("s-third", "third")
-    await asyncio.sleep(0.2)
+    await _eventually(lambda: bus.relays[0].failed_dials >= 1)
     bus.relays[0].down = False
     third_subject = await _subject(third)
     await _eventually(lambda: bus.subscriber_count(third_subject) == 1)
@@ -301,7 +301,7 @@ async def test_a_failing_resubscribe_warns_once_then_recovers(
     with caplog.at_level(logging.INFO, logger="biff.daemon.talk_feed"):
         relay.down = True
         relay.generation += 1
-        await asyncio.sleep(0.3)  # many ticks fail
+        await _eventually(lambda: relay.failed_dials >= 3)  # many ticks fail
         relay.down = False
         before = bus.subscribes
         await _eventually(lambda: bus.subscribes > before)
@@ -502,7 +502,7 @@ async def test_a_bug_in_the_feed_does_not_end_talk_for_the_session(
     relay = bus.relays[0]
     relay.crash = RuntimeError("a bug, not a relay outage")
     relay.generation += 1
-    await asyncio.sleep(0.2)  # several ticks hit the bug
+    await _eventually(lambda: relay.failed_dials >= 2)  # several ticks hit the bug
     relay.crash = None
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
     await pair.say(pair.kai, pair.eric_at, "")
@@ -569,7 +569,6 @@ async def test_an_explicit_tty_is_not_redirected_to_another_ttys_invite(
         f"bob:{await _tty(bob2)}",
     )
     await bob1.request("talk", to=kai_at, message="")  # bob's first tty invites kai
-    await asyncio.sleep(0.1)  # the invite is queued at kai, unread
     sent = cast(
         "dict[str, object]", await kai.request("talk", to=bob2_at, message="hi")
     )
@@ -604,7 +603,7 @@ async def test_a_failed_confirmation_does_not_leave_a_second_subscription_behind
     relay = bus.relays[0]
     bus.flush_fails = True
     relay.generation += 1  # resubscribe; the confirmation times out each tick
-    await asyncio.sleep(0.2)
+    await _eventually(lambda: bus.failed_flushes >= 2)
     bus.flush_fails = False
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
     await pair.say(pair.kai, pair.eric_at, "once")
@@ -618,7 +617,6 @@ async def test_held_invites_are_read_while_the_subscription_is_unconfirmed(
     subject = await _subject(pair.eric)
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
     await pair.say(pair.kai, pair.eric_at, "")  # held at eric, unread
-    await asyncio.sleep(0.1)
     bus.flush_gate = asyncio.Event()
     bus.relays[0].generation += 1  # eric resubscribes; the server has not confirmed
     await _eventually(lambda: bus.subscriber_count(subject) == 0)
@@ -638,7 +636,6 @@ async def test_an_invite_is_accepted_after_the_inviter_renamed_its_tty(
     bob = await harness.connect("s-bob", "bob")
     kai_at = f"kai:{await _tty(kai)}"
     await bob.request("talk", to=kai_at, message="")
-    await asyncio.sleep(0.1)
     await bob.request("tty", name="bobby")  # renamed while the invite is pending
     accepted = cast(
         "dict[str, object]", await kai.request("talk", to="bob:bobby", message="")
