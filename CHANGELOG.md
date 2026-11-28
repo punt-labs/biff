@@ -25,15 +25,29 @@
   days is ended by the daemon's sweep the same way.
 - `mcp.transport: daemon` in `.punt-labs/biff/config.yaml` (or
   `BIFF_MCP_TRANSPORT=daemon`) makes `biff mcp` answer `who`, `finger`, `last`
-  and `read_messages` through biffd. The text is the same, character for
+  and `read_messages` through biffd, and, since the write side moved too,
+  `write`, `plan`, `mesg`, `tty`, `wall`, `talk`, `talk_read`, `talk_listen`,
+  `talk_end` and `get_poll_status`. The text is the same, character for
   character. `read_messages` tells biffd the mail was read five seconds after
   the tool returned it, or at the session's next request, so a reply that never
   reached the client leaves the mail unread instead of losing it. The default
-  stays `inprocess`; the write and talk tools still use the server's own relay
-  until the next step. Only the stdio server uses the setting (`biff serve`
+  stays `inprocess`; the server still keeps its own relay for the descriptions
+  and the status line until the channel step. Only the stdio server uses the setting (`biff serve`
   keeps its relay), and it is refused with `--data-dir` or `--relay-url`,
   which biffd would not follow. A value that names neither transport stops the
   server with a message that names the setting.
+- `write` with an empty address answers `Empty user: give a user or user:tty to
+  write to.` (the MCP tool raised a validation error), and `wall` from `biff`
+  now names the session it posts from, as `write` does, instead of `cli`. A
+  wall aimed at one repo (`repo`) and a wall the relay refused are reported by
+  biffd's `wall`. An invalid name for `biff tty` now reads `Error: ...`, as the
+  MCP tool always said.
+- A request that is not a look or a `read` is not repeated when the connection
+  to biffd drops while it is in flight: the tool says it may have been carried
+  out, so a `write` cannot become two messages.
+- Every biffd request except `status` and `talk_read` counts as the session's
+  activity (`last_tool_at`); a `read` counts when it finds mail. A poll that
+  finds nothing does not (DES-097).
 - `biff read` and `read_messages` no longer lose the session's mail when the
   broadcast inbox cannot be fetched after a NATS fetch already consumed it: the
   mail is filed again and the next read serves it.

@@ -272,6 +272,10 @@
   "biff.daemon.talk_notices": "daemon",
   "biff.daemon.talk_channel": "daemon",
   "biff.daemon.talk_methods": "daemon",
+  "biff.daemon.uncancellable": "daemon",
+  "biff.daemon.handback": "daemon",
+  "biff.daemon.held_mail": "daemon",
+  "biff.daemon.session_fetch": "daemon",
   "biff.cli_console": "cli",
   "biff.cli_events": "cli",
   "biff.cli_link": "cli",
@@ -295,5 +299,9 @@
   "biff.commands.plan_source": "commands",
   "biff.local_tty_names": "engine",
   "biff.nats_session_rows": "engine",
-  "biff.session_edit": "engine"
+  "biff.session_edit": "engine",
+  "biff.server.daemon_calls": "server",
+  "biff.server.daemon_write_tools": "server",
+  "biff.server.daemon_talk_tools": "server",
+  "biff.daemon.activity_count": "daemon"
 }

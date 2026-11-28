@@ -10,13 +10,15 @@ from __future__ import annotations
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
 from fastmcp.exceptions import ToolError
 
+from biff._stdlib import get_repo_common_root
 from biff.client.connection import (
     ClientIdentity,
     ConnectionLostError,
@@ -26,12 +28,20 @@ from biff.client.connection import (
 from biff.daemon.relays import ResolvedSession
 from biff.daemon.server import BiffDaemon
 from biff.daemon.session_store import CliSessionStore
-from biff.models import BiffConfig
+from biff.markers import (
+    clear_plan_marker,
+    read_plan_marker,
+    read_wall_marker,
+    write_wall_marker,
+)
+from biff.models import BiffConfig, WallPost
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
 from biff.server.app import create_server
 from biff.server.mcp_assembly import McpAssembly
 from biff.server.mcp_link import McpLink
+from biff.server.state import ServerState
+from biff.server.tools._descriptions import get_tty_name
 from biff.session_routing import SessionRouting
 from biff.testing import RecordingClient, Transcript
 from biff.testing.caller import StampedClient, caller_for
@@ -43,10 +53,10 @@ from tests._mcp_golden import (
     last_table,
 )
 from tests._state import create_state
+from tests.test_daemon.talk_bus import TalkBus, TalkBusRelay
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
-    from pathlib import Path
 
     from fastmcp.tools import Tool
     from pydantic import JsonValue
@@ -100,6 +110,7 @@ class _Rig:
     resolver: _OneRepo
     asked: list[str] = field(default_factory=list[str])
     stack: AsyncExitStack = field(default_factory=AsyncExitStack)
+    states: dict[str, ServerState] = field(default_factory=dict[str, ServerState])
     connected: list[DaemonClient] = field(default_factory=list[DaemonClient])
 
     def link(self, user: str, settle: float = 5.0) -> McpLink:
@@ -115,7 +126,12 @@ class _Rig:
         )
 
     async def client(
-        self, user: str, link: McpLink | None = None, relay: Relay | None = None
+        self,
+        user: str,
+        link: McpLink | None = None,
+        relay: Relay | None = None,
+        *,
+        dormant: bool = False,
     ) -> _Caller:
         """Return *user*'s MCP client, over a server that asks biffd for reads."""
         state = create_state(
@@ -124,9 +140,11 @@ class _Rig:
             relay=relay,
             hostname="test-host",
             pwd="/test",
+            dormant=dormant,
         )
+        self.states[user] = state
         server = create_server(state)
-        McpAssembly.answer_reads_from(link or self.link(user), server, state)
+        McpAssembly.answer_from(link or self.link(user), server, state)
         stamped = StampedClient(FastMCPTransport(server))
         await self.stack.enter_async_context(stamped)
         recording = RecordingClient(
@@ -218,7 +236,7 @@ async def test_the_tools_a_daemon_server_lists_are_the_ones_the_in_process_serve
     plain = create_server(create_state(config, tmp_path / "plain"))
     served_state = create_state(config, tmp_path / "served")
     served = create_server(served_state)
-    McpAssembly.answer_reads_from(rig.link("kai"), served, served_state)
+    McpAssembly.answer_from(rig.link("kai"), served, served_state)
 
     def listing(tools: Sequence[Tool]) -> dict[str, tuple[object, ...]]:
         return {t.name: (t.description, t.parameters, t.meta) for t in tools}
@@ -426,6 +444,95 @@ async def _plain(tmp_path: Path, stack: AsyncExitStack) -> RecordingClient:
     return RecordingClient(client=stamped, transcript=Transcript(title=""))
 
 
+async def test_a_write_goes_to_biffd_and_an_empty_address_is_answered_in_text(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai")
+
+    sent = await kai.call("write", to="eric", message="hi")
+    empty = await kai.call("write", to="", message="hi")
+
+    assert (sent, empty, rig.asked.count("write")) == (
+        "Message sent to eric.",
+        "Empty user: give a user or user:tty to write to.",
+        2,
+    )
+
+
+async def test_a_plan_goes_to_biffd_and_its_marker_is_written_here(rig: _Rig) -> None:
+    kai = await rig.client("kai")
+    root = get_repo_common_root()
+
+    await kai.call("plan", message="mine")
+
+    assert (rig.asked.count("plan"), read_plan_marker(root, "kai-session")) == (
+        1,
+        "mine",
+    )
+
+
+async def test_an_auto_plan_that_keeps_the_manual_one_rewrites_the_marker(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai")
+    root = get_repo_common_root()
+    await kai.call("plan", message="mine")
+    clear_plan_marker(root, "kai-session")
+
+    text = await kai.call("plan", message="from a hook", source="auto")
+
+    assert (text, read_plan_marker(root, "kai-session")) == (
+        "Plan unchanged (manual):\n   mine",
+        "mine",
+    )
+
+
+async def test_a_tty_name_is_claimed_by_biffd_and_kept_here_for_the_hints(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai")
+
+    text = await kai.call("tty", name="kaitty")
+
+    assert (text, rig.asked.count("tty"), get_tty_name()) == (
+        "TTY: kaitty",
+        1,
+        "kaitty",
+    )
+
+
+async def test_mesg_goes_to_biffd(rig: _Rig) -> None:
+    kai = await rig.client("kai")
+
+    off = await kai.call("mesg", enabled=False)
+    on = await kai.call("mesg", enabled=True)
+
+    assert (off, on, rig.asked.count("mesg")) == ("is n", "is y", 2)
+
+
+async def test_a_wall_goes_to_biffd_and_its_marker_is_kept_here(rig: _Rig) -> None:
+    kai = await rig.client("kai")
+    root = str(Path())  # the server state's common root, as built here
+
+    await kai.call("wall", message="freeze", duration="1h")
+    posted = read_wall_marker(root)
+    await kai.call("wall", clear=True)
+
+    assert (rig.asked.count("wall"), posted, read_wall_marker(root)) == (
+        2,
+        "freeze",
+        None,
+    )
+
+
+async def test_a_wall_aimed_at_one_visible_repository_is_posted(rig: _Rig) -> None:
+    kai = await rig.client("kai")
+
+    text = await kai.call("wall", message="freeze", duration="1h", repo=REPO)
+
+    assert text.startswith("Wall posted (")
+
+
 async def test_a_relay_set_only_in_this_process_is_refused_by_name(
     rig: _Rig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -434,3 +541,358 @@ async def test_a_relay_set_only_in_this_process_is_refused_by_name(
 
     with pytest.raises(ToolError, match="BIFF_RELAY_URL"):
         await kai.call("who")
+
+
+class _CountingRelay(LocalRelay):
+    """A local relay that counts requests, as the NATS relay does."""
+
+    total_attempts = 5
+    total_timeouts = 1
+
+
+async def test_the_poll_status_carries_the_counters_of_the_relay_biffd_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def counting(resolved: ResolvedSession) -> Relay:
+        return _CountingRelay(resolved.data_dir)
+
+    async with _running(tmp_path, monkeypatch, counting) as rig:
+        kai = await rig.client("kai")
+
+        text = await kai.call("get_poll_status")
+
+    assert text == (
+        "Polling: active, interval=2s (2s)\n"
+        "NATS relay: 1 timeout(s) / 5 request(s) since server start"
+    )
+
+
+async def test_the_poll_status_says_when_biffd_cannot_be_asked(rig: _Rig) -> None:
+    async def refused(_identity: ClientIdentity) -> DaemonClient:
+        msg = "biffd is not installed. Run: biff install"
+        raise DaemonUnreachableError(msg)
+
+    kai = await rig.client(
+        "kai", McpLink(user="kai", cwd="/work/repo", connect=refused)
+    )
+
+    text = await kai.call("get_poll_status")
+
+    assert text == (
+        "Polling: active, interval=2s (2s)\n"
+        "biffd: biffd is not installed. Run: biff install"
+    )
+
+
+@asynccontextmanager
+async def _talking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncGenerator[tuple[_Rig, _Caller, _Caller]]:
+    """A daemon whose relay carries talk, and two named users on it."""
+    bus = TalkBus()
+
+    def build(resolved: ResolvedSession) -> Relay:
+        return TalkBusRelay(resolved.data_dir, bus)
+
+    async with _running(tmp_path, monkeypatch, build) as rig:
+        kai, eric = await rig.client("kai"), await rig.client("eric")
+        await kai.call("tty", name="kaitty")
+        await eric.call("tty", name="erictty")
+        yield rig, kai, eric
+
+
+async def test_a_conversation_runs_through_biffd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (rig, kai, eric):
+        await eric.call("talk", to="kai:kaitty", message="hello?")
+        invite = await kai.call("talk_listen", timeout=3)
+        accepted = await kai.call("talk", to="eric:erictty", message="hi")
+        reply = await eric.call("talk_listen", timeout=3)
+        ended = await kai.call("talk_end")
+
+    assert ("wants to talk" in invite, "hi" in reply) == (True, True)
+    assert (ended, {"talk", "talk_read", "talk_end"} <= set(rig.asked)) == (
+        "Talk session with eric ended.",
+        True,
+    )
+    assert accepted
+
+
+async def test_listening_with_nothing_to_hear_times_out_with_the_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (_rig, kai, _eric):
+        started = asyncio.get_running_loop().time()
+
+        text = await kai.call("talk_listen", timeout=1)
+        waited = asyncio.get_running_loop().time() - started
+
+    assert (text, 0.8 < waited < 3.0) == ("No pending talk activity.", True)
+
+
+async def test_a_mesg_biffd_never_got_is_not_taken_as_set_here(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flags: list[bool] = []
+
+    def record(*, enabled: bool) -> None:
+        flags.append(enabled)
+
+    monkeypatch.setattr("biff.server.daemon_write_tools.set_biff_enabled", record)
+
+    async def refused(_identity: ClientIdentity) -> DaemonClient:
+        msg = "biffd is not installed. Run: biff install"
+        raise DaemonUnreachableError(msg)
+
+    kai = await rig.client(
+        "kai", McpLink(user="kai", cwd="/work/repo", connect=refused)
+    )
+
+    with pytest.raises(ToolError):
+        await kai.call("mesg", enabled=False)
+
+    assert flags == []
+
+
+class _HeartbeatDown(LocalRelay):
+    """A local relay whose presence heartbeat is refused once told to be."""
+
+    down = False
+
+    async def heartbeat(self, session_key: str, at: datetime | None = None) -> None:
+        if _HeartbeatDown.down:
+            msg = "presence is unreachable"
+            raise ConnectionError(msg)
+        await super().heartbeat(session_key, at)
+
+
+async def test_a_presence_stamp_biffd_cannot_make_does_not_stop_the_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def build(resolved: ResolvedSession) -> Relay:
+        return _HeartbeatDown(resolved.data_dir)
+
+    async with _running(tmp_path, monkeypatch, build) as rig:
+        kai = await rig.client("kai")
+        await kai.call("who")
+        _HeartbeatDown.down = True
+
+        text = await kai.call("who")
+
+    assert "kai" in text
+
+
+async def test_a_wall_that_landed_but_failed_is_shown_as_the_relay_holds_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _WallRefused(LocalRelay):
+        refusing = False
+
+        async def set_wall(self, wall: WallPost | None) -> None:
+            await super().set_wall(wall)
+            if _WallRefused.refusing:
+                msg = "relay answered too late"
+                raise ConnectionError(msg)
+
+    def build(resolved: ResolvedSession) -> Relay:
+        return _WallRefused(resolved.data_dir)
+
+    async with _running(tmp_path, monkeypatch, build) as rig:
+        kai = await rig.client("kai")
+        root = str(Path())
+        await kai.call("wall", message="first", duration="1h")
+        _WallRefused.refusing = True
+
+        with pytest.raises(ToolError, match="relay answered too late"):
+            await kai.call("wall", message="second", duration="1h")
+
+    assert read_wall_marker(root) == "second"
+
+
+async def test_a_clear_that_landed_here_but_failed_elsewhere_clears_the_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _ClearRefused(LocalRelay):
+        refusing = False
+
+        async def set_wall(self, wall: WallPost | None) -> None:
+            await super().set_wall(wall)
+            if _ClearRefused.refusing:
+                msg = "a peer repo refused"
+                raise ConnectionError(msg)
+
+    def build(resolved: ResolvedSession) -> Relay:
+        return _ClearRefused(resolved.data_dir)
+
+    async with _running(tmp_path, monkeypatch, build) as rig:
+        kai = await rig.client("kai")
+        root = str(Path())
+        await kai.call("wall", message="first", duration="1h")
+        _ClearRefused.refusing = True
+
+        with pytest.raises(ToolError, match="a peer repo refused"):
+            await kai.call("wall", clear=True)
+
+    assert read_wall_marker(root) is None
+
+
+async def test_a_write_that_never_left_does_not_claim_it_may_have_been_delivered(
+    rig: _Rig,
+) -> None:
+    async def hello_refused(_identity: ClientIdentity) -> DaemonClient:
+        msg = "biffd closed the connection during the hello"
+        raise ConnectionLostError(msg)
+
+    kai = await rig.client(
+        "kai", McpLink(user="kai", cwd="/work/repo", connect=hello_refused)
+    )
+
+    with pytest.raises(ToolError) as refused:
+        await kai.call("write", to="eric", message="hi")
+
+    assert "closed the connection during the hello" in str(refused.value)
+    assert "may have been carried out" not in str(refused.value)
+
+
+def _first_hello_dropped(rig: _Rig) -> tuple[McpLink, list[int]]:
+    """A link whose first handshake fails and whose later ones succeed."""
+    attempts: list[int] = []
+
+    async def connect(identity: ClientIdentity) -> DaemonClient:
+        attempts.append(1)
+        if len(attempts) == 1:
+            msg = "biffd closed the connection during the hello"
+            raise ConnectionLostError(msg)
+        client = await DaemonClient.connect(
+            run_dir=rig.run_dir, port=rig.daemon.port, identity=identity
+        )
+        rig.connected.append(client)
+        return client
+
+    return McpLink(user="kai", cwd="/work/repo", connect=connect), attempts
+
+
+async def test_a_read_is_asked_again_after_a_handshake_that_dropped(rig: _Rig) -> None:
+    link, attempts = _first_hello_dropped(rig)
+    kai = await rig.client("kai", link)
+
+    text = await kai.call("who")
+
+    assert ("kai" in text, len(attempts)) == (True, 2)
+
+
+async def test_a_write_is_not_asked_again_after_a_handshake_that_dropped(
+    rig: _Rig,
+) -> None:
+    link, attempts = _first_hello_dropped(rig)
+    kai = await rig.client("kai", link)
+
+    with pytest.raises(ToolError, match="closed the connection during the hello"):
+        await kai.call("write", to="eric", message="hi")
+
+    assert attempts == [1]
+
+
+async def test_a_write_whose_reply_was_lost_is_not_sent_again(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """biffd may have delivered it; repeating it would be a second message."""
+    delivered = DaemonClient.request_held
+    losses: list[str] = []
+
+    async def losing(self: DaemonClient, method: str, **params: JsonValue) -> HeldReply:
+        held = await delivered(self, method, **params)
+        if method == "write" and not losses:
+            losses.append(method)
+            msg = "biffd closed the connection"
+            raise ConnectionLostError(msg)
+        return held
+
+    monkeypatch.setattr(DaemonClient, "request_held", losing)
+    writer = await rig.client("eric")
+    reader = await rig.client("kai")
+    await reader.call("tty", name="kaitty")
+
+    with pytest.raises(ToolError, match="may have been carried out"):
+        await writer.call("write", to="kai:kaitty", message="once")
+    heard = await reader.call("read_messages")
+
+    assert heard.count("once") == 1
+
+
+async def test_a_disabled_repository_is_not_announced_by_the_poll_status(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai", dormant=True)
+
+    text = await kai.call("get_poll_status")
+
+    assert (text, rig.asked) == ("Polling: active, interval=2s (2s)", [])
+
+
+def _invite(state: ServerState, sender: str) -> None:
+    """Make *state*'s own subscription hold an invite from *sender*."""
+    state.talk.receive(
+        {
+            "type": "invite",
+            "from": sender,
+            "from_tty": f"{sender}tty",
+            "from_key": f"{sender}:key1",
+            "to_key": state.session_key,
+            "body": "",
+        }
+    )
+
+
+async def test_an_invite_only_this_process_heard_is_not_lost_to_a_quiet_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (rig, kai, _eric):
+        _invite(rig.states["kai"], "eric")
+
+        text = await kai.call("talk_read")
+
+    assert "eric wants to talk" in text
+
+
+async def test_talking_to_someone_answers_the_invite_this_process_held_from_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (rig, kai, _eric):
+        _invite(rig.states["kai"], "eric")
+        rig.states["kai"].talk.absorb_idle_invites()
+
+        await kai.call("talk", to="eric:erictty")
+
+    assert rig.states["kai"].talk.pending_invites == {}
+
+
+async def test_a_bare_acceptance_ends_the_wait_of_the_one_who_invited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (_rig, kai, eric):
+        await kai.call("talk", to="eric:erictty")
+        await eric.call("talk_read")
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        listening = asyncio.create_task(kai.call("talk_listen", timeout=5))
+        await asyncio.sleep(0.3)
+
+        await eric.call("talk", to="kai:kaitty")
+        await listening
+        waited = loop.time() - started
+
+    assert waited < 3.0
+
+
+async def test_a_wall_refused_before_it_reached_a_repo_keeps_the_marker_for_the_rest(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai")
+    root = str(Path())
+    write_wall_marker(root, "elsewhere", datetime.now(UTC) + timedelta(hours=1))
+
+    await kai.call("wall", message="x", repo="nope/none")
+
+    assert read_wall_marker(root) == "elsewhere"

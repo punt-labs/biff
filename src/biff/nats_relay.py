@@ -2279,9 +2279,9 @@ class NatsRelay(SessionRows):
             _, kv = await self._ensure_connected()
             # Delete at the revision read: a wall posted since then is not
             # ours to remove, so read again and return that one.
-            if not await self._delete_at(kv, key, entry.revision):
-                return await self.get_wall(repo=repo)
-            return None
+            if await self._delete_at(kv, key, entry.revision):
+                return None
+            return await self.get_wall(repo=repo)
         return wall
 
     async def set_wall_for_repo(self, repo: str, wall: WallPost | None) -> None:

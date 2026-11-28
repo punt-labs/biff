@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Self, final
 from websockets.asyncio.server import Server, ServerConnection, serve
 
 from biff.daemon.connection import ConnectionHandler, DaemonCore
+from biff.daemon.handback import Handback
 from biff.daemon.methods import READ_BUDGET_BYTES, Methods
 from biff.daemon.relays import RelayPool
 from biff.daemon.resolver import DiskResolver
@@ -182,7 +183,7 @@ class BiffDaemon:
                 await server.wait_closed()
         finally:
             try:
-                await self._core.pool.close()
+                await Handback.close_relays(self._core)
             finally:
                 self._run_dir.remove_port(owned_by=self._port)
 

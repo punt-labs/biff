@@ -23,7 +23,12 @@ if TYPE_CHECKING:
 
     from biff.client.held_reply import HeldReply
 
-__all__ = ["FAILURES", "McpLink", "Reply", "UnreadableReplyError"]
+__all__ = [
+    "FAILURES",
+    "McpLink",
+    "Reply",
+    "UnreadableReplyError",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +45,13 @@ installed, did not start, no token, a hello biffd cannot take.
 SETTLE_SECONDS: Final = 5.0
 """How long a process must outlive a reply before its mail counts as delivered."""
 
+_REPEATABLE: Final = frozenset({"who", "finger", "last", "status", "read", "talk_read"})
+"""The requests that are safe to send again after a connection was lost.
+
+Any other may already have been carried out: a repeated ``write`` is a second
+message, a repeated ``wall`` a second post.
+"""
+
 _OLDER: Final = (
     "biffd is older than this biff mcp, or sent a reply it cannot read; "
     "run: biff daemon restart"
@@ -48,6 +60,10 @@ _OLDER: Final = (
 
 class UnreadableReplyError(ConnectionError):
     """biffd answered with something this server cannot use."""
+
+
+class UncertainRequestError(ConnectionError):
+    """The connection was lost with a request in flight that is not safe to repeat."""
 
 
 @final
@@ -62,6 +78,7 @@ class Reply(BaseModel):
 
     text: str
     data: JsonValue = None
+    error: bool = False
     more: int = 0
 
     @classmethod
@@ -97,9 +114,10 @@ class McpLink:
     """Asks biffd on behalf of the one session a ``biff mcp`` process serves.
 
     The connection is opened at the first request, starting biffd when it is
-    down, and kept.  One that was lost is opened again once and the request
-    repeated, which changes nothing: a ``read`` only holds its mail until it is
-    confirmed.  A request for another session (``/clear`` or a resume gave the
+    down, and kept.  One that was lost is opened again, and a request that is
+    safe to repeat (a look, or a ``read``, which only holds its mail until it is
+    confirmed) is sent again; any other fails, because biffd may have carried it
+    out.  A request for another session (``/clear`` or a resume gave the
     process a new one) settles and closes the old connection first.  This
     process holds no relay connection for what it asks here.
 
@@ -206,10 +224,25 @@ class McpLink:
     ) -> HeldReply:
         await self._settle(session_id)
         try:
-            return await (await self._client(session_id)).request_held(method, **params)
+            client = await self._client(session_id)
         except ConnectionLostError:
-            logger.info("connection to biffd lost; opening it again")
+            # The handshake dropped: nothing was sent, so a look may be asked
+            # again; anything else reports the handshake's own diagnostic.
+            if method not in _REPEATABLE:
+                raise
+            logger.info("the handshake with biffd dropped; opening it again")
+            client = await self._client(session_id)
+        try:
+            return await client.request_held(method, **params)
+        except ConnectionLostError as exc:
             self._clients.pop(session_id, None)
+            if method not in _REPEATABLE:
+                msg = (
+                    f"the connection to biffd was lost while {method} was in flight; "
+                    "it may have been carried out, so check before sending it again"
+                )
+                raise UncertainRequestError(msg) from exc
+            logger.info("connection to biffd lost; opening it again")
             return await (await self._client(session_id)).request_held(method, **params)
 
     async def _client(self, session_id: str) -> DaemonClient:

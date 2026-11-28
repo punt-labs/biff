@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from biff import commands
+from biff.daemon.activity_count import ActivityCount
 from biff.daemon.channel_check_methods import ChannelCheckMethods
 from biff.daemon.params import Params
 from biff.daemon.plan_method import PlanMethod
@@ -17,6 +18,7 @@ from biff.daemon.read_batch import ReadBatcher
 from biff.daemon.read_steps import ReadSteps
 from biff.daemon.refusal import RefusalError
 from biff.daemon.talk_methods import TalkMethods
+from biff.daemon.uncancellable import Uncancellable
 from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
 
@@ -34,6 +36,10 @@ _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 type Handler = Callable[[CliContext, Params], Awaitable[CommandResult]]
 type Acknowledge = Callable[[], Awaitable[None]]
+
+_POLLS = frozenset({"status", "talk_read"})
+"""The methods that are not work: an empty look must not move the activity clock
+that routes mail (a ``read`` is one too, and stamps only when it finds mail)."""
 
 READ_BUDGET_BYTES = MAX_FRAME_BYTES // 2
 """The most one ``read`` reply carries, rows and rendered text together, in bytes.
@@ -115,6 +121,8 @@ class Methods:
         async with session.requests(method):
             if method == "read":
                 return await self._read(session, Params(method, raw))
+            if method not in _POLLS:
+                await ActivityCount.of(session)
             if method in self._sessions.names:
                 result = await self._sessions.call(session, method, Params(method, raw))
                 return self._outcome(result)
@@ -143,10 +151,12 @@ class Methods:
         much as fits the read budget in bytes; a message larger than the budget
         alone is clipped, never sent whole.  ``more`` counts what the batch
         leaves: held mail and mail still on the relay behind a bounded fetch.
+
+        The request timeout cancels the caller, not the read: a fetch that
+        consumed mail runs on to where the mail is held.
         """
         p.done()
-        async with session.exclusive():
-            return await self._read_locked(session)
+        return await Uncancellable.holding(session, self._read_locked, "read")
 
     async def _read_locked(self, session: Session) -> Outcome:
         if session.is_ended:
@@ -169,9 +179,10 @@ class Methods:
         left += await ReadSteps.backlog(inbox)
         if left > 0:
             result["more"] = left
-        if not batch:
-            return Outcome(result)
-        return Outcome(result, partial(ReadSteps.delivered, session, inbox, batch))
+        if batch:
+            await ActivityCount.of(session)
+        ack = partial(ReadSteps.delivered, session, inbox, batch) if batch else None
+        return Outcome(result, ack)
 
     @staticmethod
     async def _who(ctx: CliContext, p: Params) -> CommandResult:
@@ -199,9 +210,9 @@ class Methods:
     @staticmethod
     async def _wall(ctx: CliContext, p: Params) -> CommandResult:
         message, duration = p.text("message", ""), p.text("duration", "")
-        clear = p.flag("clear", default=False)
+        clear, repo = p.flag("clear", default=False), p.text("repo", "")
         p.done()
-        return await commands.wall(ctx, message, duration, clear=clear)
+        return await commands.wall(ctx, message, duration, clear=clear, repo=repo)
 
     @staticmethod
     async def _mesg(ctx: CliContext, p: Params) -> CommandResult:

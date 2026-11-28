@@ -9739,12 +9739,13 @@ the PR that deletes the in-process path.
 deleted in the last PR of the migration (`biff wall` keeps its direct CI path). `_suppress_nats_noise` stays: `biff daemon serve` and
 `biff mcp` run NATS in the process the same callback configures.
 
-## DES-101: `biff mcp` Reads Through biffd Behind `mcp.transport`
+## DES-101: `biff mcp` Goes Through biffd Behind `mcp.transport`
 
 **Date:** 2026-11-27
 **Status:** SETTLED
-**Topic:** Migration step 4 of DES-095, first part: the opt-in setting, and the
-read-only tools (`who`, `finger`, `last`, `read_messages`) answered by biffd.
+**Topic:** Migration step 4 of DES-095: the opt-in setting, the read tools
+(`who`, `finger`, `last`, `read_messages`) and then the write and talk tools
+answered by biffd.
 
 **Decision.**
 
@@ -9773,11 +9774,10 @@ read-only tools (`who`, `finger`, `last`, `read_messages`) answered by biffd.
    and does the same. In-process the mail was marked read before the text was
    built. Rejected: confirming when the tool returns, which loses the mail when
    the send fails.
-5. **Hybrid until B2.** With `daemon` set, the write and talk tools still use the
-   server's own relay, so the process holds a connection; only the reads move.
-   `update_current_session` stays in the read tools (it stamps `last_tool_at`); a
-   daemon method that touches the session on a request replaces it. A read that
-   finds mail stamps activity too, as in-process: mail routing follows it.
+5. **Hybrid until the channel step.** With `daemon` set the process still holds its
+   own relay connection for the tool descriptions, the status line and the
+   channel events; every tool's answer comes from biffd. Activity is biffd's:
+   it touches the session on each request but a poll.
 6. **Where it applies.** Only to the stdio server: `biff serve` has no caller
    identity to give biffd and keeps its own relay. `--data-dir` and
    `--relay-url` are refused with the daemon transport (biffd resolves the relay
@@ -9790,6 +9790,35 @@ read-only tools (`who`, `finger`, `last`, `read_messages`) answered by biffd.
 7. **A fetch that fails halfway loses nothing.** `Inbox.unread` files the session
    mail again when the broadcast inbox cannot be fetched after a consuming relay
    already gave it up.
+
+**The write side (B2).** The same setting now serves the write and talk tools:
+`write`, `plan`, `mesg`, `tty`, `wall`, `talk`, `talk_read`, `talk_listen`,
+`talk_end`, plus `get_poll_status` (the cadence is this process's configuration,
+the counters are biffd's `status`). Each family registers from its `NAMES`
+(`server/daemon_tools.py`, `daemon_write_tools.py`, `daemon_talk_tools.py`) and
+`McpAssembly` replaces the in-process tools of the same names. What only this
+process can do it does around the call: the plan-gate marker and the expansion of
+a bead id (`plan`), the SessionStart wall marker, the display and the spoken wall
+(`wall`), the status-line flag (`mesg`), the claimed name for talk hints (`tty`).
+`talk_listen` looks at biffd every quarter second until something arrives; events
+replace the look in the channel step. After a talk call this process empties its
+own held talk state, so the description does not keep a `[TALK]` marker for mail
+biffd handed over (a pending invite from the one talked to is answered here too).
+A read that finds nothing at biffd reads what this process's own subscription
+holds, since a frame can arrive before biffd subscribed.
+
+Requests are repeated after a lost connection only when they are looks or a
+`read`; a `write`, `wall` or the like fails with a message that says it may have
+been carried out, because biffd may have done it and a repeat is a second
+message. The SessionStart wall marker is cleared only by a wall the caller
+cleared: a look finds this repo's wall alone. `get_poll_status` asks biffd only
+in an enabled repo, so a disabled one is not announced as a live session.
+
+Three behaviours moved into the engine because the MCP text won where the two
+differed: an empty `write` address is answered in text (`WriteRouter.find`), an
+invalid `tty` name reads `Error: ...`, and `wall` posts from the session's tty
+name and takes a `repo`. biffd now counts a request as the session's activity
+(`Methods.call`), so the tools no longer stamp it themselves.
 
 **Layers.** `server` may import `client`, as `docs/design/biffd.md` says
 ("Package layout"); the policy change landed alone, as oo-ratchet requires.
@@ -9889,12 +9918,58 @@ second group of daemon additions for PL-1670. Model:
   dormant and has been for the row's lifetime. A hello that reattaches first wins
   (the sweep re-checks under the session's guard).
 
+**Stops.** The spec has two kinds of daemon stop. A graceful stop
+(`GracefulStop`, `BiffDaemon.stop` calling `Handback.close_relays`) first lets
+the reads running finish: `Uncancellable.settle` waits at most 5 s
+(`Handback.SETTLE_SECONDS`) and only logs a warning for any that outlive it.
+It then gives every session's held outbox back (`HeldMail.refile`, by address:
+a broadcast message into the user's mailbox, a session message into the
+session's inbox) within 15 s in all (`Handback.REFILE_SECONDS`), and closes the
+relays in a `finally`. Both budgets sit inside the 30 s the restart command
+has (`Supervisor.run`). One message the relay refuses stays held and is
+logged; the others are still filed. The model counts all refiled mail in
+`sessN`, whatever its address, which changes no conservation count.
+
+A read makes two consuming fetches. `SessionFetch.unread` merges the session's
+own mail into the outbox before the next step can run, so that mail is never
+held by neither the relay nor the outbox (`MailFetch` in the spec goes
+straight to `outboxN`). The broadcast fetch takes the user's mail, which is in
+flight (`flightN`, `BroadcastFetch`) until the read hands it over
+(`MailHandOver`). The read holds the session's lock throughout, so an end or
+an expiry waits for it: `ExpireClaude` and `EndOwnSession` need `flightN = 0`.
+The plain retention statement "a dormant record at its retention enables
+`ExpireClaude`" is therefore false in the model (ProB shows it), and the spec
+states what holds: the expiry or the read's hand-over is enabled, and from
+every such state the expiry is reachable.
+
+Two windows remain, tracked by PL-1777. The settle timeout is modelled
+(`GracefulStop` with `settled? = zfalse`, `lastStop = sTimedOut`, `lostN`): a
+broadcast fetch that outlives the 5 s wait consumes the user's mail in a
+process that is about to exit. The other two are not modelled: the late
+broadcast fetch as a distinct step (the model has the loss only through the
+timeout), and the refile deadline, where a refile that spends its 15 s budget
+drops the held messages not yet filed (the stop logs the count). In the model
+`GracefulStop` files all held mail and never drops it at the deadline. Both
+are modelled with the PL-1777 fix, together with a spill transition that
+writes the remainder to local storage. The model also cannot represent a crash
+after the relay gave session mail up and before the daemon stored it: that is
+PL-1753, a documented limit of the spec.
+
+A process loss (`ProcessLoss`: a crash or kill) loses the outbox and any read in
+flight, as before (PL-1753); no code path can file mail back from a dead
+process. The conservation invariant counts in-flight mail, so a stop that
+skips the hand-back (`claude-session-end-nograceful.tex`) violates it, and a
+stop that drops a settled read's mail does too (`-noflight.tex`) or breaks
+`lastStop = sGraceful => stopLost = 0` when it counts the loss
+(`-noflight-counted.tex`).
+
 **Divergence from the model.** The durable model keeps the record across a daemon
-restart (`DaemonRestart`). The daemon holds harness records in memory, so a
-restart forgets them, which the spec states as `DaemonRestartForget`: the
-unconfirmed batch is lost with the outbox (PL-1753), and the unread mail in the
-restarted session's own relay inbox is never drained, which the spec counts as
-`strandedN`. Stranded mail is that session-inbox mail only: mail already filed in
+stop. The daemon holds harness records in memory, so any stop forgets them, which
+the spec states as `GracefulStopForget` and `ProcessLossForget`. After a
+graceful stop nothing is lost: the outbox is back in the relay, and the unread
+mail in the restarted session's own relay inbox is never drained, which the spec
+counts as `strandedN`. After a process loss the outbox is lost as well. Stranded
+mail is that session-inbox mail only: mail already filed in
 the user's mailbox (by an end, or addressed to the user) is untouched by the loss
 of a record. It stays in the relay until its own retention, and is found again if
 the session resumes under the same id. The row and the tty name stay as well, and
@@ -9902,15 +9977,24 @@ age out by the relay's own lifetime on NATS (`RowAgesOut`, `TtyAgesOut`). The
 local relay (no relay URL) keeps a name reservation as a lockfile with no
 lifetime, so there `TtyAgesOut` does not happen and a forgotten session holds its
 name until something releases it. That is not wholly safe: a forgotten session
-holds its name and its unread session-inbox mail is stranded. The spec keeps both
-restarts; the properties about the record hold unless the restart forgot it.
-Persisting the records, or scanning the relay's rows at start, closes it: PL-1771.
+holds its name and its unread session-inbox mail is stranded. The spec keeps the
+durable and the forgetting stops; the properties about the record hold unless the
+stop forgot it. Persisting the records, or scanning the relay's rows at start,
+closes it: PL-1771. The tests of the graceful stop restart a daemon that has
+forgotten its records, so they exercise `GracefulStopForget`. `GracefulStopForget` counts the
+mail it files back as stranded: that another session finds and reads it is not
+verified, because that needs a second session in the model, and belongs to the
+PL-1771 model change (the durable record fix).
 
-**Audit status.** `claude-session-end.audit.json` reports 13 of 13 clauses covered
-and zero GAP. It was reconciled by reading the tests against each clause (the
-z-spec audit tool was not run), and its rows name the tests. The residual after
-this change is PL-1770: the unconditional tty name releases in the in-process
-paths (`session_registry`, `tty.py`), which go with the in-process server.
+**Audit status.** `claude-session-end.audit.json` reports 14 of 15 clauses
+covered and one GAP: `ProcessLoss`, which a crash makes untestable in-process
+(the only test that asserted an outbox loss was removed with the hand-back). It
+was reconciled by reading the tests against each clause (the z-spec audit tool
+was not run), and its rows name the tests. The refile budget and the late
+broadcast fetch are listed as limits without a test (PL-1777). The residual
+after this change is PL-1770: the unconditional tty name releases in the
+in-process paths (`session_registry`, `tty.py`), which go with the in-process
+server.
 
 **Rejected.**
 

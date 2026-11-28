@@ -7,7 +7,7 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING, Self, cast, final
 
 from biff.commands._result import CommandResult
-from biff.commands.inbox import Inbox
+from biff.daemon.held_mail import HeldMail
 from biff.daemon.mail_transfer import MailTransfer
 from biff.daemon.refusal import RefusalError
 from biff.daemon.session_key import SessionKey
@@ -112,18 +112,6 @@ class SessionEnd:
                 await self._finish(session)
                 self._live.forget(key)
 
-    @staticmethod
-    async def refile_held(session: Session) -> None:
-        """Give the relay back every message the session's outbox holds.
-
-        A consuming relay removed that mail at fetch, so while it is held here it
-        is out of reach of the drain that ends or expires the session.
-        """
-        inbox = Inbox(session.context, (), ())
-        for message in session.outbox.held():
-            if await inbox.refile(message):
-                session.outbox.forget([message])
-
     async def _finish(self, session: Session) -> None:
         """Run the four effects of an end, then mark the session ended."""
         async with session.exclusive():
@@ -201,7 +189,7 @@ class SessionEnd:
                 msg = f"session {ref} changed while waiting; nothing was ended"
                 raise ValueError(msg)
             if held is not None:
-                await self.refile_held(held)
+                await HeldMail.refile(held)
             result = await verbs.end(target)
             if held is not None:
                 held.mark_ended()
