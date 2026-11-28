@@ -319,7 +319,7 @@ imports = ["kernel", "wire", "engine", "render", "plugins"]
 
 [tool.oo-ratchet.layers.claude_code]
 prefixes = ["plugins.claude_code"]
-imports = ["kernel", "wire", "engine", "render", "commands", "plugins", "service"]
+imports = ["kernel", "wire", "engine", "render", "commands", "plugins", "service", "client"]
 
 # The client side of the biffd protocol: it imports no engine, so no client
 # can hold a relay connection.

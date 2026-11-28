@@ -33,7 +33,9 @@ DES_088_IMPORTS: dict[str, frozenset[str]] = {
     "server": frozenset({*_INNER, "render", "commands", "client"}),
     "plugins": frozenset(_INNER),
     "service": frozenset({*_INNER, "render", "plugins"}),
-    "claude_code": frozenset({*_INNER, "render", "commands", "plugins", "service"}),
+    "claude_code": frozenset(
+        {*_INNER, "render", "commands", "plugins", "service", "client"}
+    ),
     "testing": frozenset({*_INNER, "render", "commands", "server"}),
     # docs/design/biffd.md, "Package layout".  A client holds no engine, so it
     # can hold no relay connection.
