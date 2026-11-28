@@ -13,25 +13,27 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, Literal
 
+from biff.models import SessionEvent
 from biff.nostr_directory import NostrDirectory
 from biff.relay import LocalRelay
 
 if TYPE_CHECKING:
-    from datetime import datetime
     from pathlib import Path
 
     import pytest
 
-    from biff.models import SessionEvent
 
 __all__ = [
     "STEPS",
     "VOLATILE",
     "HistoryRelay",
     "Step",
+    "differences",
     "isolate_machine",
+    "last_table",
     "normalise",
 ]
 
@@ -307,6 +309,31 @@ class HistoryRelay(LocalRelay):
         wanted = [e for e in self._events if user is None or e.user == user]
         return sorted(wanted, key=lambda e: e.timestamp, reverse=True)[:count]
 
+    async def seed_other_sessions(self) -> None:
+        """Add a finished session and one that is gone, both from Nov 20 2026.
+
+        Seed after the server attached: at attach it closes every login that has
+        no logout and no live session, so an earlier ghost would be closed.
+        """
+        at = datetime(2026, 11, 20, tzinfo=UTC)
+        for key, kind, user, tty, when in (
+            ("eric:e1", "login", "eric", "tty1", at.replace(hour=9)),
+            ("eric:e1", "logout", "eric", "tty1", at.replace(hour=10, minute=30)),
+            ("ghost:g1", "login", "ghost", "tty2", at.replace(hour=8)),
+        ):
+            await self.append_wtmp(
+                SessionEvent(
+                    session_key=key,
+                    event=kind,
+                    user=user,
+                    tty=key.partition(":")[2],
+                    tty_name=tty,
+                    hostname="test-host",
+                    repo="_test-integration",
+                    timestamp=when,
+                )
+            )
+
 
 def isolate_machine(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
     """Keep a golden run off the machine it runs on.
@@ -324,3 +351,41 @@ def isolate_machine(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
         return cls(None, root / "nostr.yaml")
 
     monkeypatch.setattr(NostrDirectory, "for_repo", classmethod(empty_directory))
+
+
+def differences(steps: tuple[Step, ...], actual: list[str]) -> list[str]:
+    """Name each step whose normalised text is not its golden text."""
+    return [
+        f"{step.user} {step.tool} {step.args}:\n  want {step.text!r}\n  got  {got!r}"
+        for step, text in zip(steps, actual, strict=True)
+        if (got := normalise(text, step.volatile)) != step.text
+    ]
+
+
+_LAST_HEADER = (
+    "▶  NAME        REPO               HOST       LOGIN             "
+    "LOGOUT            DURATION"
+)
+_LAST_ERIC = (
+    "   eric:tty1   _test-integration  test-host  Fri Nov 20 09:00  "
+    "Fri Nov 20 10:30  1:30    "
+)
+_LAST_GHOST = (
+    "   ghost:tty2  _test-integration  test-host  Fri Nov 20 08:00  "
+    "gone              -       "
+)
+
+
+def last_table(login: str, rank: int) -> str:
+    """Return the ``last`` table after :meth:`HistoryRelay.seed_other_sessions`.
+
+    The server's own session logged in at *login* (``Tue Dec 01 09:15``), and
+    that row stands at index *rank* among the three, newest login first.
+    """
+    live = (
+        f"   kai:tty1    _test-integration  test-host  {login}  "
+        "still logged in   -       "
+    )
+    rows = [_LAST_ERIC, _LAST_GHOST]
+    rows.insert(rank, live)
+    return "\n".join([_LAST_HEADER, *rows])

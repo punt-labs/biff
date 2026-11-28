@@ -12,6 +12,20 @@
   on the relay, also used by `session end`). A step that fails, a logout that
   cannot be recorded included, leaves the session, and the next `end` finishes it. A harness session with no connection for three
   days is ended by the daemon's sweep the same way.
+- `mcp.transport: daemon` in `.punt-labs/biff/config.yaml` (or
+  `BIFF_MCP_TRANSPORT=daemon`) makes `biff mcp` answer `who`, `finger`, `last`
+  and `read_messages` through biffd. The text is the same, character for
+  character. `read_messages` tells biffd the mail was read five seconds after
+  the tool returned it, or at the session's next request, so a reply that never
+  reached the client leaves the mail unread instead of losing it. The default
+  stays `inprocess`; the write and talk tools still use the server's own relay
+  until the next step. Only the stdio server uses the setting (`biff serve`
+  keeps its relay), and it is refused with `--data-dir` or `--relay-url`,
+  which biffd would not follow. A value that names neither transport stops the
+  server with a message that names the setting.
+- `biff read` and `read_messages` no longer lose the session's mail when the
+  broadcast inbox cannot be fetched after a NATS fetch already consumed it: the
+  mail is filed again and the next read serves it.
 - The biffd `plan` method takes `source`, `manual` (the default) or `auto`. An
   auto plan from a hook never replaces a non-empty manual one: the reply reads
   `Plan unchanged (manual):` and carries `"unchanged": true`, so the client
