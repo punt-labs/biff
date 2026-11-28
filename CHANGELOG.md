@@ -152,6 +152,9 @@
 
 ### Fixed
 
+- `biff doctor` strips control and escape characters from every reason a
+  channel check was not sent, including the text of a refusal biffd relays, so
+  relay-derived bytes no longer reach the terminal.
 - `biff doctor`'s channel check through biffd no longer always fails with
   "seconds must be an integer": the doctor sent its 30.0 s wait as a float. It
   sends whole seconds and biffd caps the wait at 25.

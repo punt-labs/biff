@@ -107,7 +107,15 @@ class DaemonAsk:
         """
         try:
             return self._confirmed(await self._ask(session_key, seconds))
-        except (OSError, TimeoutError, ValueError, DaemonError) as exc:
+        except (
+            OSError,
+            TimeoutError,
+            ValueError,
+            DaemonError,
+            CheckNotSentError,
+        ) as exc:
+            # One place for every refusal: a reply's text can carry relay-derived
+            # bytes, and the doctor prints this message on a terminal line.
             raise CheckNotSentError(
                 terminal_safe(str(exc)) or type(exc).__name__
             ) from exc

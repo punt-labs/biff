@@ -134,6 +134,41 @@ async def test_a_reason_biffd_gives_is_stripped_of_escapes(
     assert "\x1b" not in str(seen.value)
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"error": True, "text": "no \x1b[31mway\nhome"},
+        {"error": False, "data": "not a dict", "text": "odd \x1b]0;t\x07reply"},
+    ],
+)
+async def test_a_refusal_in_a_reply_is_stripped_of_control_characters(
+    harness: Harness,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reply: dict[str, object],
+) -> None:
+    async def refuse(_self: DaemonAsk, _key: str, _seconds: float) -> object:
+        return reply
+
+    monkeypatch.setattr(DaemonAsk, "_ask", refuse)
+    ask = DaemonAsk(user="kai", run_dir=harness.run_dir, nudge=lambda: 0, cwd=str(repo))
+    with pytest.raises(CheckNotSentError) as seen:
+        await ask.confirmed("kai:abc", 0)
+    assert str(seen.value).isprintable()
+
+
+async def test_an_unreadable_reply_is_a_check_that_was_not_sent(
+    harness: Harness, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def junk(_self: DaemonAsk, _key: str, _seconds: float) -> object:
+        return "junk"
+
+    monkeypatch.setattr(DaemonAsk, "_ask", junk)
+    ask = DaemonAsk(user="kai", run_dir=harness.run_dir, nudge=lambda: 0, cwd=str(repo))
+    with pytest.raises(CheckNotSentError, match="biff daemon restart"):
+        await ask.confirmed("kai:abc", 0)
+
+
 async def test_a_float_wait_reaches_the_session(
     harness: Harness, bus: TalkBus, repo: Path
 ) -> None:
