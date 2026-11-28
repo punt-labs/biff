@@ -4,6 +4,14 @@
 
 ### Added
 
+- With `mcp.transport: daemon`, the Claude Code SessionStart and SessionEnd hooks
+  go through biffd. SessionStart sends a hello as client `hook`, asks `status` for
+  the session key and tty name biffd chose, and writes the active marker, unread
+  status file and handle; SessionEnd sends `end`, then removes those files. Each
+  call has an 8 s deadline, and a failure is logged without breaking the session.
+  `session-end.sh` now hands the hook payload to its detached call, with a read
+  bounded at 2 s, so the call knows which session ended. The sentinel path stays
+  for the in-process transport.
 - The biffd `end` method ends the caller's own harness session: it files the mail
   the session holds back, drains its inbox into the user mailbox, releases its
   tty name (only if it still holds it), deletes its row and appends a logout. A
