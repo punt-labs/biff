@@ -1597,10 +1597,10 @@
   },
   "src/biff/server/channel_check.py": {
     "efferent_coupling": 1.0,
-    "public_names": 4.0,
+    "public_names": 3.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.6,
-    "avg_lcom": 0.6
+    "max_lcom": 0.524,
+    "avg_lcom": 0.524
   },
   "src/biff/server/channel_check_sub.py": {
     "efferent_coupling": 3.0,
@@ -1620,12 +1620,12 @@
     "efferent_coupling": 10.0,
     "public_names": 5.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.692,
-    "avg_lcom": 0.692
+    "max_lcom": 0.709,
+    "avg_lcom": 0.709
   },
   "src/biff/server/channel_gate.py": {
     "efferent_coupling": 2.0,
-    "public_names": 3.0,
+    "public_names": 4.0,
     "circular_imports": 0.0,
     "max_lcom": 0.3,
     "avg_lcom": 0.3
@@ -1653,7 +1653,7 @@
   },
   "src/biff/server/channel_reading.py": {
     "efferent_coupling": 1.0,
-    "public_names": 4.0,
+    "public_names": 5.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -1672,8 +1672,29 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/server/daemon_arrivals.py": {
+    "efferent_coupling": 4.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.59,
+    "avg_lcom": 0.295
+  },
   "src/biff/server/daemon_calls.py": {
     "efferent_coupling": 3.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
+  },
+  "src/biff/server/daemon_channel.py": {
+    "efferent_coupling": 4.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.6,
+    "avg_lcom": 0.6
+  },
+  "src/biff/server/daemon_channel_tools.py": {
+    "efferent_coupling": 2.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.333,
@@ -1736,7 +1757,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/server/mcp_assembly.py": {
-    "efferent_coupling": 10.0,
+    "efferent_coupling": 12.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -1746,8 +1767,8 @@
     "efferent_coupling": 2.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.571,
-    "avg_lcom": 0.571
+    "max_lcom": 0.611,
+    "avg_lcom": 0.611
   },
   "src/biff/server/mcp_protocol.py": {
     "efferent_coupling": 1.0,

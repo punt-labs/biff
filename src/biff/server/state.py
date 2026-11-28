@@ -43,10 +43,6 @@ class RepoToggle(Protocol):
         ...
 
 
-def _ignore_session(_routing: SessionRouting) -> None:
-    """Do nothing: the in-process server follows its session itself."""
-
-
 @dataclass(frozen=True)
 class ServerState:
     """Immutable container for all server-wide shared state."""
@@ -89,7 +85,7 @@ class ServerState:
     # Called with the session ``bind`` points the server at; the channel feed of
     # a client of biffd follows the session through it.
     session_bound: Callable[[SessionRouting], None] = field(
-        default=_ignore_session, compare=False
+        default=lambda _routing: None, compare=False
     )
     # The session this server is bound to, set once by ``bind`` on the first
     # identified call.  ``None`` until then.
