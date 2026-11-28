@@ -1,4 +1,4 @@
-"""Malformed-frame handling in ``NatsRelay._fetch_from_subject``.
+"""Malformed-frame handling in ``InboxFetch._fetch_from_subject``.
 
 A frame that fails ``Message`` validation must never be acked: acking
 removes it from the WORK_QUEUE as if delivered, silently destroying the
@@ -14,7 +14,9 @@ These tests mock JetStream at the boundary, so they run in tiers 1-2 (no
 
 from __future__ import annotations
 
+import itertools
 import logging
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,7 +24,8 @@ import pytest
 from biff.models import Message
 from biff.nats_relay import NatsRelay
 
-_LOGGER_NAME = "biff.nats_relay"
+_LOGGER_NAME = "biff.nats_inbox_fetch"
+_REPLIES = itertools.count()
 _SUBJECT = "biff.test.inbox.eric.tty2"
 
 # Short enough to survive pydantic's input-value truncation in a
@@ -31,12 +34,25 @@ _SENTINEL = "LEAK_SEKRIT_body"
 
 
 def _raw(data: bytes) -> MagicMock:
-    """A JetStream ``Msg`` stand-in recording ack/term calls."""
+    """A JetStream ``Msg`` stand-in recording ack calls; a term is a request."""
     raw = MagicMock()
     raw.data = data
-    raw.ack = AsyncMock()
-    raw.term = AsyncMock()
+    raw.ack_sync = AsyncMock()
+    raw.reply = f"$JS.ACK.{next(_REPLIES)}"
     return raw
+
+
+def _assert_termed(relay: NatsRelay, raw: MagicMock) -> None:
+    """The term went to the server as a request, which it answers once processed."""
+    assert relay._nc is not None
+    request = cast("AsyncMock", relay._nc.request)
+    request.assert_awaited_once_with(raw.reply, b"+TERM", timeout=1.0)
+
+
+def _assert_not_termed(relay: NatsRelay, raw: MagicMock) -> None:
+    assert relay._nc is not None
+    request = cast("AsyncMock", relay._nc.request)
+    assert raw.reply not in [call.args[0] for call in request.await_args_list]
 
 
 def _valid_payload(body: str) -> bytes:
@@ -49,7 +65,7 @@ def _relay_with(raw_msgs: list[MagicMock]) -> tuple[NatsRelay, MagicMock]:
     relay = NatsRelay(url="tls://fake:4222", repo_name="test")
     nc = MagicMock()
     nc.is_closed = False
-    nc.flush = AsyncMock()
+    nc.request = AsyncMock()
     relay._nc = nc
     sub = MagicMock()
     sub.fetch = AsyncMock(return_value=raw_msgs)
@@ -69,7 +85,7 @@ class TestMalformedFrameNotSilentlyDropped:
     ) -> None:
         relay, js = _relay_with([_raw(b"not json")])
         await relay._fetch_from_subject(
-            js, subject=f"biff.test.inbox.{suffix}", durable="d"
+            js, subject=f"biff.test.inbox.{suffix}", durable="d", stream="s"
         )
         assert f"in {inbox} inbox" in caplog.text
         assert "eric" not in caplog.text
@@ -82,11 +98,13 @@ class TestMalformedFrameNotSilentlyDropped:
         relay, js = _relay_with([bad])
         caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
 
-        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
 
         assert messages == []
-        bad.ack.assert_not_awaited()  # never acked-and-deleted as if delivered
-        bad.term.assert_awaited_once()  # dead-lettered via JetStream term
+        bad.ack_sync.assert_not_awaited()  # never acked-and-deleted as if delivered
+        _assert_termed(relay, bad)
         assert any(
             r.levelno == logging.ERROR and "malformed" in r.getMessage().lower()
             for r in caplog.records
@@ -96,24 +114,40 @@ class TestMalformedFrameNotSilentlyDropped:
         good = _raw(_valid_payload("ok"))
         relay, js = _relay_with([good])
 
-        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
 
         assert [m.body for m in messages] == ["ok"]
-        good.ack.assert_awaited_once()  # WORK_QUEUE deletes on ack
-        good.term.assert_not_awaited()
+        good.ack_sync.assert_awaited_once()  # WORK_QUEUE deletes on ack
+        _assert_not_termed(relay, good)
+
+    async def test_an_unconfirmed_ack_still_returns_the_message(self) -> None:
+        """Delivered at least once: an ack the server did not confirm drops nothing."""
+        good = _raw(_valid_payload("keep"))
+        good.ack_sync = AsyncMock(side_effect=TimeoutError)
+        relay, js = _relay_with([good])
+
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
+
+        assert [m.body for m in messages] == ["keep"]
 
     async def test_mixed_batch_terms_bad_acks_good(self) -> None:
         good = _raw(_valid_payload("keep"))
         bad = _raw(b"\xff\xfe not json")
         relay, js = _relay_with([good, bad])
 
-        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
 
         assert [m.body for m in messages] == ["keep"]
-        good.ack.assert_awaited_once()
-        good.term.assert_not_awaited()
-        bad.ack.assert_not_awaited()
-        bad.term.assert_awaited_once()
+        good.ack_sync.assert_awaited_once()
+        _assert_not_termed(relay, good)
+        bad.ack_sync.assert_not_awaited()
+        _assert_termed(relay, bad)
 
 
 def _too_long_body_frame() -> bytes:
@@ -150,10 +184,12 @@ class TestMalformedFrameLogDoesNotLeakContent:
         relay, js = _relay_with([bad])
         caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
 
-        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
 
         assert messages == []
-        bad.term.assert_awaited_once()  # still poison-terminated
-        bad.ack.assert_not_awaited()
+        _assert_termed(relay, bad)
+        bad.ack_sync.assert_not_awaited()
         for record in caplog.records:
             assert _SENTINEL not in record.getMessage()

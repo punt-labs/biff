@@ -9963,38 +9963,52 @@ stop that drops a settled read's mail does too (`-noflight.tex`) or breaks
 `lastStop = sGraceful => stopLost = 0` when it counts the loss
 (`-noflight-counted.tex`).
 
-**Divergence from the model.** The durable model keeps the record across a daemon
-stop. The daemon holds harness records in memory, so any stop forgets them, which
-the spec states as `GracefulStopForget` and `ProcessLossForget`. After a
-graceful stop nothing is lost: the outbox is back in the relay, and the unread
-mail in the restarted session's own relay inbox is never drained, which the spec
-counts as `strandedN`. After a process loss the outbox is lost as well. Stranded
-mail is that session-inbox mail only: mail already filed in
-the user's mailbox (by an end, or addressed to the user) is untouched by the loss
-of a record. It stays in the relay until its own retention, and is found again if
-the session resumes under the same id. The row and the tty name stay as well, and
-age out by the relay's own lifetime on NATS (`RowAgesOut`, `TtyAgesOut`). The
-local relay (no relay URL) keeps a name reservation as a lockfile with no
-lifetime, so there `TtyAgesOut` does not happen and a forgotten session holds its
-name until something releases it. That is not wholly safe: a forgotten session
-holds its name and its unread session-inbox mail is stranded. The spec keeps the
-durable and the forgetting stops; the properties about the record hold unless the
-stop forgot it. Persisting the records, or scanning the relay's rows at start,
-closes it: PL-1771. The tests of the graceful stop restart a daemon that has
-forgotten its records, so they exercise `GracefulStopForget`. `GracefulStopForget` counts the
-mail it files back as stranded: that another session finds and reads it is not
-verified, because that needs a second session in the model, and belongs to the
-PL-1771 model change (the durable record fix).
+**Durable records.** The code keeps the records (PL-1771, done:
+`harness_records.py`, `session_restore.py`), so the spec's stops leave the
+record behind (`rsStopped`) and a start deals with each record once.
+`RestoreRecord` builds the session again, dormant, when its repository is
+there and the relay still lists its row; retention resumes from the stored
+dormant time, and a session that had a connection at the stop starts a fresh
+retention. `RestoreFail` keeps the record and counts the failed start (the
+code retries at 5, 15 and 45 s while it runs and at the next start).
+`DropRecord` removes it, with a cause: the repository directory is gone
+(`dRepoGone`, at once), the relay lists no row (`dRowGone`: the session ended
+and its record outlived the end, or the row aged out while down), or five
+starts in a row failed (`dFailedStarts`; the model bounds the count at 2).
+`HelloFirst` is a hello that arrives while a failed restore is being retried, and wins:
+`BiffDaemon.start` restores every record before it serves, so no hello can come first
+at the first attempt. `RestoreFail` does not depend on the row: the relay lookup
+itself can fail. The tty name ages out independently of the record, so under a
+stopped record it may already be gone. A restored session keeps its row's tty name and claims
+none (`PresenceRow.ensure` claims only for a missing row, and a missing row is a
+drop at restore), so it may hold a row without the name's reservation. A hello
+whose record cannot be written is refused, so no session exists without one.
+The spec's old forgetting stops (`GracefulStopForget`, `ProcessLossForget`)
+are the control `claude-session-end-nopersist.tex`: it strands mail with no
+drop behind it, which violates the invariant that mail is stranded only by a
+drop (`strandedN > 0` implies a drop cause).
 
-**Audit status.** `claude-session-end.audit.json` reports 14 of 15 clauses
-covered and one GAP: `ProcessLoss`, which a crash makes untestable in-process
-(the only test that asserted an outbox loss was removed with the hand-back). It
-was reconciled by reading the tests against each clause (the z-spec audit tool
-was not run), and its rows name the tests. The refile budget and the late
-broadcast fetch are listed as limits without a test (PL-1777). The residual
-after this change is PL-1770: the unconditional tty name releases in the
-in-process paths (`session_registry`, `tty.py`), which go with the in-process
-server.
+One limit is deliberate, and stated, not repaired: the mail waiting in the
+relay inbox of a dropped session stays there, because the relay is not stored
+in the record and so cannot be reached from it. The model counts it as
+`strandedN` (not conserved to the user), and only a drop strands. The spec's
+`AG ... EF` check on a stopped record is reachability only: no fairness is stated
+and no liveness is claimed. The model
+also pauses the retention age while the daemon is down; the code's clock,
+resumed from the stored dormant time, runs on.
+
+**Audit status.** `claude-session-end.audit.json` reports 20 of 21 clauses
+covered and one GAP (a crash during a read, which no test exercises), reconciled by reading the tests against each clause
+(the z-spec audit tool was not run); its rows name them. `ProcessLoss` with no
+read running is covered by an in-process kill (`_kill` in
+`test_durable_sessions.py`), not a process death, so its confidence is medium;
+its test kills after the read replied. Limits without a test: the
+refile deadline's remainder and the late broadcast fetch (PL-1777, the open
+residual: the remainder is dropped and logged, and a spill transition will be
+modelled with that fix), the pre-storage crash (PL-1753), and the stranded
+mail of a dropped session. The residual after this change is PL-1770: the
+unconditional tty name releases in the in-process paths (`session_registry`,
+`tty.py`), which go with the in-process server.
 
 **Rejected.**
 
