@@ -42,9 +42,7 @@ class McpTransport(StrEnum):
             msg = f"mcp must be a mapping with a transport key, got {section!r}"
             raise SystemExit(msg)
         settings = cast("dict[str, object]", section)
-        return cls._named(
-            settings.get("transport", cls.DAEMON.value), "mcp.transport"
-        )
+        return cls._named(settings.get("transport", cls.DAEMON.value), "mcp.transport")
 
     @classmethod
     def _named(cls, value: object, where: str) -> McpTransport:
