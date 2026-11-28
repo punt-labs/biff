@@ -26,6 +26,7 @@ from biff.daemon.session_methods import SessionMethods
 from biff.daemon.session_restore import SessionRestore
 from biff.daemon.session_sweep import SessionSweeper
 from biff.daemon.sessions import SessionTable
+from biff.daemon.spill import Spill
 from biff.daemon.tasks import Supervised
 from biff.frame_base import MAX_FRAME_BYTES
 
@@ -69,6 +70,7 @@ class BiffDaemon:
         "_restore",
         "_run_dir",
         "_server",
+        "_spill",
         "_started",
         "_sweep_interval",
         "_sweep_task",
@@ -79,6 +81,7 @@ class BiffDaemon:
     _port: int
     _core: DaemonCore
     _restore: SessionRestore
+    _spill: Spill
     _server: Server | None
     _started: float
     _sweeper: SessionSweeper
@@ -131,6 +134,7 @@ class BiffDaemon:
             request_timeout=request_timeout,
         )
         self._restore = SessionRestore(records, self._core)
+        self._spill = Spill(sessions.root.parent / "handback-spill.json")
         self._server = None
         self._started = 0.0
         self._sweeper = SessionSweeper(sessions, resolver, pool, live)
@@ -152,6 +156,7 @@ class BiffDaemon:
 
     async def start(self) -> None:
         """Create the token, bind the loopback listener and record its port."""
+        await self._spill.refile(self._core)  # mail the last stop could not file
         await self._restore.run()
         handler = ConnectionHandler(self._run_dir.ensure_token(), self._core)
         self._server = await serve(
@@ -192,7 +197,7 @@ class BiffDaemon:
                 await server.wait_closed()
         finally:
             try:
-                await Handback.close_relays(self._core)
+                await Handback.close_relays(self._core, self._spill)
             finally:
                 self._run_dir.remove_port(owned_by=self._port)
 

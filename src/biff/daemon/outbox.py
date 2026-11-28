@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
     import uuid
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from biff.models import Message
 
@@ -31,16 +31,18 @@ class Outbox:
     fetched is lost if the client dies: delivery is at least once, never silent.
     """
 
-    __slots__ = ("_held", "_retains")
+    __slots__ = ("_held", "_retains", "_sink")
 
     _held: dict[uuid.UUID, Message]
     _retains: bool
+    _sink: Callable[[Sequence[Message]], None] | None
 
     def __new__(cls, *, retains: bool) -> Self:
         """Create an empty outbox; *retains* is whether the relay consumes on fetch."""
         self = super().__new__(cls)
         self._held = {}
         self._retains = retains
+        self._sink = None
         return self
 
     def __len__(self) -> int:
@@ -49,12 +51,22 @@ class Outbox:
 
     def merge(self, fetched: Sequence[Message]) -> list[Message]:
         """Hold *fetched*, replacing a held message its copy came back for; list all."""
-        if self._retains:
+        if self._retains and self._sink is not None:
+            self._sink(fetched)  # sealed: nothing new is held, it goes where it is kept
+        elif self._retains:
             for message in fetched:
                 self._held.pop(message.original_in(self._held), None)
                 self._held[message.id] = message
             fetched = list(self._held.values())
         return sorted(fetched, key=lambda m: (m.timestamp, m.id))
+
+    def seal(self, sink: Callable[[Sequence[Message]], None]) -> None:
+        """Stop holding: what is fetched from now on goes to *sink*.
+
+        For a daemon that is stopping: it gives back what is held, and a fetch
+        that finishes after that would be held in a process about to exit.
+        """
+        self._sink = sink
 
     def held(self) -> list[Message]:
         """Return every message held, oldest first."""

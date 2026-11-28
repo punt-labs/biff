@@ -98,6 +98,34 @@ class BroadcastStuckRelay(ConsumingRelay):
         return await super().fetch_user_inbox(user)
 
 
+class PacedRelay(ConsumingRelay):
+    """A consuming relay with slow publishes and a broadcast fetch that can pause."""
+
+    pace = 0.0
+    publishing = asyncio.Event()
+    hold_fetch = False
+    fetched = asyncio.Event()
+    release = asyncio.Event()
+
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
+        type(self).publishing.set()
+        await asyncio.sleep(type(self).pace)
+        await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
+
+    async def fetch_user_inbox(self, user: str) -> list[Message]:
+        unread = await super().fetch_user_inbox(user)  # the relay gave the mail up
+        if type(self).hold_fetch:
+            type(self).fetched.set()
+            await type(self).release.wait()
+        return unread
+
+
 def _bodies(result: object) -> list[str]:
     rows = cast("list[dict[str, str]]", cast("dict[str, object]", result)["data"])
     return [row["body"] for row in rows]
@@ -161,9 +189,9 @@ async def test_one_held_message_the_relay_refuses_does_not_drop_the_others(
     await kai.request_held("read")  # all three are held, none confirmed
     monkeypatch.setattr(FlakyRelay, "failing", 1)  # the first publish at stop fails
 
-    await harness.daemon.stop()
+    await harness.daemon.stop()  # m1 is refused: it is spilled, m2 and m3 filed
 
-    assert await _read_after_restart(harness, tmp_path) == ["m2", "m3"]
+    assert await _read_after_restart(harness, tmp_path) == ["m1", "m2", "m3"]
 
 
 async def test_a_read_that_never_finishes_does_not_hold_the_stop_or_the_held_mail(
@@ -235,3 +263,48 @@ async def test_slow_publishes_at_stop_end_at_a_total_budget_and_are_logged(
         await harness.daemon.stop()
 
     assert "3 held messages were not given back" in caplog.text
+
+
+async def test_mail_the_budget_left_unfiled_is_filed_back_at_the_next_start(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Handback, "REFILE_SECONDS", 0.2)
+    harness.factory.relay_type = PacedRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    for body in ("m1", "m2", "m3"):
+        await eric.request("write", to="kai", message=body)
+    await kai.request_held("read")  # all three are held, none confirmed
+    monkeypatch.setattr(PacedRelay, "pace", 0.15)  # the budget ends in the second
+
+    await harness.daemon.stop()
+
+    assert await _read_after_restart(harness, tmp_path) == ["m1", "m2", "m3"]
+
+
+async def test_a_fetch_that_finishes_during_the_hand_back_is_not_lost(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Handback, "SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(PacedRelay, "publishing", asyncio.Event())
+    monkeypatch.setattr(PacedRelay, "fetched", asyncio.Event())
+    monkeypatch.setattr(PacedRelay, "release", asyncio.Event())
+    harness.factory.relay_type = PacedRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="m1")
+    await kai.request_held("read")  # m1 is held, unconfirmed
+    await eric.request("write", to="kai", message="m2")
+    monkeypatch.setattr(PacedRelay, "hold_fetch", True)
+    reading = asyncio.create_task(kai.request("read"))
+    await asyncio.wait_for(PacedRelay.fetched.wait(), _WAIT)  # m2 is in flight
+    monkeypatch.setattr(PacedRelay, "pace", 0.3)  # publishing m1 takes a while
+
+    PacedRelay.publishing.clear()  # the earlier writes published too
+    stopping = asyncio.create_task(harness.daemon.stop())
+    await asyncio.wait_for(PacedRelay.publishing.wait(), _WAIT)
+    PacedRelay.release.set()  # the fetch ends while m1 is being filed back
+    await asyncio.wait_for(stopping, _WAIT)
+
+    await asyncio.gather(reading, return_exceptions=True)
+    assert await _read_after_restart(harness, tmp_path) == ["m1", "m2"]

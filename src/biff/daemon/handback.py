@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import partial
 from typing import TYPE_CHECKING, ClassVar, final
 
 from biff.daemon.held_mail import HeldMail
@@ -12,6 +13,7 @@ from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
     from biff.daemon.connection import DaemonCore
+    from biff.daemon.spill import Spill
 
 __all__ = ["Handback"]
 
@@ -30,33 +32,39 @@ class Handback:
     The whole restart command has 30 seconds (``Supervisor.run``), so each step
     has a budget that leaves room for the next: a few seconds for reads in
     flight, then the held mail as long as it takes within a second budget.  What
-    a read that is still running has not yet taken stays in the relay.
+    a read that is still running has not yet taken stays in the relay; what could
+    not be filed in time, or is fetched after the hand-back began, is spilled to
+    a file that the next start files back before it serves.
     """
 
     SETTLE_SECONDS: ClassVar[float] = 5.0
     REFILE_SECONDS: ClassVar[float] = 15.0
 
     @staticmethod
-    async def close_relays(core: DaemonCore) -> None:
+    async def close_relays(core: DaemonCore, spill: Spill) -> None:
         """Let started reads finish, give back held mail, and close the relays.
 
         Reads get :attr:`SETTLE_SECONDS` to finish; those still running after
         that are left, and the mail held so far is given back, within
-        :attr:`REFILE_SECONDS` in all.  The relays are closed even if giving the
-        mail back raised.
+        :attr:`REFILE_SECONDS` in all.  Whatever could not be given back, or
+        arrives from a read that ends later, goes to *spill* for the next start.
+        The relays are closed even if giving the mail back raised.
         """
         try:
             await Uncancellable.settle(Handback.SETTLE_SECONDS)
-            await Handback._give_back(core)
+            await Handback._give_back(core, spill)
         finally:
             await core.pool.close()
 
     @staticmethod
-    async def _give_back(core: DaemonCore) -> None:
-        """File every session's held mail back, until the budget is spent."""
+    async def _give_back(core: DaemonCore, spill: Spill) -> None:
+        """File every session's held mail back, and spill what is left."""
+        sessions = core.sessions.snapshot()  # after the wait: reads have had their time
+        for session in sessions.values():
+            session.outbox.seal(partial(spill.hold, session))  # late mail is spilled
         try:
             async with asyncio.timeout(Handback.REFILE_SECONDS):
-                for key, session in core.sessions.snapshot().items():
+                for key, session in sessions.items():
                     try:
                         await HeldMail.refile(session)
                     except RELAY_ERRORS:
@@ -66,9 +74,10 @@ class Handback:
                             exc_info=True,
                         )
         except TimeoutError:
-            left = sum(len(s.outbox) for s in core.sessions.snapshot().values())
             logger.error(
                 "%d held messages were not given back within %g s",
-                left,
+                sum(len(s.outbox) for s in sessions.values()),
                 Handback.REFILE_SECONDS,
             )
+        for session in sessions.values():
+            spill.hold(session, session.outbox.held())
