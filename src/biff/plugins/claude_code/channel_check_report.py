@@ -1,11 +1,9 @@
 """``biff doctor``'s end-to-end channel check: ask each session, report each answer.
 
-For this user's running sessions in the repo, doctor sends a channel check over
-the relay and waits for the model to acknowledge it with ``channel_ack`` (the
-server side is ``biff.server.channel_check``).  Every line is informational:
-polling still delivers messages, so a channel that is not confirmed never fails
-doctor.  Names that come from the relay are stripped of control characters
-before they are printed.
+For this user's running sessions, doctor has biffd send a channel check and wait for
+the model's ``channel_ack`` (``biff.daemon.channel_check_methods``).  Every line is
+informational: polling still delivers messages, so an unconfirmed channel never fails
+doctor.  Relay-supplied names are stripped of control characters before printing.
 """
 
 from __future__ import annotations
@@ -16,8 +14,8 @@ from typing import TYPE_CHECKING, Self, final
 
 from nats.errors import Error as NatsError
 
-from biff._formatting import terminal_safe
-from biff.formatting import sanitized_address
+from biff.formatting import sanitized_address, terminal_safe
+from biff.plugins.claude_code.channel_check_ask import CheckNotSentError, DaemonAsk
 from biff.plugins.contract import CheckResult
 from biff.relay import PRESENCE_LIVENESS_SECONDS
 
@@ -25,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from biff.models import UserSession
+    from biff.plugins.claude_code.channel_check_ask import ChannelAsk
     from biff.plugins.claude_code.channel_check_relay import CheckRelay
     from biff.plugins.claude_code.channel_check_target import CheckTarget
 
@@ -46,8 +45,9 @@ _NOT_CONFIRMED = (
 class ChannelCheckReport:
     """Run the check against a target and turn the answers into doctor lines."""
 
-    __slots__ = ("_now", "_target", "_timeout")
+    __slots__ = ("_asker", "_now", "_target", "_timeout")
 
+    _asker: ChannelAsk
     _target: CheckTarget
     _timeout: float
     _now: Callable[[], datetime]
@@ -56,11 +56,13 @@ class ChannelCheckReport:
         cls,
         target: CheckTarget,
         *,
+        ask: Callable[[], ChannelAsk] = lambda: DaemonAsk.for_this_process(None),
         timeout: float = WAIT_SECONDS,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> Self:
-        """Check *target*, waiting up to *timeout* seconds for the answers."""
+        """Check *target*, waiting up to *timeout* seconds; *ask* makes biffd's ask."""
         self = super().__new__(cls)
+        self._asker = ask()
         self._target = target
         self._timeout = timeout
         self._now = now
@@ -77,7 +79,7 @@ class ChannelCheckReport:
                 return (
                     self._note("nothing to check: no running biff session", ok=True),
                 )
-            lines = await asyncio.gather(*(self._ask(relay, s) for s in sessions))
+            lines = await asyncio.gather(*(self._ask(s) for s in sessions))
         except ConnectionError:
             return (self._note(f"{_NEEDS_NATS} (the relay is unreachable)"),)
         finally:
@@ -95,10 +97,8 @@ class ChannelCheckReport:
             try:
                 sessions = await relay.list_sessions_for_user(user)
             except ValueError:
-                shown = terminal_safe(user)
-                notes.append(
-                    self._note(f"cannot check {shown!r}: not a valid biff handle")
-                )
+                shown = f"cannot check {terminal_safe(user)!r}"
+                notes.append(self._note(f"{shown}: not a valid biff handle"))
             except ConnectionError:
                 raise  # the relay is unreachable: results() says so once
             except (OSError, TimeoutError, NatsError):
@@ -116,16 +116,13 @@ class ChannelCheckReport:
                 ]
         return live, notes
 
-    async def _ask(self, relay: CheckRelay, session: UserSession) -> CheckResult:
+    async def _ask(self, session: UserSession) -> CheckResult:
         name = sanitized_address(session.user, session.tty_name or session.tty)
+        key = f"{session.user}:{session.tty}"
         try:
-            pending = await relay.request_channel_check(f"{session.user}:{session.tty}")
-        except (OSError, TimeoutError, NatsError):
-            return self._line(name, "channel not confirmed (the check was not sent)")
-        try:
-            is_live = await pending.confirmed(self._timeout)
-        finally:
-            await pending.close()
+            is_live = await self._asker.confirmed(key, self._timeout)
+        except CheckNotSentError as exc:
+            return self._line(name, f"channel not confirmed (not sent: {exc})")
         if is_live:
             return self._line(name, "channel live", ok=True)
         return self._line(name, _NOT_CONFIRMED)

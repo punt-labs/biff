@@ -48,7 +48,8 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
-from biff.channel_check_wire import CheckAck, CheckWire, PendingCheck
+from biff.channel_check_pending import CheckRefusal, PendingCheck
+from biff.channel_check_wire import CheckAck, CheckWire
 from biff.models import (
     Message,
     RelayAuth,
@@ -60,6 +61,7 @@ from biff.models import (
 )
 from biff.nats_connection import NatsSupport, Scrub
 from biff.nats_inbox_fetch import InboxFetch
+from biff.nats_missing import MissingStore, StoreMissingError
 from biff.session_edit import SessionChangedError, SessionEdit
 from biff.tty import (
     SID_HINT_NAMESPACE,
@@ -83,7 +85,7 @@ _STREAM_MAX_BYTES = 100 * 1024 * 1024  # 100 MiB — shared stream, all repos' m
 # The daemon's spill files mail back under an id derived from the original's, and
 # retries run every few minutes, so the default 2 minutes is too short.  A stream
 # that already exists keeps the window it was created with.
-INBOX_DUPLICATE_WINDOW_SECONDS = 15 * 60.0
+_INBOX_DUPLICATE_WINDOW_SECONDS = 15 * 60.0
 _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
@@ -498,6 +500,7 @@ class NatsRelay(InboxFetch):
         # ``is_connected`` does not.
         self._reconnect_epoch = 0
         self._reconnect_listeners: list[Callable[[], None]] = []
+        self._missing = MissingStore(logger)
         # Session keys for which heartbeat() has already logged a missing-
         # session warning -- caps the warning at once per key rather than
         # once per heartbeat tick, which runs on a fixed interval forever.
@@ -932,7 +935,7 @@ class NatsRelay(InboxFetch):
             subjects=[f"{self._stream_prefix}.*.inbox.>"],
             retention=RetentionPolicy.WORK_QUEUE,
             max_bytes=_STREAM_MAX_BYTES,
-            duplicate_window=INBOX_DUPLICATE_WINDOW_SECONDS,
+            duplicate_window=_INBOX_DUPLICATE_WINDOW_SECONDS,
         )
         try:
             await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
@@ -1289,8 +1292,8 @@ class NatsRelay(InboxFetch):
         what ``biff doctor`` calls: it sends the request and waits up to 30
         seconds with :meth:`PendingCheck.confirmed`.
         """
-        wire = CheckWire(await self.get_nc())
-        return await wire.request(self.channel_check_subject(session_key), session_key)
+        subject = self.channel_check_subject(session_key)
+        return await PendingCheck.start(await self.get_nc(), subject, session_key)
 
     async def publish_channel_check_ack(
         self, reply: str, session_key: str, token: str
@@ -1298,6 +1301,11 @@ class NatsRelay(InboxFetch):
         """Tell the doctor listening on *reply* that *session_key* saw the check."""
         wire = CheckWire(await self._live_nc_or_reconnect())
         await wire.acknowledge(reply, CheckAck(session_key, token))
+
+    async def publish_channel_check_refusal(self, reply: str, reason: str) -> None:
+        """Tell the doctor listening on *reply* why its request was refused."""
+        wire = CheckWire(await self._live_nc_or_reconnect())
+        await wire.refuse(reply, CheckRefusal(reason).to_payload())
 
     def inbox_notify_subject(self, repo: str, user: str) -> str:
         """NATS core subject for a broadcast-message wake poke to *user* in *repo*.
@@ -1675,13 +1683,15 @@ class NatsRelay(InboxFetch):
         user_subject = self._user_subject(user)
 
         tty_count = user_count = 0
-        with suppress(NotFoundError):
+        try:
             tty_info = await self._tracked(
                 "stream_info",
                 js.stream_info(self._stream_name, subjects_filter=tty_subject),
             )
             if tty_info.state.subjects:
                 tty_count = tty_info.state.subjects.get(tty_subject, 0)
+        except NotFoundError as exc:
+            self._require_stream(exc)
         # Re-anchor to the current connection: the first _tracked's await
         # may have let a concurrent loop rebuild self._nc, leaving `js`
         # stale.  Fast path returns cached handles, so `owner = self._nc` at
@@ -1697,9 +1707,20 @@ class NatsRelay(InboxFetch):
             )
             if user_info.state.subjects:
                 user_count = user_info.state.subjects.get(user_subject, 0)
-        except NotFoundError:
-            pass
+        except NotFoundError as exc:
+            self._require_stream(exc)
+        self._missing.found(self._stream_name)
         return UnreadSummary(count=tty_count + user_count)
+
+    def _require_stream(self, exc: NotFoundError) -> None:
+        """Raise when *exc* says the inbox stream is gone; an absent subject is empty.
+
+        An empty inbox is normal, but a purged stream reads the same, so it is
+        warned about once and fails the read, which a poll reports as degraded.
+        """
+        if self._missing.gone(exc, self._stream_name):
+            msg = f"stream {self._stream_name} is missing"
+            raise StoreMissingError(msg) from exc
 
     def add_reconnect_listener(self, callback: Callable[[], None]) -> None:
         """Call *callback* after each in-place reconnect, once subscriptions are live.
@@ -1729,10 +1750,12 @@ class NatsRelay(InboxFetch):
                 raw = await self._tracked(
                     "get_last_msg", js.get_last_msg(self._stream_name, subject)
                 )
-            except (NotFoundError, BucketNotFoundError):
+            except NotFoundError as exc:
+                self._require_stream(exc)
                 logger.debug("no inbox message on %s in %s", subject, self._repo_name)
                 continue
             seqs.append(raw.seq or 0)
+        self._missing.found(self._stream_name)
         return max(seqs)
 
     # -- Presence --
@@ -2197,7 +2220,10 @@ class NatsRelay(InboxFetch):
             if entry.value is None:
                 return None
             wall = WallPost.model_validate_json(entry.value)
-        except (KeyNotFoundError, BucketNotFoundError, ValidationError, ValueError):
+        except BucketNotFoundError as exc:
+            self._missing.gone(exc, self._kv_bucket)
+            return None
+        except (KeyNotFoundError, ValidationError, ValueError):
             return None
         if wall.is_expired:
             # Re-resolve the handle immediately before use (the same
@@ -2207,9 +2233,11 @@ class NatsRelay(InboxFetch):
             # outer ``kv`` is bound to, stranding this delete on a closed
             # connection instead of rebuilding.
             _, kv = await self._ensure_connected()
-            with suppress(KeyNotFoundError, BucketNotFoundError):
-                await kv.delete(key)
-            return None
+            # Delete at the revision read: a wall posted since then is not
+            # ours to remove, so read again and return that one.
+            if await self._delete_at(kv, key, entry.revision):
+                return None
+            return await self.get_wall(repo=repo)
         return wall
 
     async def set_wall_for_repo(self, repo: str, wall: WallPost | None) -> None:

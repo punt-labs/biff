@@ -23,7 +23,9 @@ from biff.daemon.spill import Spill
 from biff.daemon.spill_entry import Held, Spilled
 from biff.daemon.spill_file import SpillFile
 from biff.models import Message
-from biff.nats_relay import INBOX_DUPLICATE_WINDOW_SECONDS
+from biff.nats_relay import (
+    _INBOX_DUPLICATE_WINDOW_SECONDS,  # pyright: ignore[reportPrivateUsage]
+)
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
 from tests.test_daemon.claude_seats import until
@@ -737,7 +739,7 @@ async def test_relays_close_at_the_same_time_not_one_after_another(
 
 
 def test_the_inbox_stream_remembers_ids_longer_than_the_spill_retries() -> None:
-    assert INBOX_DUPLICATE_WINDOW_SECONDS >= 2 * Spill.RETRY_INTERVAL
+    assert _INBOX_DUPLICATE_WINDOW_SECONDS >= 2 * Spill.RETRY_INTERVAL
 
 
 async def test_the_shelf_is_retried_at_every_start(

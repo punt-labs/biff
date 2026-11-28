@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from biff.commands import CommandResult
+from biff.daemon.arrivals_reading import ArrivalsReading
+from biff.daemon.channel_check_methods import ChannelCheckMethods
 from biff.daemon.session_end import SessionEnd
 from biff.daemon.session_host import SessionHost
 from biff.daemon.session_pointer import CurrentPointer
@@ -58,6 +60,8 @@ class SessionMethods:
             "session_use": self._use,
             "session_end": self._ender.end_shell,
             "end": self._ender.end,
+            "arrivals": ArrivalsReading.handle,
+            "channel_ack": ChannelCheckMethods.ack,
         }
         return self
 
