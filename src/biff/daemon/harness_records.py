@@ -177,6 +177,11 @@ class HarnessRecords:
         try:
             changed = step(self._read(path))
             self._write(path, changed)
+        except FileNotFoundError:
+            # The session ended and its record went with it; a connection that
+            # leaves afterwards has nothing to mark.
+            logger.debug("no record at %s to update", path)
+            return None
         except (OSError, ValueError, ValidationError):
             logger.warning("could not update the record at %s", path, exc_info=True)
             return None

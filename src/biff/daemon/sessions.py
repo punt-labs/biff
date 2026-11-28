@@ -279,6 +279,21 @@ class Session:
             )
             raise RefusalError.of(ErrorCode.SESSION_CONFLICT, msg)
 
+    def check_ends_for(self, hello: Hello) -> None:
+        """Refuse an end that is not for this session's user and current run.
+
+        A client that states no run ends for whatever run is current.
+
+        Raises:
+            RefusalError: The hello names another user, or a run that is not the
+                session's current one.
+        """
+        user = hello.user.strip()  # login trims the override, so logout must too
+        if user and user != self._context.user:
+            msg = f"session {self._session_id} belongs to {self._context.user}"
+            raise RefusalError.of(ErrorCode.SESSION_CONFLICT, msg)
+        self._runs.check_current(self._session_id, hello.main_agent_id)
+
     async def revive(self) -> None:
         """Recreate the relay row if it vanished while no one was attached."""
         row = await self._presence.ensure()
@@ -328,6 +343,16 @@ class Session:
             for held in tuple(self._attachments):
                 if held.replaced_by(run):
                     held.replace()
+        return self.attach_as(run)
+
+    def attach_as(self, run: str) -> Attachment:
+        """Attach a connection that claims *run* without admitting it.
+
+        The run is not recorded, so it cannot replace the session's current run.
+        A connection that ends the session uses this: when a newer run is
+        admitted later, this one is replaced like any other of the older run, and
+        its end is refused.
+        """
         attachment = Attachment(self, run)
         self._attachments.add(attachment)
         self._talk.start()
@@ -466,6 +491,26 @@ class SessionTable:
         if session.is_agent and session.is_dormant:
             key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
             self._records.mark(key, datetime.now(UTC))
+
+    async def attach_ending(self, hello: Hello) -> Attachment:
+        """Attach a client that only means to end the session *hello* names.
+
+        The session is the one the daemon holds, on the relay it lives on; the
+        hello's directory is not resolved, so a relay setting changed since the
+        session opened does not matter, and nothing is created or revived.
+
+        Raises:
+            RefusalError: The daemon holds no such session, it belongs to another
+                user, or the run the client ends for is not the session's.
+        """
+        key = SessionKey.of(hello)
+        async with self.guard(key):
+            session = self._sessions.get(key)
+            if session is None:
+                msg = f"biffd holds no session {hello.session_id}; nothing to end"
+                raise RefusalError.of(ErrorCode.SESSION_ENDED, msg)
+            session.check_ends_for(hello)
+            return session.attach_as(hello.main_agent_id)
 
     def holding(self, session_id: str) -> Session | None:
         """Return the shell session *session_id* if the daemon holds it."""

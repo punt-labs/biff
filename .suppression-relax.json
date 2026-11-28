@@ -18,6 +18,12 @@
     "added_at": "2026-11-26T18:11:55.879423Z"
   },
   {
+    "file": "src/biff/plugins/claude_code/session_lifecycle.py",
+    "ceiling": 1,
+    "justify": "PL-1670 B3: one lazy import keeps the relay and NATS modules out of the daemon-transport hook, whose startup is latency-bound; it goes with the in-process path when that is deleted",
+    "added_at": "2026-11-28T06:45:11.413260Z"
+  },
+  {
     "file": "src/biff/server/tools/messaging.py",
     "ceiling": 2,
     "justify": "read_messages stamps activity after the fetch; on NATS the fetch already consumed the mail, so a failed presence write must be logged, not raised, or the mail is lost. Broad catch at the MCP tool boundary (PY-EH-6).",

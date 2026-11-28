@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import nullcontext
+from contextlib import AsyncExitStack, nullcontext
 from typing import TYPE_CHECKING, Self, cast, final
 
 from biff.commands._result import CommandResult
@@ -44,14 +45,16 @@ class SessionEnd:
     attempt finishes it: no row or tty name outlives its record.
     """
 
-    __slots__ = ("_live",)
+    __slots__ = ("_live", "_running")
 
     _live: SessionTable
+    _running: set[asyncio.Task[None]]
 
     def __new__(cls, live: SessionTable) -> Self:
         """End the sessions held in *live*."""
         self = super().__new__(cls)
         self._live = live
+        self._running = set()
         return self
 
     async def end(
@@ -71,16 +74,44 @@ class SessionEnd:
             msg = "end applies to a harness session; shell sessions use session_end"
             raise RefusalError.of(ErrorCode.INVALID_PARAMS, msg)
         key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
-        async with self._live.guard(key):
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(self._live.guard(key))
             if not session.is_ended:  # another end may have finished while this waited
                 try:
                     await session.begin_end()
-                    await self._finish(session)
                 except BaseException:
                     session.abort_end()
                     raise
-                self._live.forget(key, spare=session)
+                # From here the effects run as a task of their own, holding the
+                # guard: a caller that goes away part way (a hook killed by its
+                # time limit) must not leave the row deleted and the tty name
+                # still held.  Until here a caller that leaves leaves the session
+                # open.
+                work = asyncio.ensure_future(
+                    self._complete(key, session, stack.pop_all())
+                )
+                self._running.add(work)
+                work.add_done_callback(self._reap)
+                await asyncio.shield(work)
         return CommandResult(text="Session ended.", json_data={"ended": True})
+
+    async def _complete(
+        self, key: SessionKey, session: Session, held: AsyncExitStack
+    ) -> None:
+        """Run the effects of the end, then drop the record; release the guard."""
+        async with held:
+            try:
+                await self._finish(session)
+            except BaseException:
+                session.abort_end()
+                raise
+            self._live.forget(key, spare=session)
+
+    def _reap(self, work: asyncio.Task[None]) -> None:
+        """Forget a finished end, and log one that failed with no caller to tell."""
+        self._running.discard(work)
+        if not work.cancelled() and (exc := work.exception()) is not None:
+            logger.warning("ending a session failed", exc_info=exc)
 
     async def expire(self, retention: float) -> None:
         """End every harness session that has had no connection for *retention*.

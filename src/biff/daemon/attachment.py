@@ -46,8 +46,12 @@ class Attachment:
 
     @property
     def is_current(self) -> bool:
-        """Whether this connection's run is still the session's run."""
-        return self._run in ("", self._session.run)
+        """Whether this connection's run is still the session's run.
+
+        A session with no current run (no client has claimed one) has no newer
+        run to be replaced by, so a connection that ends it still counts.
+        """
+        return not self._session.run or self._run in ("", self._session.run)
 
     def on_replaced(self, callback: Callable[[], None]) -> None:
         """Call *callback* when a newer run replaces this connection's run."""

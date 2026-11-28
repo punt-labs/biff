@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,6 +50,14 @@ class SessionHandleStore:
             tmp.unlink(missing_ok=True)
             raise
         return target
+
+    def remove(self, routing: SessionRouting) -> None:
+        """Delete *routing*'s handle and its directory; absent is not an error."""
+        target = self.path(routing)
+        target.unlink(missing_ok=True)
+        # A directory that is gone or holds something else is left as it is.
+        with suppress(OSError):
+            target.parent.rmdir()
 
     def read(self, routing: SessionRouting) -> str | None:
         """Return the stored handle; ``None`` means this session was never opened."""
