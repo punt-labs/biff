@@ -1943,7 +1943,7 @@ def test_the_instructions_do_not_tell_the_model_to_distrust_bodies() -> None:
 
 
 class TestWakes:
-    """ReadBegin under the lock, PollWake, and the per-kind fairness (PL-1769)."""
+    """ReadBegin under the lock, PollWake, and the per-kind fairness."""
 
     async def test_two_wakes_at_once_announce_an_arrival_once(self, rig: _Rig) -> None:
         """ReadBegin takes the lock: the push's pass and the poll's do not both send."""
