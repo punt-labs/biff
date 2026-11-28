@@ -1,0 +1,136 @@
+"""The pass that finds what arrived for a session, on a push or on the clock."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import suppress
+from typing import TYPE_CHECKING, Self, final
+
+from biff.daemon.arrivals_reading import ArrivalsReading
+from biff.relay_errors import RELAY_ERRORS, RelayLog
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from pydantic import JsonValue
+
+    from biff.daemon.sessions import Session
+    from biff.frames import EventKind
+    from biff.models import WallPost
+
+__all__ = ["ArrivalPoll"]
+
+logger = logging.getLogger(__name__)
+
+_WHAT = "subscription check"
+
+
+@final
+class ArrivalPoll:
+    """Reads a session's mail mark and wall and announces what rose.
+
+    There is one pass, run when a push of an arrival notice wakes it and every
+    *interval* seconds whether or not one came (``PushWake`` and ``PollWake`` of
+    ``notification-mail-event.tex``): a push is at least once and may be lost, a
+    wake is a flag so a repeat changes nothing, and the pass reads every kind, so
+    no kind waits on another.  It marks no mail read.
+
+    A relay outage is not fatal: the pass is tried again, the client is told once
+    that it is ``degraded`` and once that it ``recovered``, and one log line is
+    written per episode rather than one per pass.
+    """
+
+    __slots__ = (
+        "_degraded",
+        "_emit",
+        "_interval",
+        "_log",
+        "_reading",
+        "_session",
+        "_wake",
+    )
+
+    _session: Session
+    _emit: Callable[[EventKind, JsonValue], Awaitable[None]]
+    _interval: float
+    _wake: asyncio.Event
+    _reading: ArrivalsReading
+    _log: RelayLog
+    _degraded: bool
+
+    def __new__(
+        cls,
+        session: Session,
+        emit: Callable[[EventKind, JsonValue], Awaitable[None]],
+        interval: float,
+        wake: asyncio.Event,
+    ) -> Self:
+        """Poll *session* every *interval* seconds, or when *wake* is set."""
+        self = super().__new__(cls)
+        self._session = session
+        self._emit = emit
+        self._interval = interval
+        self._wake = wake
+        self._reading = ArrivalsReading(session)
+        self._log = RelayLog(logger)
+        self._degraded = False
+        return self
+
+    async def run(self) -> None:
+        """Send the current summary, then each mail and wall arrival."""
+        mark, wall, count = await self._baseline()
+        await self._emit("unread", {"count": count})
+        if wall is not None:
+            await self._emit("wall", wall.model_dump(mode="json"))
+        while True:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._wake.wait(), self._interval)
+            self._wake.clear()
+            try:
+                mark, wall = await self._pass(mark, wall)
+            except RELAY_ERRORS as exc:
+                await self._outage(exc)
+            else:
+                await self._recovered()
+
+    async def _baseline(self) -> tuple[int, WallPost | None, int]:
+        """Read the starting point, retrying through an outage."""
+        relay = self._session.context.relay
+        while True:
+            try:
+                mark = await self._reading.mark()
+                wall = await relay.get_wall()
+                count = await self._reading.unread()
+            except RELAY_ERRORS as exc:
+                await self._outage(exc)
+                await asyncio.sleep(self._interval)
+            else:
+                await self._recovered()
+                return mark, wall, count
+
+    async def _pass(
+        self, mark: int, wall: WallPost | None
+    ) -> tuple[int, WallPost | None]:
+        """Emit what arrived since *mark* and *wall*; return the new baseline."""
+        current = await self._reading.mark()
+        posted = await self._session.context.relay.get_wall()
+        # A read can lower the mark; only a rise is an arrival.
+        if current > mark:
+            count = await self._reading.unread()
+            await self._emit("mail", {"count": count, "mark": current})
+        if posted is not None and posted != wall:
+            await self._emit("wall", posted.model_dump(mode="json"))
+        return current, posted
+
+    async def _outage(self, exc: Exception) -> None:
+        self._log.failed(_WHAT, exc)
+        if not self._degraded:
+            self._degraded = True
+            await self._emit("degraded", {"reason": type(exc).__name__})
+
+    async def _recovered(self) -> None:
+        self._log.recovered(_WHAT)
+        if self._degraded:
+            self._degraded = False
+            await self._emit("recovered", {})

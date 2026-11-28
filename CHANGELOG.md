@@ -4,6 +4,9 @@
 
 ### Added
 
+- The biffd `arrivals` method answers `{mark, unread, wall, invites, talk_pending}`
+  without marking any mail read. The `mail` event, and so `biff watch`, now carries
+  the inbox's high-water `mark` next to the `count`.
 - The biffd `end` method ends the caller's own harness session: it files the mail
   the session holds back, drains its inbox into the user mailbox, releases its
   tty name (only if it still holds it), deletes its row and appends a logout. A

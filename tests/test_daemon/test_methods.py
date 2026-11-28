@@ -84,6 +84,7 @@ def test_every_command_object_is_a_method(tmp_path: Path) -> None:
         "session_use",
         "session_end",
         "end",
+        "arrivals",
         "talk",
         "talk_read",
         "talk_end",
