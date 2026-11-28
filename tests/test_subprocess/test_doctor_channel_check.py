@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from biff.nats_relay import NatsRelay
+from biff.plugins.claude_code.channel_check_ask import DaemonAsk
 from biff.plugins.claude_code.channel_check_target import CheckTarget
 from biff.plugins.claude_code.doctor_checks import DoctorChecks
 from tests.test_subprocess.test_channel_check import _REPO, _session_key
@@ -29,6 +30,33 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.subprocess, pytest.mark.nats_local]
 
 
+class _RelayAsk:
+    """Asks over a relay of its own: the server side under test, not the daemon hop."""
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+
+    async def confirmed(self, session_key: str, seconds: float) -> bool:
+        relay = NatsRelay(url=self._url, repo_name=_REPO)
+        try:
+            pending = await relay.request_channel_check(session_key)
+            try:
+                return await pending.confirmed(seconds)
+            finally:
+                await pending.close()
+        finally:
+            await relay.close()
+
+
+def _ask_over(url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make doctor's default ask a relay of its own, as no biffd runs here."""
+
+    def relay_ask(_user: str | None) -> _RelayAsk:
+        return _RelayAsk(url)
+
+    monkeypatch.setattr(DaemonAsk, "for_this_process", staticmethod(relay_ask))
+
+
 async def _registered(url: str, user: str) -> None:
     relay = NatsRelay(url=url, repo_name=_REPO)
     try:
@@ -38,8 +66,9 @@ async def _registered(url: str, user: str) -> None:
 
 
 def test_doctor_reports_channel_live_for_a_session_that_acknowledges(
-    tmp_path: Path, nats_server: str
+    tmp_path: Path, nats_server: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _ask_over(nats_server, monkeypatch)
     server = _Server(tmp_path, channel_mode=True, relay_url=nats_server)
     try:
         server.initialize()
@@ -79,9 +108,10 @@ def test_doctor_reports_channel_live_for_a_session_that_acknowledges(
 
 
 def test_doctor_reports_not_confirmed_when_channels_are_off(
-    tmp_path: Path, nats_server: str
+    tmp_path: Path, nats_server: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A server without channel mode cannot send the event: doctor says so."""
+    _ask_over(nats_server, monkeypatch)
     server = _Server(tmp_path, channel_mode=False, relay_url=nats_server)
     try:
         server.initialize()

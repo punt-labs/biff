@@ -146,6 +146,7 @@
   "biff.plugins.claude_code._hook_entry": "claude_code",
   "biff.plugins.claude_code._hook_foreground": "claude_code",
   "biff.plugins.claude_code._hook_runtime": "claude_code",
+  "biff.plugins.claude_code.channel_check_ask": "claude_code",
   "biff.plugins.claude_code.channel_check_relay": "claude_code",
   "biff.plugins.claude_code.channel_check_report": "claude_code",
   "biff.plugins.claude_code.channel_check_target": "claude_code",
