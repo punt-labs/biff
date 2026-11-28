@@ -223,8 +223,9 @@ class McpLink:
         self, session_id: str, method: str, params: dict[str, JsonValue]
     ) -> HeldReply:
         await self._settle(session_id)
+        client = await self._client(session_id)  # a failure here sent nothing
         try:
-            return await (await self._client(session_id)).request_held(method, **params)
+            return await client.request_held(method, **params)
         except ConnectionLostError as exc:
             self._clients.pop(session_id, None)
             if method not in _REPEATABLE:

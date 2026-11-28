@@ -114,7 +114,7 @@ async def test_a_reply_nobody_confirmed_is_not_shown_to_a_session_with_no_client
 
 
 @pytest.mark.parametrize("consuming", [False, True])
-async def test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail(
+async def test_a_daemon_restart_keeps_the_mail_a_read_held(
     harness: Harness, consuming: bool
 ) -> None:
     harness.factory.relay_type = ConsumingLogging if consuming else LoggingRelay
@@ -147,9 +147,9 @@ async def test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail(
         )
         reply = cast("dict[str, list[dict[str, str]]]", await client.request("read"))
         bodies = [row["body"] for row in reply["data"]]
-        # A consuming relay gave the held batch up at fetch: the outbox was the
-        # only copy, and a restart loses it.  A relay that keeps mail still has it.
-        assert bodies == ([] if consuming else ["in flight"])
+        # A consuming relay gave the held batch up at fetch, so stopping files it
+        # back; a relay that keeps mail never lost it.
+        assert bodies == ["in flight"]
         await client.close()
     finally:
         await revived.stop()

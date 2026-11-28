@@ -216,11 +216,11 @@ class DaemonWriteTools:
                 "wall", message=message, duration=duration, clear=clear, repo=repo
             )
         except ToolError:
-            await self._shown_as_held()
+            await self._shown_as_held(clear_marker=clear)
             raise
         data = reply.data
         if reply.error or not isinstance(data, dict):
-            await self._shown_as_held()
+            await self._shown_as_held(clear_marker=clear)
             return reply.text
         # The display, the SessionStart marker and the spoken wall are this
         # process's: biffd has none of them.
@@ -228,19 +228,20 @@ class DaemonWriteTools:
             await self._show_wall(data, clear_marker=clear)
         return reply.text
 
-    async def _shown_as_held(self) -> None:
+    async def _shown_as_held(self, *, clear_marker: bool) -> None:
         """Show the wall the relay holds, after a write that may have half landed.
 
         A post or clear that failed for one repository may have changed another's,
         and only the relay knows which; if biffd cannot be asked either, the
-        display stays as it was.
+        display stays as it was.  A clear that left no wall here clears the marker
+        too, as a clear that succeeded does.
         """
         try:
             held = (await self._calls.ask("wall")).data
         except ToolError:
             return
         if isinstance(held, dict):
-            await self._show_wall(held)
+            await self._show_wall(held, clear_marker=clear_marker)
 
     async def _show_wall(
         self, data: dict[str, JsonValue], *, clear_marker: bool = False

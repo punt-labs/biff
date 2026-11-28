@@ -12,8 +12,15 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from biff.client.connection import ClientIdentity, DaemonClient, RequestTimeoutError
+from biff.client.connection import (
+    ClientIdentity,
+    DaemonClient,
+    DaemonError,
+    RequestTimeoutError,
+)
 from biff.daemon.connection import ConnectionHandler
+from biff.frame_reply import Reply
+from biff.frames import Frames
 from biff.relay import LocalRelay
 from tests.test_daemon.consuming import ConsumingRelay
 
@@ -21,6 +28,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from websockets.asyncio.server import ServerConnection
+
+    from biff.frame_proof import Proof
+    from biff.frames import AnyFrame, Event
     from biff.models import Message, UnreadSummary
     from tests.test_daemon.conftest import Harness
 
@@ -147,14 +158,59 @@ async def test_a_reply_the_client_gave_up_on_does_not_consume_the_mail(
     relay_type: Callable[[Path], LocalRelay],
 ) -> None:
     harness.factory.relay_type = relay_type
+    carried: list[Reply] = []
+    written = asyncio.Event()
+    send = ConnectionHandler._send  # pyright: ignore[reportPrivateUsage]
+
+    async def recording_send(
+        ws: ServerConnection, frame: Reply | Event | Proof
+    ) -> bool:
+        sent = await send(ws, frame)
+        if sent and isinstance(frame, Reply) and frame.needs_ack:
+            carried.append(frame)  # a success reply that carries mail
+            written.set()
+        return sent
+
+    decode = Frames.decode
+    reader_took = asyncio.Event()
+
+    def recording_decode(text: str) -> AnyFrame:
+        frame = decode(text)
+        if isinstance(frame, Reply) and carried and frame.id == carried[0].id:
+            reader_took.set()  # the client reader has this frame in hand
+        return frame
+
     kai = await _short_patience_client(harness, 0.1)
     eric = await harness.connect("s-eric", "eric")
     await eric.request("write", to="kai", message="do not lose me")
     monkeypatch.setattr(relay_type, "delay", 0.25)
+    monkeypatch.setattr(ConnectionHandler, "_send", staticmethod(recording_send))
+    monkeypatch.setattr(Frames, "decode", staticmethod(recording_decode))
     with pytest.raises(RequestTimeoutError):
         await kai.request("read")  # the daemon replies after the client left
-    await asyncio.sleep(0.4)  # the late reply was written and discarded
+    await asyncio.wait_for(written.wait(), _WAIT)  # the late reply was written
+    assert _bodies(carried[0].result) == ["do not lose me"]
+    await asyncio.wait_for(reader_took.wait(), _WAIT)
     monkeypatch.setattr(relay_type, "delay", 0.0)
+    # The daemon finishes an ack before it dispatches the next frame of the
+    # connection, so an ack the reader sent for the abandoned reply is handled
+    # before this read runs.
+    assert _bodies(await kai.request("read")) == ["do not lose me"]
+
+
+async def test_a_read_the_daemon_timed_out_does_not_lose_the_mail_it_fetched(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.factory.relay_type = SlowConsumingRelay
+    kai = await _short_patience_client(harness, _WAIT)
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="do not lose me")
+    # Longer than the daemon's own request timeout (0.5 s in the harness): the
+    # daemon cancels the read after the relay consumed the mail.
+    monkeypatch.setattr(SlowConsumingRelay, "delay", 0.7)
+    with pytest.raises(DaemonError, match="timed out"):
+        await kai.request("read")
+    monkeypatch.setattr(SlowConsumingRelay, "delay", 0.0)
     assert _bodies(await kai.request("read")) == ["do not lose me"]
 
 

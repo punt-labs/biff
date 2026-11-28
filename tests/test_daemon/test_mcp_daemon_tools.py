@@ -710,6 +710,51 @@ async def test_a_wall_that_landed_but_failed_is_shown_as_the_relay_holds_it(
     assert read_wall_marker(root) == "second"
 
 
+async def test_a_clear_that_landed_here_but_failed_elsewhere_clears_the_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _ClearRefused(LocalRelay):
+        refusing = False
+
+        async def set_wall(self, wall: WallPost | None) -> None:
+            await super().set_wall(wall)
+            if _ClearRefused.refusing:
+                msg = "a peer repo refused"
+                raise ConnectionError(msg)
+
+    def build(resolved: ResolvedSession) -> Relay:
+        return _ClearRefused(resolved.data_dir)
+
+    async with _running(tmp_path, monkeypatch, build) as rig:
+        kai = await rig.client("kai")
+        root = str(Path())
+        await kai.call("wall", message="first", duration="1h")
+        _ClearRefused.refusing = True
+
+        with pytest.raises(ToolError, match="a peer repo refused"):
+            await kai.call("wall", clear=True)
+
+    assert read_wall_marker(root) is None
+
+
+async def test_a_write_that_never_left_does_not_claim_it_may_have_been_delivered(
+    rig: _Rig,
+) -> None:
+    async def hello_refused(_identity: ClientIdentity) -> DaemonClient:
+        msg = "biffd closed the connection during the hello"
+        raise ConnectionLostError(msg)
+
+    kai = await rig.client(
+        "kai", McpLink(user="kai", cwd="/work/repo", connect=hello_refused)
+    )
+
+    with pytest.raises(ToolError) as refused:
+        await kai.call("write", to="eric", message="hi")
+
+    assert "closed the connection during the hello" in str(refused.value)
+    assert "may have been carried out" not in str(refused.value)
+
+
 async def test_a_write_whose_reply_was_lost_is_not_sent_again(
     rig: _Rig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
