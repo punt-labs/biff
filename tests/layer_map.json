@@ -271,10 +271,6 @@
   "biff.daemon.uncancellable": "daemon",
   "biff.daemon.handback": "daemon",
   "biff.daemon.held_mail": "daemon",
-  "biff.daemon.durable_file": "daemon",
-  "biff.daemon.spill": "daemon",
-  "biff.daemon.spill_entry": "daemon",
-  "biff.daemon.spill_file": "daemon",
   "biff.daemon.session_fetch": "daemon",
   "biff.cli_console": "cli",
   "biff.cli_events": "cli",
@@ -318,5 +314,12 @@
   "biff.daemon.push_feed": "daemon",
   "biff.daemon.wakes": "daemon",
   "biff.nats_missing": "engine",
-  "biff.plugins.claude_code.channel_check_ask": "claude_code"
+  "biff.plugins.claude_code.channel_check_ask": "claude_code",
+  "biff.server.daemon_arrivals": "server",
+  "biff.server.daemon_channel": "server",
+  "biff.server.daemon_channel_tools": "server",
+  "biff.daemon.durable_file": "daemon",
+  "biff.daemon.spill": "daemon",
+  "biff.daemon.spill_entry": "daemon",
+  "biff.daemon.spill_file": "daemon"
 }

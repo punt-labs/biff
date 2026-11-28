@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from mcp.server.subscriptions import InMemorySubscriptionBus as NotificationBus
 
@@ -22,6 +22,9 @@ from biff.server.wake import WakeSignal
 from biff.session_routing import SessionRouting
 from biff.talk_state import TalkState
 from biff.tty import build_session_key
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class RepoToggle(Protocol):
@@ -79,6 +82,11 @@ class ServerState:
     channel_check: ChannelCheck = field(default_factory=ChannelCheck)
     # Sends channel events; dormant until channel mode gives it a link (DES-087).
     emitter: ChannelEmitter = field(init=False)
+    # Called with the session ``bind`` points the server at; the channel feed of
+    # a client of biffd follows the session through it.
+    session_bound: Callable[[SessionRouting], None] = field(
+        default=lambda _routing: None, compare=False
+    )
     # The session this server is bound to, set once by ``bind`` on the first
     # identified call.  ``None`` until then.
     bound_session_id: str | None = None
@@ -148,6 +156,7 @@ class ServerState:
         self.talk.rebind(
             tty=routing.routing_id, session_key=routing.session_key(self.config.user)
         )
+        self.session_bound(routing)
 
     @property
     def visible_repos(self) -> frozenset[str]:
