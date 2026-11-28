@@ -781,11 +781,13 @@ class LocalRelay:
 
     async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool:
         """Reserve a TTY name atomically via O_CREAT|O_EXCL lockfile."""
-        return self._names.reserve(user, name, session_key)
+        with self._lock():
+            return self._names.reserve(user, name, session_key)
 
     async def release_tty_name(self, user: str, name: str) -> None:
         """Release a TTY name reservation by removing the lockfile."""
-        self._names.release(user, name)
+        with self._lock():
+            self._names.release(user, name)
 
     async def release_tty_name_if(self, user: str, name: str, owner: str) -> bool:
         """Release *name* if *owner* holds it, under the relay's file lock."""
@@ -796,7 +798,8 @@ class LocalRelay:
         self, user: str, name: str, session_key: str
     ) -> None:
         """Refresh the reservation, if *session_key* still owns it."""
-        self._names.refresh(user, name, session_key)
+        with self._lock():
+            self._names.refresh(user, name, session_key)
 
     async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
         """Return the session key that holds *name*, or ``None``."""

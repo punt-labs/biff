@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from nats.js.errors import KeyNotFoundError, KeyWrongLastSequenceError
+from nats.js.errors import BadRequestError, KeyNotFoundError
 
 from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay
@@ -102,8 +102,25 @@ async def test_a_nats_name_is_deleted_at_the_revision_the_check_read() -> None:
 @pytest.mark.anyio()
 async def test_a_nats_name_that_changed_hands_after_the_check_is_kept() -> None:
     kv = _names_kv("kai:one")
-    kv.delete = AsyncMock(side_effect=KeyWrongLastSequenceError)  # the entry moved
+    # What nats-py 2.13 really raises from KeyValue.delete at a stale revision:
+    # a bad request carrying JetStream's wrong-last-sequence code, not the
+    # KeyWrongLastSequenceError that update() translates it to.
+    kv.delete = AsyncMock(
+        side_effect=BadRequestError(
+            code=400, err_code=10071, description="wrong last sequence: 5"
+        )
+    )
     assert await _nats(kv).release_tty_name_if("kai", "alpha", "kai:one") is False
+
+
+@pytest.mark.anyio()
+async def test_any_other_nats_error_from_the_delete_is_not_swallowed() -> None:
+    kv = _names_kv("kai:one")
+    kv.delete = AsyncMock(
+        side_effect=BadRequestError(code=400, err_code=10003, description="bad")
+    )
+    with pytest.raises(BadRequestError):
+        await _nats(kv).release_tty_name_if("kai", "alpha", "kai:one")
 
 
 @pytest.mark.anyio()

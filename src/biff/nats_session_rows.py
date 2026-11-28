@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from nats.js.errors import (
+    BadRequestError,
     BucketNotFoundError,
     KeyNotFoundError,
     KeyWrongLastSequenceError,
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 
 __all__ = ["SessionRows"]
 
+_WRONG_LAST_SEQUENCE = 10071  # the JetStream error code for a stale revision
 _TRIES = 3  # a later heartbeat tick retries what these do not land
 
 
@@ -105,5 +107,11 @@ class SessionRows:
                 return False
             await names.delete(key, last=entry.revision)
         except (KeyNotFoundError, BucketNotFoundError, KeyWrongLastSequenceError):
+            return False
+        except BadRequestError as exc:
+            # ``KeyValue.delete`` does not translate a stale revision as ``update``
+            # does: the server's wrong-last-sequence answer arrives as this error.
+            if exc.err_code != _WRONG_LAST_SEQUENCE:
+                raise
             return False
         return True

@@ -19,6 +19,8 @@ from biff.session_id import CLAUDE_CODE_ROLE, CLI_ROLE
 from biff.tty import get_hostname
 
 if TYPE_CHECKING:
+    import uuid
+
     from biff.daemon.params import Params
     from biff.daemon.session_verbs import SessionVerbs
     from biff.daemon.sessions import Session, SessionTable
@@ -71,8 +73,8 @@ class SessionEnd:
         key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
         async with self._live.guard(key):
             if not session.is_ended:  # another end may have finished while this waited
-                await session.begin_end()
                 try:
+                    await session.begin_end()
                     await self._finish(session)
                 except BaseException:
                     session.abort_end()
@@ -146,10 +148,17 @@ class SessionEnd:
         """
         ctx = session.context
         transfer = MailTransfer(ctx.relay)
-        pending = session.outbox.merge(await ctx.relay.fetch(ctx.session_key))
-        for message in pending:
-            await transfer.forward(ctx.session_key, ctx.user, message)
-            session.outbox.forget([message])
+        sent: set[uuid.UUID] = set()
+        # A fetch returns a bounded batch, so go on until one brings nothing new.
+        while fresh := [
+            m
+            for m in session.outbox.merge(await ctx.relay.fetch(ctx.session_key))
+            if m.id not in sent
+        ]:
+            for message in fresh:
+                await transfer.forward(ctx.session_key, ctx.user, message)
+                session.outbox.forget([message])
+                sent.add(message.id)
 
     @staticmethod
     async def _logout(session: Session) -> None:

@@ -86,9 +86,9 @@
       "text": "NewHello: the new session of a clear takes the name only after the old end is complete (the goal needs an EndOwnSession step: ownEnded)",
       "category": "precondition",
       "source": "NewHello",
-      "coveredBy": "tests/test_daemon/test_claude_end.py::test_a_clear_ends_the_old_session_before_the_new_hello",
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_a_clear_ends_the_old_session_before_the_new_hello; tests/test_daemon/test_claude_end.py::test_a_new_hello_before_the_old_end_does_not_get_the_name",
       "confidence": "medium",
-      "verifiedBy": "the new session's tty request for the old name errors while the old session holds it, succeeds after the old end, and the owner is then not the old key. The model's hello is the daemon-side name claim; the client's wait for the end's reply is not tested here"
+      "verifiedBy": "the first test sends the old end, then the new hello, and asserts the name was free after the end and is then held by the new session; the second sends the new hello first and asserts its claim of the old name is refused while the old session holds it. The model's hello is the daemon-side name claim; the client's wait for the end's reply is not tested here"
     },
     {
       "text": "retention and end: enabled(ExpireClaude) at retention; every owed end step and the finish enabled; a failed end is finished by the next",
