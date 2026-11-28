@@ -305,5 +305,14 @@
   "biff.plugins.claude_code.daemon_session_end": "claude_code",
   "biff.plugins.claude_code.session_lifecycle": "claude_code",
   "biff.repo_transport": "engine",
-  "biff.plugins.claude_code.hook_daemon": "claude_code"
+  "biff.plugins.claude_code.hook_daemon": "claude_code",
+  "biff.channel_check_pending": "engine",
+  "biff.daemon.arrival_poll": "daemon",
+  "biff.daemon.arrivals_reading": "daemon",
+  "biff.daemon.channel_check_methods": "daemon",
+  "biff.daemon.check_hop": "daemon",
+  "biff.daemon.push_feed": "daemon",
+  "biff.daemon.wakes": "daemon",
+  "biff.nats_missing": "engine",
+  "biff.plugins.claude_code.channel_check_ask": "claude_code"
 }

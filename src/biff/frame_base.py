@@ -6,7 +6,13 @@ from pydantic import BaseModel, ConfigDict
 
 __all__ = ["MAX_FRAME_BYTES", "PROTOCOL_VERSION", "FrameBase"]
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+"""The wire version; a peer of another version is refused at the handshake.
+
+Version 2 added the ``channel_check_request`` event.  A version-1 client rejects
+an event kind it does not know and drops the connection mid-stream, so it must
+be told to upgrade at the hello instead.
+"""
 
 MAX_FRAME_BYTES = 1_048_576
 """The largest frame either side accepts, in bytes of UTF-8 JSON."""

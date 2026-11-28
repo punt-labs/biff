@@ -322,6 +322,21 @@ class DaemonClient:
         await held.confirm()
         return held.result
 
+    async def request_within(
+        self, deadline: float, method: str, /, **params: JsonValue
+    ) -> JsonValue:
+        """Run *method* like :meth:`request`, waiting up to *deadline* seconds.
+
+        For a method that answers only after it has waited on something itself
+        (a channel check waits for the session's acknowledgement), so the
+        request timeout would end the call before the daemon replies.  The
+        deadline and the method are positional-only, so every keyword reaches
+        the method, a ``seconds`` parameter included.
+        """
+        held = await self._hold(method, params, deadline)
+        await held.confirm()
+        return held.result
+
     async def request_held(self, method: str, **params: JsonValue) -> HeldReply:
         """Run *method* and return its result with the confirmation still unsent.
 
@@ -337,9 +352,14 @@ class DaemonClient:
         """
         return await self._hold(method, params)
 
-    async def _hold(self, method: str, params: dict[str, JsonValue]) -> HeldReply:
+    async def _hold(
+        self,
+        method: str,
+        params: dict[str, JsonValue],
+        seconds: float | None = None,
+    ) -> HeldReply:
         reply = await self._roundtrip(
-            lambda i: Request(id=i, method=method, params=params), method
+            lambda i: Request(id=i, method=method, params=params), method, seconds
         )
         if reply.error is not None:
             raise DaemonError(reply.error.code, reply.error.message)
@@ -384,9 +404,13 @@ class DaemonClient:
             logger.warning("reply %d not confirmed; the daemon resends", request_id)
 
     async def _roundtrip(
-        self, build: Callable[[int], Request | Subscribe], what: str
+        self,
+        build: Callable[[int], Request | Subscribe],
+        what: str,
+        seconds: float | None = None,
     ) -> Reply:
-        """Send the frame *build* makes and wait for its reply."""
+        """Send the frame *build* makes and wait up to *seconds* for its reply."""
+        timeout = self._request_timeout if seconds is None else seconds
         self._require_open()
         request_id = next(self._ids)
         waiter: asyncio.Future[Reply] = asyncio.get_running_loop().create_future()
@@ -399,10 +423,10 @@ class DaemonClient:
             # The reader may have stopped while the frame was sent, after it
             # failed the waiters that existed then.
             self._require_open()
-            return await asyncio.wait_for(waiter, timeout=self._request_timeout)
+            return await asyncio.wait_for(waiter, timeout=timeout)
         except TimeoutError:
             msg = (
-                f"{what} got no reply from biffd within {self._request_timeout:g}s; "
+                f"{what} got no reply from biffd within {timeout:g}s; "
                 f"it may be stuck on a slow relay ({LOG_HINT})"
             )
             raise RequestTimeoutError(msg) from None

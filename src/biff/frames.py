@@ -35,6 +35,7 @@ type EventKind = Literal[
     "talk_accept",
     "talk_line",
     "talk_end",
+    "channel_check_request",
 ]
 
 
