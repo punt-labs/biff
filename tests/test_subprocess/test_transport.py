@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from fastmcp.client.client import CallToolResult
     from mcp import Client as MCPClient
 
+    from biff.run_dir import RunDir
     from biff.testing import NotificationTracker
 
 pytestmark = pytest.mark.subprocess
@@ -134,23 +135,14 @@ class TestToolCallOverStdio:
     """Tool calls round-trip correctly over the stdio wire protocol."""
 
     async def test_invalid_arguments_stay_out_of_diagnostics(
-        self, tmp_path: Path
+        self, tmp_path: Path, repo: Path, run_dir: RunDir
     ) -> None:
+        assert run_dir.port_path.exists()  # biffd is up in this home directory
         transport = StdioTransport(
             command=sys.executable,
-            args=[
-                "-m",
-                "biff",
-                "--no-telemetry",
-                "mcp",
-                "--user",
-                "kai",
-                "--data-dir",
-                str(tmp_path / "relay"),
-                "--relay-url",
-                "",
-            ],
-            env={"HOME": str(tmp_path)},
+            args=["-m", "biff", "--no-telemetry", "mcp", "--user", "kai"],
+            env={"HOME": str(tmp_path), "BIFF_MCP_TRANSPORT": "daemon"},
+            cwd=str(repo),
         )
         async with StampedClient(transport) as client:
             with pytest.raises(ToolError, match="rejected-input"):
@@ -335,7 +327,14 @@ class TestDynamicDescriptionOverStdio:
         await eric_client.call_tool("plan", {"message": "working"})
         desc = await self._check_desc(eric_client)
         assert "1 unread" in desc
-        # Check clears it
+        # Check clears it.  biffd counts the mail unread until the read is
+        # confirmed, which the session's next request does.
         await eric_client.call_tool("read_messages", {})
+        await eric_client.call_tool("who", {})
         desc = await self._check_desc(eric_client)
+        for _ in range(50):
+            if "unread" not in desc:
+                break
+            await asyncio.sleep(0.1)
+            desc = await self._check_desc(eric_client)
         assert "unread" not in desc
