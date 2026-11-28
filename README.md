@@ -438,7 +438,7 @@ peers:
   repos: ["my-org/other-repo"]  # repos that are always visible
 
 mcp:
-  transport: inprocess          # inprocess (the default) or daemon: read through biffd
+  transport: inprocess          # inprocess (the default) or daemon: every tool asks biffd
 ```
 
 The `peers:` key makes `/who`, `/write` and `/finger` reach sessions in other repos. `orgs` finds repos with active sessions; `repos` lists repos that are always visible. Both are optional.

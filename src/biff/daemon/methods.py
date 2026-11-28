@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from biff import commands
+from biff.daemon.activity_count import ActivityCount
 from biff.daemon.params import Params
 from biff.daemon.plan_method import PlanMethod
 from biff.daemon.read_batch import ReadBatcher
@@ -34,6 +35,10 @@ _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 type Handler = Callable[[CliContext, Params], Awaitable[CommandResult]]
 type Acknowledge = Callable[[], Awaitable[None]]
+
+_POLLS = frozenset({"status", "talk_read"})
+"""The methods that are not work: an empty look must not move the activity clock
+that routes mail (a ``read`` is one too, and stamps only when it finds mail)."""
 
 READ_BUDGET_BYTES = MAX_FRAME_BYTES // 2
 """The most one ``read`` reply carries, rows and rendered text together, in bytes.
@@ -114,6 +119,8 @@ class Methods:
         async with session.requests(method):
             if method == "read":
                 return await self._read(session, Params(method, raw))
+            if method not in _POLLS:
+                await ActivityCount.of(session)
             if method in self._sessions.names:
                 result = await self._sessions.call(session, method, Params(method, raw))
                 return self._outcome(result)
@@ -170,6 +177,8 @@ class Methods:
         left += await ReadSteps.backlog(inbox)
         if left > 0:
             result["more"] = left
+        if batch:
+            await ActivityCount.of(session)
         ack = partial(ReadSteps.delivered, session, inbox, batch) if batch else None
         return Outcome(result, ack)
 
@@ -199,9 +208,9 @@ class Methods:
     @staticmethod
     async def _wall(ctx: CliContext, p: Params) -> CommandResult:
         message, duration = p.text("message", ""), p.text("duration", "")
-        clear = p.flag("clear", default=False)
+        clear, repo = p.flag("clear", default=False), p.text("repo", "")
         p.done()
-        return await commands.wall(ctx, message, duration, clear=clear)
+        return await commands.wall(ctx, message, duration, clear=clear, repo=repo)
 
     @staticmethod
     async def _mesg(ctx: CliContext, p: Params) -> CommandResult:

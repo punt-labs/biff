@@ -15,7 +15,9 @@ async def tty(ctx: CliContext, name: str) -> CommandResult:
     if name:
         error = validate_tty_name(name)
         if error:
-            return CommandResult(text=error, json_data={"error": error}, error=True)
+            return CommandResult(
+                text=f"Error: {error}", json_data={"error": error}, error=True
+            )
 
     # Claim new name, then release old on success (DES-035).
     try:

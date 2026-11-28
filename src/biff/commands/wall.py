@@ -42,12 +42,16 @@ async def _show(ctx: CliContext) -> CommandResult:
 
 
 async def wall(
-    ctx: CliContext, message: str, duration: str, *, clear: bool
+    ctx: CliContext, message: str, duration: str, *, clear: bool, repo: str = ""
 ) -> CommandResult:
-    """Post, read, or clear a team broadcast."""
+    """Post, read, or clear a team broadcast, to every visible repo or to *repo*."""
+    if repo and repo not in ctx.visible_repos:
+        text = f"Repo {repo!r} is not in your visible repos."
+        return CommandResult(text=text, json_data={"error": text}, error=True)
+    target = repo or None
     if clear:
         failed = await broadcast_wall_to_repos(
-            ctx.relay, ctx.visible_repos, wall=None, target_repo=None
+            ctx.relay, ctx.visible_repos, wall=None, target_repo=target
         )
         if failed:
             return _undelivered(failed)
@@ -68,7 +72,7 @@ async def wall(
         post = WallPost(
             text=message[:512],
             from_user=ctx.user,
-            from_tty="cli",
+            from_tty=ctx.tty_name or "cli",
             posted_at=datetime.now(UTC),
             expires_at=datetime.now(UTC) + parse_duration(duration),
         )
@@ -76,7 +80,7 @@ async def wall(
         return CommandResult(text=str(exc), json_data={"error": str(exc)}, error=True)
 
     failed = await broadcast_wall_to_repos(
-        ctx.relay, ctx.visible_repos, wall=post, target_repo=None
+        ctx.relay, ctx.visible_repos, wall=post, target_repo=target
     )
     if failed:
         return _undelivered(failed)

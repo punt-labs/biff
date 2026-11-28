@@ -292,5 +292,9 @@
   "biff.commands.plan_source": "commands",
   "biff.local_tty_names": "engine",
   "biff.nats_session_rows": "engine",
-  "biff.session_edit": "engine"
+  "biff.session_edit": "engine",
+  "biff.server.daemon_calls": "server",
+  "biff.server.daemon_write_tools": "server",
+  "biff.server.daemon_talk_tools": "server",
+  "biff.daemon.activity_count": "daemon"
 }
