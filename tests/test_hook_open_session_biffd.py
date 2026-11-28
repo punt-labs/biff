@@ -106,7 +106,11 @@ def test_the_start_context_carries_the_note(
     from biff.plugins.claude_code import hook
 
     monkeypatch.setattr(hook, "_read_hook_input", lambda: {"session_id": "sid-1"})
-    monkeypatch.setattr(hook, "_open_session", lambda _data: "SESSION NOT OPENED")
+
+    def _failed(_data: dict[str, object]) -> str:
+        return "SESSION NOT OPENED"
+
+    monkeypatch.setattr(hook, "_open_session", _failed)
 
     hook._run_session_start(resume=False)  # pyright: ignore[reportPrivateUsage]
 
