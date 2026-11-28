@@ -39,7 +39,11 @@ class LaunchdBackend:
     # launchctl bootout returns before the job is gone; a bootstrap that starts
     # too early fails with "Input/output error", so each unload waits and checks.
     UNLOAD_POLL_SECONDS: ClassVar[float] = 0.2
-    UNLOAD_WAIT_SECONDS: ClassVar[float] = 10.0
+    # launchd sends SIGKILL this long after SIGTERM (its default is about 20 s).
+    # biffd's stop gives back the mail it holds within its own budget, so launchd
+    # must wait longer than that, and a restart must wait longer than launchd.
+    EXIT_TIMEOUT_SECONDS: ClassVar[int] = 40
+    UNLOAD_WAIT_SECONDS: ClassVar[float] = 50.0
 
     _spec: ServiceSpec
     _plist_path: Path
@@ -92,6 +96,7 @@ class LaunchdBackend:
 
         Output goes to the biff log, with ``~`` expanded because launchd does not.
         ``ThrottleInterval`` bounds a crash loop, which launchd restarts forever.
+        ``ExitTimeOut`` is how long launchd waits for a stop before it kills.
         """
         keep_alive: bool | dict[str, bool] = (
             {"SuccessfulExit": False} if self._spec.restart_on_crash_only else True
@@ -105,6 +110,7 @@ class LaunchdBackend:
                 "RunAtLoad": True,
                 "KeepAlive": keep_alive,
                 "ThrottleInterval": _THROTTLE_SECONDS,
+                "ExitTimeOut": self.EXIT_TIMEOUT_SECONDS,
                 "StandardOutPath": log,
                 "StandardErrorPath": log,
                 "EnvironmentVariables": {
@@ -229,7 +235,9 @@ class LaunchdBackend:
         """Boot the job out if it is loaded, and wait until launchd has let it go."""
         if not self.is_loaded():
             return
-        self._require("stop", "bootout", self._target)
+        self._require(
+            "stop", "bootout", self._target, timeout=Supervisor.STOP_TIMEOUT_SECONDS
+        )
         deadline = time.monotonic() + self.UNLOAD_WAIT_SECONDS
         while self.is_loaded():
             if time.monotonic() >= deadline:
@@ -245,5 +253,10 @@ class LaunchdBackend:
         except FileNotFoundError:
             return b""
 
-    def _require(self, action: str, *args: str) -> None:
-        Supervisor.require(self._spec, action, "launchctl", *args)
+    def _require(
+        self,
+        action: str,
+        *args: str,
+        timeout: float | None = None,  # None: the default limit
+    ) -> None:
+        Supervisor.require(self._spec, action, "launchctl", *args, timeout=timeout)

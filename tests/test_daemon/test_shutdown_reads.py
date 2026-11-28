@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING, cast
 
 from biff.client.connection import ClientIdentity, DaemonClient
 from biff.daemon.handback import Handback
 from biff.daemon.server import BiffDaemon
 from biff.run_dir import RunDir
+from tests.test_daemon.claude_seats import until
 from tests.test_daemon.conftest import CountingFactory, FakeResolver
 from tests.test_daemon.consuming import ConsumingRelay
 
@@ -98,6 +100,61 @@ class BroadcastStuckRelay(ConsumingRelay):
         return await super().fetch_user_inbox(user)
 
 
+class PacedRelay(ConsumingRelay):
+    """A consuming relay with slow publishes and a broadcast fetch that can pause."""
+
+    pace = 0.0
+    publishing = asyncio.Event()
+    hold_fetch = False
+    fetched = asyncio.Event()
+    release = asyncio.Event()
+
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
+        type(self).publishing.set()
+        await asyncio.sleep(type(self).pace)
+        await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
+
+    async def fetch_user_inbox(self, user: str) -> list[Message]:
+        unread = await super().fetch_user_inbox(user)  # the relay gave the mail up
+        if type(self).hold_fetch:
+            type(self).fetched.set()
+            await type(self).release.wait()
+        return unread
+
+
+class BarrierRelay(ConsumingRelay):
+    """A relay whose publish pauses once the copy is in it, and whose fetch waits."""
+
+    hold = False
+    fetching = asyncio.Event()
+    published = asyncio.Event()
+    resume = asyncio.Event()
+
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
+        await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
+        if type(self).hold:
+            type(self).published.set()  # the copy is in the relay...
+            await type(self).resume.wait()  # ...and this call has not returned
+
+    async def fetch_user_inbox(self, user: str) -> list[Message]:
+        if type(self).hold:
+            type(self).fetching.set()
+            await type(self).published.wait()  # take mail only once the copy is there
+        return await super().fetch_user_inbox(user)
+
+
 def _bodies(result: object) -> list[str]:
     rows = cast("list[dict[str, str]]", cast("dict[str, object]", result)["data"])
     return [row["body"] for row in rows]
@@ -161,9 +218,9 @@ async def test_one_held_message_the_relay_refuses_does_not_drop_the_others(
     await kai.request_held("read")  # all three are held, none confirmed
     monkeypatch.setattr(FlakyRelay, "failing", 1)  # the first publish at stop fails
 
-    await harness.daemon.stop()
+    await harness.daemon.stop()  # m1 is refused: it is spilled, m2 and m3 filed
 
-    assert await _read_after_restart(harness, tmp_path) == ["m2", "m3"]
+    assert await _read_after_restart(harness, tmp_path) == ["m1", "m2", "m3"]
 
 
 async def test_a_read_that_never_finishes_does_not_hold_the_stop_or_the_held_mail(
@@ -172,6 +229,7 @@ async def test_a_read_that_never_finishes_does_not_hold_the_stop_or_the_held_mai
     monkeypatch.setattr(StuckRelay, "stuck", asyncio.Event())
     monkeypatch.setattr(StuckRelay, "release", asyncio.Event())
     monkeypatch.setattr(Handback, "SETTLE_SECONDS", 0.1)
+    monkeypatch.setattr(Handback, "LOCK_SECONDS", 0.05)
     harness.factory.relay_type = StuckRelay
     kai = await harness.connect("s-kai", "kai")
     eric = await harness.connect("s-eric", "eric")
@@ -235,3 +293,124 @@ async def test_slow_publishes_at_stop_end_at_a_total_budget_and_are_logged(
         await harness.daemon.stop()
 
     assert "3 held messages were not given back" in caplog.text
+
+
+async def test_mail_the_budget_left_unfiled_is_filed_back_at_the_next_start(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Handback, "REFILE_SECONDS", 0.2)
+    harness.factory.relay_type = PacedRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    for body in ("m1", "m2", "m3"):
+        await eric.request("write", to="kai", message=body)
+    await kai.request_held("read")  # all three are held, none confirmed
+    monkeypatch.setattr(PacedRelay, "pace", 0.15)  # the budget ends in the second
+
+    await harness.daemon.stop()
+
+    assert await _read_after_restart(harness, tmp_path) == ["m1", "m2", "m3"]
+
+
+async def test_a_fetch_that_finishes_after_the_seal_is_not_lost(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Handback, "SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(Handback, "LOCK_SECONDS", 3.0)
+    monkeypatch.setattr(PacedRelay, "fetched", asyncio.Event())
+    monkeypatch.setattr(PacedRelay, "release", asyncio.Event())
+    harness.factory.relay_type = PacedRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="m1")
+    await kai.request_held("read")  # m1 is held, unconfirmed
+    await eric.request("write", to="kai", message="m2")
+    monkeypatch.setattr(PacedRelay, "hold_fetch", True)
+    reading = asyncio.create_task(kai.request("read"))
+    await asyncio.wait_for(PacedRelay.fetched.wait(), _WAIT)  # m2 is in flight
+
+    stopping = asyncio.create_task(harness.daemon.stop())
+    sessions = harness.daemon._core.sessions  # pyright: ignore[reportPrivateUsage]
+    await until(lambda: sessions._sink is not None)  # pyright: ignore[reportPrivateUsage]
+    PacedRelay.release.set()  # the fetch ends after the outboxes were sealed
+    await asyncio.wait_for(stopping, _WAIT)
+
+    await asyncio.gather(reading, return_exceptions=True)
+    assert await _read_after_restart(harness, tmp_path) == ["m1", "m2"]
+
+
+async def test_a_late_read_cannot_take_the_refiled_copy_of_a_held_message(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Handback, "SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(Handback, "LOCK_SECONDS", 0.1, raising=False)
+    monkeypatch.setattr(BarrierRelay, "fetching", asyncio.Event())
+    monkeypatch.setattr(BarrierRelay, "published", asyncio.Event())
+    monkeypatch.setattr(BarrierRelay, "resume", asyncio.Event())
+    harness.factory.relay_type = BarrierRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="m1")
+    await kai.request_held("read")  # m1 is held, unconfirmed
+    monkeypatch.setattr(BarrierRelay, "hold", True)
+    reading = asyncio.create_task(kai.request("read"))
+    await asyncio.wait_for(BarrierRelay.fetching.wait(), _WAIT)
+
+    stopping = asyncio.create_task(harness.daemon.stop())
+    with contextlib.suppress(TimeoutError):  # it never is, once the hand-back waits
+        await asyncio.wait_for(BarrierRelay.published.wait(), 0.5)
+    BarrierRelay.resume.set()
+    await asyncio.wait_for(stopping, _WAIT)
+
+    try:
+        assert await _read_after_restart(harness, tmp_path) == ["m1"]
+    finally:
+        BarrierRelay.published.set()  # let the read end
+        await asyncio.gather(reading, return_exceptions=True)
+
+
+async def test_held_mail_is_in_the_spill_file_before_the_hand_back_files_any_of_it(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stop killed at launchd's 20 s must find the mail on disk: the spill is the
+    # durable copy first, and what is filed is removed from it after.
+    monkeypatch.setattr(Handback, "SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(Handback, "REFILE_SECONDS", 30.0)
+    monkeypatch.setattr(PacedRelay, "publishing", asyncio.Event())
+    harness.factory.relay_type = PacedRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="m1")
+    await kai.request_held("read")  # m1 is held, unconfirmed
+    monkeypatch.setattr(PacedRelay, "pace", 60.0)  # the publish never ends
+    PacedRelay.publishing.clear()  # the writes above published too
+
+    stopping = asyncio.create_task(harness.daemon.stop())
+    await asyncio.wait_for(PacedRelay.publishing.wait(), _WAIT)  # filing has begun
+    spill = harness.sessions.root.parent / "handback-spill.json"
+    try:
+        assert spill.exists()
+        assert '"m1"' in spill.read_text()
+    finally:  # the process is "killed" here
+        stopping.cancel()
+        await asyncio.gather(stopping, return_exceptions=True)
+
+
+async def test_a_listener_that_never_closes_does_not_hold_back_the_hand_back(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    async def never(_self: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("websockets.asyncio.server.Server.wait_closed", never)
+    monkeypatch.setattr(Handback, "CLOSE_SECONDS", 0.1, raising=False)
+    harness.factory.relay_type = ConsumingRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="m1")
+    await kai.request_held("read")  # m1 is held
+
+    async with asyncio.timeout(_WAIT):
+        await harness.daemon.stop()
+
+    assert await _read_after_restart(harness, tmp_path) == ["m1"]

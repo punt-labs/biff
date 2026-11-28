@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +10,7 @@ from typing import TYPE_CHECKING, Final, Self, final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from biff.daemon.durable_file import DurableFile, UnsyncedError
 from biff.daemon.refusal import RefusalError
 from biff.frame_client import ClientType, Hello
 from biff.frame_reply import ErrorCode
@@ -99,7 +98,7 @@ class HarnessRecords:
             )
         )
         try:
-            self._write(self._path(hello.session_id), stored)
+            self._write(hello.session_id, stored)
         except OSError as exc:
             msg = f"cannot keep the session record in {self._root}: {exc}"
             raise RefusalError.of(ErrorCode.INTERNAL, msg) from exc
@@ -176,7 +175,7 @@ class HarnessRecords:
         path = self._path(key.session_id)
         try:
             changed = step(self._read(path))
-            self._write(path, changed)
+            self._write(key.session_id, changed)
         except FileNotFoundError:
             # The session ended and its record went with it; a connection that
             # leaves afterwards has nothing to mark.
@@ -202,28 +201,13 @@ class HarnessRecords:
     def _read(path: Path) -> _Stored:
         return _Stored.model_validate_json(path.read_text())
 
-    def _write(self, path: Path, stored: _Stored) -> None:
-        """Replace the file at *path* with *stored*, durably: data, then name."""
-        self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=self._root, prefix=".record-", suffix=".tmp")
+    def _write(self, session_id: str, stored: _Stored) -> None:
+        """Replace the session's record with *stored*, durably."""
+        name = f"{session_id}{_SUFFIX}"
         try:
-            with os.fdopen(fd, "w") as fh:
-                fh.write(stored.model_dump_json(indent=2))
-                fh.flush()
-                os.fsync(fh.fileno())
-            Path(tmp).chmod(0o600)
-            Path(tmp).replace(path)
-            self._sync_directory()
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
-
-    def _sync_directory(self) -> None:
-        fd = os.open(self._root, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+            DurableFile.replace(self._root, name, stored.model_dump_json(indent=2))
+        except UnsyncedError:
+            logger.warning("record %s written; its directory entry is not synced", name)
 
     def _path(self, session_id: str) -> Path:
         # A session id has passed the id charset (``Hello``), so it cannot climb out.

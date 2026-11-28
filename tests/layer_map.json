@@ -317,5 +317,9 @@
   "biff.plugins.claude_code.channel_check_ask": "claude_code",
   "biff.server.daemon_arrivals": "server",
   "biff.server.daemon_channel": "server",
-  "biff.server.daemon_channel_tools": "server"
+  "biff.server.daemon_channel_tools": "server",
+  "biff.daemon.durable_file": "daemon",
+  "biff.daemon.spill": "daemon",
+  "biff.daemon.spill_entry": "daemon",
+  "biff.daemon.spill_file": "daemon"
 }
