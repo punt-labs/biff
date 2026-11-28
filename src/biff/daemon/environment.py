@@ -1,4 +1,4 @@
-"""The daemon's own environment must not decide any session's identity or relay."""
+"""The daemon's own environment must not decide any session's identity."""
 
 from __future__ import annotations
 
@@ -11,24 +11,23 @@ __all__ = ["DaemonEnvironment"]
 
 _SESSION_SETTINGS: Final = (
     "BIFF_OWNER",
-    "BIFF_RELAY_NKEYS_SEED",
-    "BIFF_RELAY_TLS_HANDSHAKE_FIRST",
-    "BIFF_RELAY_TOKEN",
-    "BIFF_RELAY_URL",
-    "BIFF_RELAY_USER_CREDENTIALS",
     "BIFF_USER",
 )
 
 
 @final
 class DaemonEnvironment:
-    """Removes the per-session settings the daemon inherited from its launcher."""
+    """Removes the per-session identity the daemon inherited from its launcher.
+
+    The ``BIFF_RELAY_*`` variables stay: they are the relay settings biffd is
+    started with (see ``biff.relay_seed``), and every client is compared with them.
+    """
 
     @staticmethod
     def scrub(environ: MutableMapping[str, str]) -> tuple[str, ...]:
-        """Delete every per-session ``BIFF_*`` setting from *environ*.
+        """Delete every per-session identity setting from *environ*.
 
-        The daemon serves many users' sessions; a variable set where it was
+        The daemon serves many users' sessions; a user or owner set where it was
         started would otherwise override each session's own configuration.
         Returns the names removed, so the caller can say so.
         """

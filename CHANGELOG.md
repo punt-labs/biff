@@ -4,6 +4,20 @@
 
 ### Added
 
+- biffd takes its `BIFF_RELAY_*` relay settings from the environment of the process
+  that starts it (a `biff` command starting it where there is no service manager, as
+  in a container). The values travel by environment only, never on a command line,
+  in a log or in a file. A client is admitted only if its own `BIFF_RELAY_*` equal
+  biffd's, compared by digest in both directions; otherwise it is refused naming the
+  variables biffd was started with, the ones it sets and the ones that differ. Under a
+  systemd or launchd unit biffd has no such environment and refuses a client that
+  carries them. biffd refuses to start with a credential and no `BIFF_RELAY_URL`, two
+  credentials, or a credentials path that is not an absolute existing file, and sends
+  seeded credentials only to the seeded URL on every path that opens a relay
+  (hello, restore, sweep, spill replay), comparing credential files by resolved path. The hello reply, `/health`,
+  `biff daemon status` and `biff doctor` show the seeded variable names and relay host.
+  A restart with other relay settings logs a warning, and sessions opened under the
+  old ones are kept dormant instead of dropped.
 - With `mcp.transport: daemon`, `biff mcp` sends Claude Code's channel events
   (mail, wall, talk invite, talk message, channel check) from biffd's subscription
   instead of a relay of its own. The emitter, its rate limit, held kinds and retry

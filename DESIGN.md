@@ -10061,3 +10061,135 @@ may not import the server; the server's copy goes with the in-process server.
   its copy are deleted.
 - *Acknowledging in the daemon on the event's delivery.* The acknowledgement is the
   model's, through `channel_ack`; delivery proves nothing about the model.
+
+## DES-104: biffd Is Seeded With the Relay Settings of the Process That Starts It
+
+**Date:** 2026-11-28
+**Status:** SETTLED
+**Topic:** Amends DES-095 item 6 (identity and environment). Which `BIFF_RELAY_*`
+settings biffd serves, who may use them, and what a restart does to the sessions
+opened under them.
+
+**Problem.** biffd resolves every session in its own process, so it cannot see a
+client's `BIFF_RELAY_URL`, `BIFF_RELAY_TOKEN`, `BIFF_RELAY_NKEYS_SEED`,
+`BIFF_RELAY_USER_CREDENTIALS` or `BIFF_RELAY_TLS_HANDSHAKE_FIRST`. Until now biffd
+deleted those variables from its own environment at start and a client that set any
+of them was refused, so an agent container or a Devin session that hands biff its
+relay through the environment could not use the daemon at all.
+
+**Decision.**
+
+1. **The starter's environment is the seed.** A biffd started by a client (the
+   detached start used where there is no service manager, as in an agent
+   container) inherits that client's environment. biffd keeps its `BIFF_RELAY_*`
+   variables and the session resolver reads them as it always has, so the existing
+   repo gate (`relay.allow_env_override`, a committed relay wins) is unchanged.
+   `BIFF_USER` and `BIFF_OWNER` are still removed: those name a person. The secret
+   reaches biffd by environment only: the start command line is `biffd --port N`,
+   and no log line, error message or file carries a value or a digest of one.
+2. **The seed must be whole.** biffd refuses to start (exit status a unit does not
+   retry) when a credential has no `BIFF_RELAY_URL`, when more than one credential
+   is set, or when a key or credentials path is not an absolute path to an existing
+   file. The message names variables only. Credentials without a URL would
+   otherwise go to whichever relay a repository's committed configuration names.
+3. **Credentials go only to the seeded URL, on every path.** A session that holds a
+   seeded credential and whose relay URL is not the seeded `BIFF_RELAY_URL`
+   (compared in normal form: trimmed, no trailing slash, case folded) is refused.
+   The check lives in the one resolution step, `CredentialsHomeResolver`, which
+   wraps the resolver that the hello, the restore at start, the sweep and the spill
+   replay all use. A restore it refuses keeps the record dormant, a sweep leaves the
+   session alone and a replay leaves the mail unfiled, each with a log line that
+   names variables, never values. A key or credentials file is compared by its
+   resolved path (`os.path.realpath`, in the process that reads it, so a relative
+   path means the file under biffd's directory), so a symlink, `..` or relative
+   spelling of the seeded file is that file. biffd also records the (device, inode)
+   of each seeded file at start and stats a session's credential file when it
+   checks, so a hardlink, or a symlink re-pointed after the start, is the seeded
+   file too. A file that cannot be read is not the seeded one, and is logged by
+   variable name.
+4. **A client must equal the seed, in both directions.** `Hello.relay` maps each
+   `BIFF_RELAY_*` variable the client sets to a SHA-256 digest of its value in the
+   form the relay configuration reads (a TLS flag is its parsed true or false, and
+   a value the configuration ignores is no setting). The hello is left plain when
+   no variable is set. biffd admits a client only if its set of variables and every
+   value equal its own seed. Anything else is refused with `bad_hello`, naming the
+   variables biffd was started with, the ones the client sets and the ones that
+   differ, never a value. A client with no settings is refused by a seeded biffd,
+   because it would otherwise be served silently by relay settings it never chose.
+   On a host with no seed nothing changes. In an agent container every process
+   shares one environment, so every client matches; no agent-image change is needed.
+5. **The seed is visible.** The hello reply (`DaemonClient.relay_seed`),
+   `/health`, `biff daemon status` and `biff doctor` give the variable names and the
+   relay host (no userinfo, no value).
+6. **A hello that only ends a session is not compared.** It resolves no relay and
+   sends no credential: it attaches to the session on the relay it was opened on.
+   Refusing it would strand a session whose end hook runs in another environment
+   than the client that opened it.
+7. **A restart with other relay settings keeps the sessions opened under the old
+   ones.** biffd's seed identity is the variable names, a display form
+   `scheme://host[:port]` and one keyed HMAC over all the relay settings: the whole
+   normalised URL with its userinfo, path and query, the token, the resolved paths of
+   the credential files and the parsed TLS flag. The key is 32 random bytes in
+   `relay-seed.key` (0600) in the run directory, made through a flushed temporary
+   file and a link so a crash leaves no short file; a key that is missing, empty,
+   short, a link, another user's or open to others is replaced with a warning, and
+   the records then stay dormant because their hashes no longer match. What is shown
+   (logs, the hello reply, `/health`, `biff daemon status`) is the names and the
+   display form only. The display form is built from the text after the last `@`;
+   it is `unparseable` when a `/`, `?` or `#` comes before that `@`, or the host or
+   scheme has a character outside `[a-z0-9.:\[\]-]`, so userinfo and control
+   characters never reach it, and the HMAC still tells such URLs apart. biffd
+   writes the identity to `relay-seed` (0600) in its run directory. A start whose
+   identity differs from the file's logs a warning that names both display forms
+   when the names or host differ and says only `credentials or path differs`
+   otherwise, never a value. The old state in that note is rebuilt from a strict
+   parse of what the file holds, never copied: text that is not in the current format
+   (an older one, or edited by hand) yields only `the relay settings changed`. It
+   is reported in `/health`, `biff daemon status` and
+   `biff doctor`. Each harness session record carries the identity it was opened
+   under; `SessionRestore` keeps a record whose identity differs from the running
+   biffd's dormant, with a log line, and brings it back when biffd is started with
+   it again. A restore never reads "no row on this relay" as "the session ended"
+   when the relay is not the one the session lives on. A record kept dormant for the
+   seed starts a clock the first time it is seen, and is dropped, with a log line,
+   once it has been dormant for longer than a relay row lives
+   (`RETENTION_SECONDS`): the session is gone from any relay by then. Before this, a
+   unit-started biffd came up unseeded, or a client started it on another relay or
+   account, re-resolved every kept session there, found no row and deleted the
+   record.
+
+**Known limit.** A biffd started by a service manager (a systemd or launchd unit)
+does not inherit a client's environment, and exporting a token to the manager would
+expose it to every process of the user. Such a biffd is seeded with nothing, so a
+client that carries `BIFF_RELAY_*` is refused naming them. Run that client's relay
+through `.punt-labs/biff/config.local.yaml`, or stop the unit and run
+`biff daemon serve` from the environment that sets them.
+
+**Limits of the hash.** The HMAC protects copies of `relay-seed`, the records, logs
+and status output that leave the run directory; anyone who can read `relay-seed` can
+read `relay-seed.key` beside it, which is acceptable because both are the user's.
+Every hello carries a bare SHA-256 of each relay variable's value, over the
+authenticated loopback connection, so a client and biffd can compare settings. A
+per-connection nonce in the challenge with the client sending HMAC(nonce, value)
+would keep a bare digest of a token off the wire; that changes the protocol and is
+not done here.
+
+**Not covered.** The digest of a key or credentials path covers the path string,
+not the file, so a rotation under the same path is not noticed, and an open session
+is not admitted again after one until biffd restarts. Absolute and existing paths
+(item 2) remove the relative-path ambiguity. CLI session records carry no seed identity, so after retention a sweep under a
+changed seed resolves them on the new relay, releases there and expires the record
+while the original row waits for its relay TTL. Tagging them and skipping the sweep
+when the tag differs is tracked as a Bug (repo:biff).
+
+**Rejected.**
+
+- *Sending the values in the hello.* A secret would cross the socket and sit in a
+  frame biffd could log.
+- *One relay per session, resolved from the client's values.* biffd holds one relay
+  connection per target; per-session credentials are the per-user key design
+  (`docs/design/trust-model.md`), not this one.
+- *Keeping the refusal of every `BIFF_RELAY_*` client.* It left the agent
+  container with no daemon path.
+- *Admitting a client that sets nothing.* It is served by the seed with nothing on
+  the client side saying so, and a restarted biffd moves it to another relay.

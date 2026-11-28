@@ -23,6 +23,7 @@ from biff.frame_reply import ErrorCode, Reply, ReplyError
 from biff.frames import Event, FrameError, Frames
 from biff.log_hint import LOG_HINT
 from biff.relay_errors import RELAY_ERRORS
+from biff.relay_seed import RelayConflictError, RelaySeed
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -61,6 +62,8 @@ class DaemonCore:
     poll_interval: float
     attach_timeout: float
     request_timeout: float
+    # The relay settings biffd was started with; a hello may not differ from them.
+    relay_seed: RelaySeed
 
 
 @final
@@ -139,6 +142,7 @@ class ConnectionHandler:
         result: dict[str, JsonValue] = {
             "protocol": PROTOCOL_VERSION,
             "session_key": attachment.session.context.session_key,
+            "relay_seed": self._core.relay_seed.describe(),
         }
         await self._send(ws, Reply(id=_HELLO_ID, result=result))
         return attachment
@@ -201,13 +205,17 @@ class ConnectionHandler:
         core = self._core
         try:
             async with asyncio.timeout(core.attach_timeout):
+                # An end resolves no relay and sends no credential, so it is not
+                # compared: a hook that runs in another environment than the client
+                # that opened the session must still be able to end it.
                 if hello.ends:
                     return await core.sessions.attach_ending(hello)
+                core.relay_seed.admit(RelaySeed.from_wire(hello.relay))
                 resolved = await core.resolver.resolve(hello)
                 return await core.sessions.open(hello, resolved, core.pool)
         except RefusalError:
             raise
-        except ResolveError as exc:
+        except (ResolveError, RelayConflictError) as exc:
             raise RefusalError.of(ErrorCode.BAD_HELLO, str(exc)) from exc
         except TimeoutError as exc:
             msg = f"relay did not answer within {core.attach_timeout:g}s"

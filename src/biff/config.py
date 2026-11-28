@@ -40,6 +40,7 @@ from biff._stdlib import (
     yaml_config_dir,
 )
 from biff.models import BiffConfig, RelayAuth
+from biff.relay_seed import RelaySeed
 
 # Re-export stdlib functions so existing callers of biff.config still work.
 __all__ = [
@@ -375,9 +376,6 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
     )
 
 
-_TLS_TRUE_VALUES = frozenset({"1", "true", "yes"})
-_TLS_FALSE_VALUES = frozenset({"0", "false", "no"})
-
 _AUTH_ENV_FIELDS: dict[str, str] = {
     "BIFF_RELAY_TOKEN": "token",
     "BIFF_RELAY_NKEYS_SEED": "nkeys_seed",
@@ -428,12 +426,7 @@ def _tls_env_override() -> bool | None:
     unlike the boolean's default, absence (``None``) means "leave whatever
     value the URL/file resolution already settled on."
     """
-    normalized = os.environ.get("BIFF_RELAY_TLS_HANDSHAKE_FIRST", "").strip().casefold()
-    if normalized in _TLS_TRUE_VALUES:
-        return True
-    if normalized in _TLS_FALSE_VALUES:
-        return False
-    return None
+    return RelaySeed.tls_value(os.environ.get("BIFF_RELAY_TLS_HANDSHAKE_FIRST", ""))
 
 
 def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
