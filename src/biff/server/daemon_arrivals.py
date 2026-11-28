@@ -189,7 +189,9 @@ class DaemonArrivals:
         )
 
     def _invite(self) -> Reading:
-        live = set() if self._snapshot is None else set(self._snapshot.invites)
+        live: set[tuple[str, str]] = (
+            set() if self._snapshot is None else set(self._snapshot.invites)
+        )
         newest = max(
             (entry for entry in self._invites if (entry[1], entry[2]) in live),
             key=lambda entry: entry[0],
