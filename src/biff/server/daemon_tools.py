@@ -7,16 +7,13 @@ panel line and the model's context, so nothing here reformats it.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from fastmcp.exceptions import ToolError
 
-from biff.relay_errors import RELAY_ERRORS
 from biff.server.daemon_calls import DaemonCalls
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
-from biff.server.tools._session import get_or_create_session, update_current_session
 from biff.tty import parse_address
 
 if TYPE_CHECKING:
@@ -26,8 +23,6 @@ if TYPE_CHECKING:
     from biff.server.state import ServerState
 
 __all__ = ["DaemonReadTools"]
-
-logger = logging.getLogger(__name__)
 
 # What each tool says about itself.  The in-process tools say the same, and a test
 # fails when the two servers list a tool differently.
@@ -97,7 +92,6 @@ class DaemonReadTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        await update_current_session(self._state)
         await refresh_read_messages(self._mcp, self._state)
         return (await self._calls.ask("who")).text
 
@@ -117,7 +111,6 @@ class DaemonReadTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        await update_current_session(self._state)
         await refresh_read_messages(self._mcp, self._state)
         for address in user.split():
             parse_address(address)
@@ -138,7 +131,6 @@ class DaemonReadTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        await update_current_session(self._state)
         return (await self._calls.ask("last", user=user, count=count)).text
 
     async def read_messages(self) -> str:
@@ -156,28 +148,10 @@ class DaemonReadTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        # An empty poll is not work: it keeps the presence row alive and no more.
-        await self._presence_kept()
         reply = await self._calls.read(self._delivered)
-        if reply.carries_mail:
-            await self._stamped()
         if reply.more > 0:
             return f"{reply.text}\n{reply.more} more unread; call read_messages again"
         return reply.text
-
-    async def _stamped(self) -> None:
-        """Count a read that found mail as activity: mail routing follows it."""
-        try:
-            await update_current_session(self._state)
-        except RELAY_ERRORS as exc:
-            logger.warning("read_messages: presence update failed: %s", exc)
-
-    async def _presence_kept(self) -> None:
-        """Keep the presence row alive; a relay that cannot is not a failed read."""
-        try:
-            await get_or_create_session(self._state)
-        except RELAY_ERRORS as exc:
-            logger.warning("read_messages: presence update failed: %s", exc)
 
     async def _delivered(self) -> None:
         await refresh_read_messages(self._mcp, self._state)

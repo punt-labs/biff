@@ -34,6 +34,10 @@ _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 type Handler = Callable[[CliContext, Params], Awaitable[CommandResult]]
 type Acknowledge = Callable[[], Awaitable[None]]
 
+_POLLS = frozenset({"status", "talk_read"})
+"""The methods that are not work: an empty look must not move the activity clock
+that routes mail (a ``read`` is one too, and stamps only when it finds mail)."""
+
 READ_BUDGET_BYTES = MAX_FRAME_BYTES // 2
 """The most one ``read`` reply carries, rows and rendered text together, in bytes.
 
@@ -113,6 +117,8 @@ class Methods:
         ctx = session.context
         if method == "read":
             return await self._read(session, Params(method, raw))
+        if method not in _POLLS:
+            await session.touch()
         if method in self._sessions.names:
             result = await self._sessions.call(session, method, Params(method, raw))
             return self._outcome(result)
@@ -169,6 +175,7 @@ class Methods:
             result["more"] = left
         if not batch:
             return Outcome(result)
+        await session.touch()
         return Outcome(result, partial(ReadSteps.delivered, session, inbox, batch))
 
     @staticmethod

@@ -15,7 +15,6 @@ from biff.commands.talk_read import TalkReadout
 from biff.server.daemon_calls import DaemonCalls
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import TALK_BASE_DESCRIPTION, refresh_talk
-from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -100,10 +99,7 @@ class DaemonTalkTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        await update_current_session(self._state)
-        return await self._shown(
-            await self._calls.ask("talk", to=to, message=message)
-        )
+        return await self._shown(await self._calls.ask("talk", to=to, message=message))
 
     async def talk_read(self) -> str:
         """Read pending talk invitations and consume queued talk messages.
@@ -142,7 +138,6 @@ class DaemonTalkTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        await update_current_session(self._state)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + float(timeout)
         while True:
@@ -167,7 +162,6 @@ class DaemonTalkTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        await update_current_session(self._state)
         return await self._shown(await self._calls.ask("talk_end"))
 
     async def _shown(self, reply: Reply) -> str:

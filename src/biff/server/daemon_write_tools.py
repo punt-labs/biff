@@ -22,7 +22,6 @@ from biff.server.tools._descriptions import (
     set_biff_enabled,
     set_tty_name,
 )
-from biff.server.tools._session import update_current_session
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
 
 if TYPE_CHECKING:
@@ -102,7 +101,6 @@ class DaemonWriteTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        await update_current_session(self._state)
         await refresh_read_messages(self._mcp, self._state)
         return (await self._calls.ask("write", to=to, message=message)).text
 
@@ -212,7 +210,6 @@ class DaemonWriteTools:
                 the message names the cause and the command that repairs it.
         """
         state = self._state
-        await update_current_session(state)
         reply = await self._calls.ask(
             "wall", message=message, duration=duration, clear=clear, repo=repo
         )
