@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Self, final
 from urllib.parse import urlsplit
@@ -122,6 +123,10 @@ class RelaySeed:
             value = value.strip().rstrip("/").casefold()
         elif name == "BIFF_RELAY_TLS_HANDSHAKE_FIRST":
             value = str(cls.tls_value(value))
+        elif name in _CREDENTIAL_PATHS:
+            # One file has many spellings (relative, ``..``, a symlink), and a
+            # relative one means the file under the cwd of the process that reads it.
+            value = os.path.realpath(value)
         return hashlib.sha256(value.encode()).hexdigest()
 
     @classmethod
@@ -220,11 +225,12 @@ class RelaySeed:
         if auth is None:
             return
         seeded = {self._digests[name] for name in _CREDENTIALS if name in self._digests}
-        held = {
-            self._digest(value, "BIFF_RELAY_TOKEN")
-            for value in (auth.token, auth.nkeys_seed, auth.user_credentials)
-            if value
-        }
+        fields: tuple[tuple[RelayVariable, str | None], ...] = (
+            ("BIFF_RELAY_TOKEN", auth.token),
+            ("BIFF_RELAY_NKEYS_SEED", auth.nkeys_seed),
+            ("BIFF_RELAY_USER_CREDENTIALS", auth.user_credentials),
+        )
+        held = {self._digest(value, name) for name, value in fields if value}
         here = self._digest(relay_url or "", "BIFF_RELAY_URL")
         if held & seeded and here != self._digests.get("BIFF_RELAY_URL"):
             msg = (

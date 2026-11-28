@@ -12,6 +12,7 @@ from biff.daemon.resolver import ResolveError
 from biff.daemon.session_key import SessionKey
 from biff.daemon.tasks import Supervised
 from biff.relay_errors import RELAY_ERRORS
+from biff.relay_seed import RelayConflictError
 from biff.session_id import CLAUDE_CODE_ROLE
 from biff.session_routing import SessionRouting
 
@@ -101,15 +102,12 @@ class SessionRestore:
         if SessionKey.of(hello) in self._core.sessions.snapshot():
             return True  # a hello came first: its record is newer than this one
         if kept.relay_seed != self._core.relay_seed.names():
-            logger.warning(
-                "session %s was opened with relay settings %s and biffd now has "
-                "%s; its record is kept dormant until biffd is started with them "
-                "again",
-                hello.session_id,
-                ", ".join(kept.relay_seed) or "none",
-                self._core.relay_seed.listed(),
+            return self._keep_dormant(
+                hello,
+                f"it was opened with relay settings "
+                f"{', '.join(kept.relay_seed) or 'none'} "
+                f"and biffd now has {self._core.relay_seed.listed()}",
             )
-            return True
         try:
             async with asyncio.timeout(self._core.attach_timeout):
                 attachment = await self._open(hello)
@@ -124,6 +122,8 @@ class SessionRestore:
                 hello.cwd,
             )
             return False
+        except RelayConflictError as exc:
+            return self._keep_dormant(hello, str(exc))
         except (TimeoutError, *RELAY_ERRORS):
             logger.warning(
                 "could not restore session %s", hello.session_id, exc_info=True
@@ -139,6 +139,17 @@ class SessionRestore:
         attachment.detach()
         attachment.session.rest_for((datetime.now(UTC) - since).total_seconds())
         self._records.mark(SessionKey(hello.session_id, CLAUDE_CODE_ROLE), since)
+        return True
+
+    @staticmethod
+    def _keep_dormant(hello: Hello, why: str) -> bool:
+        """Leave the record of *hello* unopened and say why; never drop it."""
+        logger.warning(
+            "session %s is kept dormant: %s; it comes back when biffd runs with "
+            "the relay settings it was opened under",
+            hello.session_id,
+            why,
+        )
         return True
 
     async def _open(self, hello: Hello) -> Attachment | None:

@@ -20,6 +20,7 @@ from biff.models import UnreadSummary, UserSession
 from biff.relay import LocalRelay
 from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
+from tests.test_daemon.conftest import FakeResolver
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -324,11 +325,11 @@ async def test_an_unserialisable_payload_fails_loudly_not_as_a_string(
 async def test_a_resolver_bug_is_an_internal_hello_refusal_not_a_dead_socket(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def boom(_hello: object) -> object:
+    async def boom(_resolver: object, _hello: object) -> object:
         msg = "resolver bug"
         raise RuntimeError(msg)
 
-    monkeypatch.setattr(harness.daemon._core.resolver, "resolve", boom)
+    monkeypatch.setattr(FakeResolver, "resolve", boom)
     with pytest.raises(DaemonError, match=r"biff\.log") as caught:
         await harness.connect("s-kai", "kai")
     assert caught.value.code is ErrorCode.INTERNAL

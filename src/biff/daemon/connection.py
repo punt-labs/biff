@@ -212,9 +212,6 @@ class ConnectionHandler:
                     return await core.sessions.attach_ending(hello)
                 core.relay_seed.admit(RelaySeed.from_wire(hello.relay))
                 resolved = await core.resolver.resolve(hello)
-                core.relay_seed.require_credentials_home(
-                    resolved.config.relay_url, resolved.config.relay_auth
-                )
                 return await core.sessions.open(hello, resolved, core.pool)
         except RefusalError:
             raise

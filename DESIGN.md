@@ -10092,10 +10092,17 @@ relay through the environment could not use the daemon at all.
    is set, or when a key or credentials path is not an absolute path to an existing
    file. The message names variables only. Credentials without a URL would
    otherwise go to whichever relay a repository's committed configuration names.
-3. **Credentials go only to the seeded URL.** After a session resolves, biffd
-   refuses it if it holds a seeded credential and its relay URL is not the seeded
-   `BIFF_RELAY_URL` (compared in normal form: trimmed, no trailing slash, case
-   folded).
+3. **Credentials go only to the seeded URL, on every path.** A session that holds a
+   seeded credential and whose relay URL is not the seeded `BIFF_RELAY_URL`
+   (compared in normal form: trimmed, no trailing slash, case folded) is refused.
+   The check lives in the one resolution step, `CredentialsHomeResolver`, which
+   wraps the resolver that the hello, the restore at start, the sweep and the spill
+   replay all use. A restore it refuses keeps the record dormant, a sweep leaves the
+   session alone and a replay leaves the mail unfiled, each with a log line that
+   names variables, never values. A key or credentials file is compared by its
+   resolved path (`os.path.realpath`, in the process that reads it, so a relative
+   path means the file under biffd's directory), so a symlink, `..` or relative
+   spelling of the seeded file is that file.
 4. **A client must equal the seed, in both directions.** `Hello.relay` maps each
    `BIFF_RELAY_*` variable the client sets to a SHA-256 digest of its value in the
    form the relay configuration reads (a TLS flag is its parsed true or false, and

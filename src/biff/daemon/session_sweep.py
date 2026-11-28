@@ -15,6 +15,7 @@ from biff.daemon.session_pointer import CurrentPointer
 from biff.daemon.session_select import SessionSelector
 from biff.frame_client import Hello
 from biff.relay_errors import RELAY_ERRORS
+from biff.relay_seed import RelayConflictError
 from biff.tty import get_hostname
 
 if TYPE_CHECKING:
@@ -105,7 +106,7 @@ class SessionSweeper:
                 continue
             try:
                 await self._sweep_one(record)
-            except ResolveError as exc:
+            except (ResolveError, RelayConflictError) as exc:
                 logger.info("session %s left alone: %s", record.session_id, exc)
             except (OSError, ValueError, *RELAY_ERRORS):
                 logger.warning(

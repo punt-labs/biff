@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Self, final
 from websockets.asyncio.server import Server, ServerConnection, serve
 
 from biff.daemon.connection import ConnectionHandler, DaemonCore
+from biff.daemon.credentials_home_resolver import CredentialsHomeResolver
 from biff.daemon.handback import Handback
 from biff.daemon.harness_records import HarnessRecords
 from biff.daemon.methods import READ_BUDGET_BYTES, Methods
@@ -128,7 +129,7 @@ class BiffDaemon:
         self = super().__new__(cls)
         self._run_dir = run_dir
         self._port = port
-        resolver = resolver or DiskResolver()
+        resolver = CredentialsHomeResolver(resolver or DiskResolver(), relay_seed)
         pool = RelayPool(relay_factory or RelayPool.selecting())
         records = HarnessRecords(sessions.root.parent / "harness-sessions", relay_seed)
         spill = Spill(

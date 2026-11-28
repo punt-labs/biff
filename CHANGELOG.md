@@ -13,7 +13,8 @@
   systemd or launchd unit biffd has no such environment and refuses a client that
   carries them. biffd refuses to start with a credential and no `BIFF_RELAY_URL`, two
   credentials, or a credentials path that is not an absolute existing file, and sends
-  seeded credentials only to the seeded URL. The hello reply, `/health`,
+  seeded credentials only to the seeded URL on every path that opens a relay
+  (hello, restore, sweep, spill replay), comparing credential files by resolved path. The hello reply, `/health`,
   `biff daemon status` and `biff doctor` show the seeded variable names and relay host.
   A restart with other relay settings logs a warning, and sessions opened under the
   old ones are kept dormant instead of dropped.
