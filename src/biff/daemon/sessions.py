@@ -7,6 +7,7 @@ import time
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_context import CliContext
@@ -234,6 +235,10 @@ class Session:
         """Accept requests again: the end failed, and the session goes on."""
         self._hold.abort_end()
 
+    def rest_for(self, seconds: float) -> None:
+        """Count the session as dormant for *seconds* already: a restored one is."""
+        self._idle_since = time.monotonic() - seconds
+
     def idle_for(self) -> float:
         """Return the seconds since the last connection left, or since the start."""
         return time.monotonic() - self._idle_since
@@ -419,16 +424,26 @@ class SessionTable:
                     heartbeat_interval=self._interval,
                     org_refresh_interval=self._org_interval,
                 )
-                self._sessions[key] = session
                 if key.role != CLI_ROLE:
-                    self._records.save(hello)
+                    self._records.keep(hello)  # refuses before the session exists
+                self._sessions[key] = session
             else:
                 session.check_same(resolved)
                 if session.is_dormant:
                     await session.revive()
+                if key.role != CLI_ROLE:
+                    self._records.mark(key, None)
             if hello.client == "cli":
                 await session.touch()
             return session.attach(hello.main_agent_id)
+
+    def release(self, attachment: Attachment) -> None:
+        """Let go of a connection; a harness session left with none is dormant now."""
+        session = attachment.session
+        attachment.detach()
+        if session.is_agent and session.is_dormant:
+            key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
+            self._records.mark(key, datetime.now(UTC))
 
     def holding(self, session_id: str) -> Session | None:
         """Return the shell session *session_id* if the daemon holds it."""
@@ -446,12 +461,12 @@ class SessionTable:
         reply.
         """
         session = self._sessions.pop(key, None)
-        if key.role != CLI_ROLE:
-            self._records.remove(key)
         if self._users[key] == 0:
             self._locks.pop(key, None)  # guard drops it only while no session
         if session is not None and session is not spare:
             session.end_attachments()
+        if key.role != CLI_ROLE:
+            self._records.remove(key)  # last: it logs a failure, never raises
 
     def snapshot(self) -> dict[SessionKey, Session]:
         """Return a copy of every session held, safe to iterate while awaiting."""

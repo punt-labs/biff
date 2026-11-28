@@ -380,13 +380,24 @@ lifetime of its relay row, three days) is ended by the session sweep with the sa
 effects (`ExpireClaude`); a hello that reattaches first restarts the clock. A relay
 failure leaves the record and the next sweep retries. The daemon keeps each
 harness session's record on disk (`~/.punt-labs/biff/harness-sessions/<session id>.json`,
-mode 0600: the client, session id, main agent, directory and user of the hello that
-opened it), written when the session opens and removed when it ends or expires. At
-start, before it listens, the daemon builds every kept session again, dormant, with
-the retention clock restarted: the mail waiting in its relay inbox is drained into the
-user's mailbox by an end or by retention, as for any session, and a hello reattaches
-it. A record whose repository or relay does not answer is kept and tried again at the
-next start. A crash still loses the batch held in the outbox (PL-1753).
+mode 0600, written and synced when the session opens): the hello's client, session id,
+main agent, directory and user, when its last connection left (`dormant_since`, null
+while one is on it) and how many starts in a row failed to restore it. A session that
+cannot be recorded is refused its hello. The record is removed last when the session
+ends or expires; a record that cannot be deleted is logged, and a restart drops it when
+the relay no longer lists the session.
+
+At start, before it listens, the daemon builds every kept session again, dormant, each
+bounded by the attach timeout and none able to stop the start. Retention resumes from
+`dormant_since`; a session that had a connection when the daemon died starts a fresh
+period. The mail waiting in its relay inbox is drained into the user's mailbox by an
+end or by retention, as for any session, and a hello reattaches it. A session the
+relay could not serve is tried again after 5, 15 and 45 seconds, and at each start,
+until five starts in a row have failed. A record whose repository is gone, whose relay
+row is gone (the session ended, or aged out while the daemon was down), or that failed
+five starts is dropped and logged; its mail stays in the relay inbox, since forwarding
+it needs the relay the record can no longer reach. A crash still loses the batch held
+in the outbox (PL-1753).
 
 ## Z specification obligations
 

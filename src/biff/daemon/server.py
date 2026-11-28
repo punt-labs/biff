@@ -66,7 +66,7 @@ class BiffDaemon:
     __slots__ = (
         "_core",
         "_port",
-        "_records",
+        "_restore",
         "_run_dir",
         "_server",
         "_started",
@@ -78,7 +78,7 @@ class BiffDaemon:
     _run_dir: RunDir
     _port: int
     _core: DaemonCore
-    _records: HarnessRecords
+    _restore: SessionRestore
     _server: Server | None
     _started: float
     _sweeper: SessionSweeper
@@ -114,11 +114,11 @@ class BiffDaemon:
         self._port = port
         resolver = resolver or DiskResolver()
         pool = RelayPool(relay_factory or RelayPool.selecting())
-        self._records = HarnessRecords(sessions.root.parent / "harness-sessions")
+        records = HarnessRecords(sessions.root.parent / "harness-sessions")
         live = SessionTable(
             heartbeat_interval=heartbeat_interval,
             org_refresh_interval=org_refresh_interval,
-            records=self._records,
+            records=records,
         )
         self._core = DaemonCore(
             resolver=resolver,
@@ -130,6 +130,7 @@ class BiffDaemon:
             attach_timeout=attach_timeout,
             request_timeout=request_timeout,
         )
+        self._restore = SessionRestore(records, self._core)
         self._server = None
         self._started = 0.0
         self._sweeper = SessionSweeper(sessions, resolver, pool, live)
@@ -151,7 +152,7 @@ class BiffDaemon:
 
     async def start(self) -> None:
         """Create the token, bind the loopback listener and record its port."""
-        await SessionRestore.run(self._records, self._core)
+        await self._restore.run()
         handler = ConnectionHandler(self._run_dir.ensure_token(), self._core)
         self._server = await serve(
             handler.handle,
@@ -179,6 +180,7 @@ class BiffDaemon:
         still propagates.  The port file is removed only while it still names
         this daemon's port, so a late stop cannot erase its replacement's record.
         """
+        await self._restore.stop()
         server, self._server = self._server, None
         sweep, self._sweep_task = self._sweep_task, None
         if sweep is not None:
