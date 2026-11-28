@@ -77,6 +77,16 @@ class ChannelCheck:
         self._is_unsent = True
         return self._token
 
+    def owe(self, token: str) -> None:
+        """Owe the event for *token*, made by biffd, which also took the request.
+
+        biffd keeps the cooldown and the reply subject, so only the token and
+        the fact that it is unsent are held here.
+        """
+        self._token = token
+        self._reply = ""
+        self._is_unsent = True
+
     def take_unsent(self) -> str | None:
         """Return the token whose event is owed, once; ``None`` if none is owed."""
         if not self._is_unsent:

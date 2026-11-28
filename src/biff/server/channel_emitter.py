@@ -19,17 +19,18 @@ import time
 from collections.abc import Callable, Hashable
 from contextlib import suppress
 from datetime import datetime
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, cast
 
 from biff.relay_errors import RelayLog
 from biff.server.channel import ChannelUnavailableError
 from biff.server.channel_arrivals import Arrivals
 from biff.server.channel_check import ChannelCheck
 from biff.server.channel_content import EventKind
-from biff.server.channel_gate import Gate, SendGate
+from biff.server.channel_gate import Gate, ReadinessGate, SendGate
 from biff.server.channel_instructions import INSTRUCTIONS
 from biff.server.channel_rate import RateLimit, RateWindow
 from biff.server.channel_reading import (
+    ArrivalReader,
     ArrivalSource,
     EventSink,
     Reading,
@@ -66,8 +67,8 @@ class ChannelEmitter:
     its record unchanged and goes out later with current values.
     """
 
-    _source: ArrivalSource
-    _arrivals: Arrivals
+    _source: ArrivalSource | None  # None: biffd keeps the relay, the arrivals say
+    _arrivals: ArrivalReader
     _wake: Callable[[], None]
     _link: EventSink | None
     _rate: RateWindow
@@ -77,7 +78,7 @@ class ChannelEmitter:
     _misses: dict[EventKind, int]
     _is_listening: bool
     _lock: asyncio.Lock
-    _gate: SendGate
+    _gate: ReadinessGate
     _due: dict[EventKind, float]
     _retried: set[EventKind]
     _dormant: dict[EventKind, Hashable]
@@ -87,25 +88,36 @@ class ChannelEmitter:
 
     def __new__(
         cls,
-        source: ArrivalSource,
+        source: ArrivalSource | None,
         wake: Callable[[], None],
         *,
         limit: RateLimit | None = None,
         clock: Callable[[], float] = time.monotonic,
         check: ChannelCheck | None = None,
+        arrivals: ArrivalReader | None = None,
+        gate: ReadinessGate | None = None,
     ) -> Self:
         """Create a dormant emitter; :meth:`serve` gives it a link.
 
         Args:
-            source: The relay, talk state and session key to read.
+            source: The relay, talk state and session key to read; ``None`` when
+                *arrivals* and *gate* are given, as for a client of biffd.
             wake: Ask the poller for a pass; called when a gate opens.
             limit: The rate limit; the design's constants by default.
             clock: A monotonic clock, replaced in tests.
             check: The doctor's pending channel check; one of its own by default.
+            arrivals: What has arrived; read from *source* by default.
+            gate: When an event may go out; ``SendGate`` on *source* by default.
+
+        Raises:
+            ValueError: There is no *source* and no *arrivals* or no *gate*.
         """
+        if source is None and (arrivals is None or gate is None):
+            msg = "an emitter with no source needs its own arrivals and gate"
+            raise ValueError(msg)
         self = super().__new__(cls)
         self._source = source
-        self._arrivals = Arrivals(source)
+        self._arrivals = arrivals or Arrivals(cast("ArrivalSource", source))
         self._wake = wake
         self._link = None
         self._clock = clock
@@ -115,7 +127,7 @@ class ChannelEmitter:
         self._misses = {}
         self._is_listening = False
         self._lock = asyncio.Lock()
-        self._gate = SendGate(source)
+        self._gate = gate or SendGate(cast("ArrivalSource", source))
         self._due = {}
         self._retried = set()
         self._dormant = {}
@@ -155,6 +167,8 @@ class ChannelEmitter:
         only from the connected partner (the DES-046 key check).  Returns what
         ``TalkState.receive`` returned: whether the poller should wake.
         """
+        if self._source is None or not isinstance(self._arrivals, Arrivals):
+            return False  # biffd holds the talk; its events are counted instead
         woke = self._source.talk.receive(raw)
         if woke:
             self._arrivals.count(TalkNotification.from_payload(raw))
@@ -168,7 +182,7 @@ class ChannelEmitter:
         subscription rebind, which calls :meth:`reconnected` too.
         """
         self._link = link
-        relay = self._source.relay
+        relay: object = None if self._source is None else self._source.relay
         if isinstance(relay, ReconnectNotifier) and not self._is_listening:
             self._is_listening = True
             relay.add_reconnect_listener(self.reconnected)

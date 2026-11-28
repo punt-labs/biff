@@ -51,6 +51,14 @@ class EventSink(Protocol):
         ...
 
 
+class ArrivalReader(Protocol):
+    """What the emitter reads kinds from: one reading of a kind at a time."""
+
+    async def reading(self, kind: EventKind) -> Reading:
+        """Read *kind* now: its fingerprint, whether it is newer, and its event."""
+        ...
+
+
 @runtime_checkable
 class ReconnectNotifier(Protocol):
     """A relay that reports an in-place reconnect to its listeners."""
