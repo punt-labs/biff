@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Final, Self, final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from biff.daemon.durable_file import DurableFile
+from biff.daemon.durable_file import DurableFile, UnsyncedError
 from biff.daemon.refusal import RefusalError
 from biff.frame_client import ClientType, Hello
 from biff.frame_reply import ErrorCode
@@ -199,7 +199,10 @@ class HarnessRecords:
     def _write(self, session_id: str, stored: _Stored) -> None:
         """Replace the session's record with *stored*, durably."""
         name = f"{session_id}{_SUFFIX}"
-        DurableFile.replace(self._root, name, stored.model_dump_json(indent=2))
+        try:
+            DurableFile.replace(self._root, name, stored.model_dump_json(indent=2))
+        except UnsyncedError:
+            logger.warning("record %s written; its directory entry is not synced", name)
 
     def _path(self, session_id: str) -> Path:
         # A session id has passed the id charset (``Hello``), so it cannot climb out.

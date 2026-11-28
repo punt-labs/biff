@@ -72,7 +72,9 @@ def test_every_command_object_is_a_method(tmp_path: Path) -> None:
         org_refresh_interval=1.0,
         records=HarnessRecords(tmp_path / "harness-sessions"),
     )
-    methods = Methods(SessionMethods(CliSessionStore(tmp_path), live))
+    methods = Methods(
+        SessionMethods(CliSessionStore(tmp_path), live), annotate_status=lambda r: r
+    )
     assert set(methods.names) == {
         "who",
         "finger",

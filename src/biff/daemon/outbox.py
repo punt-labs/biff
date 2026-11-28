@@ -52,8 +52,12 @@ class Outbox:
     def merge(self, fetched: Sequence[Message]) -> list[Message]:
         """Hold *fetched*, replacing a held message its copy came back for; list all."""
         if self._retains and self._sink is not None:
-            self._sink(fetched)  # sealed: nothing new is held, it goes where it is kept
-        elif self._retains:
+            # Sealed: the hand-back files back what is held; only what is new is
+            # spilled, once, and the read, whose client is gone, is left nothing.
+            fresh = [m for m in fetched if m.original_in(self._held) not in self._held]
+            self._sink(fresh)
+            return []
+        if self._retains:
             for message in fetched:
                 self._held.pop(message.original_in(self._held), None)
                 self._held[message.id] = message

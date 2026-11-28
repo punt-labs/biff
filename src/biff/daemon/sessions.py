@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_context import CliContext
@@ -27,12 +28,13 @@ from biff.session_id import CLAUDE_CODE_ROLE, CLI_ROLE, derive_routing_id
 from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable, Sequence
     from contextlib import AbstractAsyncContextManager
 
     from biff.daemon.harness_records import HarnessRecords
     from biff.daemon.relays import RelayPool, RelayTarget, ResolvedSession
     from biff.frame_client import Hello
+    from biff.models import Message
     from biff.relay import Relay
 
 __all__ = ["Session", "SessionStatus", "SessionTable"]
@@ -364,12 +366,14 @@ class SessionTable:
         "_org_interval",
         "_records",
         "_sessions",
+        "_sink",
         "_users",
     )
 
     _interval: float
     _org_interval: float
     _records: HarnessRecords
+    _sink: Callable[[Session, Sequence[Message]], None] | None
     _sessions: dict[SessionKey, Session]
     _locks: defaultdict[SessionKey, asyncio.Lock]
     _users: Counter[SessionKey]
@@ -389,6 +393,7 @@ class SessionTable:
         self._interval = heartbeat_interval
         self._org_interval = org_refresh_interval
         self._records = records
+        self._sink = None
         self._sessions = {}
         self._locks = defaultdict(asyncio.Lock)
         self._users = Counter()
@@ -437,6 +442,8 @@ class SessionTable:
                     org_refresh_interval=self._org_interval,
                 )
                 self._sessions[key] = session
+                if self._sink is not None:
+                    session.outbox.seal(partial(self._sink, session))
             else:
                 session.check_same(resolved)
                 if session.is_dormant:
@@ -455,6 +462,15 @@ class SessionTable:
         if session.is_agent and session.is_dormant:
             key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
             self._records.mark(key, datetime.now(UTC))
+
+    def seal(self, sink: Callable[[Session, Sequence[Message]], None]) -> None:
+        """Seal every outbox, and the outbox of every session created from now on.
+
+        For a daemon that is stopping: mail fetched after this goes to *sink*.
+        """
+        self._sink = sink
+        for session in self._sessions.values():
+            session.outbox.seal(partial(sink, session))
 
     def holding(self, session_id: str) -> Session | None:
         """Return the shell session *session_id* if the daemon holds it."""

@@ -58,6 +58,7 @@ class DaemonStatus:
 
     relay_connections: int
     sessions: tuple[SessionStatus, ...]
+    spilled: int
 
 
 @final
@@ -118,6 +119,10 @@ class BiffDaemon:
         resolver = resolver or DiskResolver()
         pool = RelayPool(relay_factory or RelayPool.selecting())
         records = HarnessRecords(sessions.root.parent / "harness-sessions")
+        spill = Spill(
+            sessions.root.parent / "handback-spill.json",
+            run_dir.path / "handback-spill.json",
+        )
         live = SessionTable(
             heartbeat_interval=heartbeat_interval,
             org_refresh_interval=org_refresh_interval,
@@ -127,14 +132,18 @@ class BiffDaemon:
             resolver=resolver,
             pool=pool,
             sessions=live,
-            methods=Methods(SessionMethods(sessions, live), read_budget),
+            methods=Methods(
+                SessionMethods(sessions, live),
+                read_budget,
+                annotate_status=spill.annotate,
+            ),
             seq=count(1),
             poll_interval=poll_interval,
             attach_timeout=attach_timeout,
             request_timeout=request_timeout,
         )
         self._restore = SessionRestore(records, self._core)
-        self._spill = Spill(sessions.root.parent / "handback-spill.json")
+        self._spill = spill
         self._server = None
         self._started = 0.0
         self._sweeper = SessionSweeper(sessions, resolver, pool, live)
@@ -152,6 +161,7 @@ class BiffDaemon:
         return DaemonStatus(
             relay_connections=self._core.pool.connection_count,
             sessions=self._core.sessions.statuses,
+            spilled=self._spill.pending(),
         )
 
     async def start(self) -> None:

@@ -272,6 +272,7 @@
   "biff.daemon.held_mail": "daemon",
   "biff.daemon.durable_file": "daemon",
   "biff.daemon.spill": "daemon",
+  "biff.daemon.spill_file": "daemon",
   "biff.daemon.session_fetch": "daemon",
   "biff.cli_console": "cli",
   "biff.cli_events": "cli",

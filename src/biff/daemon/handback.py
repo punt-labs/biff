@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from functools import partial
 from typing import TYPE_CHECKING, ClassVar, final
 
 from biff.daemon.held_mail import HeldMail
@@ -12,7 +11,10 @@ from biff.daemon.uncancellable import Uncancellable
 from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from biff.daemon.connection import DaemonCore
+    from biff.daemon.sessions import Session
     from biff.daemon.spill import Spill
 
 __all__ = ["Handback"]
@@ -59,9 +61,8 @@ class Handback:
     @staticmethod
     async def _give_back(core: DaemonCore, spill: Spill) -> None:
         """File every session's held mail back, and spill what is left."""
-        sessions = core.sessions.snapshot()  # after the wait: reads have had their time
-        for session in sessions.values():
-            session.outbox.seal(partial(spill.hold, session))  # late mail is spilled
+        core.sessions.seal(spill.hold)  # after the wait; sessions made later too
+        sessions = core.sessions.snapshot()
         try:
             async with asyncio.timeout(Handback.REFILE_SECONDS):
                 for key, session in sessions.items():
@@ -79,5 +80,16 @@ class Handback:
                 sum(len(s.outbox) for s in sessions.values()),
                 Handback.REFILE_SECONDS,
             )
-        for session in sessions.values():
-            spill.hold(session, session.outbox.held())
+        finally:
+            Handback._spill_rest(sessions.values(), spill)
+
+    @staticmethod
+    def _spill_rest(sessions: Iterable[Session], spill: Spill) -> None:
+        """Spill what each session still holds; one failing does not stop the rest."""
+        for session in sessions:
+            try:
+                spill.hold(session, session.outbox.held())
+            except Exception:
+                logger.exception(
+                    "could not spill the mail held for session %s", session.session_id
+                )

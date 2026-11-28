@@ -64,14 +64,19 @@ class Outcome:
 class Methods:
     """Dispatches a method name to its command object."""
 
-    __slots__ = ("_read_budget", "_sessions", "_table")
+    __slots__ = ("_annotate_status", "_read_budget", "_sessions", "_table")
 
     _table: dict[str, Handler]
     _sessions: SessionMethods
     _read_budget: int
+    _annotate_status: Callable[[CommandResult], CommandResult]
 
     def __new__(
-        cls, sessions: SessionMethods, read_budget: int = READ_BUDGET_BYTES
+        cls,
+        sessions: SessionMethods,
+        read_budget: int = READ_BUDGET_BYTES,
+        *,
+        annotate_status: Callable[[CommandResult], CommandResult],
     ) -> Self:
         """Create the table of every served method.
 
@@ -82,6 +87,7 @@ class Methods:
         self = super().__new__(cls)
         self._sessions = sessions
         self._read_budget = read_budget
+        self._annotate_status = annotate_status
         self._table = {
             "who": Methods._who,
             "finger": Methods._finger,
@@ -91,7 +97,7 @@ class Methods:
             "wall": Methods._wall,
             "mesg": Methods._mesg,
             "tty": Methods._tty,
-            "status": Methods._status,
+            "status": self._status,
             "talk": TalkMethods.talk,
             "talk_read": TalkMethods.talk_read,
             "talk_end": TalkMethods.talk_end,
@@ -224,7 +230,6 @@ class Methods:
         p.done()
         return await commands.tty(ctx, name)
 
-    @staticmethod
-    async def _status(ctx: CliContext, p: Params) -> CommandResult:
+    async def _status(self, ctx: CliContext, p: Params) -> CommandResult:
         p.done()
-        return await commands.status(ctx)
+        return self._annotate_status(await commands.status(ctx))
