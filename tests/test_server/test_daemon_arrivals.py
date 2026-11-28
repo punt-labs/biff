@@ -206,3 +206,53 @@ def test_forgetting_a_session_clears_what_was_sent_and_what_was_known() -> None:
     arrivals.forget()
 
     assert arrivals.mesg_on is None  # no snapshot of the new session yet
+
+
+async def test_an_invite_queued_before_the_feed_subscribed_is_owed() -> None:
+    arrivals = DaemonArrivals()
+
+    arrivals.refresh(_snapshot(invites=(("eric", "tty1"),), talk_pending=1))
+
+    reading = await arrivals.reading(EventKind.TALK_INVITE)
+    assert reading.is_owed  # no talk_invite event was ever seen for it
+
+
+async def test_an_invite_the_event_and_the_snapshot_both_report_is_owed_once() -> None:
+    arrivals = DaemonArrivals()
+    arrivals.refresh(_snapshot(invites=(("eric", "tty1"),)))
+    (await arrivals.reading(EventKind.TALK_INVITE)).commit()
+
+    arrivals.count(_event("talk_invite"))  # the event of the same invite, late
+    arrivals.refresh(_snapshot(invites=(("eric", "tty1"),)))
+
+    assert not (await arrivals.reading(EventKind.TALK_INVITE)).is_newer
+
+
+async def test_an_invite_withdrawn_and_made_again_in_a_gap_is_owed_again() -> None:
+    arrivals = DaemonArrivals()
+    arrivals.refresh(_snapshot(invites=(("eric", "tty1"),)))
+    (await arrivals.reading(EventKind.TALK_INVITE)).commit()
+    arrivals.refresh(_snapshot(invites=()))  # withdrawn while no event was heard
+
+    arrivals.refresh(_snapshot(invites=(("eric", "tty1"),)))  # and made again
+
+    assert (await arrivals.reading(EventKind.TALK_INVITE)).is_owed
+
+
+async def test_talk_lines_waiting_when_the_feed_subscribes_are_owed_once() -> None:
+    arrivals = DaemonArrivals()
+    arrivals.refresh(_snapshot(talk_pending=2))
+    arrivals.subscribed()
+    reading = await arrivals.reading(EventKind.TALK_MESSAGE)
+    assert reading.is_owed
+    reading.commit()
+
+    arrivals.subscribed()  # a reconnect with the same lines still unread
+
+    assert not (await arrivals.reading(EventKind.TALK_MESSAGE)).is_newer
+
+    arrivals.refresh(_snapshot(talk_pending=0))  # read
+    arrivals.refresh(_snapshot(talk_pending=1))  # a new line came in a gap
+    arrivals.subscribed()
+
+    assert (await arrivals.reading(EventKind.TALK_MESSAGE)).is_owed

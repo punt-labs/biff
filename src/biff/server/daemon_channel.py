@@ -109,6 +109,13 @@ class DaemonChannelFeed:
         self._task = asyncio.create_task(
             self._follow(routing.session_id), name="channel feed"
         )
+        self._task.add_done_callback(self._ended)
+
+    @staticmethod
+    def _ended(task: asyncio.Task[None]) -> None:
+        """Say what ended a feed task nobody cancelled: nothing else is watching."""
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            logger.error("the channel feed ended with %r", exc, exc_info=exc)
 
     async def close(self) -> None:
         """Stop following; the connection closes with the task.
@@ -158,6 +165,7 @@ class DaemonChannelFeed:
             self._arrivals.is_whom(user, frozenset({tty, str(who["tty_name"])}))
             await client.subscribe()
             await self._refresh(client)
+            self._arrivals.subscribed()  # what waited before this subscription
             self._emitter.reconnected()  # what came while no subscription ran
             self._wait = self._retry  # it is up: the next loss starts afresh
             try:

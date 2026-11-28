@@ -402,3 +402,49 @@ async def test_a_cancellation_aimed_at_close_is_not_swallowed(rig: Rig) -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await closing
+
+
+async def test_an_invite_queued_before_the_feed_started_is_announced(rig: Rig) -> None:
+    tools = await rig.harness.connect("s-kai", "kai", client="mcp")
+    eric = await _eric(rig)
+    await eric.request("talk", to=f"kai:{await _tty(tools)}", message="")
+
+    await rig.start()
+
+    await rig.wait_for(lambda: "talk_invite" in rig.sink.kinds())
+
+
+async def test_a_talk_line_waiting_before_the_feed_started_is_announced(
+    rig: Rig,
+) -> None:
+    tools = await rig.harness.connect("s-kai", "kai", client="mcp")
+    eric = await _eric(rig)
+    kai_at, eric_at = f"kai:{await _tty(tools)}", f"eric:{await _tty(eric)}"
+    await eric.request("talk", to=kai_at, message="")
+    await tools.request("talk_read")
+    await tools.request("talk", to=eric_at, message="")
+    await eric.request("talk_read")
+    await eric.request("talk", to=kai_at, message="hello")
+
+    await rig.start()
+
+    await rig.wait_for(lambda: "talk_message" in rig.sink.kinds())
+
+
+class _Boom(BaseException):
+    """Something that is not an Exception, which the feed's retry does not catch."""
+
+
+async def test_a_feed_task_that_ends_anyway_says_what_ended_it(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def dies(self: DaemonChannelFeed, session_id: str) -> None:
+        raise _Boom(session_id)
+
+    monkeypatch.setattr(DaemonChannelFeed, "_follow", dies)
+
+    with caplog.at_level(logging.ERROR):
+        rig.feed.bind(SessionRouting("s-kai"))
+        await asyncio.sleep(0.1)
+
+    assert "channel feed ended" in caplog.text

@@ -88,10 +88,13 @@ class DaemonArrivals:
         "_invites",
         "_invites_seen",
         "_invites_sent",
+        "_live",
         "_mail_sent",
         "_messages_seen",
         "_messages_sent",
         "_names",
+        "_pending_sent",
+        "_snap_entries",
         "_snapshot",
         "_user",
         "_walls_sent",
@@ -107,6 +110,9 @@ class DaemonArrivals:
     _messages_seen: int
     _messages_sent: int
     _invites: deque[tuple[int, str, str]]
+    _live: frozenset[tuple[str, str]]
+    _pending_sent: int
+    _snap_entries: dict[int, tuple[str, str]]
 
     def __new__(cls) -> Self:
         """Create a reader in which nothing has been sent or seen."""
@@ -121,6 +127,9 @@ class DaemonArrivals:
         self._messages_seen = 0
         self._messages_sent = 0
         self._invites = deque(maxlen=_INVITE_LOG)
+        self._live = frozenset()
+        self._pending_sent = 0
+        self._snap_entries = {}
         return self
 
     @property
@@ -147,10 +156,56 @@ class DaemonArrivals:
         self._messages_seen = 0
         self._messages_sent = 0
         self._invites.clear()
+        self._live = frozenset()
+        self._pending_sent = 0
+        self._snap_entries = {}
 
     def refresh(self, snapshot: ArrivalsSnapshot) -> None:
-        """Take *snapshot* as what is true now."""
+        """Take *snapshot* as what is true now.
+
+        An invite it lists that was not live in the last snapshot has come since,
+        whether or not a ``talk_invite`` event was heard for it: before the feed
+        subscribed, or in a gap between subscriptions.  It is logged as arrived
+        unless an arrival of it is already waiting to be announced.
+        """
         self._snapshot = snapshot
+        live = frozenset(snapshot.invites)
+        self._snap_entries = {q: k for q, k in self._snap_entries.items() if k in live}
+        for sender, tty in sorted(live - self._live):
+            if (seq := self._arrived(sender, tty)) is not None:
+                self._snap_entries[seq] = (sender, tty)
+        self._live = live
+        if snapshot.talk_pending == 0:
+            self._pending_sent = 0  # the lines were read: the next one is news
+
+    def subscribed(self) -> None:
+        """Say a subscription is up, with the snapshot taken after it started.
+
+        Lines already waiting in biffd's queue, which no event of this
+        subscription announced, are owed unless an announcement already covered
+        that many.
+        """
+        snap = self._snapshot
+        if (
+            snap is not None
+            and snap.talk_pending > self._pending_sent
+            and self._messages_seen <= self._messages_sent
+        ):
+            self._messages_seen = self._messages_sent + 1
+
+    def _arrived(self, sender: str, tty: str) -> int | None:
+        """Log an invite from *sender* at *tty*; return its number, or ``None``.
+
+        ``None`` when an arrival of it is already waiting to be announced.
+        """
+        if any(
+            (entry[1], entry[2]) == (sender, tty) and entry[0] > self._invites_sent
+            for entry in self._invites
+        ):
+            return None
+        self._invites_seen += 1
+        self._invites.append((self._invites_seen, sender, tty))
+        return self._invites_seen
 
     def count(self, event: Event) -> None:
         """Count a talk event: an invite, or a line from the partner.
@@ -160,14 +215,12 @@ class DaemonArrivals:
         """
         data = cast("dict[str, object]", event.data or {})
         if event.kind == "talk_invite":
-            self._invites_seen += 1
-            self._invites.append(
-                (
-                    self._invites_seen,
-                    str(data.get("from", "")),
-                    str(data.get("tty", "")),
-                )
-            )
+            key = (str(data.get("from", "")), str(data.get("tty", "")))
+            seen = [q for q, k in self._snap_entries.items() if k == key]
+            if seen:  # the snapshot already counted this very invite
+                del self._snap_entries[seen[0]]
+            else:
+                self._arrived(*key)
         elif event.kind == "talk_line":
             self._messages_seen += 1
 
@@ -245,18 +298,20 @@ class DaemonArrivals:
 
     def _message(self) -> Reading:
         count = self._messages_seen
-        queued = self._snapshot is not None and self._snapshot.talk_pending > 0
+        pending = 0 if self._snapshot is None else self._snapshot.talk_pending
+        queued = pending > 0
         event = ChannelEvent.talk_message() if queued else None
         return Reading(
             EventKind.TALK_MESSAGE,
             count,
             count > self._messages_sent,
             event,
-            lambda: self._sent_message(count),
+            lambda: self._sent_message(count, pending),
         )
 
-    def _sent_message(self, count: int) -> None:
+    def _sent_message(self, count: int, pending: int) -> None:
         self._messages_sent = max(self._messages_sent, count)
+        self._pending_sent = pending
 
 
 @final
