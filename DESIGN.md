@@ -9890,16 +9890,42 @@ second group of daemon additions for PL-1670. Model:
   (the sweep re-checks under the session's guard).
 
 **Stops.** The spec has two kinds of daemon stop. A graceful stop
-(`GracefulStop`, `BiffDaemon.stop`) waits for in-flight reads, bounded by the
-request timeout, then files every session's held outbox back to the relay
-(`Handback.close_relays`) before closing. A read still running when the bound
-expires loses the mail it had consumed and not yet handed to the outbox
-(`lastStop = sTimedOut`, `lostN`); unread mail in the relay is untouched. The
-bound is the price of a stop that returns. A process loss (`ProcessLoss`: a
-crash or kill) loses the outbox and any read in flight, as before (PL-1753); no
-code path can file mail back from a dead process. The conservation invariant
-counts in-flight mail (`flightN`), so a stop that skips the hand-back
-(`claude-session-end-nograceful.tex`) violates it.
+(`GracefulStop`, `BiffDaemon.stop` calling `Handback.close_relays`) first lets
+the reads running finish: `Uncancellable.settle` waits at most 5 s
+(`Handback.SETTLE_SECONDS`) and only logs a warning for any that outlive it.
+It then gives every session's held outbox back (`HeldMail.refile`, by address:
+a broadcast message into the user's mailbox, a session message into the
+session's inbox) within 15 s in all (`Handback.REFILE_SECONDS`), and closes the
+relays in a `finally`. Both budgets sit inside the 30 s the restart command
+has (`Supervisor.run`). One message the relay refuses stays held and is
+logged; the others are still filed. The model counts all refiled mail in
+`sessN`, whatever its address, which changes no conservation count.
+
+A read makes two consuming fetches. `SessionFetch.unread` merges the session's
+own mail into the outbox before the next step can run, so that mail is never
+held by neither the relay nor the outbox (`MailFetch` in the spec goes
+straight to `outboxN`). The broadcast fetch takes the user's mail, which is in
+flight (`flightN`, `BroadcastFetch`) until the read hands it over
+(`MailHandOver`). The read holds the session's lock throughout, so an end or
+an expiry waits for it: `ExpireClaude` and `EndOwnSession` need `flightN = 0`.
+The plain retention statement "a dormant record at its retention enables
+`ExpireClaude`" is therefore false in the model (ProB shows it), and the spec
+states what holds: the expiry or the read's hand-over is enabled, and from
+every such state the expiry is reachable.
+
+Two windows remain, tracked by PL-1777, and the model keeps them as losses:
+a broadcast fetch that outlives the settle wait consumes the user's mail in a
+process that is about to exit (`lastStop = sTimedOut`, `lostN`), and a
+refile that spends its 15 s budget drops the held messages not yet filed (the
+deadline remainder; the stop logs the count). A spill transition, writing
+that remainder to local storage, will be modelled with the PL-1777 fix. A
+process loss (`ProcessLoss`: a crash or kill) loses the outbox and any read in
+flight, as before (PL-1753); no code path can file mail back from a dead
+process. The conservation invariant counts in-flight mail, so a stop that
+skips the hand-back (`claude-session-end-nograceful.tex`) violates it, and a
+stop that drops a settled read's mail does too (`-noflight.tex`) or breaks
+`lastStop = sGraceful => stopLost = 0` when it counts the loss
+(`-noflight-counted.tex`).
 
 **Divergence from the model.** The durable model keeps the record across a daemon
 stop. The daemon holds harness records in memory, so any stop forgets them, which
@@ -9918,16 +9944,18 @@ name until something releases it. That is not wholly safe: a forgotten session
 holds its name and its unread session-inbox mail is stranded. The spec keeps the
 durable and the forgetting stops; the properties about the record hold unless the
 stop forgot it. Persisting the records, or scanning the relay's rows at start,
-closes it: PL-1771. The two tests of the graceful stop restart a daemon that has
-forgotten its records, so they exercise `GracefulStopForget`; no test makes the
-settle step expire.
+closes it: PL-1771. The tests of the graceful stop restart a daemon that has
+forgotten its records, so they exercise `GracefulStopForget`.
 
-**Audit status.** `claude-session-end.audit.json` reports 14 of 14 clauses covered
-and zero GAP. It was reconciled by reading the tests against each clause (the
-z-spec audit tool was not run), and its rows name the tests. The settle timeout
-and the process loss are listed as limits without a test. The residual after
-this change is PL-1770: the unconditional tty name releases in the in-process
-paths (`session_registry`, `tty.py`), which go with the in-process server.
+**Audit status.** `claude-session-end.audit.json` reports 14 of 15 clauses
+covered and one GAP: `ProcessLoss`, which a crash makes untestable in-process
+(the only test that asserted an outbox loss was removed with the hand-back). It
+was reconciled by reading the tests against each clause (the z-spec audit tool
+was not run), and its rows name the tests. The refile budget and the late
+broadcast fetch are listed as limits without a test (PL-1777). The residual
+after this change is PL-1770: the unconditional tty name releases in the
+in-process paths (`session_registry`, `tty.py`), which go with the in-process
+server.
 
 **Rejected.**
 
