@@ -186,10 +186,10 @@ async def test_a_reply_the_client_gave_up_on_does_not_consume_the_mail(
     await asyncio.wait_for(written.wait(), _WAIT)  # the late reply was written
     assert _bodies(carried[0].result) == ["do not lose me"]
     await asyncio.wait_for(reader_took.wait(), _WAIT)
-    # The daemon handles frames of one connection in order, so once this round
-    # trip returns, an ack the reader sent for the abandoned reply was handled.
-    await kai.request("who")
     monkeypatch.setattr(relay_type, "delay", 0.0)
+    # The daemon finishes an ack before it dispatches the next frame of the
+    # connection, so an ack the reader sent for the abandoned reply is handled
+    # before this read runs.
     assert _bodies(await kai.request("read")) == ["do not lose me"]
 
 
