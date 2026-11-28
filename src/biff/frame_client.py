@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
-from pydantic import Field, JsonValue, StringConstraints
+from pydantic import (
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    model_serializer,
+)
 
 from biff.frame_base import FrameBase
 from biff.session_routing import MAX_ID_LENGTH
@@ -45,6 +51,16 @@ class Hello(FrameBase):
     # it already holds, on the relay that session lives on, and never creates or
     # revives one.  ``main_agent_id`` then names the run the client ends for.
     ends: bool = False
+
+    @model_serializer(mode="wrap")
+    def _omit_ends_unless_set(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        """Leave ``ends`` off an ordinary hello, so an older daemon still reads it."""
+        fields = cast("dict[str, object]", handler(self))
+        if not self.ends:
+            fields.pop("ends")
+        return fields
 
 
 class Request(FrameBase):

@@ -279,7 +279,8 @@ class Session:
             RefusalError: The hello names another user, or a run that is not the
                 session's current one.
         """
-        if hello.user and hello.user != self._context.user:
+        user = hello.user.strip()  # login trims the override, so logout must too
+        if user and user != self._context.user:
             msg = f"session {self._session_id} belongs to {self._context.user}"
             raise RefusalError.of(ErrorCode.SESSION_CONFLICT, msg)
         self._runs.check_current(self._session_id, hello.main_agent_id)

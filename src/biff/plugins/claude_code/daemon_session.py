@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
@@ -83,7 +84,10 @@ class DaemonSessionOpener:
         return key
 
     async def _status(self, routing: SessionRouting, cwd: str) -> dict[str, object]:
-        client = await self._daemon.client(routing, cwd)
+        # The run is recorded now, so a late end from an older process is refused.
+        client = await self._daemon.client(
+            routing, cwd, run=self._daemon.run_of(os.environ)
+        )
         try:
             reply = await client.request("status")
         finally:
