@@ -215,6 +215,10 @@ class Relay(Protocol):
         """Release the user's reserved name."""
         ...
 
+    async def release_tty_name_if(self, user: str, name: str, owner: str) -> bool:
+        """Release *name* only if *owner* still holds it; say whether it did."""
+        ...
+
     async def refresh_tty_reservation(
         self, user: str, name: str, session_key: str
     ) -> None:
@@ -355,6 +359,11 @@ class DormantRelay:
 
     async def release_tty_name(self, user: str, name: str) -> None:
         """Do nothing while disabled."""
+
+    async def release_tty_name_if(self, user: str, name: str, owner: str) -> bool:
+        """Hold no name while disabled."""
+        del user, name, owner
+        return False
 
     async def refresh_tty_reservation(
         self, user: str, name: str, session_key: str
@@ -772,17 +781,25 @@ class LocalRelay:
 
     async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool:
         """Reserve a TTY name atomically via O_CREAT|O_EXCL lockfile."""
-        return self._names.reserve(user, name, session_key)
+        with self._lock():
+            return self._names.reserve(user, name, session_key)
 
     async def release_tty_name(self, user: str, name: str) -> None:
         """Release a TTY name reservation by removing the lockfile."""
-        self._names.release(user, name)
+        with self._lock():
+            self._names.release(user, name)
+
+    async def release_tty_name_if(self, user: str, name: str, owner: str) -> bool:
+        """Release *name* if *owner* holds it, under the relay's file lock."""
+        with self._lock():
+            return self._names.release_if(user, name, owner)
 
     async def refresh_tty_reservation(
         self, user: str, name: str, session_key: str
     ) -> None:
         """Refresh the reservation, if *session_key* still owns it."""
-        self._names.refresh(user, name, session_key)
+        with self._lock():
+            self._names.refresh(user, name, session_key)
 
     async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
         """Return the session key that holds *name*, or ``None``."""

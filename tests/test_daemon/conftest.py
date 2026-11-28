@@ -93,6 +93,7 @@ class Harness:
     factory: CountingFactory
     sessions: CliSessionStore
     unread_dir: Path
+    relays_dir: Path
     clients: list[DaemonClient] = field(default_factory=list[DaemonClient])
 
     async def connect(
@@ -177,6 +178,7 @@ async def harness(
         factory=factory,
         sessions=sessions,
         unread_dir=unread_dir,
+        relays_dir=tmp_path / "relays",
     )
     yield env
     for connected in env.clients:

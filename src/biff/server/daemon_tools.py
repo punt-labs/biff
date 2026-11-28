@@ -177,6 +177,9 @@ class DaemonReadTools:
             else:
                 shown = f"{interval:g}s"
             status = f"Polling: active, interval={shown} ({interval:g}s)"
+        if self._state.dormant:
+            # biffd would announce a session that cannot receive in this repository.
+            return status
         try:
             reply = await self._calls.ask("status")
         except ToolError as exc:

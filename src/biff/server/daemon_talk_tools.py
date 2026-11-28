@@ -99,7 +99,10 @@ class DaemonTalkTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        return await self._shown(await self._calls.ask("talk", to=to, message=message))
+        reply = await self._calls.ask("talk", to=to, message=message)
+        # An invite from the one just talked to is answered now, here and at biffd.
+        self._state.talk.consume_pending_invite(to.removeprefix("@").partition(":")[0])
+        return await self._shown(reply, changed=True)
 
     async def talk_read(self) -> str:
         """Read pending talk invitations and consume queued talk messages.
@@ -118,7 +121,7 @@ class DaemonTalkTools:
                 the message names the cause and the command that repairs it.
         """
         # Reading is not work: replying with `talk` stamps activity, a poll does not.
-        return await self._shown(await self._calls.ask("talk_read"))
+        return await self._heard(await self._calls.ask("talk_read"))
 
     async def talk_listen(self, timeout: int = 30) -> str:
         """Wait for talk traffic before consuming the pending state.
@@ -140,10 +143,16 @@ class DaemonTalkTools:
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + float(timeout)
+        standing = ""
         while True:
             reply = await self._calls.ask("talk_read")
-            if reply.error or reply.text != TalkReadout.NO_ACTIVITY:
-                return await self._shown(reply)
+            data = reply.data
+            phase = str(data.get("phase", "")) if isinstance(data, dict) else ""
+            standing = standing or phase
+            # An acceptance renders no line, but it moves the conversation on.
+            heard = phase != standing or self._state.talk.has_pending_traffic
+            if reply.error or reply.text != TalkReadout.NO_ACTIVITY or heard:
+                return await self._heard(reply)
             if loop.time() >= deadline:
                 return await self._shown(reply)
             await asyncio.sleep(min(_LISTEN_EVERY, deadline - loop.time()))
@@ -162,15 +171,30 @@ class DaemonTalkTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        return await self._shown(await self._calls.ask("talk_end"))
+        return await self._shown(await self._calls.ask("talk_end"), changed=True)
 
-    async def _shown(self, reply: Reply) -> str:
+    async def _heard(self, reply: Reply) -> str:
+        """Return what a read of the talk found, here or at biffd.
+
+        This process's own subscription can hold what biffd missed (a frame that
+        came before biffd subscribed); when biffd has nothing, that is what is read.
+        """
+        state = self._state
+        quiet = not reply.error and reply.text == TalkReadout.NO_ACTIVITY
+        if quiet and state.talk.has_pending_traffic:
+            text = (await TalkReadout.take(state)).text()
+            await refresh_talk(self._mcp, state)
+            return text
+        return await self._shown(reply)
+
+    async def _shown(self, reply: Reply, *, changed: bool = False) -> str:
         """Return *reply*'s text after emptying this process's mirror of the talk.
 
-        An answer of "nothing" leaves the mirror alone: a frame this process has
-        and biffd lacks (it subscribed later) is still news.
+        The mirror is emptied when the conversation changed (a talk call) or the
+        reply carried something biffd consumed; an answer of "nothing" leaves it
+        alone, since a frame this process has and biffd lacks is still news.
         """
-        if reply.text != TalkReadout.NO_ACTIVITY:
+        if changed or reply.text != TalkReadout.NO_ACTIVITY:
             self._state.talk.drain_for_agent()
         await refresh_talk(self._mcp, self._state)
         return reply.text

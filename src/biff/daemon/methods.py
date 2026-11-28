@@ -115,23 +115,23 @@ class Methods:
         Raises:
             RefusalError: The method is unknown or its params are invalid.
         """
-        ctx = session.context
-        if method == "read":
-            return await self._read(session, Params(method, raw))
-        if method not in _POLLS:
-            await ActivityCount.of(session)
-        if method in self._sessions.names:
-            result = await self._sessions.call(session, method, Params(method, raw))
-            return self._outcome(result)
-        if method in TalkMethods.GATED and not await session.talk.ready(
-            TalkMethods.READY_SECONDS
-        ):
-            return self._outcome(TalkMethods.NOT_READY)
-        handler = self._table.get(method)
-        if handler is None:
-            msg = f"unknown method {method!r}; served: {', '.join(self.names)}"
-            raise RefusalError.of(ErrorCode.UNKNOWN_METHOD, msg)
-        return self._outcome(await handler(ctx, Params(method, raw)))
+        async with session.requests(method):
+            if method == "read":
+                return await self._read(session, Params(method, raw))
+            if method not in _POLLS:
+                await ActivityCount.of(session)
+            if method in self._sessions.names:
+                result = await self._sessions.call(session, method, Params(method, raw))
+                return self._outcome(result)
+            if method in TalkMethods.GATED and not await session.talk.ready(
+                TalkMethods.READY_SECONDS
+            ):
+                return self._outcome(TalkMethods.NOT_READY)
+            handler = self._table.get(method)
+            if handler is None:
+                msg = f"unknown method {method!r}; served: {', '.join(self.names)}"
+                raise RefusalError.of(ErrorCode.UNKNOWN_METHOD, msg)
+            return self._outcome(await handler(session.context, Params(method, raw)))
 
     @staticmethod
     def _outcome(result: CommandResult) -> Outcome:

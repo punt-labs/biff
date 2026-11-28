@@ -41,7 +41,8 @@ and a reaper in some other process finished what the first left.
 with no process and no sentinel behind it ($BadOrphan$): a crash in one step (G1),
 and the fallback sentinel racing its own reaper in five (G2).
 
-With the record in the daemon the question changes.  The record is durable and
+With the record in the daemon the question changes.  The record is meant to be
+durable (the code, today, keeps it in memory: $DaemonRestartForget$, below) and
 the daemon, not a process that is going away, performs the end.  Two transitions
 end a Claude session:
 
@@ -127,7 +128,8 @@ connection began the end in progress.
   ttyTodo : ZBOOL \\
   logTodo : ZBOOL \\
   mailTodo : ZBOOL \\
-  newLive : ZBOOL
+  newLive : ZBOOL \\
+  ownEnded : ZBOOL
 \end{schema}
 
 What an end touches: the relay row, the tty-name reservation, the logout event,
@@ -136,17 +138,26 @@ session of a clear, after its hello.
 
 \begin{schema}{Mail}
   outboxN : 0 \upto maxMail \\
-  inboxN : 0 \upto maxMail \\
+  sessN : 0 \upto maxMail \\
+  userN : 0 \upto maxMail \\
   shownN : 0 \upto maxMail \\
   issuedN : 0 \upto maxMail \\
   lostN : 0 \upto maxMail \\
-  shownDormant : ZBOOL
+  strandedN : 0 \upto maxMail \\
+  shownDormant : ZBOOL \\
+  forgot : ZBOOL
 \end{schema}
 
-Mail counts: held by the session ($outboxN$), in the user's inbox ($inboxN$),
+Mail counts: held by the session ($outboxN$), in the session's own inbox in the
+relay ($sessN$), in the user's mailbox ($userN$, where an end files what it
+drains),
 shown to the client ($shownN$), lost with a daemon that restarted ($lostN$, a
-ghost), and issued in all ($issuedN$, a ghost).  $shownDormant$ is a ghost that
-records a print made while nobody was connected.
+ghost), and issued in all ($issuedN$, a ghost).  $strandedN$ counts the mail left in the session inbox of a session whose
+record a restart forgot ($sessN$ at that moment): nothing drains or reads it.
+Mail already in the user's mailbox ($userN$) is not touched by the loss of a
+record.  $shownDormant$ is a ghost
+that records a print made while nobody was connected.  $forgot$ is a ghost set by
+$DaemonRestartForget$, the restart that loses the record.
 
 \begin{schema}{EndState}
   Record \\
@@ -157,8 +168,8 @@ records a print made while nobody was connected.
 \begin{schema}{EndInv}
   EndState
   \where
-  rowPresent = ztrue \implies recState \neq rsNone \\
-  ttyOwner = tOld \implies recState \neq rsNone \\
+  rowPresent = ztrue \implies ( recState \neq rsNone \lor forgot = ztrue ) \\
+  ttyOwner = tOld \implies ( recState \neq rsNone \lor forgot = ztrue ) \\
   newLive = ztrue \implies ttyOwner = tNew \\
   recState = rsDormant \implies conns = \emptyset \\
   recState = rsLive \implies conns \neq \emptyset \\
@@ -166,17 +177,19 @@ records a print made while nobody was connected.
   recState \neq rsEnding \implies
     ( rowTodo = zfalse \land ttyTodo = zfalse \land logTodo = zfalse \land
       mailTodo = zfalse ) \\
-  outboxN + inboxN + shownN + lostN = issuedN \\
+  outboxN + sessN + userN + shownN + lostN + strandedN = issuedN \\
   shownDormant = zfalse
 \end{schema}
 
 The invariants, in the order of the obligations.  A row, or the old session's tty
-name, exists only while the record does ($BadOrphan$ is not a state).  The new
+name, exists only while the record does ($BadOrphan$ is not a state) unless the
+daemon restarted and forgot the record ($forgot$, below).  The new
 session of a clear always holds its tty name.  A live record has a connection and
 a dormant one has none.  An end that is not in progress owes nothing.  And mail
-is conserved: issued is held, in the inbox, shown, or lost with a restart of the
-daemon (the outbox is its memory).  An end loses nothing: $FileOutbox$ moves what
-is held to the inbox, and only $DaemonRestart$ adds to $lostN$.
+is conserved: issued is held, in the session's inbox, in the user's mailbox,
+shown, lost with a restart of the daemon (the outbox is its memory), or stranded
+by a restart that forgot the record.  An end loses nothing: $FileOutbox$ files
+what is held and drains the session's inbox into the user's mailbox.
 
 \begin{schema}{Invariant}
   EndInv
@@ -198,12 +211,16 @@ is held to the inbox, and only $DaemonRestart$ adds to $lostN$.
   logTodo' = zfalse \\
   mailTodo' = zfalse \\
   newLive' = zfalse \\
+  ownEnded' = zfalse \\
   outboxN' = 0 \\
-  inboxN' = 0 \\
+  sessN' = 0 \\
+  userN' = 0 \\
   shownN' = 0 \\
   issuedN' = 0 \\
   lostN' = 0 \\
-  shownDormant' = zfalse
+  strandedN' = 0 \\
+  shownDormant' = zfalse \\
+  forgot' = zfalse
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -274,6 +291,89 @@ last connection goes.
 
 The daemon's sweep counts a dormant record's age.
 
+\begin{schema}{DaemonRestartForget}
+  \Delta Record \\
+  \Xi Effects \\
+  \Delta Mail
+  \where
+  recState \in \{ rsLive, rsDormant \} \\
+  recState' = rsNone \\
+  currentRun' = currentRun \\
+  conns' = \emptyset \\
+  age' = 0 \\
+  endRun' = endRun \\
+  outboxN' = 0 \\
+  lostN' = lostN + outboxN \\
+  sessN' = 0 \\
+  userN' = userN \\
+  strandedN' = strandedN + sessN \\
+  shownN' = shownN \\
+  issuedN' = issuedN \\
+  shownDormant' = shownDormant \\
+  forgot' = ztrue
+\end{schema}
+
+What the code does on a restart: biffd keeps the records of harness sessions in
+memory, so the restart forgets them.  The relay row and the tty name stay, and age
+out by the relay's own row lifetime ($RowAgesOut$, $TtyAgesOut$ below); the held
+batch is lost with the outbox ($lostN$, PL-1753); and the mail waiting in the
+session's own relay inbox ($sessN$) is neither drained into the user's mailbox
+(that is part of an end) nor read by anyone, which the model counts as
+$strandedN$.  It stays in the relay until the relay's own retention, and a
+session resumed under the same id finds it again; the model does not state the
+resume.  Mail already in the user's mailbox ($userN$) is untouched, and so is the
+mail an end filed there.
+
+This is not wholly safe, which is why the durable restart below is kept beside it
+and not replaced by it: a forgotten session holds its tty name for the row
+lifetime, and its unread mail is stranded.  The properties that mention the
+record hold unless $forgot = ztrue$.  Persisting the records, or a scan of the
+relay's rows when the daemon starts, would close both.
+
+\begin{schema}{RowAgesOut}
+  \Xi Record \\
+  \Delta Effects \\
+  \Xi Mail
+  \where
+  forgot = ztrue \\
+  recState = rsNone \\
+  rowPresent = ztrue \\
+  rowPresent' = zfalse \\
+  ttyOwner' = ttyOwner \\
+  logged' = logged \\
+  rowTodo' = rowTodo \\
+  ttyTodo' = ttyTodo \\
+  logTodo' = logTodo \\
+  mailTodo' = mailTodo \\
+  newLive' = newLive \\
+  ownEnded' = ownEnded
+\end{schema}
+
+\begin{schema}{TtyAgesOut}
+  \Xi Record \\
+  \Delta Effects \\
+  \Xi Mail
+  \where
+  forgot = ztrue \\
+  recState = rsNone \\
+  ttyOwner = tOld \\
+  ttyOwner' = tNone \\
+  rowPresent' = rowPresent \\
+  logged' = logged \\
+  rowTodo' = rowTodo \\
+  ttyTodo' = ttyTodo \\
+  logTodo' = logTodo \\
+  mailTodo' = mailTodo \\
+  newLive' = newLive \\
+  ownEnded' = ownEnded
+\end{schema}
+
+The relay's row lifetime and the name reservation's lifetime run out.  This is the
+NATS relay.  The local relay (no relay URL configured) keeps a reservation as a
+lockfile with no lifetime: there $TtyAgesOut$ does not happen, and a forgotten
+session holds its name until something releases it.  The model has no local
+variant: the NATS behaviour is the favourable one.
+
 \begin{schema}{DaemonRestart}
   \Delta Record \\
   \Xi Effects \\
@@ -288,7 +388,10 @@ The daemon's sweep counts a dormant record's age.
   outboxN' = 0 \\
   lostN' = lostN + outboxN \\
   shownDormant' = shownDormant \\
-  inboxN' = inboxN \\
+  strandedN' = strandedN \\
+  forgot' = forgot \\
+  sessN' = sessN \\
+  userN' = userN \\
   shownN' = shownN \\
   issuedN' = issuedN
 \end{schema}
@@ -326,7 +429,8 @@ modelled.
   ttyTodo' = ztrue \\
   logTodo' = ztrue \\
   mailTodo' = ztrue \\
-  newLive' = newLive
+  newLive' = newLive \\
+  ownEnded' = ztrue
 \end{schema}
 
 A connection of the current run ends its own session: the end begins and owes
@@ -363,7 +467,8 @@ A connection of a replaced run is refused and nothing changes.
   ttyTodo' = ztrue \\
   logTodo' = ztrue \\
   mailTodo' = ztrue \\
-  newLive' = newLive
+  newLive' = newLive \\
+  ownEnded' = ownEnded
 \end{schema}
 
 Retention: a dormant record with no connection, aged to the retention, begins the
@@ -383,7 +488,8 @@ same end.
   ttyTodo' = ttyTodo \\
   logTodo' = logTodo \\
   mailTodo' = mailTodo \\
-  newLive' = newLive
+  newLive' = newLive \\
+  ownEnded' = ownEnded
 \end{schema}
 
 \begin{schema}{ReleaseTty}
@@ -393,18 +499,25 @@ same end.
   \where
   recState = rsEnding \\
   ttyTodo = ztrue \\
-  ttyOwner' = tNone \\
+  ttyOwner' = ( \IF ttyOwner = tOld \THEN tNone \ELSE ttyOwner ) \\
   ttyTodo' = zfalse \\
   rowPresent' = rowPresent \\
   logged' = logged \\
   rowTodo' = rowTodo \\
   logTodo' = logTodo \\
   mailTodo' = mailTodo \\
-  newLive' = newLive
+  newLive' = newLive \\
+  ownEnded' = ownEnded
 \end{schema}
 
-The release is by name: it frees the name whoever holds it.  That is why an end
-that runs after a new hello is wrong.
+The release is owner-checked, as the code's is: it frees the name only if this
+session still holds it, and a name another session took stays theirs.  The
+frozen variant \texttt{claude-session-end-unordered.tex} releases by name and
+frees the new session's name; \texttt{claude-session-end-unordered-owned.tex}
+keeps the owner check and lets the new hello run during the end, and the
+invariant holds.  So the check, not the order alone, is what protects the new
+session, and the order (the client waits for the end's reply) keeps the name
+from being claimed while it is still held.
 
 \begin{schema}{AppendLogout}
   \Xi Record \\
@@ -420,7 +533,8 @@ that runs after a new hello is wrong.
   rowTodo' = rowTodo \\
   ttyTodo' = ttyTodo \\
   mailTodo' = mailTodo \\
-  newLive' = newLive
+  newLive' = newLive \\
+  ownEnded' = ownEnded
 \end{schema}
 
 \begin{schema}{FileOutbox}
@@ -430,12 +544,15 @@ that runs after a new hello is wrong.
   \where
   recState = rsEnding \\
   mailTodo = ztrue \\
-  inboxN' = inboxN + outboxN \\
+  userN' = userN + outboxN + sessN \\
+  sessN' = 0 \\
   outboxN' = 0 \\
   shownN' = shownN \\
   issuedN' = issuedN \\
   lostN' = lostN \\
   shownDormant' = shownDormant \\
+  strandedN' = strandedN \\
+  forgot' = forgot \\
   mailTodo' = zfalse \\
   rowPresent' = rowPresent \\
   ttyOwner' = ttyOwner \\
@@ -443,11 +560,16 @@ that runs after a new hello is wrong.
   rowTodo' = rowTodo \\
   ttyTodo' = ttyTodo \\
   logTodo' = logTodo \\
-  newLive' = newLive
+  newLive' = newLive \\
+  ownEnded' = ownEnded
 \end{schema}
 
-The mail the session holds goes back to the user's inbox, where any reader finds
-it, and the end no longer owes it.
+The mail the session holds is filed back in the relay and the session's inbox is
+drained into the user's mailbox, where any reader finds it, and the end no longer
+owes it.  A mail that arrives in the session's inbox after the drain and before
+the record goes stays there, as in the code (the drain stops when a fetch finds
+nothing and cannot see what comes later); the model allows the arrival and does
+not state a property about it.
 
 \begin{schema}{FinishEnd}
   \Delta Record \\
@@ -487,7 +609,8 @@ The record goes only when every effect is done.
   rowTodo' = rowTodo \\
   ttyTodo' = ttyTodo \\
   logTodo' = logTodo \\
-  mailTodo' = mailTodo
+  mailTodo' = mailTodo \\
+  ownEnded' = ownEnded
 \end{schema}
 
 The new session's hello after a clear.  It is enabled only when the old session's
@@ -505,12 +628,15 @@ reply before it sends the hello.
   \Delta Mail
   \where
   issuedN < maxMail \\
-  inboxN' = inboxN + 1 \\
+  sessN' = sessN + 1 \\
+  userN' = userN \\
   issuedN' = issuedN + 1 \\
   outboxN' = outboxN \\
   shownN' = shownN \\
   lostN' = lostN \\
-  shownDormant' = shownDormant
+  shownDormant' = shownDormant \\
+  strandedN' = strandedN \\
+  forgot' = forgot
 \end{schema}
 
 \begin{schema}{MailFetch}
@@ -519,13 +645,16 @@ reply before it sends the hello.
   \Delta Mail
   \where
   recState = rsLive \\
-  inboxN > 0 \\
-  inboxN' = inboxN - 1 \\
+  sessN > 0 \\
+  sessN' = sessN - 1 \\
+  userN' = userN \\
   outboxN' = outboxN + 1 \\
   shownN' = shownN \\
   issuedN' = issuedN \\
   lostN' = lostN \\
-  shownDormant' = shownDormant
+  shownDormant' = shownDormant \\
+  strandedN' = strandedN \\
+  forgot' = forgot
 \end{schema}
 
 The client prints a message it was handed.  It needs a connected client: with the
@@ -542,10 +671,13 @@ is the count $shownN$ took when it was handed over.
   outboxN > 0 \\
   outboxN' = outboxN - 1 \\
   shownN' = shownN + 1 \\
-  inboxN' = inboxN \\
+  sessN' = sessN \\
+  userN' = userN \\
   issuedN' = issuedN \\
   lostN' = lostN \\
-  shownDormant' = ( \IF recState = rsDormant \THEN ztrue \ELSE shownDormant )
+  shownDormant' = ( \IF recState = rsDormant \THEN ztrue \ELSE shownDormant ) \\
+  strandedN' = strandedN \\
+  forgot' = forgot
 \end{schema}
 
 \begin{schema}{Quiesce}
@@ -584,17 +716,25 @@ formulas is a liveness theorem.
 and the non-vacuity goals are that both transitions are reachable:
 $recState = rsEnding$ after $EndOwnSession$ and after $ExpireClaude$, that
 $EndRefused$ is enabled ($currentRun = 1 \land 0 \in conns$), and that a clear
-completes ($newLive = ztrue$).
+completes through an end ($newLive = ztrue \land ownEnded = ztrue \land forgot =
+zfalse$, the ghost $ownEnded$ set by $EndOwnSession$: a trace with an
+$EndOwnSession$ step before $NewHello$, not the path through the forgetting restart
+and $TtyAgesOut$, which enables $NewHello$ with no end).
 
-Six frozen variants are the negative controls, each the shipped file with one
+Eight frozen variants are the negative controls, each the shipped file with one
 thing taken out:
 \begin{itemize}
   \item \texttt{claude-session-end-nofile.tex}: $FileOutbox$ drops what the session
     holds (the end that does not file mail back, the requirement A2 of DES-099
     states): the conservation invariant is violated.
   \item \texttt{claude-session-end-unordered.tex}: $NewHello$ is enabled while the
-    old end is still in progress: the old end's by-name $ReleaseTty$ frees the new
-    session's name, and $newLive = ztrue \Rightarrow ttyOwner = tNew$ is violated.
+    old end is still in progress and $ReleaseTty$ frees the name by name: the old
+    end frees the new session's name, and $newLive = ztrue \Rightarrow ttyOwner =
+    tNew$ is violated.
+  \item \texttt{claude-session-end-unordered-owned.tex}: the same unordered
+    $NewHello$ with the owner-checked $ReleaseTty$ of the shipped model: the
+    invariant \textbf{holds} over its 2,791 states.  This is the positive control:
+    the owner check is what keeps the new session's name.
   \item \texttt{claude-session-end-orphan.tex}: $ExpireClaude$ owes no row deletion
     (the retention path forgets the row): the record goes with the row still
     present, and $rowPresent = ztrue \Rightarrow recState \neq rsNone$ is violated:
@@ -629,12 +769,17 @@ thing taken out:
 %%       "AG({recState=rsEnding & rowTodo=zfalse & ttyTodo=zfalse & logTodo=zfalse & mailTodo=zfalse} => e(FinishEnd))"
 %%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
 %%       "AG({recState=rsEnding} => EF {recState=rsNone})"   (reachability)
-%%   goals: "recState=rsEnding & age=2", "newLive=ztrue", "recState=rsLive & conns/={} & currentRun=1"
+%%   goals: "recState=rsEnding & age=2", "newLive=ztrue & ownEnded=ztrue & forgot=zfalse", "recState=rsLive & conns/={} & currentRun=1"
+%%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
+%%       "AG({forgot=ztrue & recState=rsNone & rowPresent=ztrue} => e(RowAgesOut))"   (and TtyAgesOut)
+%%   goals (the restart that forgets): "forgot=ztrue & rowPresent=ztrue", "strandedN>0",
+%%       "forgot=ztrue & ttyOwner=tNew & rowPresent=zfalse"
+%%   shipped model, exhaustive: 1,651 states; unordered-owned: 2,791 states, no violation
 %%
 %% Negative controls (each reports an invariant violation, the noexpire one a
 %% FALSE CTL formula):
 %%
-%%   for V in nofile unordered orphan; do
+%%   for V in nofile unordered orphan anyrun showanywhere; do
 %%     "$PROBCLI" docs/specs/claude-session-end-$V.tex $P -model_check
 %%   done
 %%   "$PROBCLI" docs/specs/claude-session-end-noexpire.tex $P -model_check -ctlformula \

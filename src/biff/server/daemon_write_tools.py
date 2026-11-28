@@ -225,7 +225,7 @@ class DaemonWriteTools:
         # The display, the SessionStart marker and the spoken wall are this
         # process's: biffd has none of them.
         if clear or message.strip() or "text" not in data:
-            await self._show_wall(data)
+            await self._show_wall(data, clear_marker=clear)
         return reply.text
 
     async def _shown_as_held(self) -> None:
@@ -242,12 +242,20 @@ class DaemonWriteTools:
         if isinstance(held, dict):
             await self._show_wall(held)
 
-    async def _show_wall(self, data: dict[str, JsonValue]) -> None:
-        """Show *data*, a wall or the news that there is none, here."""
+    async def _show_wall(
+        self, data: dict[str, JsonValue], *, clear_marker: bool = False
+    ) -> None:
+        """Show *data*, a wall or the news that there is none, here.
+
+        The SessionStart marker is cleared only when the caller cleared the wall:
+        a look finds this repo's wall alone, and a wall posted to another repo
+        must still reach the sessions that start here.
+        """
         root = str(self._state.repo_common_root)
         if "text" not in data:
             await refresh_wall(self._mcp, self._state, wall=None)
-            clear_wall_marker(root)
+            if clear_marker:
+                clear_wall_marker(root)
             return
         post = WallPost.model_validate(data)
         await refresh_wall(self._mcp, self._state, wall=post)

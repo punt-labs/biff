@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
@@ -28,13 +28,19 @@ from biff.client.connection import (
 from biff.daemon.relays import ResolvedSession
 from biff.daemon.server import BiffDaemon
 from biff.daemon.session_store import CliSessionStore
-from biff.markers import clear_plan_marker, read_plan_marker, read_wall_marker
+from biff.markers import (
+    clear_plan_marker,
+    read_plan_marker,
+    read_wall_marker,
+    write_wall_marker,
+)
 from biff.models import BiffConfig, WallPost
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
 from biff.server.app import create_server
 from biff.server.mcp_assembly import McpAssembly
 from biff.server.mcp_link import McpLink
+from biff.server.state import ServerState
 from biff.server.tools._descriptions import get_tty_name
 from biff.session_routing import SessionRouting
 from biff.testing import RecordingClient, Transcript
@@ -104,6 +110,7 @@ class _Rig:
     resolver: _OneRepo
     asked: list[str] = field(default_factory=list[str])
     stack: AsyncExitStack = field(default_factory=AsyncExitStack)
+    states: dict[str, ServerState] = field(default_factory=dict[str, ServerState])
     connected: list[DaemonClient] = field(default_factory=list[DaemonClient])
 
     def link(self, user: str, settle: float = 5.0) -> McpLink:
@@ -119,7 +126,12 @@ class _Rig:
         )
 
     async def client(
-        self, user: str, link: McpLink | None = None, relay: Relay | None = None
+        self,
+        user: str,
+        link: McpLink | None = None,
+        relay: Relay | None = None,
+        *,
+        dormant: bool = False,
     ) -> _Caller:
         """Return *user*'s MCP client, over a server that asks biffd for reads."""
         state = create_state(
@@ -128,7 +140,9 @@ class _Rig:
             relay=relay,
             hostname="test-host",
             pwd="/test",
+            dormant=dormant,
         )
+        self.states[user] = state
         server = create_server(state)
         McpAssembly.answer_from(link or self.link(user), server, state)
         stamped = StampedClient(FastMCPTransport(server))
@@ -694,3 +708,107 @@ async def test_a_wall_that_landed_but_failed_is_shown_as_the_relay_holds_it(
             await kai.call("wall", message="second", duration="1h")
 
     assert read_wall_marker(root) == "second"
+
+
+async def test_a_write_whose_reply_was_lost_is_not_sent_again(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """biffd may have delivered it; repeating it would be a second message."""
+    delivered = DaemonClient.request_held
+    losses: list[str] = []
+
+    async def losing(self: DaemonClient, method: str, **params: JsonValue) -> HeldReply:
+        held = await delivered(self, method, **params)
+        if method == "write" and not losses:
+            losses.append(method)
+            msg = "biffd closed the connection"
+            raise ConnectionLostError(msg)
+        return held
+
+    monkeypatch.setattr(DaemonClient, "request_held", losing)
+    writer = await rig.client("eric")
+    reader = await rig.client("kai")
+    await reader.call("tty", name="kaitty")
+
+    with pytest.raises(ToolError, match="may have been carried out"):
+        await writer.call("write", to="kai:kaitty", message="once")
+    heard = await reader.call("read_messages")
+
+    assert heard.count("once") == 1
+
+
+async def test_a_disabled_repository_is_not_announced_by_the_poll_status(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai", dormant=True)
+
+    text = await kai.call("get_poll_status")
+
+    assert (text, rig.asked) == ("Polling: active, interval=2s (2s)", [])
+
+
+def _invite(state: ServerState, sender: str) -> None:
+    """Make *state*'s own subscription hold an invite from *sender*."""
+    state.talk.receive(
+        {
+            "type": "invite",
+            "from": sender,
+            "from_tty": f"{sender}tty",
+            "from_key": f"{sender}:key1",
+            "to_key": state.session_key,
+            "body": "",
+        }
+    )
+
+
+async def test_an_invite_only_this_process_heard_is_not_lost_to_a_quiet_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (rig, kai, _eric):
+        _invite(rig.states["kai"], "eric")
+
+        text = await kai.call("talk_read")
+
+    assert "eric wants to talk" in text
+
+
+async def test_talking_to_someone_answers_the_invite_this_process_held_from_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (rig, kai, _eric):
+        _invite(rig.states["kai"], "eric")
+        rig.states["kai"].talk.absorb_idle_invites()
+
+        await kai.call("talk", to="eric:erictty")
+
+    assert rig.states["kai"].talk.pending_invites == {}
+
+
+async def test_a_bare_acceptance_ends_the_wait_of_the_one_who_invited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (_rig, kai, eric):
+        await kai.call("talk", to="eric:erictty")
+        await eric.call("talk_read")
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        listening = asyncio.create_task(kai.call("talk_listen", timeout=5))
+        await asyncio.sleep(0.3)
+
+        await eric.call("talk", to="kai:kaitty")
+        await listening
+        waited = loop.time() - started
+
+    assert waited < 3.0
+
+
+async def test_a_wall_refused_before_it_reached_a_repo_keeps_the_marker_for_the_rest(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai")
+    root = str(Path())
+    write_wall_marker(root, "elsewhere", datetime.now(UTC) + timedelta(hours=1))
+
+    await kai.call("wall", message="x", repo="nope/none")
+
+    assert read_wall_marker(root) == "elsewhere"

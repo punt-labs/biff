@@ -4,6 +4,14 @@
 
 ### Added
 
+- The biffd `end` method ends the caller's own harness session: it files the mail
+  the session holds back, drains its inbox into the user mailbox, releases its
+  tty name (only if it still holds it), deletes its row and appends a logout. A
+  connection of a replaced run is refused. Mail is forwarded at least once, and
+  the tty name is released only if the session still holds it (a compare-and-delete
+  on the relay, also used by `session end`). A step that fails, a logout that
+  cannot be recorded included, leaves the session, and the next `end` finishes it. A harness session with no connection for three
+  days is ended by the daemon's sweep the same way.
 - `mcp.transport: daemon` in `.punt-labs/biff/config.yaml` (or
   `BIFF_MCP_TRANSPORT=daemon`) makes `biff mcp` answer `who`, `finger`, `last`
   and `read_messages` through biffd, and, since the write side moved too,
@@ -23,6 +31,9 @@
   wall aimed at one repo (`repo`) and a wall the relay refused are reported by
   biffd's `wall`. An invalid name for `biff tty` now reads `Error: ...`, as the
   MCP tool always said.
+- A request that is not a look or a `read` is not repeated when the connection
+  to biffd drops while it is in flight: the tool says it may have been carried
+  out, so a `write` cannot become two messages.
 - Every biffd request except `status` and `talk_read` counts as the session's
   activity (`last_tool_at`); a `read` counts when it finds mail. A poll that
   finds nothing does not (DES-097).
