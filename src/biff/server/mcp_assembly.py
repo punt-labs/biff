@@ -28,12 +28,7 @@ if TYPE_CHECKING:
 
 __all__ = ["McpAssembly"]
 
-_FAMILIES: Final = (
-    DaemonReadTools,
-    DaemonWriteTools,
-    DaemonTalkTools,
-    DaemonChannelAck,
-)
+_FAMILIES: Final = (DaemonReadTools, DaemonWriteTools, DaemonTalkTools)
 _MOVED: Final = (
     "mcp.transport: daemon cannot be used with --data-dir or --relay-url: biffd "
     "resolves the relay from the repository, so the read tools would read another "
@@ -87,7 +82,7 @@ class McpAssembly:
         return server
 
     @staticmethod
-    def feed_channel_from(link: McpLink, state: ServerState) -> None:
+    def feed_channel_from(link: McpLink, state: ServerState) -> DaemonChannelFeed:
         """Have *state*'s channel events come from biffd's subscription.
 
         The emitter is replaced before the server is created, so the channel
@@ -97,6 +92,7 @@ class McpAssembly:
         feed = DaemonChannelFeed(link=link, check=state.channel_check)
         object.__setattr__(state, "emitter", feed.emitter)
         object.__setattr__(state, "session_bound", feed.bind)
+        return feed
 
     @staticmethod
     def answer_from(
@@ -107,3 +103,5 @@ class McpAssembly:
             for name in family.NAMES:
                 server.local_provider.remove_tool(name)
             family(server, state, link).register()
+        # ``channel_ack`` exists only while channel mode serves: biffd's answers it.
+        server.attach_channel_tools(DaemonChannelAck(server, state, link).register)

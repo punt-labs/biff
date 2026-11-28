@@ -4,6 +4,12 @@
 
 ### Added
 
+- With `mcp.transport: daemon`, `biff mcp` sends Claude Code's channel events
+  (mail, wall, talk invite, talk message, channel check) from biffd's subscription
+  instead of a relay of its own. The emitter, its rate limit, held kinds and retry
+  are the in-process ones; it reads biffd's `arrivals` snapshot and events. The
+  `channel_ack` tool tells biffd, which made the check token. The `arrivals`
+  snapshot carries `mesg` and lists an invite as live as soon as it is queued.
 - With `mcp.transport: daemon`, the Claude Code SessionStart and SessionEnd hooks
   go through biffd. SessionStart sends a hello as client `hook`, asks `status` for
   the session key and tty name biffd chose, and writes the active marker, unread

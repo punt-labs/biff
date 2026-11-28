@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, Self, final
+from typing import TYPE_CHECKING, Self, final
 
 from biff.server.daemon_calls import DaemonCalls
 from biff.server.tools.channel_ack import CHANNEL_ACK_DESCRIPTION
@@ -24,9 +24,6 @@ class DaemonChannelAck:
     subject, so it spends the token and answers the doctor; this returns its
     text unchanged.
     """
-
-    NAMES: ClassVar[tuple[str, ...]] = ("channel_ack",)
-    """The tool it registers: the in-process tool it replaces."""
 
     __slots__ = ("_calls", "_mcp")
 

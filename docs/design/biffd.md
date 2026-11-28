@@ -425,6 +425,21 @@ per token. `channel_ack` spends the token and relays the acknowledgement once; a
 request frame replayed after the acknowledgement makes no event and no second
 acknowledgement, because the token is spent.
 
+**Channel events on the daemon transport.** With `mcp.transport: daemon`, `biff mcp`
+opens a connection of its own to the session (beside the one its tools use),
+subscribes, and follows each event with one `arrivals` request and a pass of the
+channel emitter. The emitter is the in-process one, so its rate limit, held kinds,
+retry and the channel link are unchanged; only what it reads differs. Mail is
+ordered by the snapshot's `mark`, a wall by its key, an invite by a counter of
+`talk_invite` events checked against the snapshot's live `invites`, and a talk line
+by a counter of `talk_line` events while `talk_pending` is above zero. The snapshot
+carries `mesg`, which holds events while it is off. Each pass starts from a fresh
+snapshot. A `channel_check_request` event owes one channel event for biffd's token
+(no rate slot), and the `channel_ack` tool sends the token to biffd. A lost
+connection is opened again, and the summary biffd sends on the new subscription
+announces what came meanwhile. A new session id (`/clear`, a resume) moves the feed
+to that session.
+
 ## Z specification obligations
 
 The daemon adds states the current specs do not have. Per the repository's
