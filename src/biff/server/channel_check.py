@@ -14,6 +14,7 @@ import logging
 import re
 import secrets
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Self
 
@@ -27,6 +28,9 @@ logger = logging.getLogger(__name__)
 CHECK_SECONDS = 60.0
 """A session accepts at most one check request in this many seconds."""
 
+OWED_MEMORY = 8
+"""How many owed tokens are remembered, so that a replayed request is not a new one."""
+
 
 class ChannelCheck:
     """Hold the one pending check: its token, its reply subject, its send."""
@@ -37,6 +41,7 @@ class ChannelCheck:
     _token: str | None  # absent when no check is pending
     _reply: str
     _is_unsent: bool
+    _owed: deque[str]  # tokens already owed, pending or spent, newest last
 
     def __new__(cls, clock: Callable[[], float] = time.monotonic) -> Self:
         """Create a session's check state with nothing pending."""
@@ -55,6 +60,7 @@ class ChannelCheck:
         self._token = None
         self._reply = ""
         self._is_unsent = False
+        self._owed = deque(maxlen=OWED_MEMORY)
 
     def request(self, reply: str) -> str | None:
         """Accept a request naming *reply*; return its fresh token, or ``None``.
@@ -81,8 +87,13 @@ class ChannelCheck:
         """Owe the event for *token*, made by biffd, which also took the request.
 
         biffd keeps the cooldown and the reply subject, so only the token and
-        the fact that it is unsent are held here.
+        the fact that it is unsent are held here.  biffd delivers a request at
+        least once, so a token already owed, whether its event is sent, pending
+        or its acknowledgement spent, is not owed again.
         """
+        if token in self._owed:
+            return
+        self._owed.append(token)
         self._token = token
         self._reply = ""
         self._is_unsent = True
