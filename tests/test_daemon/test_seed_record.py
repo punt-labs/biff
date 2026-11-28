@@ -1,0 +1,97 @@
+"""biffd remembers which relay settings it was last started with, names only."""
+
+from __future__ import annotations
+
+import stat
+from typing import TYPE_CHECKING
+
+import pytest
+
+from biff.daemon.seed_record import SeedRecord
+from biff.relay_seed import RelaySeed
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+_SEEDED = {"BIFF_RELAY_URL": "nats://relay.invalid:4222", "BIFF_RELAY_TOKEN": "tok-A"}
+
+
+def test_the_first_start_has_nothing_to_compare_with(tmp_path: Path) -> None:
+    assert SeedRecord(tmp_path / "relay-seed").record(RelaySeed.of(_SEEDED)) == ""
+
+
+def test_the_file_holds_names_only_and_is_private(tmp_path: Path) -> None:
+    path = tmp_path / "relay-seed"
+    SeedRecord(path).record(RelaySeed.of(_SEEDED))
+    assert path.read_text() == (
+        "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay nats://relay.invalid:4222)\n"
+    )
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_a_start_with_the_same_names_says_nothing(tmp_path: Path) -> None:
+    record = SeedRecord(tmp_path / "relay-seed")
+    record.record(RelaySeed.of(_SEEDED))
+    assert record.record(RelaySeed.of({**_SEEDED, "BIFF_RELAY_TOKEN": "tok-B"})) == ""
+
+
+def test_a_start_without_the_settings_says_what_changed(tmp_path: Path) -> None:
+    record = SeedRecord(tmp_path / "relay-seed")
+    record.record(RelaySeed.of(_SEEDED))
+    note = record.record(RelaySeed.of({}))
+    assert (
+        "BIFF_RELAY_TOKEN, BIFF_RELAY_URL" in note,
+        "none" in note,
+        "tok-A" in note,
+    ) == (True, True, False)
+
+
+def test_the_change_is_reported_once(tmp_path: Path) -> None:
+    record = SeedRecord(tmp_path / "relay-seed")
+    record.record(RelaySeed.of(_SEEDED))
+    record.record(RelaySeed.of({}))
+    assert record.record(RelaySeed.of({})) == ""
+
+
+def test_a_start_on_another_relay_with_the_same_names_says_what_changed(
+    tmp_path: Path,
+) -> None:
+    record = SeedRecord(tmp_path / "relay-seed")
+    record.record(RelaySeed.of(_SEEDED))
+    other = {"BIFF_RELAY_URL": "nats://other.invalid:4222", "BIFF_RELAY_TOKEN": "tok-B"}
+    note = record.record(RelaySeed.of(other))
+    assert (
+        "relay.invalid:4222" in note,
+        "other.invalid:4222" in note,
+        "tok-A" in note or "tok-B" in note,
+    ) == (True, True, False)
+
+
+_STORED = [
+    "\x1b[31mSECRET-xyz-7f3a old format line\n",
+    "BIFF_RELAY_URL (relay nats://h\x1b[31mSECRET-xyz-7f3a:4222)\n",
+    "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay relay.invalid:4222)\n",
+    "BIFF_RELAY_URL (relay nats://relay.invalid:4222); settings SECRET-xyz-7f3a\n",
+]
+
+
+@pytest.mark.parametrize("stored", _STORED)
+def test_stored_text_that_is_not_the_current_format_is_never_repeated(
+    stored: str, tmp_path: Path
+) -> None:
+    path = tmp_path / "relay-seed"
+    path.write_text(stored)
+    note = SeedRecord(path).record(RelaySeed.of(_SEEDED))
+    assert (
+        note,
+        "\x1b" in note or "SECRET" in note or "old format" in note,
+    ) == ("the relay settings changed", False)
+
+
+def test_a_stored_identity_in_the_current_format_is_rebuilt_not_copied(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "relay-seed"
+    path.write_text("BIFF_RELAY_URL (relay nats://other.invalid:4222)\n")
+    note = SeedRecord(path).record(RelaySeed.of(_SEEDED))
+    assert ("other.invalid:4222" in note, "relay.invalid:4222" in note) == (True, True)

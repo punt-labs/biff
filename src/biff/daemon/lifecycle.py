@@ -144,6 +144,10 @@ class BiffdService:
         lines.append(f"uptime: {health.uptime_seconds:.0f}s")
         if health.pid is not None:
             lines.append(f"pid: {health.pid}")
+        if health.relay_seed:
+            lines.append(f"relay settings from its environment: {health.relay_seed}")
+        if health.relay_seed_note:
+            lines.append(f"relay settings changed: {health.relay_seed_note}")
         lines.append(f"relay connections: {NOT_REPORTED}")
         lines.append(f"attached clients: {NOT_REPORTED}")
         return Outcome("done", "\n".join(lines))

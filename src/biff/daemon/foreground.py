@@ -9,15 +9,17 @@ import os
 import sys
 from importlib import import_module
 from importlib.metadata import version as pkg_version
-from typing import TYPE_CHECKING, Self, cast, final
+from typing import TYPE_CHECKING, NoReturn, Self, cast, final
 
 import typer
 from punt_observe.logging import Role
 
 from biff.daemon.environment import DaemonEnvironment
 from biff.daemon.handshake_log import HandshakeLog
+from biff.daemon.seed_key import SeedKey
 from biff.daemon.session_store import CliSessionStore
 from biff.logging_config import configure_logging
+from biff.relay_seed import RelaySeed
 from biff.run_dir import RunDir
 from biff.supervision.biffd import PERMANENT_EXIT_STATUS
 
@@ -74,13 +76,26 @@ class Foreground:
                 "each session resolves its own",
                 err=True,
             )
+        # Names only: the values are secrets and never reach a log or a screen.
+        try:
+            run_dir.ensure()
+            # No key is made, or looked for, when there is no seed to hash.
+            keyed = bool(RelaySeed.of(os.environ))
+            key = SeedKey(run_dir.path / "relay-seed.key").load() if keyed else b""
+            seed = RelaySeed.for_daemon(os.environ, key)
+        except (OSError, ValueError) as exc:
+            self._fail(str(exc))
+        logger.info("biffd relay settings from its environment: %s", seed.describe())
         # Loaded here, after the line above: the relay stack is most of biffd's
         # start-up time, and a daemon that is still importing it has said so.
         server = import_module("biff.daemon.server")
         daemon = cast(
             "BiffDaemon",
             server.BiffDaemon(
-                run_dir=run_dir, port=self._port, sessions=CliSessionStore.default()
+                run_dir=run_dir,
+                port=self._port,
+                sessions=CliSessionStore.default(),
+                relay_seed=seed,
             ),
         )
         try:
@@ -98,7 +113,7 @@ class Foreground:
             self._fail(str(exc))
 
     @staticmethod
-    def _fail(message: str) -> None:
+    def _fail(message: str) -> NoReturn:
         """Report *message* as biffd's one-line error and exit permanently.
 
         It goes to the log as well as stderr: under a service manager nobody reads

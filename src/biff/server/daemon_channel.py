@@ -6,6 +6,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Final, Self, cast, final
 
+from biff.client.connection import DaemonError
+from biff.frame_reply import ErrorCode
 from biff.server.channel_emitter import ChannelEmitter
 from biff.server.daemon_arrivals import ArrivalsSnapshot, DaemonArrivals, DaemonGate
 
@@ -28,6 +30,9 @@ MAX_RETRY_SECONDS: Final = 10.0
 
 STABLE_SECONDS: Final = 30.0
 """How long a subscription must stay up before its loss starts the backoff afresh."""
+
+_REFUSALS: Final = frozenset({ErrorCode.BAD_HELLO, ErrorCode.UNSUPPORTED_VERSION})
+"""What biffd answers when it will not serve this process; a retry cannot help."""
 
 
 @final
@@ -166,6 +171,13 @@ class DaemonChannelFeed:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if isinstance(exc, DaemonError) and exc.code in _REFUSALS:
+                    logger.exception(
+                        "biffd refused this session: %s; channel events are off "
+                        "for it, so poll with /biff:read 2m",
+                        exc,
+                    )
+                    return
                 self._backoff_after_loss()
                 logger.warning(
                     "channel events from biffd stopped: %s; opening again in %.1fs",

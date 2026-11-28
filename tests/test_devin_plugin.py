@@ -93,7 +93,6 @@ def test_manifest_and_server() -> None:
     assert args[0] == "-c"
     assert "exec biff mcp --user devin" in args[1]
     assert server["env"] == {
-        "BIFF_MCP_TRANSPORT": "inprocess",
         "BIFF_RELAY_TOKEN": "${MCP_BIFF_RELAY_TOKEN}",
         "BIFF_RELAY_URL": "tls://biff-relay.punt-labs.com:4222",
         "BIFF_RELAY_TLS_HANDSHAKE_FIRST": "true",
@@ -400,8 +399,8 @@ def test_launcher_environment_and_version(
     assert result.stderr == ""
 
 
-def test_the_devin_server_runs_in_process_because_it_carries_relay_settings() -> None:
-    """Devin hands biff its relay in the environment, which biffd cannot carry."""
+def test_the_devin_server_names_no_transport() -> None:
+    """Devin hands biff its relay in the environment, and biffd is seeded with it."""
     manifest = json.loads((_SURFACE / ".mcp.json").read_text())
 
-    assert manifest["mcpServers"]["biff"]["env"]["BIFF_MCP_TRANSPORT"] == "inprocess"
+    assert "BIFF_MCP_TRANSPORT" not in manifest["mcpServers"]["biff"]["env"]

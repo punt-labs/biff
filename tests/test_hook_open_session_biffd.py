@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-from biff.client.environment import UnsupportedOverrideError
+from biff.client.connection import DaemonError
+from biff.frame_reply import ErrorCode
 from biff.plugins.claude_code.daemon_session import DaemonSessionOpener
 from biff.plugins.claude_code.hook import _open_session
 
@@ -59,11 +60,10 @@ def test_a_daemon_failure_is_logged_and_does_not_break_startup(
 
 class _Refused:
     async def open(self, data: dict[str, object]) -> str:
-        raise UnsupportedOverrideError(
-            "BIFF_RELAY_URL cannot be sent to biffd yet and would be ignored; "
-            "unset it, or run biff without the daemon with "
-            "BIFF_MCP_TRANSPORT=inprocess (or mcp.transport: inprocess in "
-            ".punt-labs/biff/config.yaml)"
+        raise DaemonError(
+            ErrorCode.BAD_HELLO,
+            "this process's relay settings must equal biffd's: biffd was started "
+            "with BIFF_RELAY_URL, this process sets none",
         )
 
 

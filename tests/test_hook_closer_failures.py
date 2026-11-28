@@ -15,7 +15,6 @@ from biff.client.connection import (
     DaemonClient,
     DaemonError,
 )
-from biff.client.environment import UnsupportedOverrideError
 from biff.frame_reply import ErrorCode
 from biff.plugins.claude_code.daemon_session_end import DaemonSessionCloser
 from biff.plugins.claude_code.hook_daemon import HookDaemon
@@ -92,7 +91,7 @@ def _leave_handle(tmp_path: Path) -> SessionHandleStore:
         TimeoutError(),
         DaemonError(ErrorCode.BAD_HELLO, "an older biffd does not know ends"),
         DaemonError(ErrorCode.SESSION_ENDED, "biffd holds no session sess-1"),
-        UnsupportedOverrideError("BIFF_RELAY_URL cannot be sent to biffd yet"),
+        DaemonError(ErrorCode.BAD_HELLO, "relay settings must equal biffd's"),
     ],
 )
 async def test_a_hello_biffd_refuses_is_logged_and_left_to_the_fallback(

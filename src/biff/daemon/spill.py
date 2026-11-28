@@ -13,6 +13,7 @@ from biff.daemon.mail_transfer import MailTransfer
 from biff.daemon.spill_entry import Held, Spilled, SpillKey, Tries
 from biff.daemon.spill_file import SpillFile
 from biff.relay_errors import RELAY_ERRORS
+from biff.relay_seed import RelayConflictError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -318,6 +319,10 @@ class Spill:
                     )
                 else:
                     await self._deliver(core.pool.acquire(resolved), item, tries)
+        except RelayConflictError as exc:
+            logger.warning(
+                "the spilled mail of %s stays unfiled: %s", item.session_id, exc
+            )
         except Exception:
             # Before any message was tried the whole session failed; after, the
             # ones not yet tried were not at fault.

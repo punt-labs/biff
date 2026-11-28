@@ -9,7 +9,7 @@ import pytest
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from biff.client.environment import ClientEnvironment, UnsupportedOverrideError
+from biff.client.environment import ClientEnvironment
 from biff.config import ResolvedConfig
 from biff.daemon import resolver as resolver_module
 from biff.daemon.environment import DaemonEnvironment
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from tests.test_daemon.conftest import Harness
 
 
-def test_scrub_removes_the_identity_and_relay_variables_and_names_them() -> None:
+def test_scrub_removes_the_identity_variables_and_keeps_the_relay_ones() -> None:
     environ = {
         "BIFF_USER": "x",
         "BIFF_RELAY_URL": "nats://x",
@@ -34,16 +34,16 @@ def test_scrub_removes_the_identity_and_relay_variables_and_names_them() -> None
         "HOME": "/h",
     }
     removed = DaemonEnvironment.scrub(environ)
-    assert removed == (
-        "BIFF_OWNER",
-        "BIFF_RELAY_NKEYS_SEED",
-        "BIFF_RELAY_TLS_HANDSHAKE_FIRST",
-        "BIFF_RELAY_TOKEN",
-        "BIFF_RELAY_URL",
-        "BIFF_RELAY_USER_CREDENTIALS",
-        "BIFF_USER",
-    )
-    assert environ == {"BIFF_TELEMETRY": "off", "HOME": "/h"}
+    assert removed == ("BIFF_OWNER", "BIFF_USER")
+    assert environ == {
+        "BIFF_RELAY_URL": "nats://x",
+        "BIFF_RELAY_TOKEN": "t",
+        "BIFF_RELAY_NKEYS_SEED": "s",
+        "BIFF_RELAY_USER_CREDENTIALS": "c",
+        "BIFF_RELAY_TLS_HANDSHAKE_FIRST": "1",
+        "BIFF_TELEMETRY": "off",
+        "HOME": "/h",
+    }
 
 
 def test_scrub_of_a_clean_environment_removes_nothing() -> None:
@@ -56,26 +56,6 @@ def test_the_clients_user_variable_is_carried_when_no_user_is_given() -> None:
 
 def test_an_explicit_user_wins_over_the_variable() -> None:
     assert ClientEnvironment.user("kai", {"BIFF_USER": "eric"}) == "kai"
-
-
-def test_relay_overrides_in_the_clients_environment_are_refused_by_name() -> None:
-    environ = {"BIFF_RELAY_URL": "nats://x", "BIFF_RELAY_TOKEN": "t", "HOME": "/h"}
-    pattern = "BIFF_RELAY_TOKEN, BIFF_RELAY_URL"
-    with pytest.raises(UnsupportedOverrideError, match=pattern):
-        ClientEnvironment.require_no_relay_overrides(environ)
-
-
-def test_a_client_without_relay_overrides_is_accepted() -> None:
-    ClientEnvironment.require_no_relay_overrides({"BIFF_USER": "eric"})
-
-
-async def test_connect_refuses_a_relay_override_before_touching_the_network(
-    harness: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("BIFF_RELAY_URL", "nats://elsewhere")
-    with pytest.raises(UnsupportedOverrideError, match="BIFF_RELAY_URL"):
-        await harness.connect("s-kai", "kai")
-    assert harness.daemon.status().sessions == ()
 
 
 async def test_connect_carries_the_clients_user_variable(

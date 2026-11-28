@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from biff.channel_check_wire import CheckAck, CheckRequest
-from biff.client.connection import ClientIdentity, ConnectionLostError, DaemonClient
+from biff.client.connection import (
+    ClientIdentity,
+    ConnectionLostError,
+    DaemonClient,
+    DaemonError,
+)
+from biff.frame_reply import ErrorCode
 from biff.frames import Event
 from biff.server.channel_check import ChannelCheck
 from biff.server.channel_rate import RateLimit
@@ -105,10 +111,13 @@ class Rig:
         self.drop_lives = 0.0  # how long such a subscription lasts
         self.open_times: list[float] = []
         self.surprise_first = 0  # the first opens fail in a way nobody expects
+        self.refuse_with: DaemonError | None = None  # every open is refused
 
     async def _connect(self, identity: ClientIdentity) -> DaemonClient:
         self.opens += 1
         self.open_times.append(asyncio.get_running_loop().time())
+        if self.refuse_with is not None:
+            raise self.refuse_with
         if self.refuse_first >= self.opens:
             msg = "biffd is down"
             raise ConnectionError(msg)
@@ -598,3 +607,19 @@ async def test_a_move_during_a_slow_deferred_send_does_not_carry_its_record_over
         assert [m.get("count") for _, m in rig.sink.sent] == ["1", "1"]
     finally:
         await rig.feed.close()
+
+
+async def test_a_refusal_ends_the_feed_with_one_error_and_no_retry(
+    rig: Rig, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig.refuse_with = DaemonError(
+        ErrorCode.BAD_HELLO, "this process's relay settings must equal biffd's"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await rig.start()
+        await rig.wait_for(lambda: rig.opens >= 1)
+        await asyncio.sleep(0.5)  # the retry delay is 0.05s: it would have retried
+
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert (rig.opens, len(errors), "poll" in " ".join(errors)) == (1, 1, True)

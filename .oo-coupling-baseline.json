@@ -276,12 +276,12 @@
     "efferent_coupling": 9.0,
     "public_names": 7.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.714,
-    "avg_lcom": 0.714
+    "max_lcom": 0.743,
+    "avg_lcom": 0.743
   },
   "src/biff/client/environment.py": {
-    "efferent_coupling": 0.0,
-    "public_names": 2.0,
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -483,7 +483,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/config.py": {
-    "efferent_coupling": 3.0,
+    "efferent_coupling": 4.0,
     "public_names": 7.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -567,11 +567,18 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/connection.py": {
-    "efferent_coupling": 13.0,
+    "efferent_coupling": 14.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.758,
-    "avg_lcom": 0.758
+    "max_lcom": 0.682,
+    "avg_lcom": 0.682
+  },
+  "src/biff/daemon/credentials_home_resolver.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/biff/daemon/durable_file.py": {
     "efferent_coupling": 0.0,
@@ -588,7 +595,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/foreground.py": {
-    "efferent_coupling": 6.0,
+    "efferent_coupling": 8.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -609,7 +616,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/harness_records.py": {
-    "efferent_coupling": 4.0,
+    "efferent_coupling": 5.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.778,
@@ -734,12 +741,26 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/daemon/seed_key.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.286,
+    "avg_lcom": 0.286
+  },
+  "src/biff/daemon/seed_record.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/daemon/server.py": {
-    "efferent_coupling": 13.0,
+    "efferent_coupling": 16.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.6,
-    "avg_lcom": 0.6
+    "max_lcom": 0.564,
+    "avg_lcom": 0.564
   },
   "src/biff/daemon/service_cli.py": {
     "efferent_coupling": 1.0,
@@ -812,11 +833,11 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/session_restore.py": {
-    "efferent_coupling": 6.0,
+    "efferent_coupling": 8.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.5,
-    "avg_lcom": 0.5
+    "max_lcom": 0.472,
+    "avg_lcom": 0.472
   },
   "src/biff/daemon/session_select.py": {
     "efferent_coupling": 4.0,
@@ -833,7 +854,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/session_sweep.py": {
-    "efferent_coupling": 9.0,
+    "efferent_coupling": 10.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.464,
@@ -854,11 +875,11 @@
     "avg_lcom": 0.514
   },
   "src/biff/daemon/spill.py": {
-    "efferent_coupling": 4.0,
+    "efferent_coupling": 6.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.643,
-    "avg_lcom": 0.643
+    "max_lcom": 0.797,
+    "avg_lcom": 0.797
   },
   "src/biff/daemon/spill_entry.py": {
     "efferent_coupling": 3.0,
@@ -1008,7 +1029,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/frame_client.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 3.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -1532,6 +1553,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/relay_seed.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 5.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.374,
+    "avg_lcom": 0.374
+  },
   "src/biff/relay_select.py": {
     "efferent_coupling": 2.0,
     "public_names": 1.0,
@@ -1715,7 +1743,7 @@
     "avg_lcom": 0.333
   },
   "src/biff/server/daemon_channel.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 4.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.603,

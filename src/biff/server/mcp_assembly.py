@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from biff.client.environment import ClientEnvironment, UnsupportedOverrideError
 from biff.config import ResolvedConfig
 from biff.mcp_transport import McpTransport
 from biff.repo_transport import RepoTransport
@@ -71,13 +70,6 @@ class McpAssembly:
         )
         if asks_biffd and any(o is not None for o in self.overrides):
             raise SystemExit(_MOVED)
-        if asks_biffd:
-            try:
-                ClientEnvironment.require_no_relay_overrides(os.environ)
-            except UnsupportedOverrideError as exc:
-                # Refused where it is seen: every channel subscription would fail
-                # and the model is told not to poll.
-                raise SystemExit(str(exc)) from exc
         state = McpLaunch(self.resolved, self.toggle).state()
         link = None
         if asks_biffd:

@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final, final
+from typing import TYPE_CHECKING, final
+
+from biff.relay_seed import RELAY_VARIABLES, RelaySeed
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-__all__ = ["ClientEnvironment", "UnsupportedOverrideError"]
-
-_RELAY_OVERRIDES: Final = (
-    "BIFF_RELAY_NKEYS_SEED",
-    "BIFF_RELAY_TLS_HANDSHAKE_FIRST",
-    "BIFF_RELAY_TOKEN",
-    "BIFF_RELAY_URL",
-    "BIFF_RELAY_USER_CREDENTIALS",
-)
-
-
-class UnsupportedOverrideError(ValueError):
-    """The client's environment overrides something biffd cannot yet carry."""
+__all__ = ["ClientEnvironment"]
 
 
 @final
@@ -27,8 +17,8 @@ class ClientEnvironment:
     """Reads the settings a client's environment sets for its session.
 
     biffd resolves a session in its own process, so it cannot see the client's
-    environment.  The user override travels in the hello; relay overrides are
-    refused by name until they can, instead of being dropped without a word.
+    environment.  The user override travels in the hello; the relay settings
+    travel as digests, which biffd compares with the ones it was started with.
     """
 
     @staticmethod
@@ -37,27 +27,15 @@ class ClientEnvironment:
         return explicit or environ.get("BIFF_USER", "")
 
     @staticmethod
+    def relay_seed(environ: Mapping[str, str]) -> RelaySeed:
+        """Return the digests of the ``BIFF_RELAY_*`` values *environ* sets."""
+        return RelaySeed.of(environ)
+
+    @staticmethod
     def carries_relay_settings(environ: Mapping[str, str]) -> bool:
         """Return whether *environ* sets a ``BIFF_RELAY_*`` override.
 
-        A process that does is not a session of a person: it is a runner handed
-        its relay and credentials explicitly, which biffd cannot carry.
+        A process that does is a runner handed its relay and credentials
+        explicitly, such as a CI job posting to the wall.
         """
-        return any(name in environ for name in _RELAY_OVERRIDES)
-
-    @staticmethod
-    def require_no_relay_overrides(environ: Mapping[str, str]) -> None:
-        """Refuse a client whose environment overrides the relay.
-
-        Raises:
-            UnsupportedOverrideError: A ``BIFF_RELAY_*`` variable is set.
-        """
-        set_here = [name for name in _RELAY_OVERRIDES if name in environ]
-        if set_here:
-            msg = (
-                f"{', '.join(set_here)} cannot be sent to biffd yet and would be "
-                "ignored; unset it, or run biff without the daemon with "
-                "BIFF_MCP_TRANSPORT=inprocess (or mcp.transport: inprocess in "
-                ".punt-labs/biff/config.yaml)"
-            )
-            raise UnsupportedOverrideError(msg)
+        return any(name in environ for name in RELAY_VARIABLES)

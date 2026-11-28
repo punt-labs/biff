@@ -16,6 +16,7 @@ from biff.daemon.server import BiffDaemon
 from biff.daemon.session_store import CliSessionStore
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
+from biff.relay_seed import RelaySeed
 from biff.run_dir import RunDir
 from tests.test_daemon.talk_bus import TalkBus, TalkBusRelay
 
@@ -147,8 +148,17 @@ def bus(harness: Harness) -> TalkBus:
 
 
 @pytest.fixture
+def relay_seed() -> RelaySeed:
+    """The relay settings the daemon is started with; a module overrides this."""
+    return RelaySeed.of({})
+
+
+@pytest.fixture
 async def harness(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    relay_seed: RelaySeed,
 ) -> AsyncIterator[Harness]:
     """Run a daemon; ``indirect`` parametrization sets its request timeout."""
     run_dir = RunDir(tmp_path / "run")
@@ -171,6 +181,7 @@ async def harness(
         request_timeout=getattr(request, "param", 0.5),
         read_budget=4000,
         org_refresh_interval=0.05,
+        relay_seed=relay_seed,
     )
     await daemon.start()
     env = Harness(

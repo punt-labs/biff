@@ -571,9 +571,9 @@ async def test_a_relay_set_only_in_this_process_is_refused_by_name(
     with pytest.raises(ToolError, match="BIFF_RELAY_URL") as caught:
         await kai.call("who")
 
-    # Loud and actionable under the daemon default: the way out is named twice.
-    assert "BIFF_MCP_TRANSPORT=inprocess" in str(caught.value)
-    assert "mcp.transport: inprocess" in str(caught.value)
+    # Loud and actionable: biffd names what it was started with and the way out.
+    assert "must equal biffd's" in str(caught.value)
+    assert "Set the same environment here" in str(caught.value)
 
 
 class _CountingRelay(LocalRelay):
