@@ -827,15 +827,34 @@ def handle_pre_compact(data: dict[str, object] | None = None) -> str:
     return "Biff session resumed after compaction. Check /read for unread messages."
 
 
-def handle_session_end() -> int:
-    """Convert active-session markers to sentinels for cleanup.
+def handle_session_end(data: dict[str, object] | None = None) -> int:
+    """End the session of the SessionEnd payload through biffd, or reap markers.
 
-    Only processes sessions belonging to the **current repo** — other
-    repos' sessions are left untouched.  This prevents ending one
-    Claude Code session from reaping sessions in unrelated repos.
+    With ``mcp.transport: daemon`` and a payload that names a session, biffd
+    ends that one session.  Otherwise active-session markers become sentinels
+    for the reaper.  Only sessions of the **current repo** are processed, so
+    ending one Claude Code session never reaps sessions of unrelated repos.
 
     Returns the number of sessions cleaned up.
+
+    Raises:
+        ConnectionError: biffd is absent, cannot start, or sent an unreadable
+            reply.
+        TimeoutError: biffd did not answer in time.
     """
+    from biff.mcp_transport import McpTransport  # noqa: PLC0415
+
+    if data and isinstance(data.get("session_id"), str):
+        transport = McpTransport.for_repo(
+            pathlib.Path(_repo_common_root(data)), os.environ
+        )
+        if transport is McpTransport.DAEMON:
+            from biff.plugins.claude_code.daemon_session_end import (  # noqa: PLC0415
+                DaemonSessionCloser,
+            )
+
+            asyncio.run(DaemonSessionCloser.for_host().end(data))
+            return 1
     from biff._stdlib import (  # noqa: PLC0415
         active_dir,
         find_git_root,
@@ -963,7 +982,7 @@ def cc_session_end() -> None:
     """SessionEnd — convert active sessions to sentinels for cleanup."""
     if not _is_biff_enabled():
         return
-    handle_session_end()
+    handle_session_end(_read_hook_input())
 
 
 @_cc_app.command("pre-compact")
