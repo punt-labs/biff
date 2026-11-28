@@ -11,15 +11,19 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar, Literal, Self, final
 
 from biff._stdlib import expand_bead_id
+from biff.markers import clear_wall_marker, write_wall_marker
+from biff.models import WallPost
 from biff.plan_marker import PlanMarker
 from biff.server.daemon_calls import DaemonCalls
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import (
     refresh_read_messages,
+    refresh_wall,
     set_biff_enabled,
     set_tty_name,
 )
 from biff.server.tools._session import update_current_session
+from biff.server.tools.wall import WALL_BASE_DESCRIPTION
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -54,7 +58,7 @@ TTY_DESCRIPTION = "Name the current session. Visible in /who and /finger TTY col
 class DaemonWriteTools:
     """Registers the write-side tools on a server, backed by one link to biffd."""
 
-    NAMES: ClassVar[tuple[str, ...]] = ("write", "plan", "mesg", "tty")
+    NAMES: ClassVar[tuple[str, ...]] = ("write", "plan", "mesg", "tty", "wall")
     """The tools it registers: the in-process tools it replaces."""
 
     __slots__ = ("_calls", "_mcp", "_state")
@@ -80,6 +84,7 @@ class DaemonWriteTools:
         self._mcp.tool(name="plan", description=PLAN_DESCRIPTION)(guard(self.plan))
         self._mcp.tool(name="mesg", description=MESG_DESCRIPTION)(guard(self.mesg))
         self._mcp.tool(name="tty", description=TTY_DESCRIPTION)(guard(self.tty))
+        self._mcp.tool(name="wall", description=WALL_BASE_DESCRIPTION)(guard(self.wall))
 
     async def write(self, to: str, message: str) -> str:
         """Deliver a durable message to a teammate.
@@ -176,4 +181,54 @@ class DaemonWriteTools:
             set_tty_name(claimed)
             self._state.talk.set_tty_name(claimed)
         await refresh_read_messages(self._mcp, self._state)
+        return reply.text
+
+    async def wall(
+        self,
+        message: str = "",
+        duration: str = "",
+        *,
+        clear: bool = False,
+        repo: str = "",
+    ) -> str:
+        """Post, inspect, or clear a time-limited team broadcast.
+
+        Call without arguments to read the current wall; supply message to post,
+        or clear=True to remove it. Posts and clears update the local display
+        immediately and are written to the relay before this returns.
+
+        Args:
+            duration: A duration such as '30m' or '2h'; empty defaults to one hour.
+            repo: A visible repository slug, such as punt-labs__vox. Empty sends
+                posts and clears to all visible repositories.
+
+        Returns:
+            The active wall or a post/clear confirmation. Invalid durations or
+            unauthorized repositories are reported in text, and so is a repository
+            the relay refused. Messages are sanitized and limited to 512 characters.
+
+        Raises:
+            ToolError: biffd is not installed, did not start, or refused the call;
+                the message names the cause and the command that repairs it.
+        """
+        state = self._state
+        await update_current_session(state)
+        reply = await self._calls.ask(
+            "wall", message=message, duration=duration, clear=clear, repo=repo
+        )
+        data = reply.data
+        if reply.error or not isinstance(data, dict):
+            return reply.text
+        # The display, the SessionStart marker and the spoken wall are this
+        # process's: biffd has none of them.
+        root = str(state.repo_common_root)
+        if clear:
+            await refresh_wall(self._mcp, state, wall=None)
+            clear_wall_marker(root)
+        elif data.get("status") == "inactive":
+            await refresh_wall(self._mcp, state, wall=None)
+        elif message.strip() and "text" in data:
+            post = WallPost.model_validate(data)
+            await refresh_wall(self._mcp, state, wall=post)
+            write_wall_marker(root, post.text, post.expires_at)
         return reply.text

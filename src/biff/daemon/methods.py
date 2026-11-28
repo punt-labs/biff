@@ -197,9 +197,9 @@ class Methods:
     @staticmethod
     async def _wall(ctx: CliContext, p: Params) -> CommandResult:
         message, duration = p.text("message", ""), p.text("duration", "")
-        clear = p.flag("clear", default=False)
+        clear, repo = p.flag("clear", default=False), p.text("repo", "")
         p.done()
-        return await commands.wall(ctx, message, duration, clear=clear)
+        return await commands.wall(ctx, message, duration, clear=clear, repo=repo)
 
     @staticmethod
     async def _mesg(ctx: CliContext, p: Params) -> CommandResult:

@@ -11,6 +11,7 @@ import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 import pytest
@@ -27,7 +28,7 @@ from biff.client.connection import (
 from biff.daemon.relays import ResolvedSession
 from biff.daemon.server import BiffDaemon
 from biff.daemon.session_store import CliSessionStore
-from biff.markers import clear_plan_marker, read_plan_marker
+from biff.markers import clear_plan_marker, read_plan_marker, read_wall_marker
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
@@ -49,7 +50,6 @@ from tests._state import create_state
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
-    from pathlib import Path
 
     from fastmcp.tools import Tool
     from pydantic import JsonValue
@@ -493,6 +493,29 @@ async def test_mesg_goes_to_biffd(rig: _Rig) -> None:
     on = await kai.call("mesg", enabled=True)
 
     assert (off, on, rig.asked.count("mesg")) == ("is n", "is y", 2)
+
+
+async def test_a_wall_goes_to_biffd_and_its_marker_is_kept_here(rig: _Rig) -> None:
+    kai = await rig.client("kai")
+    root = str(Path())  # the server state's common root, as built here
+
+    await kai.call("wall", message="freeze", duration="1h")
+    posted = read_wall_marker(root)
+    await kai.call("wall", clear=True)
+
+    assert (rig.asked.count("wall"), posted, read_wall_marker(root)) == (
+        2,
+        "freeze",
+        None,
+    )
+
+
+async def test_a_wall_aimed_at_one_visible_repository_is_posted(rig: _Rig) -> None:
+    kai = await rig.client("kai")
+
+    text = await kai.call("wall", message="freeze", duration="1h", repo=REPO)
+
+    assert text.startswith("Wall posted (")
 
 
 async def test_a_relay_set_only_in_this_process_is_refused_by_name(

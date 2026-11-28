@@ -62,6 +62,7 @@ class Reply(BaseModel):
 
     text: str
     data: JsonValue = None
+    error: bool = False
     more: int = 0
 
     @classmethod
