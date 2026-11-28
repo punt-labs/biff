@@ -101,12 +101,11 @@ class SessionRestore:
         hello = kept.hello
         if SessionKey.of(hello) in self._core.sessions.snapshot():
             return True  # a hello came first: its record is newer than this one
-        if kept.relay_seed != self._core.relay_seed.names():
+        if kept.relay_seed != self._core.relay_seed.describe():
             return self._keep_dormant(
                 hello,
-                f"it was opened with relay settings "
-                f"{', '.join(kept.relay_seed) or 'none'} "
-                f"and biffd now has {self._core.relay_seed.listed()}",
+                f"it was opened with relay settings {kept.relay_seed} "
+                f"and biffd now has {self._core.relay_seed.describe()}",
             )
         try:
             async with asyncio.timeout(self._core.attach_timeout):

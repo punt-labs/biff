@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Self, final
@@ -12,6 +13,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from biff.models import RelayAuth
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "NO_RELAY_SETTINGS",
@@ -69,22 +72,40 @@ class RelaySeed:
     empty value counts as unset, as the relay configuration reads it.
     """
 
-    __slots__ = ("_digests", "_host")
+    __slots__ = ("_digests", "_files", "_host")
 
     _digests: Mapping[RelayVariable, str]
     # The relay's host and port, no credential: what a client may be told.
     _host: str
+    # (device, inode) of each credential file biffd was started with: the file
+    # itself, whatever name a later session gives it.  Never printed.
+    _files: frozenset[tuple[int, int]]
 
-    def __new__(cls, digests: Mapping[RelayVariable, str], host: str = "") -> Self:
+    def __new__(
+        cls,
+        digests: Mapping[RelayVariable, str],
+        host: str = "",
+        files: frozenset[tuple[int, int]] = frozenset(),
+    ) -> Self:
         """Create the seed that holds *digests*, keyed by variable name."""
         self = super().__new__(cls)
         self._digests = dict(digests)
         self._host = host
+        self._files = files
         return self
 
     @classmethod
-    def of(cls, environ: Mapping[str, str]) -> Self:
-        """Return the seed of *environ*: one digest per relay variable it sets."""
+    def of(
+        cls,
+        environ: Mapping[str, str],
+        *,
+        files: frozenset[tuple[int, int]] = frozenset(),
+    ) -> Self:
+        """Return the seed of *environ*: one digest per relay variable it sets.
+
+        *files* are the identities of the credential files it names, which only
+        biffd records.
+        """
         return cls(
             {
                 name: cls._digest(environ[name], name)
@@ -92,7 +113,20 @@ class RelaySeed:
                 if cls._is_setting(name, environ.get(name, ""))
             },
             host=urlsplit(environ.get("BIFF_RELAY_URL", "")).netloc.rpartition("@")[2],
+            files=files,
         )
+
+    @staticmethod
+    def _identity(name: RelayVariable, path: str) -> tuple[int, int] | None:
+        """Return the (device, inode) of the file *path* names now, if it has one."""
+        try:
+            status = Path(path).stat()
+        except OSError:
+            logger.warning(
+                "cannot read the file %s names; it is not the seeded one", name
+            )
+            return None
+        return (status.st_dev, status.st_ino)
 
     @staticmethod
     def tls_value(raw: str) -> bool | None:
@@ -194,24 +228,40 @@ class RelaySeed:
                 more than one credential, or a credentials path is not an absolute
                 path to an existing file.  The message names variables only.
         """
-        seed = cls.of(environ)
-        held = [name for name in _CREDENTIALS if name in seed.names()]
+        cls.of(environ).require_whole()
+        files = {
+            identity
+            for name in _CREDENTIAL_PATHS
+            if (raw := environ.get(name, ""))
+            and (identity := cls._require_file(name, raw)) is not None
+        }
+        return cls.of(environ, files=frozenset(files))
+
+    def require_whole(self) -> None:
+        """Refuse a seed with a credential and no URL, or with two credentials.
+
+        Raises:
+            RelayConflictError: The seed is not one URL and at most one credential.
+        """
+        held = [name for name in _CREDENTIALS if name in self._digests]
         if len(held) > 1:
             msg = f"{', '.join(held)} are all set; biffd takes at most one of them"
             raise RelayConflictError(msg)
-        if held and "BIFF_RELAY_URL" not in seed.names():
+        if held and "BIFF_RELAY_URL" not in self._digests:
             msg = (
                 f"{held[0]} is set but BIFF_RELAY_URL is not; biffd sends its "
                 "credentials only to the relay it was started with. Set "
                 "BIFF_RELAY_URL too, or unset it"
             )
             raise RelayConflictError(msg)
-        for name in _CREDENTIAL_PATHS:
-            raw = environ.get(name, "")
-            if raw and not (Path(raw).is_absolute() and Path(raw).is_file()):
-                msg = f"{name} must be an absolute path to a file that exists"
-                raise RelayConflictError(msg)
-        return seed
+
+    @classmethod
+    def _require_file(cls, name: RelayVariable, raw: str) -> tuple[int, int] | None:
+        """Return the identity of the credentials file *raw* names, or refuse it."""
+        if not (Path(raw).is_absolute() and Path(raw).is_file()):
+            msg = f"{name} must be an absolute path to a file that exists"
+            raise RelayConflictError(msg)
+        return cls._identity(name, raw)
 
     def require_credentials_home(
         self, relay_url: str | None, auth: RelayAuth | None
@@ -222,22 +272,33 @@ class RelaySeed:
             RelayConflictError: *auth* holds a credential this seed holds and
                 *relay_url* is not this seed's ``BIFF_RELAY_URL``.
         """
-        if auth is None:
+        if auth is None or not self._holds_seeded(auth):
             return
+        if self._digest(relay_url or "", "BIFF_RELAY_URL") != self._digests.get(
+            "BIFF_RELAY_URL"
+        ):
+            msg = (
+                "this session's relay is not the BIFF_RELAY_URL biffd was started "
+                "with, the only relay it sends its BIFF_RELAY_* credentials to"
+            )
+            raise RelayConflictError(msg)
+
+    def _holds_seeded(self, auth: RelayAuth) -> bool:
+        """Return whether *auth* is a credential this seed holds, by value or file."""
         seeded = {self._digests[name] for name in _CREDENTIALS if name in self._digests}
         fields: tuple[tuple[RelayVariable, str | None], ...] = (
             ("BIFF_RELAY_TOKEN", auth.token),
             ("BIFF_RELAY_NKEYS_SEED", auth.nkeys_seed),
             ("BIFF_RELAY_USER_CREDENTIALS", auth.user_credentials),
         )
-        held = {self._digest(value, name) for name, value in fields if value}
-        here = self._digest(relay_url or "", "BIFF_RELAY_URL")
-        if held & seeded and here != self._digests.get("BIFF_RELAY_URL"):
-            msg = (
-                "this session's relay is not the BIFF_RELAY_URL biffd was started "
-                "with, the only relay it sends its BIFF_RELAY_* credentials to"
-            )
-            raise RelayConflictError(msg)
+        if {self._digest(value, name) for name, value in fields if value} & seeded:
+            return True
+        # The file itself, not only its path now: a hardlink has another name.
+        return bool(self._files) and any(
+            self._identity(name, value) in self._files
+            for name, value in fields
+            if value and name in _CREDENTIAL_PATHS
+        )
 
     def describe(self) -> str:
         """Say which variables are set and the relay's host, never a value."""

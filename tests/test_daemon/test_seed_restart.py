@@ -154,7 +154,7 @@ async def test_the_record_names_the_seed_it_was_opened_under_never_a_value(
         assert (
             json.loads(text)["relay_seed"],
             "tok-A" in text,
-        ) == (["BIFF_RELAY_TOKEN", "BIFF_RELAY_URL"], False)
+        ) == ("BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay relay.invalid:4222)", False)
     finally:
         await seeded.stop()
 
@@ -167,3 +167,57 @@ async def test_a_restart_with_a_changed_seed_is_flagged_in_health(
         assert "BIFF_RELAY_TOKEN, BIFF_RELAY_URL" in unseeded.seed_note
     finally:
         await unseeded.stop()
+
+
+_OTHER = {"BIFF_RELAY_URL": "nats://other.invalid:4222", "BIFF_RELAY_TOKEN": "tok-B"}
+
+
+async def _restart_on_another_relay_with_the_same_names(
+    harness: Harness,
+) -> BiffDaemon:
+    await harness.daemon.stop()
+    seeded = await _start(harness, seeded=True)
+    client = await _open(harness, seeded)
+    await client.close()
+    await seeded.stop()
+    daemon = BiffDaemon(
+        run_dir=harness.run_dir,
+        port=0,
+        sessions=harness.sessions,
+        resolver=_SeedAwareResolver(harness.relays_dir, seeded=False),
+        relay_factory=harness.factory,
+        heartbeat_interval=0.05,
+        poll_interval=0.02,
+        attach_timeout=0.3,
+        relay_seed=RelaySeed.of(_OTHER),
+    )
+    await daemon.start()
+    return daemon
+
+
+async def test_a_restart_on_another_relay_with_the_same_names_keeps_the_record(
+    harness: Harness,
+) -> None:
+    other = await _restart_on_another_relay_with_the_same_names(harness)
+    try:
+        assert (_records(harness), _KEY in other._core.sessions.snapshot()) == (  # pyright: ignore[reportPrivateUsage]
+            ["s-keep"],
+            False,
+        )
+    finally:
+        await other.stop()
+
+
+async def test_a_restart_on_another_relay_with_the_same_names_is_flagged(
+    harness: Harness,
+) -> None:
+    other = await _restart_on_another_relay_with_the_same_names(harness)
+    try:
+        note = other.seed_note
+        assert (
+            "relay.invalid:4222" in note,
+            "other.invalid:4222" in note,
+            "tok-A" in note or "tok-B" in note,
+        ) == (True, True, False)
+    finally:
+        await other.stop()

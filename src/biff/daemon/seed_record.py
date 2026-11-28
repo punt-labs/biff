@@ -24,8 +24,8 @@ class SeedRecord:
 
     A restart under a service manager has none of the environment a client gave
     the first biffd, and every session opened under that environment is then on
-    a relay this biffd does not use.  The file holds variable names only, never a
-    value or a digest.
+    a relay this biffd does not use.  The file holds variable names and the relay's
+    host and port, never a value or a digest.
     """
 
     __slots__ = ("_path",)
@@ -44,7 +44,7 @@ class SeedRecord:
         The first start has nothing to compare with and says nothing.  A file that
         cannot be written is logged, not raised: biffd serves without the note.
         """
-        names = seed.listed()
+        names = seed.describe()
         try:
             previous = self._path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:

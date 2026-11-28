@@ -21,7 +21,9 @@ def test_the_first_start_has_nothing_to_compare_with(tmp_path: Path) -> None:
 def test_the_file_holds_names_only_and_is_private(tmp_path: Path) -> None:
     path = tmp_path / "relay-seed"
     SeedRecord(path).record(RelaySeed.of(_SEEDED))
-    assert path.read_text() == "BIFF_RELAY_TOKEN, BIFF_RELAY_URL\n"
+    assert path.read_text() == (
+        "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay relay.invalid:4222)\n"
+    )
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
@@ -47,3 +49,17 @@ def test_the_change_is_reported_once(tmp_path: Path) -> None:
     record.record(RelaySeed.of(_SEEDED))
     record.record(RelaySeed.of({}))
     assert record.record(RelaySeed.of({})) == ""
+
+
+def test_a_start_on_another_relay_with_the_same_names_says_what_changed(
+    tmp_path: Path,
+) -> None:
+    record = SeedRecord(tmp_path / "relay-seed")
+    record.record(RelaySeed.of(_SEEDED))
+    other = {"BIFF_RELAY_URL": "nats://other.invalid:4222", "BIFF_RELAY_TOKEN": "tok-B"}
+    note = record.record(RelaySeed.of(other))
+    assert (
+        "relay.invalid:4222" in note,
+        "other.invalid:4222" in note,
+        "tok-A" in note or "tok-B" in note,
+    ) == (True, True, False)

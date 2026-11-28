@@ -51,9 +51,9 @@ class _Stored(BaseModel):
     hello: _StoredHello
     dormant_since: datetime | None = None
     failed_starts: int = 0
-    # The relay variables biffd was seeded with when it opened the session: names
-    # only, so the file holds no secret.
-    relay_seed: tuple[str, ...] = ()
+    # What biffd was seeded with when it opened the session: variable names and the
+    # relay's host and port, so the file holds no secret and no digest of one.
+    relay_seed: str = NO_RELAY_SETTINGS.describe()
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,8 +65,8 @@ class KeptSession:
     """When its last connection left; ``None``: one was on it when written."""
     failed_starts: int
     """How many starts in a row could not build it again."""
-    relay_seed: tuple[str, ...]
-    """The relay variables biffd was seeded with when it opened the session."""
+    relay_seed: str
+    """What biffd was seeded with when it opened the session, names and relay host."""
 
 
 @final
@@ -81,17 +81,17 @@ class HarnessRecords:
     __slots__ = ("_root", "_seed")
 
     _root: Path
-    _seed: tuple[str, ...]
+    _seed: str
 
     def __new__(cls, root: Path, seed: RelaySeed = NO_RELAY_SETTINGS) -> Self:
         """Keep the records under *root*, created when the first is kept.
 
-        Each record is tagged with the names of *seed*, the relay settings biffd
+        Each record is tagged with *seed*'s description, the relay settings biffd
         holds as it opens the session.
         """
         self = super().__new__(cls)
         self._root = root
-        self._seed = seed.names()
+        self._seed = seed.describe()
         return self
 
     def keep(self, hello: Hello) -> None:
