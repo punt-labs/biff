@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import logging
 import os
 import secrets
 import stat
+from collections.abc import Generator
 from typing import TYPE_CHECKING, Final, Self, final
 
 if TYPE_CHECKING:
@@ -51,9 +53,31 @@ class SeedKey:
         another biffd linked into place first is the one used, so two starts at once
         end with the key on disk.
 
+        An exclusive lock on a lock file beside the key is held for the whole of
+        it, so two biffd starting at once take turns and cannot move each other's
+        good key aside.
+
         Raises:
             OSError: The directory cannot be written.
         """
+        with self._locked():
+            return self._load()
+
+    @contextlib.contextmanager
+    def _locked(self) -> Generator[None]:
+        """Hold an exclusive lock on the lock file beside the key."""
+        fd = os.open(
+            self._path.with_name(f"{self._path.name}.lock"),
+            os.O_RDWR | os.O_CREAT,
+            _PRIVATE,
+        )
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+    def _load(self) -> bytes:
         key = self._read()
         if key is not None:
             return key
@@ -89,24 +113,28 @@ class SeedKey:
         elif info.st_size != _BYTES:
             why = f"is not {_BYTES} bytes"
         if why:
-            self._set_aside(why)
+            self._set_aside(why, info.st_mode)
             return None
         try:
             return self._path.read_bytes()
         except OSError:
-            self._set_aside("cannot be read")
+            self._set_aside("cannot be read", info.st_mode)
             return None
 
-    def _set_aside(self, why: str) -> None:
-        """Move the unusable file out of the way, never deleting it, and say so."""
-        aside = self._path.with_name(
-            f"{self._path.name}.bad.{os.getpid()}.{secrets.token_hex(4)}"
-        )
+    def _set_aside(self, why: str, mode: int = 0) -> None:
+        """Move the unusable file to the one ``.bad`` name, private, and say so.
+
+        It is replaced by the next one, so they do not pile up, and a file that was
+        open to others is made private: the old key material must not stay readable.
+        """
+        aside = self._path.with_name(f"{self._path.name}.bad")
         logger.warning(
             "the key file %s %s; moving it aside and making a new one", self._path, why
         )
         try:
-            self._path.rename(aside)
+            self._path.replace(aside)
+            if stat.S_ISREG(mode):
+                aside.chmod(_PRIVATE)
         except OSError:
             logger.warning("the key file %s could not be moved aside", self._path)
 

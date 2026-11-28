@@ -30,7 +30,8 @@ def test_the_key_is_private_and_stable(path: Path) -> None:
 
 def test_no_temporary_file_is_left_beside_the_key(path: Path) -> None:
     SeedKey(path).load()
-    assert [p.name for p in path.parent.iterdir()] == ["relay-seed.key"]
+    left = {p.name for p in path.parent.iterdir()} - {"relay-seed.key.lock"}
+    assert left == {"relay-seed.key"}
 
 
 def test_an_empty_key_file_is_replaced_not_fatal(
@@ -106,7 +107,7 @@ def test_two_starts_at_once_both_end_with_the_key_on_disk(path: Path) -> None:
         found = original(self)
         if threading.current_thread().name == "B" and not paused:
             paused.append(True)
-            a_done.wait(timeout=10)  # B has seen no key; A now makes one
+            a_done.wait(timeout=1)  # A cannot run until B lets go of the lock
         return found
 
     with pytest.MonkeyPatch.context() as patch:
@@ -143,5 +144,59 @@ def test_a_bad_key_file_is_moved_aside_not_deleted(path: Path) -> None:
     path.write_bytes(b"short")
     path.chmod(0o600)
     SeedKey(path).load()
-    aside = [p for p in path.parent.iterdir() if p.name != path.name]
-    assert [p.read_bytes() for p in aside] == [b"short"]
+    assert [p.read_bytes() for p in _aside(path)] == [b"short"]
+
+
+def _aside(path: Path) -> list[Path]:
+    return sorted(p for p in path.parent.iterdir() if ".bad" in p.name)
+
+
+def test_two_starts_judging_a_bad_key_at_once_end_with_the_key_on_disk(
+    path: Path,
+) -> None:
+    path.write_bytes(b"short")
+    path.chmod(0o600)
+    original = SeedKey._set_aside  # pyright: ignore[reportPrivateUsage]
+    inside = threading.Event()
+    release = threading.Event()
+    keys: dict[str, bytes] = {}
+
+    def set_aside(self: SeedKey, why: str, mode: int = 0) -> None:
+        if threading.current_thread().name == "B":
+            inside.set()  # B has judged the key bad and is about to move it
+            release.wait(timeout=10)
+        original(self, why, mode)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SeedKey, "_set_aside", set_aside)
+        b = threading.Thread(
+            target=lambda: keys.update(B=SeedKey(path).load()), name="B"
+        )
+        a = threading.Thread(
+            target=lambda: keys.update(A=SeedKey(path).load()), name="A"
+        )
+        b.start()
+        assert inside.wait(timeout=10)
+        a.start()
+        time.sleep(0.5)  # A runs now if nothing holds it back
+        release.set()
+        b.join(timeout=10)
+        a.join(timeout=10)
+    disk = path.read_bytes()
+    assert (keys["A"] == disk, keys["B"] == disk, len(_aside(path))) == (True, True, 1)
+
+
+def test_a_key_moved_aside_is_private_whatever_it_was(path: Path) -> None:
+    path.write_bytes(b"old key material that is open")
+    path.chmod(0o644)
+    SeedKey(path).load()
+    (aside,) = _aside(path)
+    assert stat.S_IMODE(aside.stat().st_mode) == 0o600
+
+
+def test_many_bad_keys_leave_one_file_aside(path: Path) -> None:
+    for _ in range(5):
+        path.write_bytes(b"short")
+        path.chmod(0o600)
+        SeedKey(path).load()
+    assert [p.name for p in _aside(path)] == ["relay-seed.key.bad"]

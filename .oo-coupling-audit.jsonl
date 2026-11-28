@@ -373,3 +373,4 @@
 {"ts":"2026-11-28T14:54:35Z","commit":"f6065f7","source":null,"files_scored":328,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
 {"ts":"2026-11-28T15:10:29Z","commit":"bdc9e30","source":null,"files_scored":2,"files_improved":0,"files_regressed":0,"verdict":"rebaseline-files","reason":"PL-1670 B5: stored text is parsed, never repeated; the seed key is moved aside, never deleted, and made only with a seed","deltas":{},"improved":{}}
 {"ts":"2026-11-28T15:10:35Z","commit":"bdc9e30","source":null,"files_scored":328,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-11-28T15:27:28Z","commit":"350ec27","source":null,"files_scored":1,"files_improved":0,"files_regressed":0,"verdict":"rebaseline-files","reason":"PL-1670 B5: the seed key load takes a lock and moves a bad key to one private .bad file","deltas":{},"improved":{}}
