@@ -27,7 +27,7 @@ _DAEMON_MARGIN_SECONDS = 15.0
 """How much longer than the wait the client waits: biffd answers after its wait."""
 
 
-class CheckNotSentError(Exception):
+class CheckNotSentError(ValueError):
     """The check was not sent; the message says why, in words fit for a line."""
 
 
@@ -108,9 +108,11 @@ class DaemonAsk:
         try:
             return self._confirmed(await self._ask(session_key, seconds))
         except (OSError, TimeoutError, ValueError, DaemonError) as exc:
-            raise CheckNotSentError(
-                terminal_safe(str(exc)) or type(exc).__name__
-            ) from exc
+            # CheckNotSentError is a ValueError, so every refusal passes here: a
+            # reply's text can carry relay-derived bytes, and the doctor prints
+            # this message on a terminal line.
+            msg = terminal_safe(str(exc)) or type(exc).__name__
+            raise CheckNotSentError(msg) from exc
 
     async def _ask(self, session_key: str, seconds: float) -> JsonValue:
         port = await asyncio.to_thread(self._nudge)
