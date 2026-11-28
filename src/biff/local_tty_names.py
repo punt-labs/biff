@@ -46,6 +46,13 @@ class LocalTtyNames:
         """Release *name* by removing its lockfile."""
         self._lock_path(user, name).unlink(missing_ok=True)
 
+    def release_if(self, user: str, name: str, owner: str) -> bool:
+        """Remove *name*'s lockfile only if *owner* wrote it; say whether it did."""
+        if self.owner(user, name) != owner:
+            return False
+        self.release(user, name)
+        return True
+
     def refresh(self, user: str, name: str, session_key: str) -> None:
         """Rewrite the lockfile, only if *session_key* is its current owner.
 

@@ -17,6 +17,7 @@ from biff.daemon.outbox import Outbox
 from biff.daemon.presence import PresenceRow
 from biff.daemon.refusal import RefusalError
 from biff.daemon.run_ledger import RunLedger
+from biff.daemon.session_hold import SessionHold
 from biff.daemon.session_key import SessionKey
 from biff.daemon.talk_channel import TalkChannel
 from biff.daemon.tasks import Supervised
@@ -26,6 +27,7 @@ from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+    from contextlib import AbstractAsyncContextManager
 
     from biff.daemon.relays import RelayPool, RelayTarget, ResolvedSession
     from biff.frame_client import Hello
@@ -58,16 +60,15 @@ class Session:
     __slots__ = (
         "_attachments",
         "_beat",
-        "_busy",
         "_context",
         "_cwd",
+        "_hold",
         "_idle_since",
         "_is_ended",
         "_orgs",
         "_outbox",
         "_presence",
         "_pulse",
-        "_queued",
         "_runs",
         "_session_id",
         "_talk",
@@ -86,10 +87,9 @@ class Session:
     _attachments: set[Attachment]
     _pulse: Heartbeat
     _beat: asyncio.Task[None] | None
-    _busy: asyncio.Lock
-    _queued: int
     _is_ended: bool
     _idle_since: float
+    _hold: SessionHold
 
     def __new__(
         cls,
@@ -124,10 +124,9 @@ class Session:
             context.relay, context.session_key, session_id, heartbeat_interval
         )
         self._beat = None
-        self._busy = asyncio.Lock()
-        self._queued = 0
         self._is_ended = False
         self._idle_since = time.monotonic()
+        self._hold = SessionHold()
         return self
 
     @classmethod
@@ -208,16 +207,27 @@ class Session:
         """Whether no connection is attached."""
         return not self._attachments
 
-    def require_live(self) -> None:
-        """Refuse a request for an agent's session that was ended.
+    def requests(self, method: str) -> AbstractAsyncContextManager[None]:
+        """Hold the session open for one request, which ``end`` does not.
 
-        An end deleted the row, which nothing may rebuild.  A shell's session is
-        let through: its end is the shell's own command, which goes on.
+        An agent's session that is ended refuses it: the end deleted the row,
+        which nothing may rebuild.  A shell's session is let through, its end being
+        the shell's own command, which goes on.
         """
-        agent = derive_routing_id(self._session_id, CLAUDE_CODE_ROLE)
-        if self._is_ended and self._context.tty == agent:
-            msg = "session ended; start a new session"
-            raise RefusalError.of(ErrorCode.SESSION_ENDED, msg)
+        agent = self._context.tty == derive_routing_id(
+            self._session_id, CLAUDE_CODE_ROLE
+        )
+        return self._hold.requests(
+            counted=method != "end", refuse=agent and self._is_ended
+        )
+
+    async def begin_end(self) -> None:
+        """Refuse new requests, and wait for those running to finish."""
+        await self._hold.begin_end()
+
+    def abort_end(self) -> None:
+        """Accept requests again: the end failed, and the session goes on."""
+        self._hold.abort_end()
 
     def idle_for(self) -> float:
         """Return the seconds since the last connection left, or since the start."""
@@ -260,29 +270,14 @@ class Session:
         """Count a command from a shell as activity on the session's presence row."""
         await self._presence.touch()
 
-    @asynccontextmanager
-    async def exclusive(self) -> AsyncGenerator[None]:
-        """Hold the session while mail moves in or out of its outbox.
-
-        A read holds it from the fetch to the merge into the outbox, and ending
-        or expiring the session holds it while it files the outbox back and drains
-        the relay, so neither can run between the other's steps.
-        """
-        self._queued += 1
-        try:
-            async with self._busy:
-                yield
-        finally:
-            self._queued -= 1
+    def exclusive(self) -> AbstractAsyncContextManager[None]:
+        """Hold the session while mail moves in or out of its outbox."""
+        return self._hold.exclusive()
 
     @property
     def queued(self) -> int:
-        """How many callers hold :meth:`exclusive` or wait for it.
-
-        Nothing in the daemon reads it: a test waits for it to reach a number to
-        know a caller is parked at the hold, instead of guessing how long that takes.
-        """
-        return self._queued
+        """How many callers hold :meth:`exclusive` or wait for it."""
+        return self._hold.queued
 
     @property
     def is_ended(self) -> bool:

@@ -7,8 +7,10 @@
 - The biffd `end` method ends the caller's own harness session: it files the mail
   the session holds back, drains its inbox into the user mailbox, releases its
   tty name (only if it still holds it), deletes its row and appends a logout. A
-  connection of a replaced run is refused. A step that fails leaves the session,
-  and the next `end` finishes it. A harness session with no connection for three
+  connection of a replaced run is refused. Mail is forwarded at least once, and
+  the tty name is released only if the session still holds it (a compare-and-delete
+  on the relay, also used by `session end`). A step that fails, a logout that
+  cannot be recorded included, leaves the session, and the next `end` finishes it. A harness session with no connection for three
   days is ended by the daemon's sweep the same way.
 - The biffd `plan` method takes `source`, `manual` (the default) or `auto`. An
   auto plan from a hook never replaces a non-empty manual one: the reply reads

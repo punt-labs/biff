@@ -121,14 +121,24 @@ async def test_a_clear_ends_the_old_session_before_the_new_hello(
     harness: Harness,
 ) -> None:
     old = await seat(harness, "s-before")
+    assert await old.owner() == old.key  # the old session holds the name
+    await old.client.request("end")  # NewHello is enabled only after this reply
+    assert await old.owner() is None  # the name is free for the new session
     new = await harness.connect("s-after", "kai", client="mcp")
     taken = cast("dict[str, object]", await new.request("tty", name=old.tty))
-    assert taken["error"] is True  # the old session still holds the name
-    await old.client.request("end")
-    taken = cast("dict[str, object]", await new.request("tty", name=old.tty))
     assert taken["error"] is False
-    assert await old.owner() is not None
-    assert await old.owner() != old.key
+    status = cast("dict[str, dict[str, str]]", await new.request("status"))
+    assert await old.owner() == status["data"]["session_key"]  # the new one holds it
+
+
+async def test_a_new_hello_before_the_old_end_does_not_get_the_name(
+    harness: Harness,
+) -> None:
+    old = await seat(harness, "s-first")
+    new = await harness.connect("s-second", "kai", client="mcp")
+    taken = cast("dict[str, object]", await new.request("tty", name=old.tty))
+    assert taken["error"] is True  # the model's NewHello needs the old end first
+    assert await old.owner() == old.key
 
 
 async def test_an_end_files_back_the_mail_the_session_holds(harness: Harness) -> None:
@@ -211,3 +221,12 @@ async def test_a_logout_that_cannot_be_recorded_keeps_the_record_for_the_next_en
     logouts = [e for e in LoggingRelay.events if e.event == "logout"]
     assert [e.session_key for e in logouts] == [s.key]
     assert harness.daemon.status().sessions == ()
+
+
+async def test_a_second_end_succeeds_and_does_nothing_more(harness: Harness) -> None:
+    s = await seat(harness, "s-again")
+    await s.client.request("end")
+    again = cast("dict[str, object]", await s.client.request("end"))
+    assert again["error"] is False
+    logouts = [e for e in LoggingRelay.events if e.event == "logout"]
+    assert len(logouts) == 1

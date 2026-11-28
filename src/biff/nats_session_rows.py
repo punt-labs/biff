@@ -1,4 +1,4 @@
-"""Compare-and-set edits of presence rows in the NATS key-value bucket."""
+"""Compare-and-set edits of presence rows and tty name reservations in NATS."""
 
 from __future__ import annotations
 
@@ -30,7 +30,8 @@ class SessionRows:
     """The compare-and-set a NATS relay applies to a session row.
 
     A mixin of the relay: it needs the relay's connection, its request
-    accounting and its row key, declared below and supplied by the relay.
+    accounting, its row key and its names bucket, declared below and supplied
+    by the relay.
     """
 
     __slots__ = ()
@@ -39,6 +40,13 @@ class SessionRows:
         raise NotImplementedError
 
     async def _ensure_connected(self) -> tuple[JetStreamContext, KeyValue]:
+        raise NotImplementedError
+
+    async def _ensure_names_kv(self) -> KeyValue:
+        raise NotImplementedError
+
+    @staticmethod
+    def _validate_user(user: str) -> str:
         raise NotImplementedError
 
     async def _tracked[T](self, operation: str, awaitable: Awaitable[T]) -> T:
@@ -81,3 +89,21 @@ class SessionRows:
             return updated
         msg = f"session {edit.key} changed concurrently; gave up after {_TRIES} tries"
         raise SessionChangedError(msg)
+
+    async def release_tty_name_if(self, user: str, name: str, owner: str) -> bool:
+        """Delete *name*'s reservation only if *owner* still holds it.
+
+        ``kv.delete`` names the revision that was read and fails if the entry has
+        moved, so a name that changed hands after the check is never freed.
+        """
+        self._validate_user(user)
+        names = await self._ensure_names_kv()
+        key = f"{user}.{name}"
+        try:
+            entry = await names.get(key)
+            if not entry.value or entry.value.decode() != owner:
+                return False
+            await names.delete(key, last=entry.revision)
+        except (KeyNotFoundError, BucketNotFoundError, KeyWrongLastSequenceError):
+            return False
+        return True

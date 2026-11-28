@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Self, cast, final
 
 from biff.commands._result import CommandResult
 from biff.commands.inbox import Inbox
+from biff.daemon.mail_transfer import MailTransfer
 from biff.daemon.refusal import RefusalError
-from biff.daemon.session_drain import InboxDrain
 from biff.daemon.session_key import SessionKey
 from biff.frame_reply import ErrorCode
 from biff.models import SessionEvent
@@ -71,7 +71,12 @@ class SessionEnd:
             raise RefusalError.of(ErrorCode.INVALID_PARAMS, msg)
         async with self._live.guard(key):
             if not session.is_ended:  # another end may have finished while this waited
-                await self._finish(session)
+                await session.begin_end()
+                try:
+                    await self._finish(session)
+                except BaseException:
+                    session.abort_end()
+                    raise
                 self._live.forget(key, spare=session)
         return CommandResult(text="Session ended.", json_data={"ended": True})
 
@@ -120,15 +125,31 @@ class SessionEnd:
     async def _finish(self, session: Session) -> None:
         """Run the four effects of an end, then mark the session ended."""
         async with session.exclusive():
-            await self.refile_held(session)
             ctx = session.context
-            await InboxDrain(ctx.relay).move(ctx.session_key, ctx.user)
-            owner = await ctx.relay.get_tty_reservation_owner(ctx.user, ctx.tty_name)
-            if owner == ctx.session_key:  # a name another session took stays theirs
-                await ctx.relay.release_tty_name(ctx.user, ctx.tty_name)
-            await ctx.relay.delete_session(ctx.session_key)
+            await self._forward(session)
+            await ctx.relay.delete_session(ctx.session_key)  # no new mail routes here
+            await self._forward(session)  # what was accepted while the row went
+            # Only if this session still holds the name: one that changed hands
+            # after the check is never freed.
+            await ctx.relay.release_tty_name_if(ctx.user, ctx.tty_name, ctx.session_key)
             await self._logout(session)
             session.mark_ended()
+
+    @staticmethod
+    async def _forward(session: Session) -> None:
+        """Move the session's mail, held and unread, into its user's mailbox.
+
+        Mail a consuming relay gave up at fetch is held in the session's outbox
+        until it is forwarded, so a relay that drops in between loses nothing: the
+        next attempt forwards what is still held first.  Forwarding is by derived
+        id, so a message sent twice is one.
+        """
+        ctx = session.context
+        transfer = MailTransfer(ctx.relay)
+        pending = session.outbox.merge(await ctx.relay.fetch(ctx.session_key))
+        for message in pending:
+            await transfer.forward(ctx.session_key, ctx.user, message)
+            session.outbox.forget([message])
 
     @staticmethod
     async def _logout(session: Session) -> None:

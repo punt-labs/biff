@@ -9793,24 +9793,36 @@ second group of daemon additions for PL-1670. Model:
 
 **Decision.**
 
-- `end` (no params) ends the caller's own session. The ordering is the model's:
-  the effects (file the held batch back, drain the inbox to the user mailbox,
-  release the tty name, delete the row, append the logout) each run idempotently,
-  and the record is dropped and marked ended only after all of them. A failure
-  leaves the record, so there is no state in which a row outlives its record
-  (`BadOrphan`), and the next `end` finishes (`rsEnding` reaches `rsNone`).
-- The name is released only if the session still owns it, and so is the model's
-  `ReleaseTty`. The model also keeps the old end before the new hello, and checks
-  that the owner check alone is enough when the order is not kept
-  (`claude-session-end-unordered-owned.tex` holds; releasing by name
-  (`-unordered.tex`) frees the new session's name).
+- `end` (no params) ends the caller's own session. It first refuses new requests
+  and waits for those running (a request already running would write the row
+  back), then runs the effects in this order, each idempotent: forward the held
+  and unread mail to the user mailbox, delete the row (new mail stops routing
+  here), forward again (what was accepted while the row went), release the tty
+  name, append the logout. The record is dropped and marked ended only after all
+  of them. A failure, a failed logout included, leaves the record and lifts the
+  refusal, so there is no state in which a row outlives its record (`BadOrphan`),
+  and the next `end` finishes (`rsEnding` reaches `rsNone`).
+- Mail is forwarded at least once. A consuming relay gives up a message at fetch,
+  so it is held in the session's outbox until it is filed in the user mailbox
+  under an id derived from its own; a relay that drops in between leaves it held
+  for the next attempt. (This is the A2 requirement of DES-099: the unconfirmed
+  batch is forwarded before the record is dropped.)
+- The name is released by `Relay.release_tty_name_if(user, name, owner)`, a
+  compare-and-delete (a file lock locally, `kv.delete` at the revision the check
+  read in NATS), which is the model's owner-conditioned `ReleaseTty`: the model
+  keeps the old end before the new hello and checks that the owner condition alone
+  is enough when the order is not kept (`claude-session-end-unordered-owned.tex`
+  holds; releasing by name, `-unordered.tex`, frees the new session's name). The
+  shell session end uses it too. The in-process paths that still check and then release
+  (`session_registry`, `tty.py`) go with the in-process server.
+- A second `end`, or one queued behind the first, answers success and does
+  nothing: it compares the session object it was sent to, not the id, so an end
+  queued behind a hello that reopened the id cannot end the new session.
 - A connection of a replaced run is refused by the daemon's existing run check
   before the method runs (`EndRefused`).
 - Retention: `ExpireClaude` runs in the session sweep for a session that is
   dormant and has been for the row's lifetime. A hello that reattaches first wins
   (the sweep re-checks under the session's guard).
-- Held mail is refiled before the drop (requirement A2 of DES-099); with the
-  relay unavailable the end fails and keeps the mail.
 
 **Divergence from the model.** The durable model keeps the record across a daemon
 restart (`DaemonRestart`). The daemon holds harness records in memory, so a
@@ -9825,8 +9837,14 @@ both restarts; the properties about the record hold unless the restart forgot it
 Persisting the records, or scanning the relay's rows at start, would close it and
 is not in this change.
 
+**Audit status.** `claude-session-end.audit.json` reports 13 of 13 clauses covered
+and zero GAP. It was reconciled by reading the tests against each clause (the
+z-spec audit tool was not run), and its rows name the tests. The residual after
+this change is PL-1770: the unconditional tty name releases in the in-process
+paths (`session_registry`, `tty.py`), which go with the in-process server.
+
 **Rejected.**
 
 - *A path or session id in `end`.* Only the caller's own session ends; another
   session's end is the sweep's.
-- *Releasing the tty name by name.* It would free a name a new session took.
+- *Releasing the tty name by name, or after a separate owner check.* It would free a name a new session took.

@@ -290,9 +290,7 @@ class SessionHost:
         """Drain the inbox into the owner's mailbox, then free the name and row."""
         key = self._key(record)
         await InboxDrain(self.relay).move(key, record.user)
-        owner = await self.relay.get_tty_reservation_owner(record.user, record.tty)
-        if owner == key:
-            await self.relay.release_tty_name(record.user, record.tty)
+        await self.relay.release_tty_name_if(record.user, record.tty, key)
         await self.relay.delete_session(key)
 
     async def _wtmp(self, record: CliSessionRecord, event: str) -> None:
