@@ -10,7 +10,6 @@ Layer 2: Git hooks — capture code lifecycle events.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -20,9 +19,12 @@ import select
 import subprocess
 import sys
 from contextlib import suppress
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import typer
+
+if TYPE_CHECKING:
+    from biff.plugins.claude_code.session_lifecycle import SessionLifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -710,19 +712,25 @@ def _detect_collisions(data: dict[str, object] | None = None) -> list[str]:
     return collisions
 
 
+def _lifecycle(data: dict[str, object]) -> SessionLifecycle:
+    """Return the handler of a session hook payload (lazy: it loads biffd's client)."""
+    from biff.plugins.claude_code.session_lifecycle import (  # noqa: PLC0415
+        SessionLifecycle,
+    )
+
+    return SessionLifecycle(data)
+
+
 def _open_session(data: dict[str, object]) -> None:
     """Register the Claude session named by the SessionStart payload.
 
     SessionStart is the harness declaring ``session_id`` to biff, so this is
-    where the durable record is opened (relay row, unread file, active
-    marker, handle).  Best-effort: a failure forfeits presence until the
-    first tool call opens the session instead, but must never break session
-    startup, so it is logged and swallowed.
+    where the durable record is opened.  Best-effort: a failure forfeits
+    presence until the first tool call opens the session instead, but must
+    never break session startup, so it is logged and swallowed.
     """
-    from biff.session_open import open_session_from_payload  # noqa: PLC0415
-
     try:
-        asyncio.run(open_session_from_payload(data))
+        _lifecycle(data).open()
     except Exception:
         logger.warning("Failed to open session at SessionStart", exc_info=True)
 
@@ -812,15 +820,22 @@ def handle_pre_compact(data: dict[str, object] | None = None) -> str:
     return "Biff session resumed after compaction. Check /read for unread messages."
 
 
-def handle_session_end() -> int:
-    """Convert active-session markers to sentinels for cleanup.
+def handle_session_end(data: dict[str, object] | None = None) -> int:
+    """End the session of the SessionEnd payload through biffd, or reap markers.
 
-    Only processes sessions belonging to the **current repo** — other
-    repos' sessions are left untouched.  This prevents ending one
-    Claude Code session from reaping sessions in unrelated repos.
+    With ``mcp.transport: daemon`` biffd ends the one session the payload names.
+    Otherwise, or when biffd could not be asked, active-session markers become
+    sentinels for the reaper.  Only sessions of the **current repo** are
+    processed, so ending one Claude Code session never reaps sessions of
+    unrelated repos.
 
     Returns the number of sessions cleaned up.
+
+    Raises:
+        SystemExit: The ``mcp.transport`` setting is invalid.
     """
+    if _lifecycle(data or {}).end_through_biffd():
+        return 1
     from biff._stdlib import (  # noqa: PLC0415
         active_dir,
         find_git_root,
@@ -948,7 +963,7 @@ def cc_session_end() -> None:
     """SessionEnd — convert active sessions to sentinels for cleanup."""
     if not _is_biff_enabled():
         return
-    handle_session_end()
+    handle_session_end(_read_hook_input())
 
 
 @_cc_app.command("pre-compact")

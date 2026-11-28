@@ -38,6 +38,21 @@ class RunLedger:
         """The main agent id of the session's current run."""
         return self._current
 
+    def check_current(self, session_id: str, run: str) -> None:
+        """Refuse *run* unless it is the current run; neither changes the ledger.
+
+        A client that claims no run, or a session that has none yet, is let by.
+
+        Raises:
+            RefusalError: *run* is not the session's current run.
+        """
+        if run and self._current and run != self._current:
+            msg = (
+                f"run {run} is not the current run of session {session_id}; "
+                "only the current run ends it"
+            )
+            raise RefusalError.of(ErrorCode.SESSION_REPLACED, msg)
+
     def admit(self, session_id: str, run: str) -> str:
         """Record a connection claiming *run*; return the run it replaced, or "".
 
