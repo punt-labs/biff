@@ -82,9 +82,9 @@
       "source": "fairness assumption",
       "coveredBy": "tests/test_channel_emitter.py::TestWakes::test_mail_goes_out_while_a_wall_is_held_by_its_rate_window; tests/test_channel_emitter.py::TestWakes::test_mail_pending_is_announced_while_wall_work_competes",
       "confidence": "medium",
-      "verifiedBy": "the first holds the wall by its rate window (a second wall arrives a moment after the first) while mail is pending: mail is sent, the wall stays held. The second changes the wall before every pass for four turns but advances the clock 120 s each turn, so no window is ever closed: it shows no starvation when windows are open, not under contention. The fairness assumption (strong fairness per kind) is exercised by the first test only"
+      "verifiedBy": "the first holds the wall by its rate window (a second wall arrives a moment after the first) while mail is pending: mail is sent, the wall stays held. The second changes the wall before every pass for four turns but advances the clock 120 s each turn, so no window is ever closed: it shows no starvation when windows are open, not under contention. The fairness assumption (strong fairness per kind) is exercised by the first test only. The assertion that would fail if mail were starved by the wall: 'assert [m[\"kind\"] for m in rig.sink.metas] == [\"wall\", \"mail\"]' in test_mail_goes_out_while_a_wall_is_held_by_its_rate_window (with the wall held, mail would be missing). The contention test is not the evidence"
     }
   ],
-  "notes": "Re-audited by hand on main 3f8ca8e; fuzz -t is clean. The push rows are covered by test_push.py against a push relay with a 30 s poll. The fairness row is medium: the competing-wall test never closes a window.",
+  "notes": "Re-audited by hand on main 3f8ca8e; fuzz -t is clean. The push rows are covered by test_push.py against a push relay with a 30 s poll. The fairness row is medium: the competing-wall test never closes a window. Written by hand: the audit tool was unavailable to the author, so the next /z-spec:audit run should reproduce this file.",
   "branch": "audit-channel-mail (main 3f8ca8e)"
 }

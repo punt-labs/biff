@@ -3,10 +3,10 @@
   "testDirectory": "tests/",
   "timestamp": "2026-11-28T00:00:00Z",
   "summary": {
-    "covered": 9,
+    "covered": 6,
     "total": 9,
-    "gaps": 0,
-    "percentage": 100
+    "gaps": 3,
+    "percentage": 67
   },
   "constraints": [
     {
@@ -34,9 +34,11 @@
       "text": "emitted t <= 1: one channel event per request however often it is delivered",
       "category": "invariant",
       "source": "HopInv",
-      "coveredBy": "tests/test_channel_emitter.py::TestChannelCheck::test_a_request_sends_exactly_one_check_event; tests/test_channel_emitter.py::TestChannelCheck::test_a_second_request_inside_a_minute_sends_nothing; tests/test_daemon/test_channel_check_hop.py::test_a_second_request_inside_the_window_makes_no_second_event",
-      "confidence": "medium",
-      "verifiedBy": "the first requests once and runs the emitter twice: one frame, kind channel_check, and the token it names is acknowledged once; the second requests again 59 s later: still one frame; the daemon test asks twice and the client sees one event. They exercise the count of events per request; none delivers the same request frame to the client twice and checks the client's emitter sends once (the emitter is fed by ChannelCheck.request, not by a daemon frame). Medium"
+      "coveredBy": "",
+      "confidence": "none",
+      "verifiedBy": "the emitter tests check once per request, and the daemon test checks the daemon sends one event per window; neither delivers the same channel_check_request frame to the client twice, which is what the constraint says",
+      "status": "untested",
+      "suggestedTest": "tests/test_daemon/test_channel_feed.py (after PR 685): publish one CheckRequest, let the feed emit it, make the daemon deliver the same request frame again (a second subscription of the same session, as test_a_new_subscription_gets_the_pending_request_again does at frame level), and assert the client's sink holds exactly one channel_check frame (kinds().count('channel_check') == 1)"
     },
     {
       "text": "relayed t <= 1: the acknowledgement is relayed to the doctor once however often it arrives",
@@ -44,15 +46,18 @@
       "source": "HopInv",
       "coveredBy": "tests/test_daemon/test_channel_check_hop.py::test_the_acknowledgement_is_relayed_once_to_the_reply_subject; tests/test_daemon/test_channel_check_hop.py::test_a_repeated_acknowledgement_changes_nothing; tests/test_daemon/test_channel_check_hop.py::test_a_wrong_token_relays_nothing",
       "confidence": "high",
-      "verifiedBy": "a real daemon over a push relay: the first ack publishes one CheckAck to the reply subject; a second ack answers 'not accepted' and the published count stays 1; a wrong token publishes nothing"
+      "verifiedBy": "a real daemon over a push relay: the first ack publishes one CheckAck to the reply subject; a second ack answers 'not accepted' and the published count stays 1; a wrong token publishes nothing. The assertion that would fail if the property broke: 'assert len(rig.acks()) == 1' after a repeated channel_ack in test_a_repeated_acknowledgement_changes_nothing"
     },
     {
       "text": "sent t => emitted t = 1",
       "category": "invariant",
       "source": "HopInv",
-      "coveredBy": "tests/test_channel_emitter.py::TestChannelCheck::test_the_event_waits_for_the_client_to_be_initialised; tests/test_daemon/test_channel_feed.py::test_a_channel_check_event_carries_biffds_token_and_the_ack_goes_through (open PR 685, branch pl-1670-b4-channel-events)",
-      "confidence": "medium",
-      "verifiedBy": "the emitter test sends nothing before initialised and exactly one channel_check frame after; PR 685's test publishes a request on the real bus and the client's sink receives one channel_check carrying the daemon's 128-bit token, which channel_ack then relays once. 'sent => emitted = 1' is exercised as 'one frame per accepted request'; the property is close to a tautology of the code. The second half is not on main until PR 685 merges"
+      "coveredBy": "",
+      "confidence": "none",
+      "verifiedBy": "no assertion distinguishes 'sent' from 'emitted' in the code: the emitter's frame is the emission. test_the_event_waits_for_the_client_to_be_initialised asserts no frame before open and one after, and PR 685's test extracts the token of the first channel_check frame only; neither asserts that every frame that left was emitted once, and neither would fail if a frame were sent twice for one token after the first. Depends on PR 685 for the daemon-sourced half",
+      "status": "untested",
+      "suggestedTest": "tests/test_daemon/test_channel_feed.py (after PR 685): after the acknowledged check, assert len(rig.sink.sent) counts exactly one channel_check and that its token equals the single CheckAck's token (the sent token is the emitted token, once)",
+      "dependsOn": "PR 685"
     },
     {
       "text": "DeliverRequest: at-least-once delivery of the request frame to the session client",
@@ -68,17 +73,20 @@
       "source": "SendEvent",
       "coveredBy": "tests/test_daemon/test_channel_feed.py::test_a_channel_check_event_carries_biffds_token_and_the_ack_goes_through (open PR 685, branch pl-1670-b4-channel-events); tests/test_daemon/test_channel_check_hop.py::test_a_pending_check_never_precedes_the_summary",
       "confidence": "medium",
-      "verifiedBy": "PR 685: no channel_check frame exists in the client's sink until the request frame has crossed the daemon, and the event carries the daemon's token: the client sends only for a request that reached it. The daemon test shows the pending request is delivered after the unread summary. The emitter's 'waits for the client to be initialised' test does NOT exercise this constraint (it gates on initialize, not on request delivery). Covered only once PR 685 merges"
+      "verifiedBy": "PR 685: no channel_check frame exists in the client's sink until the request frame has crossed the daemon, and the event carries the daemon's token: the client sends only for a request that reached it. The daemon test shows the pending request is delivered after the unread summary. The emitter's 'waits for the client to be initialised' test does NOT exercise this constraint (it gates on initialize, not on request delivery). Covered only once PR 685 merges. Depends on PR 685: the row counts as covered only once it merges",
+      "dependsOn": "PR 685"
     },
     {
       "text": "DeliverRequest: a request frame replayed after the acknowledgement (afterAck >= 1) makes no second event and no second relayed ack",
       "category": "effect",
       "source": "DeliverRequest",
-      "coveredBy": "tests/test_daemon/test_channel_check_hop.py::test_a_request_replayed_after_the_acknowledgement_makes_nothing",
-      "confidence": "high",
-      "verifiedBy": "after an acknowledged token, a new subscription gets unread and no further request event within 0.3 s, and a second channel_ack relays nothing (still one CheckAck). The daemon side of the constraint; the client's emitter is not given the replay"
+      "coveredBy": "",
+      "confidence": "none",
+      "verifiedBy": "the daemon side is exercised: test_a_request_replayed_after_the_acknowledgement_makes_nothing shows a new subscription gets no second request event and a second channel_ack relays nothing. The constraint is about the client too (a request frame replayed after the ack makes no event and no ack); no test hands the client's feed a replayed request frame after the ack. The daemon half stays as evidence",
+      "status": "untested",
+      "suggestedTest": "tests/test_daemon/test_channel_feed.py (after PR 685): ack the check, make the feed's subscription reopen (the daemon replays the spent request or the test injects the frame), and assert no second channel_check frame in the sink and no second CheckAck on the bus (len(acks) == 1)"
     }
   ],
-  "notes": "Re-audited by hand on main 3f8ca8e (the z-spec check tool reports the plugin is not enabled in this worktree and the audit tool is unavailable to this agent; fuzz -t is clean). Rows 5 and 7 lean on PR 685's tests/test_daemon/test_channel_feed.py, open, so they hold only once it merges. Rows 3 and 7 name tests that do not exercise the full constraint; see verifiedBy.",
+  "notes": "Written by hand on main 3f8ca8e: the z-spec check tool reports the plugin is not enabled in the worktree and the audit tool was unavailable to the author, so the next /z-spec:audit run should reproduce this file; a difference is a finding. fuzz -t is clean. Rows 3, 5 and 8 are uncovered and carry a suggestedTest; row 7 depends on PR 685.",
   "branch": "audit-channel-mail (main 3f8ca8e)"
 }
