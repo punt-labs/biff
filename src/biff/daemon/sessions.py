@@ -400,9 +400,18 @@ class SessionTable:
         return tuple(s.status for s in self._sessions.values())
 
     async def open(
-        self, hello: Hello, resolved: ResolvedSession, relays: RelayPool
+        self,
+        hello: Hello,
+        resolved: ResolvedSession,
+        relays: RelayPool,
+        *,
+        restoring: bool = False,
     ) -> Attachment:
         """Attach the connection *hello* describes to its session.
+
+        *restoring*: the session's record already exists (a restart is building
+        the session again), so it is left as it is until the session is
+        registered.
 
         A second client of the same session id and role attaches to the existing
         record; the table never holds two records for one key, and an attach
@@ -416,8 +425,9 @@ class SessionTable:
         key = SessionKey.of(hello)
         async with self.guard(key):
             session = self._sessions.get(key)
+            reopened = session is not None
             if session is None:
-                if key.role != CLI_ROLE:
+                if key.role != CLI_ROLE and not restoring:
                     self._records.keep(hello)  # before the relay can list a session
                 session = await Session.register(
                     hello,
@@ -434,7 +444,7 @@ class SessionTable:
             if hello.client == "cli":
                 await session.touch()
             attachment = session.attach(hello.main_agent_id)
-            if key.role != CLI_ROLE:
+            if reopened and key.role != CLI_ROLE:
                 self._records.attached(key, session.run)
             return attachment
 

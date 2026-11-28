@@ -107,7 +107,10 @@ class HarnessRecords:
     def mark(self, key: SessionKey, dormant_since: datetime | None) -> None:
         """Record when the session's last connection left (``None``: one is on it)."""
         self._change(
-            key, lambda s: s.model_copy(update={"dormant_since": dormant_since})
+            key,
+            lambda s: s.model_copy(
+                update={"dormant_since": dormant_since, "failed_starts": 0}
+            ),
         )
 
     def attached(self, key: SessionKey, run: str) -> None:
@@ -120,7 +123,9 @@ class HarnessRecords:
             hello = stored.hello
             if run:
                 hello = hello.model_copy(update={"main_agent_id": run})
-            return stored.model_copy(update={"hello": hello, "dormant_since": None})
+            return stored.model_copy(
+                update={"hello": hello, "dormant_since": None, "failed_starts": 0}
+            )
 
         self._change(key, step)
 

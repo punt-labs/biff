@@ -12,11 +12,15 @@ from typing import TYPE_CHECKING
 import pytest
 
 from biff.client.connection import ClientIdentity, DaemonClient, DaemonError
-from biff.daemon.harness_records import HarnessRecords
+from biff.daemon.harness_records import (
+    HarnessRecords,
+    _Stored,  # pyright: ignore[reportPrivateUsage]
+)
 from biff.daemon.resolver import ResolveError
-from biff.daemon.server import BiffDaemon
+from biff.daemon.server import SESSION_SWEEP_SECONDS, BiffDaemon
 from biff.daemon.session_key import SessionKey
 from biff.daemon.session_restore import SessionRestore
+from biff.daemon.session_sweep import SessionSweeper
 from biff.daemon.sessions import SessionTable
 from biff.relay import LocalRelay
 from biff.session_id import CLAUDE_CODE_ROLE
@@ -96,7 +100,16 @@ async def _restart(
         await _kill(daemon)
     else:
         await daemon.stop()
-    restarted = BiffDaemon(
+    return await _start(harness, resolver)
+
+
+async def _start(
+    harness: Harness,
+    resolver: SessionResolver | None = None,
+    sweep_interval: float | None = None,
+) -> BiffDaemon:
+    """Start a daemon over the harness's relays and session store."""
+    daemon = BiffDaemon(
         run_dir=harness.run_dir,
         port=0,
         sessions=harness.sessions,
@@ -105,9 +118,10 @@ async def _restart(
         heartbeat_interval=0.05,
         poll_interval=0.02,
         attach_timeout=0.3,
+        session_sweep_interval=sweep_interval or SESSION_SWEEP_SECONDS,
     )
-    await restarted.start()
-    return restarted
+    await daemon.start()
+    return daemon
 
 
 async def _kill(daemon: BiffDaemon) -> None:
@@ -123,6 +137,13 @@ async def _kill(daemon: BiffDaemon) -> None:
         server.close()
         await server.wait_closed()
     await daemon._core.pool.close()  # pyright: ignore[reportPrivateUsage]
+    # Every task of a killed process stops with it, the sweep and the retry too.
+    sweep = daemon._sweep_task  # pyright: ignore[reportPrivateUsage]
+    retry = daemon._restore._retry  # pyright: ignore[reportPrivateUsage]
+    for task in (sweep, retry):
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 async def _connect(
@@ -517,3 +538,97 @@ async def test_a_crash_loses_the_outbox_but_not_the_mail_still_in_the_relay(
         assert mailbox == ["still in the relay"]
     finally:
         await restarted.stop()
+
+
+class HeartbeatDownRelay(LocalRelay):
+    """A local relay whose heartbeat can be made to fail: registering then fails."""
+
+    down = False
+
+    async def heartbeat(self, session_key: str, at: datetime | None = None) -> None:
+        if type(self).down:
+            msg = "the relay stopped answering"
+            raise ConnectionError(msg)
+        await super().heartbeat(session_key, at)
+
+
+async def test_a_registration_that_fails_at_restore_keeps_the_dormant_time(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(SessionRestore, "RETRY_DELAYS", ())
+    harness.factory.relay_type = HeartbeatDownRelay
+    client = await _connect(harness, harness.daemon, "s-keep")
+    await client.close()
+    await until(lambda: harness.daemon.status().sessions[0].attached == 0)
+    key = SessionKey("s-keep", CLAUDE_CODE_ROLE)
+    records = HarnessRecords(_records_dir(harness))
+    old = datetime.now(UTC) - timedelta(days=2)
+    records.mark(key, old)
+
+    monkeypatch.setattr(HeartbeatDownRelay, "down", True)
+    restarted = await _restart(harness)
+    try:
+        (kept,) = records.load()
+        assert (kept.dormant_since, kept.failed_starts) == (old, 1)
+    finally:
+        await restarted.stop()
+
+
+async def test_registrations_that_keep_failing_at_restore_end_in_a_drop(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(SessionRestore, "RETRY_DELAYS", ())
+    monkeypatch.setattr(SessionRestore, "MAX_FAILED_STARTS", 3)
+    harness.factory.relay_type = HeartbeatDownRelay
+    client = await _connect(harness, harness.daemon, "s-doomed")
+    await client.close()
+    await until(lambda: harness.daemon.status().sessions[0].attached == 0)
+
+    monkeypatch.setattr(HeartbeatDownRelay, "down", True)
+    daemon = await _restart(harness)
+    counts: list[list[str]] = [_records(harness)]
+    for _ in range(2):
+        daemon = await _restart(harness, after=daemon)
+        counts.append(_records(harness))
+    await daemon.stop()
+
+    assert counts == [["s-doomed"], ["s-doomed"], []]  # dropped on the third start
+
+
+async def test_a_first_hello_writes_its_record_once(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writes: list[Path] = []
+    write = HarnessRecords._write  # pyright: ignore[reportPrivateUsage]
+
+    def counting(self: HarnessRecords, path: Path, stored: _Stored) -> None:
+        writes.append(path)
+        write(self, path, stored)
+
+    monkeypatch.setattr(HarnessRecords, "_write", counting)
+
+    await _connect(harness, harness.daemon, "s-once")
+
+    assert len(writes) == 1
+
+
+async def test_a_killed_daemon_sweeps_no_more(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sweeps: list[int] = []
+    real = SessionSweeper.sweep
+
+    async def counting(self: SessionSweeper) -> None:
+        sweeps.append(1)
+        await real(self)
+
+    monkeypatch.setattr(SessionSweeper, "sweep", counting)
+    daemon = await _start(harness, sweep_interval=0.02)
+    await until(lambda: len(sweeps) >= 3)  # it sweeps while it lives
+
+    await _kill(daemon)
+    after_kill = len(sweeps)
+    for _ in range(10):
+        await asyncio.sleep(0.02)  # a live sweeper would sweep in this time
+
+    assert len(sweeps) == after_kill

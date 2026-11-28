@@ -143,7 +143,7 @@ class SessionRestore:
         relay = core.pool.acquire(resolved)
         if await relay.get_session(routing.session_key(resolved.config.user)) is None:
             return None
-        return await core.sessions.open(hello, resolved, core.pool)
+        return await core.sessions.open(hello, resolved, core.pool, restoring=True)
 
     def _count_failure(self, kept: KeptSession) -> bool:
         """Count a failed start; drop the record, and say so, once too many failed."""
