@@ -123,6 +123,7 @@
   "biff.markers": "kernel",
   "biff.models": "wire",
   "biff.nats_connection": "engine",
+  "biff.nats_inbox_fetch": "engine",
   "biff.nats_relay": "engine",
   "biff.nostr_attest": "kernel",
   "biff.nostr_bech32": "kernel",

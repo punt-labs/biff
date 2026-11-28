@@ -262,6 +262,7 @@ prefixes = [
     "local_watch",
     "nats_connection",
     "nats_session_rows",
+    "nats_inbox_fetch",
     "presence_liveness",
     "nats_relay",
     "nostr_directory",
