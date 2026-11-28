@@ -102,7 +102,7 @@ class ConnectionHandler:
         except ConnectionClosed:
             logger.debug("connection closed by the client", exc_info=True)
         finally:
-            attachment.detach()
+            self._core.sessions.release(attachment)
 
     async def _authenticate(self, ws: ServerConnection) -> Attachment:
         """Prove the token, read the hello; return the attachment.

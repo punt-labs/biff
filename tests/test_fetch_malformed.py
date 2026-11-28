@@ -85,7 +85,7 @@ class TestMalformedFrameNotSilentlyDropped:
     ) -> None:
         relay, js = _relay_with([_raw(b"not json")])
         await relay._fetch_from_subject(
-            js, subject=f"biff.test.inbox.{suffix}", durable="d"
+            js, subject=f"biff.test.inbox.{suffix}", durable="d", stream="s"
         )
         assert f"in {inbox} inbox" in caplog.text
         assert "eric" not in caplog.text
@@ -98,7 +98,9 @@ class TestMalformedFrameNotSilentlyDropped:
         relay, js = _relay_with([bad])
         caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
 
-        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
 
         assert messages == []
         bad.ack_sync.assert_not_awaited()  # never acked-and-deleted as if delivered
@@ -112,7 +114,9 @@ class TestMalformedFrameNotSilentlyDropped:
         good = _raw(_valid_payload("ok"))
         relay, js = _relay_with([good])
 
-        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
 
         assert [m.body for m in messages] == ["ok"]
         good.ack_sync.assert_awaited_once()  # WORK_QUEUE deletes on ack
@@ -124,7 +128,9 @@ class TestMalformedFrameNotSilentlyDropped:
         good.ack_sync = AsyncMock(side_effect=TimeoutError)
         relay, js = _relay_with([good])
 
-        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
 
         assert [m.body for m in messages] == ["keep"]
 
@@ -133,7 +139,9 @@ class TestMalformedFrameNotSilentlyDropped:
         bad = _raw(b"\xff\xfe not json")
         relay, js = _relay_with([good, bad])
 
-        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
 
         assert [m.body for m in messages] == ["keep"]
         good.ack_sync.assert_awaited_once()
@@ -176,7 +184,9 @@ class TestMalformedFrameLogDoesNotLeakContent:
         relay, js = _relay_with([bad])
         caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
 
-        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+        messages = await relay._fetch_from_subject(
+            js, subject=_SUBJECT, durable="d", stream="s"
+        )
 
         assert messages == []
         _assert_termed(relay, bad)

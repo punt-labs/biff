@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from biff.models import Message
 from biff.nats_relay import NatsRelay
+
+if TYPE_CHECKING:
+    import pytest
 
 _COUNT = 50
 _SUBJECT = "biff.test.inbox.eric.tty2"
@@ -57,7 +59,7 @@ async def test_mail_a_cancelled_fetch_consumed_is_filed_again(
     js.pull_subscribe = AsyncMock(return_value=sub)
     js.delete_consumer = AsyncMock()
 
-    fetch = asyncio.create_task(relay._fetch_from_subject(js, _SUBJECT, "d"))
+    fetch = asyncio.create_task(relay._fetch_from_subject(js, _SUBJECT, "d", "s"))
     await asyncio.sleep(0.5)
     fetch.cancel()
     await asyncio.gather(fetch, return_exceptions=True)

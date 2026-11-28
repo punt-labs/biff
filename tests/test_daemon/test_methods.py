@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from biff.daemon.harness_records import HarnessRecords
 from biff.daemon.methods import Methods
 from biff.daemon.params import Params
 from biff.daemon.refusal import RefusalError
@@ -66,7 +67,11 @@ def test_refusals_carry_the_invalid_params_code() -> None:
 
 
 def test_every_command_object_is_a_method(tmp_path: Path) -> None:
-    live = SessionTable(heartbeat_interval=1.0, org_refresh_interval=1.0)
+    live = SessionTable(
+        heartbeat_interval=1.0,
+        org_refresh_interval=1.0,
+        records=HarnessRecords(tmp_path / "harness-sessions"),
+    )
     methods = Methods(SessionMethods(CliSessionStore(tmp_path), live))
     assert set(methods.names) == {
         "who",

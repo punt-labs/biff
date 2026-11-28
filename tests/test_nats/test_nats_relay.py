@@ -153,7 +153,7 @@ class TestFetch:
     async def test_a_malformed_frame_is_not_served_again(
         self, relay: NatsRelay
     ) -> None:
-        """A terminated frame stays out of the queue; the valid frame beside it is read."""
+        """A terminated frame is not served again; the valid frame beside it is."""
         key = f"eric:{_ERIC_TTY}"
         js, _ = await relay._ensure_connected()
         await js.publish(relay._subject_for_key(key), b"not a message")

@@ -1,4 +1,4 @@
-"""Retention ends a harness session nobody is attached to; a restart loses the outbox.
+"""Retention ends a harness session nobody is attached to; a restart keeps it.
 
 ``docs/specs/claude-session-end.tex``: ``ExpireClaude`` (a dormant session aged to
 retention ends like an own end), the retention obligations, ``shownDormant`` and
@@ -134,6 +134,9 @@ async def test_a_daemon_restart_keeps_the_mail_a_read_held(
     )
     await revived.start()
     try:
+        # The session is restored from its record: dormant, before any hello.
+        restored = {x.session_id: x.attached for x in revived.status().sessions}
+        assert restored["s-restart"] == 0
         client = await DaemonClient.connect(
             run_dir=harness.run_dir,
             port=revived.port,

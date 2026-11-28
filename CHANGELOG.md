@@ -139,11 +139,19 @@
 
 ### Fixed
 
-- A NATS read confirms each ack with the server before it deletes its consumer.
-  Acks were plain publishes the server could still be processing at that
-  moment, so a large inbox came back from the next read: messages were read
-  twice and `more` overstated what was left. A message whose ack is not
-  confirmed is still returned, so mail is delivered at least once.
+- A NATS read confirms each ack with the server, all at once, before it deletes
+  its consumer. Acks were plain publishes the server could still be processing
+  at that moment, so a large inbox came back from the next read: messages were
+  read twice and `more` overstated what was left. A message whose ack is not
+  confirmed is still returned, so mail is delivered at least once. A caller
+  cancelled mid-fetch no longer loses the mail the server already removed: the
+  fetch runs on and files it back. A malformed frame's termination is confirmed
+  too, and a failed session drain restores the mail it consumed even when some
+  of the batch was still queued.
+- A daemon restart no longer forgets harness sessions, which stranded the mail
+  waiting in their relay inbox. biffd keeps each harness session's record on disk
+  (`~/.punt-labs/biff/harness-sessions/`), builds the sessions again at start, and
+  an end or the retention sweep then drains that mail into the user's mailbox.
 - biffd's heartbeat carries the plugin hook's per-session activity stamp
   (`~/.punt-labs/biff/unread/<session_id>.active`) into `last_tool_at`, as the
   in-process server does. Without it, a session working through Bash and Edit

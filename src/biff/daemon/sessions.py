@@ -7,6 +7,7 @@ import time
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_context import CliContext
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from contextlib import AbstractAsyncContextManager
 
+    from biff.daemon.harness_records import HarnessRecords
     from biff.daemon.relays import RelayPool, RelayTarget, ResolvedSession
     from biff.frame_client import Hello
     from biff.relay import Relay
@@ -233,6 +235,10 @@ class Session:
         """Accept requests again: the end failed, and the session goes on."""
         self._hold.abort_end()
 
+    def rest_for(self, seconds: float) -> None:
+        """Count the session as dormant for *seconds* already: a restored one is."""
+        self._idle_since = time.monotonic() - seconds
+
     def idle_for(self) -> float:
         """Return the seconds since the last connection left, or since the start."""
         return time.monotonic() - self._idle_since
@@ -352,19 +358,37 @@ class Session:
 class SessionTable:
     """Every session the daemon holds, get-or-create by session id and role."""
 
-    __slots__ = ("_interval", "_locks", "_org_interval", "_sessions", "_users")
+    __slots__ = (
+        "_interval",
+        "_locks",
+        "_org_interval",
+        "_records",
+        "_sessions",
+        "_users",
+    )
 
     _interval: float
     _org_interval: float
+    _records: HarnessRecords
     _sessions: dict[SessionKey, Session]
     _locks: defaultdict[SessionKey, asyncio.Lock]
     _users: Counter[SessionKey]
 
-    def __new__(cls, *, heartbeat_interval: float, org_refresh_interval: float) -> Self:
-        """Create an empty table whose sessions run their timers at these intervals."""
+    def __new__(
+        cls,
+        *,
+        heartbeat_interval: float,
+        org_refresh_interval: float,
+        records: HarnessRecords,
+    ) -> Self:
+        """Create an empty table whose sessions run their timers at these intervals.
+
+        *records* keeps each harness session from its hello to its end.
+        """
         self = super().__new__(cls)
         self._interval = heartbeat_interval
         self._org_interval = org_refresh_interval
+        self._records = records
         self._sessions = {}
         self._locks = defaultdict(asyncio.Lock)
         self._users = Counter()
@@ -376,9 +400,18 @@ class SessionTable:
         return tuple(s.status for s in self._sessions.values())
 
     async def open(
-        self, hello: Hello, resolved: ResolvedSession, relays: RelayPool
+        self,
+        hello: Hello,
+        resolved: ResolvedSession,
+        relays: RelayPool,
+        *,
+        restoring: bool = False,
     ) -> Attachment:
         """Attach the connection *hello* describes to its session.
+
+        *restoring*: the session's record already exists (a restart is building
+        the session again), so it is left as it is until the session is
+        registered.
 
         A second client of the same session id and role attaches to the existing
         record; the table never holds two records for one key, and an attach
@@ -392,7 +425,10 @@ class SessionTable:
         key = SessionKey.of(hello)
         async with self.guard(key):
             session = self._sessions.get(key)
+            reopened = session is not None
             if session is None:
+                if key.role != CLI_ROLE and not restoring:
+                    self._records.keep(hello)  # before the relay can list a session
                 session = await Session.register(
                     hello,
                     resolved,
@@ -407,7 +443,18 @@ class SessionTable:
                     await session.revive()
             if hello.client == "cli":
                 await session.touch()
-            return session.attach(hello.main_agent_id)
+            attachment = session.attach(hello.main_agent_id)
+            if reopened and key.role != CLI_ROLE:
+                self._records.attached(key, session.run)
+            return attachment
+
+    def release(self, attachment: Attachment) -> None:
+        """Let go of a connection; a harness session left with none is dormant now."""
+        session = attachment.session
+        attachment.detach()
+        if session.is_agent and session.is_dormant:
+            key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
+            self._records.mark(key, datetime.now(UTC))
 
     def holding(self, session_id: str) -> Session | None:
         """Return the shell session *session_id* if the daemon holds it."""
@@ -429,6 +476,8 @@ class SessionTable:
             self._locks.pop(key, None)  # guard drops it only while no session
         if session is not None and session is not spare:
             session.end_attachments()
+        if key.role != CLI_ROLE:
+            self._records.remove(key)  # last: it logs a failure, never raises
 
     def snapshot(self) -> dict[SessionKey, Session]:
         """Return a copy of every session held, safe to iterate while awaiting."""

@@ -46,7 +46,6 @@ class InboxFetch(SessionRows):
 
     _orphans: ClassVar[set[asyncio.Task[None]]] = set()
 
-    _stream_name: str
     _subject_prefix: str
     _repo_name: str
     _nc: NatsClient | None
@@ -58,10 +57,11 @@ class InboxFetch(SessionRows):
         sender_key: str = "",
         target_repo: str | None = None,
     ) -> None:
+        """Publish *message*; the relay supplies this."""
         raise NotImplementedError
 
     async def _fetch_from_subject(
-        self, js: JetStreamContext, subject: str, durable: str
+        self, js: JetStreamContext, subject: str, durable: str, stream: str
     ) -> list[Message]:
         """Return the valid frames of *subject*, consumed.
 
@@ -69,7 +69,7 @@ class InboxFetch(SessionRows):
         broadcast inbox).  The fetch is shielded: a caller cancelled before it
         returns does not stop it, and the mail it consumed is filed again.
         """
-        task = asyncio.ensure_future(self._consume(js, subject, durable))
+        task = asyncio.ensure_future(self._consume(js, subject, durable, stream))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -92,7 +92,7 @@ class InboxFetch(SessionRows):
                 logger.exception("could not file message %s again", message.id)
 
     async def _consume(
-        self, js: JetStreamContext, subject: str, durable: str
+        self, js: JetStreamContext, subject: str, durable: str, stream: str
     ) -> list[Message]:
         """Pull valid frames, ack them, and delete the consumer for a subject.
 
@@ -107,7 +107,7 @@ class InboxFetch(SessionRows):
         sub = await js.pull_subscribe(
             subject,
             durable=durable,
-            stream=self._stream_name,
+            stream=stream,
             config=ConsumerConfig(inactive_threshold=CONSUMER_INACTIVE_THRESHOLD),
         )
         try:
@@ -159,7 +159,7 @@ class InboxFetch(SessionRows):
             # returning already-acked messages (WORK_QUEUE deletes on ack).
             # inactive_threshold provides backup cleanup.
             try:
-                await js.delete_consumer(self._stream_name, durable)
+                await js.delete_consumer(stream, durable)
             except (NatsError, TimeoutError):
                 logger.debug("Consumer cleanup failed (will expire)")
 

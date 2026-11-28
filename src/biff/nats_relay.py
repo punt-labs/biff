@@ -1610,6 +1610,7 @@ class NatsRelay(InboxFetch):
             js,
             subject=self._subject_for_key(session_key),
             durable=self._durable_name(session_key),
+            stream=self._stream_name,
         )
 
     async def mark_read(self, session_key: str, ids: Sequence[UUID]) -> None:
@@ -1625,6 +1626,7 @@ class NatsRelay(InboxFetch):
             js,
             subject=self._user_subject(user),
             durable=self._user_durable_name(user),
+            stream=self._stream_name,
         )
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[UUID]) -> None:
