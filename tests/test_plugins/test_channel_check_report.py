@@ -9,49 +9,50 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from biff.models import UserSession
+from biff.plugins.claude_code.channel_check_ask import CheckNotSentError
 from biff.plugins.claude_code.channel_check_report import ChannelCheckReport
 from biff.plugins.claude_code.channel_check_target import CheckTarget
 
 _NOW = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
 
 
-class _Pending:
-    """A check that answers after *delay* seconds, if it answers at all."""
+class _Ask:
+    """The doctor's way to ask biffd: each session answers after its delay."""
 
-    def __init__(self, delay: float | None) -> None:
-        self._delay = delay  # None: never answers
-        self.closed = 0
+    def __init__(
+        self,
+        delays: dict[str, float | None] | None = None,
+        *,
+        fails: Exception | None = None,
+    ) -> None:
+        self._delays = delays or {}
+        self._fails = fails
+        self.requested: list[tuple[str, float]] = []
 
-    async def confirmed(self, timeout: float) -> bool:
-        if self._delay is None:
-            await asyncio.sleep(timeout)
+    async def confirmed(self, session_key: str, seconds: float) -> bool:
+        self.requested.append((session_key, seconds))
+        if self._fails is not None:
+            raise self._fails
+        delay = self._delays.get(session_key)
+        if delay is None or delay > seconds:
+            await asyncio.sleep(seconds)
             return False
-        if self._delay > timeout:
-            await asyncio.sleep(timeout)
-            return False
-        await asyncio.sleep(self._delay)
+        await asyncio.sleep(delay)
         return True
-
-    async def close(self) -> None:
-        self.closed += 1
 
 
 class _Relay:
-    """A relay that knows its sessions and how long each takes to answer."""
+    """A relay that knows its sessions; it carries no check."""
 
     def __init__(
         self,
         sessions: list[UserSession],
         *,
-        delays: dict[str, float | None] | None = None,
         fails: Exception | None = None,
     ) -> None:
         self._sessions = sessions
-        self._delays = delays or {}
         self._fails = fails
-        self.requested: list[str] = []
         self.looked_up: list[str] = []
-        self.pending: list[_Pending] = []
         self.closed = 0
 
     async def list_sessions_for_user(self, user: str) -> list[UserSession]:
@@ -59,12 +60,6 @@ class _Relay:
         if self._fails is not None:
             raise self._fails
         return [s for s in self._sessions if s.user == user]
-
-    async def request_channel_check(self, session_key: str) -> _Pending:
-        self.requested.append(session_key)
-        pending = _Pending(self._delays.get(session_key))
-        self.pending.append(pending)
-        return pending
 
     async def close(self) -> None:
         self.closed += 1
@@ -82,16 +77,23 @@ def _session(
 
 
 def _report(
-    relay: _Relay | None, *, timeout: float = 30.0, users: tuple[str, ...] = ("kai",)
+    relay: _Relay | None,
+    ask: _Ask | None = None,
+    *,
+    timeout: float = 30.0,
+    users: tuple[str, ...] = ("kai",),
 ) -> ChannelCheckReport:
     return ChannelCheckReport(
-        CheckTarget(relay, users), timeout=timeout, now=lambda: _NOW
+        CheckTarget(relay, users),
+        ask=lambda: ask or _Ask(),
+        timeout=timeout,
+        now=lambda: _NOW,
     )
 
 
 async def test_a_session_that_answers_is_channel_live() -> None:
-    relay = _Relay([_session("abc", name="tty1")], delays={"kai:abc": 0.0})
-    (line,) = await _report(relay).results()
+    relay = _Relay([_session("abc", name="tty1")])
+    (line,) = await _report(relay, _Ask({"kai:abc": 0.0})).results()
     assert line.message == "kai:tty1: channel live"
     assert line.passed
     assert not line.required  # doctor never fails on a channel
@@ -107,48 +109,51 @@ async def test_a_session_that_does_not_answer_points_at_the_gates() -> None:
 
 
 async def test_each_session_gets_its_own_line() -> None:
-    relay = _Relay(
-        [_session("a", name="tty1"), _session("b", name="tty2")],
-        delays={"kai:a": 0.0},
-    )
-    lines = await _report(relay, timeout=0.05).results()
-    assert sorted(relay.requested) == ["kai:a", "kai:b"]
+    relay = _Relay([_session("a", name="tty1"), _session("b", name="tty2")])
+    ask = _Ask({"kai:a": 0.0})
+    lines = await _report(relay, ask, timeout=0.05).results()
+    assert sorted(key for key, _ in ask.requested) == ["kai:a", "kai:b"]
     assert [(ln.message.split(":")[1].split()[0], ln.passed) for ln in lines] == [
         ("tty1", True),
         ("tty2", False),
     ]
 
 
+async def test_the_wait_is_the_report_timeout_in_seconds() -> None:
+    relay = _Relay([_session("a")])
+    ask = _Ask({"kai:a": 0.0})
+    await _report(relay, ask, timeout=12.5).results()
+    assert ask.requested == [("kai:a", 12.5)]
+
+
 async def test_sessions_that_take_a_second_are_waited_for_together() -> None:
     """Three 1 s sessions finish in about 1 s: serial checks would take 3 s."""
     sessions = [_session(t) for t in "abc"]
-    relay = _Relay(sessions, delays={"kai:a": 1.0, "kai:b": 1.0, "kai:c": 1.0})
+    ask = _Ask({"kai:a": 1.0, "kai:b": 1.0, "kai:c": 1.0})
     started = time.monotonic()
-    lines = await _report(relay, timeout=5).results()
+    lines = await _report(_Relay(sessions), ask, timeout=5).results()
     elapsed = time.monotonic() - started
     assert all(ln.passed for ln in lines)
     assert 0.9 <= elapsed < 2.0
 
 
 async def test_a_session_that_never_answers_ends_at_the_timeout() -> None:
-    relay = _Relay([_session("a"), _session("b")], delays={"kai:a": 0.0})
+    relay = _Relay([_session("a"), _session("b")])
     started = time.monotonic()
-    lines = await asyncio.wait_for(_report(relay, timeout=0.5).results(), 5)
+    lines = await asyncio.wait_for(
+        _report(relay, _Ask({"kai:a": 0.0}), timeout=0.5).results(), 5
+    )
     elapsed = time.monotonic() - started
     assert [ln.passed for ln in lines] == [True, False]
     assert 0.45 <= elapsed < 1.5
 
 
 async def test_an_answer_later_than_the_timeout_is_not_confirmed() -> None:
-    relay = _Relay([_session("a")], delays={"kai:a": 2.0})
-    (line,) = await asyncio.wait_for(_report(relay, timeout=0.3).results(), 5)
+    relay = _Relay([_session("a")])
+    (line,) = await asyncio.wait_for(
+        _report(relay, _Ask({"kai:a": 2.0}), timeout=0.3).results(), 5
+    )
     assert not line.passed
-
-
-async def test_every_pending_check_is_closed() -> None:
-    relay = _Relay([_session("a"), _session("b")], delays={"kai:a": 0.0})
-    await _report(relay, timeout=0.05).results()
-    assert [p.closed for p in relay.pending] == [1, 1]
 
 
 async def test_the_relay_is_closed_after_the_check() -> None:
@@ -158,15 +163,16 @@ async def test_the_relay_is_closed_after_the_check() -> None:
 
 
 async def test_a_session_without_a_name_is_named_by_its_tty() -> None:
-    relay = _Relay([_session("abc12345")], delays={"kai:abc12345": 0.0})
-    (line,) = await _report(relay).results()
+    relay = _Relay([_session("abc12345")])
+    (line,) = await _report(relay, _Ask({"kai:abc12345": 0.0})).results()
     assert line.message == "kai:abc12345: channel live"
 
 
 async def test_a_session_that_stopped_heartbeating_is_not_asked() -> None:
     relay = _Relay([_session("old", age=3600)])
-    (line,) = await _report(relay).results()
-    assert relay.requested == []
+    ask = _Ask()
+    (line,) = await _report(relay, ask).results()
+    assert ask.requested == []
     assert "nothing to check" in line.message
 
 
@@ -199,15 +205,28 @@ async def test_a_failed_lookup_is_not_reported_as_no_session(error: Exception) -
     assert not line.required
 
 
+# -- the ask goes through biffd, and says so when biffd cannot be asked ---------
+
+
+async def test_a_check_that_was_not_sent_says_why() -> None:
+    relay = _Relay([_session("a", name="tty1")])
+    ask = _Ask(fails=CheckNotSentError("biffd is not answering on 127.0.0.1:8424"))
+    (line,) = await _report(relay, ask).results()
+    assert line.message == (
+        "kai:tty1: channel not confirmed "
+        "(not sent: biffd is not answering on 127.0.0.1:8424)"
+    )
+    assert not line.passed
+    assert not line.required
+
+
 # -- every handle an MCP server in the repo would register under ----------------
 
 
 async def test_every_handle_is_looked_up_and_each_session_is_asked() -> None:
-    relay = _Relay(
-        [_session("h", user="kai"), _session("a", user="claude")],
-        delays={"kai:h": 0.0, "claude:a": 0.0},
-    )
-    lines = await _report(relay, users=("claude", "kai")).results()
+    relay = _Relay([_session("h", user="kai"), _session("a", user="claude")])
+    ask = _Ask({"kai:h": 0.0, "claude:a": 0.0})
+    lines = await _report(relay, ask, users=("claude", "kai")).results()
     assert relay.looked_up == ["claude", "kai"]
     assert sorted(ln.message for ln in lines) == [
         "claude:a: channel live",
@@ -233,8 +252,10 @@ async def test_a_bad_handle_does_not_hide_the_sessions_of_a_good_one() -> None:
                 raise ValueError("Invalid username")
             return await super().list_sessions_for_user(user)
 
-    relay = _Picky([_session("a")], delays={"kai:a": 0.0})
-    lines = await _report(relay, users=("first.last", "kai")).results()
+    relay = _Picky([_session("a")])
+    lines = await _report(
+        relay, _Ask({"kai:a": 0.0}), users=("first.last", "kai")
+    ).results()
     assert [ln.passed for ln in lines] == [False, True]
     assert "not a valid biff handle" in lines[0].message
     assert lines[1].message == "kai:a: channel live"
@@ -245,8 +266,8 @@ async def test_a_bad_handle_does_not_hide_the_sessions_of_a_good_one() -> None:
 
 async def test_escape_sequences_in_a_session_name_are_stripped() -> None:
     evil = "tty\x1b]0;pwned\x07\x1b[2J1"
-    relay = _Relay([_session("a", name=evil)], delays={"kai:a": 0.0})
-    (line,) = await _report(relay).results()
+    relay = _Relay([_session("a", name=evil)])
+    (line,) = await _report(relay, _Ask({"kai:a": 0.0})).results()
     assert "\x1b" not in line.message
     assert "\x07" not in line.message
     assert line.message.endswith("channel live")

@@ -100,7 +100,6 @@ class TalkBus:
         return len(self._subscribers.get(subject, []))
 
 
-@final
 class TalkBusRelay(LocalRelay):
     """A local relay whose talk frames travel over a shared :class:`TalkBus`."""
 

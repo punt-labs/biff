@@ -10015,3 +10015,49 @@ unconditional tty name releases in the in-process paths (`session_registry`,
 - *A path or session id in `end`.* Only the caller's own session ends; another
   session's end is the sweep's.
 - *Releasing the tty name by name, or after a separate owner check.* It would free a name a new session took.
+
+## DES-102: The Daemon Carries the Channel Check, the Arrivals Reading and the Push
+
+**Date:** 2026-11-27
+**Status:** SETTLED
+**Topic:** The third group of daemon additions for PL-1670. Models:
+`docs/specs/channel-check.tex`, `docs/specs/notification-mail-event.tex`. Detail:
+`docs/design/biffd.md`.
+
+**Decision.**
+
+- The channel check crosses the daemon in four steps. A doctor's request on the
+  session's check subject is accepted by `CheckHop` (an inbox reply, at most one a
+  minute, a fresh 128-bit token). Every subscription of the session is sent one
+  `channel_check_request` event `{token}`, and one that starts while a token is
+  pending is sent it again: delivery to the client is at least once, and the
+  client makes one channel event per token. `channel_ack` spends the token and
+  relays one acknowledgement to the doctor's reply subject. `channel_check` lets
+  the doctor ask and wait through the daemon's relay.
+- `arrivals` is a read-only snapshot `{mark, unread, wall, invites, talk_pending}`
+  and the `mail` event carries `{count, mark}`. The count is the relay's plus the
+  mail the daemon holds; nothing is marked read.
+- Push and poll are one path. `PushFeed` turns the relay's wake pokes (mail to the
+  user, mail to the session, a wall) into a flag; `ArrivalPoll` runs the same pass
+  on the flag or its interval. A repeated poke changes nothing and a lost one is
+  covered by the interval.
+- The emitter's lock and per-kind fairness (PL-1769) were already in
+  `ChannelEmitter`; the tests that pin them (two wakes announce once, a bare pass
+  reads every kind, mail is announced while wall work competes and while a wall is
+  held) are in `tests/test_channel_emitter.py`.
+
+**Divergence from the model.** The channel check's daemon hop has the daemon hold
+the token, and the client's `SendEvent` dedup by token is the client's. The
+daemon's `CheckHop` duplicates the server's `ChannelCheck` because the daemon layer
+may not import the server; the server's copy goes with the in-process server.
+
+**Rejected.**
+
+- *One feed for the poll and the pushes, announcing from the push callback.* A NATS
+  callback must not send (it is unreliable); the push only sets a flag and the poll,
+  which already reads and decides, sends.
+- *Importing the server's `ChannelCheck`.* The daemon layer may not import the
+  server; the daemon's `CheckHop` is a second copy until the in-process server and
+  its copy are deleted.
+- *Acknowledging in the daemon on the event's delivery.* The acknowledgement is the
+  model's, through `channel_ack`; delivery proves nothing about the model.

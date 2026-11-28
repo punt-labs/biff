@@ -7,7 +7,7 @@ from typing import Self
 
 from biff.frame_reply import ErrorCode, ReplyError
 
-__all__ = ["HandshakeRefusedError", "RefusalError"]
+__all__ = ["ClientGoneError", "HandshakeRefusedError", "RefusalError"]
 
 
 # Not frozen: raising sets ``__traceback__``, which a frozen dataclass rejects.
@@ -36,3 +36,11 @@ class HandshakeRefusedError(Exception):
     def __str__(self) -> str:
         """Return the reason."""
         return self.reason
+
+
+class ClientGoneError(Exception):
+    """An event could not be written because the client had already left.
+
+    It is not a relay error: the arrival poll ends quietly, and nothing is
+    announced to a connection that is gone.
+    """

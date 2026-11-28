@@ -4,6 +4,19 @@
 
 ### Added
 
+- biffd carries the channel check: a doctor's request on a session's check subject
+  becomes one `channel_check_request` event (a 128-bit token, at most one request a
+  minute), the new `channel_ack` method relays one acknowledgement to the doctor,
+  and `biff doctor` sends its check through the daemon's `channel_check` method,
+  starting biffd when it is down; the doctor holds no relay for the send itself.
+  A line says why when biffd could not send it.
+- biffd pushes the arrival notice: it subscribes to the relay's wake pokes for mail
+  and walls, so a mail or wall event reaches a subscribed client at once instead
+  of at the next poll. A repeated or lost push changes nothing; the poll still
+  runs on its interval.
+- The biffd `arrivals` method answers `{mark, unread, wall, invites, talk_pending}`
+  without marking any mail read. The `mail` event, and so `biff watch`, now carries
+  the inbox's high-water `mark` next to the `count`.
 - The biffd `end` method ends the caller's own harness session: it files the mail
   the session holds back, drains its inbox into the user mailbox, releases its
   tty name (only if it still holds it), deletes its row and appends a logout. A
@@ -139,6 +152,29 @@
 
 ### Fixed
 
+- `biff doctor`'s channel check through biffd no longer always fails with
+  "seconds must be an integer": the doctor sent its 30.0 s wait as a float. It
+  sends whole seconds and biffd caps the wait at 25.
+- A channel check biffd refuses (a second request inside a minute, or a reply that
+  is not an inbox) is logged by biffd and answered to the doctor, which prints
+  `refused: rate-limited (60 s)` instead of waiting 25 s and blaming the channel.
+  A closed reply subscription reads as a lost relay, not as silence, and an
+  unreadable acknowledgement is logged.
+- `channel_ack` no longer says the channel is live when its reply to the doctor was
+  not published: the token is pending again, the answer is an error, and the
+  model's retry is accepted.
+- A subscription whose client has left ends quietly: the poll no longer advances
+  past a notice that was not delivered, nor reports the dead connection as a relay
+  outage.
+- A missing inbox stream no longer reads as an empty inbox: it is warned about once
+  per episode and the arrival poll reports `degraded`.
+- Reading an expired NATS wall deletes it at the revision that was read, so a wall
+  posted between the read and the delete is kept and returned instead of lost.
+- A client can wait longer than the request timeout for a method that waits itself
+  (`DaemonClient.request_within`); a channel check holds its reply up to 25 s.
+- The biffd protocol is version 2. Version 1 clients rejected the new
+  `channel_check_request` event and dropped the connection mid-stream; they are now
+  refused at the hello with a message naming both versions and the fix.
 - A NATS read confirms each ack with the server, all at once, before it deletes
   its consumer. Acks were plain publishes the server could still be processing
   at that moment, so a large inbox came back from the next read: messages were
