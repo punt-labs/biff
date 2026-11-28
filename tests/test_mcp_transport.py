@@ -67,14 +67,14 @@ class TestFromTheRepo:
     ) -> None:
         repo = self._repo(tmp_path, "mcp:\n  transport: daemon\n")
 
-        assert McpAssembly.transport_for(repo, {}) is McpTransport.DAEMON
+        assert McpTransport.for_repo(repo, {}) is McpTransport.DAEMON
 
     def test_a_repo_that_does_not_set_it_keeps_the_in_process_server(
         self, tmp_path: Path
     ) -> None:
         repo = self._repo(tmp_path, "team: []\n")
 
-        assert McpAssembly.transport_for(repo, {}) is McpTransport.INPROCESS
+        assert McpTransport.for_repo(repo, {}) is McpTransport.INPROCESS
 
 
 class TestWhereTheDaemonIsUsed:

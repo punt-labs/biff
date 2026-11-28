@@ -15,8 +15,7 @@ from biff.client.connection import (
     DaemonClient,
     DaemonError,
 )
-from biff.client.nudge import DaemonNudge
-from biff.run_dir import RunDir
+from biff.client.host import HostConnector
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -169,16 +168,7 @@ class McpLink:
     @classmethod
     def for_host(cls, *, user: str, cwd: str) -> Self:
         """Return the link that starts biffd on this host when it is down."""
-        run_dir = RunDir.default()
-
-        async def connect(identity: ClientIdentity) -> DaemonClient:
-            # Blocking: it can wait on the service manager, so it leaves the loop.
-            port = await asyncio.to_thread(DaemonNudge.for_host(run_dir).ensure_running)
-            return await DaemonClient.connect(
-                run_dir=run_dir, port=port, identity=identity
-            )
-
-        return cls(user=user, cwd=cwd, connect=connect)
+        return cls(user=user, cwd=cwd, connect=HostConnector.for_host().connect)
 
     async def ask(self, session_id: str, method: str, **params: JsonValue) -> Reply:
         """Run *method* for *session_id* and return its reply.

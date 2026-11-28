@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from biff.config import ResolvedConfig, load_yaml_config, load_yaml_local, merge_config
+from biff.config import ResolvedConfig
 from biff.mcp_transport import McpTransport
 from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
@@ -44,23 +44,6 @@ class McpAssembly:
     overrides: tuple[Path | None, str | None]  # --data-dir, --relay-url
 
     @staticmethod
-    def transport_for(
-        repo_root: Path | None, environ: Mapping[str, str]
-    ) -> McpTransport:
-        """Return the transport the settings of *repo_root* and *environ* choose.
-
-        Raises:
-            SystemExit: A setting names neither transport, or a config file is
-                malformed.
-        """
-        merged: dict[str, object] = {}
-        if repo_root is not None:
-            merged = merge_config(
-                load_yaml_config(repo_root), load_yaml_local(repo_root)
-            )
-        return McpTransport.from_settings(merged, environ)
-
-    @staticmethod
     def uses_biffd(
         transport: str, repo_root: Path | None, environ: Mapping[str, str]
     ) -> bool:
@@ -69,7 +52,7 @@ class McpAssembly:
         Only the stdio server does: the HTTP server (``biff serve``) has no
         caller identity of its own to give biffd, so it keeps its relay.
         """
-        choice = McpAssembly.transport_for(repo_root, environ)
+        choice = McpTransport.for_repo(repo_root, environ)
         return transport == "stdio" and choice is McpTransport.DAEMON
 
     def server(self) -> ChannelServer[ServerState]:

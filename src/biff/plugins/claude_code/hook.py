@@ -719,11 +719,26 @@ def _open_session(data: dict[str, object]) -> None:
     first tool call opens the session instead, but must never break session
     startup, so it is logged and swallowed.
     """
-    from biff.session_open import open_session_from_payload  # noqa: PLC0415
+    from biff.mcp_transport import McpTransport  # noqa: PLC0415
 
     try:
-        asyncio.run(open_session_from_payload(data))
-    except Exception:
+        root = _repo_common_root(data)
+        transport = McpTransport.for_repo(
+            pathlib.Path(root) if root else None, os.environ
+        )
+        if transport is McpTransport.DAEMON:
+            from biff.plugins.claude_code.daemon_session import (  # noqa: PLC0415
+                DaemonSessionOpener,
+            )
+
+            asyncio.run(DaemonSessionOpener.for_host().open(data))
+        else:
+            from biff.session_open import (  # noqa: PLC0415
+                open_session_from_payload,
+            )
+
+            asyncio.run(open_session_from_payload(data))
+    except (Exception, SystemExit):
         logger.warning("Failed to open session at SessionStart", exc_info=True)
 
 
