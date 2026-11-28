@@ -267,6 +267,7 @@
   "biff.daemon.talk_methods": "daemon",
   "biff.daemon.uncancellable": "daemon",
   "biff.daemon.handback": "daemon",
+  "biff.daemon.held_mail": "daemon",
   "biff.cli_console": "cli",
   "biff.cli_events": "cli",
   "biff.cli_link": "cli",

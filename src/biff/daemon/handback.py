@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, ClassVar, final
 
-from biff.daemon.session_end import SessionEnd
+from biff.daemon.held_mail import HeldMail
 from biff.daemon.uncancellable import Uncancellable
 from biff.relay_errors import RELAY_ERRORS
 
@@ -25,20 +25,27 @@ class Handback:
     the daemon stops finishes after its caller left: the mail would exist only
     in the memory of a process that is about to exit, so a restart would not
     find it.
+
+    The whole restart command has 30 seconds (``Supervisor.run``), so the wait
+    for reads in flight is a few seconds, not the read's own timeout: what a read
+    that is still running has not yet taken stays in the relay.
     """
+
+    SETTLE_SECONDS: ClassVar[float] = 5.0
 
     @staticmethod
     async def close_relays(core: DaemonCore) -> None:
         """Let started reads finish, give back held mail, and close the relays.
 
-        Reads get ``core.request_timeout`` seconds to finish.  The relays are
+        Reads get :attr:`SETTLE_SECONDS` to finish; those still running after
+        that are left, and the mail held so far is given back.  The relays are
         closed even if giving the mail back raised.
         """
         try:
-            await Uncancellable.settle(core.request_timeout)
+            await Uncancellable.settle(Handback.SETTLE_SECONDS)
             for key, session in core.sessions.snapshot().items():
                 try:
-                    await SessionEnd.refile_held(session)
+                    await HeldMail.refile(session)
                 except RELAY_ERRORS:
                     logger.warning(
                         "could not give back the mail held for session %s",

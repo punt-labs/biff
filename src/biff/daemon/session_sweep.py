@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
+from biff.daemon.held_mail import HeldMail
 from biff.daemon.resolver import ResolveError
 from biff.daemon.session_end import RETENTION_SECONDS, SessionEnd
 from biff.daemon.session_host import SessionHost
@@ -120,7 +121,7 @@ class SessionSweeper:
             if not held.is_dormant and record.state != "ended":
                 await self._renew(record)
                 return
-            await SessionEnd.refile_held(held)
+            await HeldMail.refile(held)
             await self._judge(record)
             try:
                 self._store.read(record.session_id)
