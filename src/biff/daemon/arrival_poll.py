@@ -48,6 +48,7 @@ class ArrivalPoll:
         "_log",
         "_reading",
         "_session",
+        "_summarized",
         "_wake",
     )
 
@@ -58,6 +59,7 @@ class ArrivalPoll:
     _reading: ArrivalsReading
     _log: RelayLog
     _degraded: bool
+    _summarized: asyncio.Event
 
     def __new__(
         cls,
@@ -75,7 +77,13 @@ class ArrivalPoll:
         self._reading = ArrivalsReading(session)
         self._log = RelayLog(logger)
         self._degraded = False
+        self._summarized = asyncio.Event()
         return self
+
+    @property
+    def summarized(self) -> asyncio.Event:
+        """Set once the starting summary, and the wall if any, has been sent."""
+        return self._summarized
 
     async def run(self) -> None:
         """Send the current summary, then each mail and wall arrival."""
@@ -83,6 +91,7 @@ class ArrivalPoll:
         await self._emit("unread", {"count": count})
         if wall is not None:
             await self._emit("wall", wall.model_dump(mode="json"))
+        self._summarized.set()
         while True:
             with suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), self._interval)

@@ -197,3 +197,14 @@ async def test_channel_ack_refuses_params_it_does_not_know(rig: Rig) -> None:
     kai, _ = await _session(rig)
     with pytest.raises(DaemonError):
         await kai.request("channel_ack", token="x", session_key="eric:abc")
+
+
+async def test_a_pending_check_never_precedes_the_summary(rig: Rig) -> None:
+    kai, key = await _session(rig)
+    await _ask(rig, key)
+    await _next(kai)
+    again = await rig.harness.connect("s-kai", "kai", client="mcp")
+    await again.subscribe()
+    kinds = [(await _next(again)).kind, (await _next(again)).kind]
+    assert kinds[0] == "unread"
+    assert kinds[1] == "channel_check_request"

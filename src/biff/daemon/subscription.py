@@ -75,10 +75,13 @@ class Subscription:
             async with asyncio.TaskGroup() as group:
                 group.create_task(poll.run())
                 group.create_task(self._session.talk.announce(self._emit))
-                group.create_task(self._announce_checks(checks))
+                group.create_task(self._announce_checks(checks, poll.summarized))
 
-    async def _announce_checks(self, tokens: asyncio.Queue[str]) -> None:
-        """Send each channel check token, the pending one first: at least once."""
+    async def _announce_checks(
+        self, tokens: asyncio.Queue[str], summarized: asyncio.Event
+    ) -> None:
+        """Send each channel check token, the pending one first, after the summary."""
+        await summarized.wait()  # the summary comes first on every subscription
         while True:
             await self._emit("channel_check_request", {"token": await tokens.get()})
 

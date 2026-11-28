@@ -9952,3 +9952,14 @@ paths (`session_registry`, `tty.py`), which go with the in-process server.
 the token, and the client's `SendEvent` dedup by token is the client's. The
 daemon's `CheckHop` duplicates the server's `ChannelCheck` because the daemon layer
 may not import the server; the server's copy goes with the in-process server.
+
+**Rejected.**
+
+- *One feed for the poll and the pushes, announcing from the push callback.* A NATS
+  callback must not send (it is unreliable); the push only sets a flag and the poll,
+  which already reads and decides, sends.
+- *Importing the server's `ChannelCheck`.* The daemon layer may not import the
+  server; the daemon's `CheckHop` is a second copy until the in-process server and
+  its copy are deleted.
+- *Acknowledging in the daemon on the event's delivery.* The acknowledgement is the
+  model's, through `channel_ack`; delivery proves nothing about the model.
