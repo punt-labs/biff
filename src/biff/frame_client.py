@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 from biff.frame_base import FrameBase
+from biff.relay_seed import RelayVariable
 from biff.session_routing import MAX_ID_LENGTH
 
 __all__ = ["ClientType", "Hello", "Request", "Subscribe"]
@@ -51,15 +52,20 @@ class Hello(FrameBase):
     # it already holds, on the relay that session lives on, and never creates or
     # revives one.  ``main_agent_id`` then names the run the client ends for.
     ends: bool = False
+    # Digests of the client's ``BIFF_RELAY_*`` values, never the values: biffd
+    # refuses a client whose settings differ from the ones it was started with.
+    relay: dict[RelayVariable, _Mac] = Field(default_factory=dict[RelayVariable, str])
 
     @model_serializer(mode="wrap")
-    def _omit_ends_unless_set(
+    def _omit_defaults(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, object]:
-        """Leave ``ends`` off an ordinary hello, so an older daemon still reads it."""
+        """Leave ``ends`` and ``relay`` off a plain hello, for an older biffd."""
         fields = cast("dict[str, object]", handler(self))
         if not self.ends:
             fields.pop("ends")
+        if not self.relay:
+            fields.pop("relay")
         return fields
 
 

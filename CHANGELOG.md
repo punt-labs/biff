@@ -4,6 +4,13 @@
 
 ### Added
 
+- biffd takes its `BIFF_RELAY_*` relay settings from the environment of the process
+  that starts it (a `biff` command starting it where there is no service manager, as
+  in a container). The values travel by environment only, never on a command line
+  or in a log. A client whose own `BIFF_RELAY_*` differ from them is refused naming
+  the variable; a client with the same values, or none, is accepted. The comparison
+  is by digest, so no token is printed or sent. Under a systemd or launchd unit biffd
+  has no such environment and refuses a client that carries them.
 - With `mcp.transport: daemon`, `biff mcp` sends Claude Code's channel events
   (mail, wall, talk invite, talk message, channel check) from biffd's subscription
   instead of a relay of its own. The emitter, its rate limit, held kinds and retry

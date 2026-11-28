@@ -10061,3 +10061,58 @@ may not import the server; the server's copy goes with the in-process server.
   its copy are deleted.
 - *Acknowledging in the daemon on the event's delivery.* The acknowledgement is the
   model's, through `channel_ack`; delivery proves nothing about the model.
+
+## DES-104: biffd Is Seeded With the Relay Settings of the Process That Starts It
+
+**Date:** 2026-11-28
+**Status:** SETTLED
+**Topic:** Amends DES-095 item 6 (identity and environment). Which `BIFF_RELAY_*`
+settings biffd serves, and what happens to a client whose own differ.
+
+**Problem.** biffd resolves every session in its own process, so it cannot see a
+client's `BIFF_RELAY_URL`, `BIFF_RELAY_TOKEN`, `BIFF_RELAY_NKEYS_SEED`,
+`BIFF_RELAY_USER_CREDENTIALS` or `BIFF_RELAY_TLS_HANDSHAKE_FIRST`. Until now biffd
+deleted those variables from its own environment at start and a client that set any
+of them was refused, so an agent container or a Devin session that hands biff its
+relay through the environment could not use the daemon at all.
+
+**Decision.**
+
+1. **The starter's environment is the seed.** A biffd started by a client (the
+   detached start used where there is no service manager, as in an agent
+   container) inherits that client's environment. biffd keeps its `BIFF_RELAY_*`
+   variables and the session resolver reads them as it always has, so the existing
+   repository gate (`relay.allow_env_override`, a committed relay wins) applies
+   unchanged. `BIFF_USER` and `BIFF_OWNER` are still removed: those name a person.
+   The secret reaches biffd by environment only. The start command line is
+   `biffd --port N`, and no log line or error message carries a value.
+2. **A hello carries digests.** `Hello.relay` maps each `BIFF_RELAY_*` variable the
+   client sets (non-empty) to the SHA-256 of its value, and is left off a hello that
+   sets none. biffd holds the digests of its own seed. Comparison is by digest, so
+   neither side prints or sends a secret to learn that they differ.
+3. **The comparison.** A client whose variables all match the seed, or that sets
+   none, is accepted. A client that sets a variable biffd was started without, or
+   with another value, is refused with `bad_hello`, naming the variables: "biffd
+   was started without X" or "X differ from the ones biffd was started with". A
+   hello that only ends a session is not compared: it attaches to the session biffd
+   already holds and resolves no relay.
+4. **Containers.** Every process in one container shares one environment, so the
+   first `biff` command starts biffd with it and every later client carries the same
+   values. No agent-image change is needed.
+
+**Known limit.** A biffd started by a service manager (a systemd or launchd unit)
+does not inherit a client's environment, and exporting a token to the manager would
+expose it to every process of the user. Such a biffd is seeded with nothing, so a
+client that carries `BIFF_RELAY_*` is refused naming them. Run that client's relay
+through `.punt-labs/biff/config.local.yaml`, or stop the unit's biffd and let the
+client start it.
+
+**Rejected.**
+
+- *Sending the values in the hello.* A secret would cross the socket and sit in a
+  frame biffd could log.
+- *One relay per session, resolved from the client's values.* biffd holds one relay
+  connection per target; per-session credentials are the per-user key design
+  (`docs/design/trust-model.md`), not this one.
+- *Keeping the refusal of every `BIFF_RELAY_*` client.* It left the agent
+  container with no daemon path.

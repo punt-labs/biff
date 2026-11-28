@@ -196,6 +196,8 @@ Without `allow_env_override: true`, a committed `relay.url` always wins — an a
 
 **Human interactive use:** put `BIFF_RELAY_*` in that repo's `.envrc.local` (gitignored, direnv-scoped — unloaded automatically on `cd` out of the repo), not in a bare shell `export` or a shell profile such as `~/.zshrc`. A bare export is ambient for the rest of that shell session across every repo you `cd` into, which can leak one team's credential to another team's relay. See [relay-env-overrides.md](../design/relay-env-overrides.md) for the full design rationale.
 
+**Through biffd.** biffd, the per-user daemon, resolves every session in its own process, so it serves the `BIFF_RELAY_*` settings of the environment it was started in. A `biff` command that finds biffd down starts it from its own environment where the host has no service manager (a container), and every process of one container shares that environment. A later command whose `BIFF_RELAY_*` values are the same, or that sets none, is accepted. A command that sets a variable biffd was started without, or with another value, is refused with a message naming the variable; values are compared by digest and never printed. Under a systemd user unit or a macOS LaunchAgent biffd does not inherit a command's environment, so such a command is refused: put the relay in `.punt-labs/biff/config.local.yaml`, or stop the unit and run `biff daemon serve` from an environment that sets it.
+
 ## Updating
 
 ```bash

@@ -29,6 +29,7 @@ from biff.daemon.sessions import SessionTable
 from biff.daemon.spill import Spill
 from biff.daemon.tasks import Supervised
 from biff.frame_base import MAX_FRAME_BYTES
+from biff.relay_seed import NO_RELAY_SETTINGS, RelaySeed
 
 if TYPE_CHECKING:
     from websockets.http11 import Request, Response
@@ -108,6 +109,7 @@ class BiffDaemon:
         read_budget: int = READ_BUDGET_BYTES,
         org_refresh_interval: float = ORG_REFRESH_SECONDS,
         session_sweep_interval: float = SESSION_SWEEP_SECONDS,
+        relay_seed: RelaySeed = NO_RELAY_SETTINGS,
     ) -> Self:
         """Create a daemon that will listen on *port* (0 picks a free one).
 
@@ -115,7 +117,10 @@ class BiffDaemon:
         once at start and every *session_sweep_interval* seconds after.
 
         The resolver and relay factory default to the repository configuration
-        on disk and the relay it selects; tests inject their own.
+        on disk and the relay it selects; tests inject their own.  *relay_seed*
+        names the ``BIFF_RELAY_*`` settings the daemon was started with, which
+        sessions resolve from and clients may not differ from; ``biffd`` passes
+        those of its environment.
         """
         self = super().__new__(cls)
         self._run_dir = run_dir
@@ -145,6 +150,7 @@ class BiffDaemon:
             poll_interval=poll_interval,
             attach_timeout=attach_timeout,
             request_timeout=request_timeout,
+            relay_seed=relay_seed,
         )
         self._restore = SessionRestore(records, self._core)
         self._spill = spill

@@ -76,6 +76,7 @@ class ClientIdentity:
             cwd=self.cwd,
             user=ClientEnvironment.user(self.user, os.environ),
             ends=self.ends,
+            relay=ClientEnvironment.relay_seed(os.environ).to_wire(),
         )
 
 
@@ -162,8 +163,6 @@ class DaemonClient:
         *request_timeout* bounds each later request.
 
         Raises:
-            UnsupportedOverrideError: The environment sets a ``BIFF_RELAY_*``
-                variable biffd cannot carry.
             FileNotFoundError: No daemon has created a token.
             PermissionError: The run directory or token file is not private.
             ValueError: The token file does not hold a token.
@@ -172,10 +171,10 @@ class DaemonClient:
             UnprovenDaemonError: The listener did not prove it holds the token.
             ConnectionLostError: The daemon closed the connection, or did not
                 answer the hello in time.
-            DaemonError: The daemon refused the hello, or speaks another
-                protocol version.
+            DaemonError: The daemon refused the hello: this process's
+                ``BIFF_RELAY_*`` settings differ from the ones biffd was started
+                with, or it speaks another protocol version.
         """
-        ClientEnvironment.require_no_relay_overrides(os.environ)
         token = run_dir.read_token()
         bound = cls._port(run_dir, port)
         ws = await cls._open(bound)

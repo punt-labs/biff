@@ -11,7 +11,6 @@ from biff.__main__ import app
 from biff.cli_daemon import DaemonCommand
 from biff.cli_daemon_wire import UnreadableReplyError
 from biff.client.connection import DaemonUnreachableError
-from biff.client.environment import UnsupportedOverrideError
 from biff.client.nudge import DaemonNudge
 from biff.commands import CommandResult
 from biff.daemon import methods as methods_module
@@ -334,14 +333,6 @@ def test_when_biffd_cannot_be_started_the_command_exits_1_with_the_design_messag
     nudge, _ = _nudge(outcome, port=None)
     result = _run_cli(nudge, tmp_path / "run", monkeypatch)
     assert (result.exit_code, message in result.output) == (1, True)
-
-
-async def test_the_daemon_path_refuses_relay_settings_in_the_environment(
-    harness: Harness, repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("BIFF_RELAY_URL", "nats://relay.invalid:4222")
-    with pytest.raises(UnsupportedOverrideError, match="BIFF_RELAY_URL"):
-        await _command(harness).call("who")
 
 
 async def test_a_stale_recorded_port_does_not_hide_a_healthy_daemon(

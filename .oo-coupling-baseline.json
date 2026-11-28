@@ -280,8 +280,8 @@
     "avg_lcom": 0.714
   },
   "src/biff/client/environment.py": {
-    "efferent_coupling": 0.0,
-    "public_names": 2.0,
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -567,7 +567,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/connection.py": {
-    "efferent_coupling": 13.0,
+    "efferent_coupling": 14.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.758,
@@ -588,7 +588,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/foreground.py": {
-    "efferent_coupling": 6.0,
+    "efferent_coupling": 7.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -735,7 +735,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/server.py": {
-    "efferent_coupling": 13.0,
+    "efferent_coupling": 14.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.6,
@@ -1008,7 +1008,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/frame_client.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 3.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -1531,6 +1531,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/biff/relay_seed.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 4.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.583,
+    "avg_lcom": 0.583
   },
   "src/biff/relay_select.py": {
     "efferent_coupling": 2.0,

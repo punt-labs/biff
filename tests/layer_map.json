@@ -168,6 +168,7 @@
   "biff.relay_check": "service",
   "biff.relay_config": "engine",
   "biff.relay_errors": "engine",
+  "biff.relay_seed": "wire",
   "biff.relay_select": "engine",
   "biff.repl_display": "cli",
   "biff.repl_notify": "cli",

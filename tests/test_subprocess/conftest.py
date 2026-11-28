@@ -13,7 +13,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Generator, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import pytest
 from fastmcp.client.transports import StdioTransport
@@ -156,10 +156,29 @@ def repo(tmp_path: Path) -> Path:
     return path
 
 
+class Biffd(NamedTuple):
+    """A running ``biff daemon serve`` process and where it keeps its files."""
+
+    run_dir: RunDir
+    proc: subprocess.Popen[bytes]
+    home: Path
+
+
 @pytest.fixture
-def run_dir(tmp_path: Path) -> Iterator[RunDir]:
+def biffd_environment() -> dict[str, str]:
+    """Variables biffd is started with, as a client that starts it would pass them."""
+    return {}
+
+
+@pytest.fixture
+def biffd(tmp_path: Path, biffd_environment: dict[str, str]) -> Iterator[Biffd]:
     """A real ``biff daemon serve`` process in a throwaway home directory."""
-    env = {**os.environ, "HOME": str(tmp_path), "PUNT_TELEMETRY": "off"}
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "PUNT_TELEMETRY": "off",
+        **biffd_environment,
+    }
     proc = subprocess.Popen(
         [sys.executable, "-m", "biff", "daemon", "serve", "--port", "0"],
         env=env,
@@ -171,6 +190,12 @@ def run_dir(tmp_path: Path) -> Iterator[RunDir]:
     while not run.port_path.exists():
         assert time.monotonic() < deadline, "daemon never wrote its port file"
         time.sleep(0.05)
-    yield run
+    yield Biffd(run, proc, tmp_path)
     proc.send_signal(signal.SIGTERM)
     proc.wait(timeout=10)
+
+
+@pytest.fixture
+def run_dir(biffd: Biffd) -> RunDir:
+    """The run directory of the real biffd process."""
+    return biffd.run_dir

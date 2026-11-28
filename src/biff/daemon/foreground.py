@@ -18,6 +18,7 @@ from biff.daemon.environment import DaemonEnvironment
 from biff.daemon.handshake_log import HandshakeLog
 from biff.daemon.session_store import CliSessionStore
 from biff.logging_config import configure_logging
+from biff.relay_seed import RelaySeed
 from biff.run_dir import RunDir
 from biff.supervision.biffd import PERMANENT_EXIT_STATUS
 
@@ -74,13 +75,19 @@ class Foreground:
                 "each session resolves its own",
                 err=True,
             )
+        # Names only: the values are secrets and never reach a log or a screen.
+        seed = RelaySeed.of(os.environ)
+        logger.info("biffd relay settings from its environment: %s", seed.describe())
         # Loaded here, after the line above: the relay stack is most of biffd's
         # start-up time, and a daemon that is still importing it has said so.
         server = import_module("biff.daemon.server")
         daemon = cast(
             "BiffDaemon",
             server.BiffDaemon(
-                run_dir=run_dir, port=self._port, sessions=CliSessionStore.default()
+                run_dir=run_dir,
+                port=self._port,
+                sessions=CliSessionStore.default(),
+                relay_seed=seed,
             ),
         )
         try:

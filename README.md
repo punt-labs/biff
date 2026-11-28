@@ -274,7 +274,7 @@ Each command is also available with the plugin prefix, for example `/biff:read`.
 
 ### CLI
 
-Every slash command has a matching `biff` subcommand. The CLI works outside Claude Code, in any terminal or SSH session. The product commands (`who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`, `status`) run through biffd, the per-user daemon: a command starts it when it is down, and `biff install` installs it as a user service. A command that cannot start it exits 1 and says why. The one exception is `biff wall` in a CI runner whose environment carries `BIFF_RELAY_*` settings (no session, no daemon): it talks to that relay directly: posting and clearing reach the configured repository and every repository of the configured organizations, showing reads the configured repository's wall only, and it exits 1 when the relay refuses.
+Every slash command has a matching `biff` subcommand. The CLI works outside Claude Code, in any terminal or SSH session. The product commands (`who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`, `status`) run through biffd, the per-user daemon: a command starts it when it is down, and `biff install` installs it as a user service. A command that cannot start it exits 1 and says why. The one exception is `biff wall` in a CI runner whose environment carries `BIFF_RELAY_*` settings (no session, no daemon): it talks to that relay directly: posting and clearing reach the configured repository and every repository of the configured organizations, showing reads the configured repository's wall only, and it exits 1 when the relay refuses. Every other command runs through biffd, which a command starts from its own environment where there is no service manager (a container): biffd then serves that environment's `BIFF_RELAY_*` settings, a later command with the same values or none is accepted, and one with different values is refused naming the variable. Under a systemd or launchd unit biffd has no such environment, so a command that carries `BIFF_RELAY_*` is refused; put the relay in `.punt-labs/biff/config.local.yaml` instead.
 
 | Command | What it does |
 |---------|--------------|
@@ -302,7 +302,7 @@ Setup and maintenance commands:
 | `biff enable` | Turn biff on for the current repo (see [Setup](#setup)) |
 | `biff disable` | Turn biff off for the current repo and remove what `enable` added |
 | `biff doctor` | Check the installation |
-| `biff daemon serve` | Run biffd, the per-user daemon, in the foreground (not yet used by other commands) |
+| `biff daemon serve` | Run biffd, the per-user daemon, in the foreground. It serves the `BIFF_RELAY_*` settings of the environment it is started in, and refuses a client whose own differ (see [Environment-variable relay overrides](docs/guides/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd)) |
 | `biff daemon install`, `uninstall` | Install or remove biffd's user service alone (systemd user unit, macOS LaunchAgent) |
 | `biff daemon start`, `stop`, `restart`, `status` | Control the service; `status` shows whether it is installed and running, and its version. `install`, `start` and `restart` wait up to 30 seconds for biffd to answer `/health` (set `BIFF_DAEMON_HEALTH_WAIT` to a number of seconds up to 600) and print one line to stderr when the wait passes 3 seconds; a biffd that is running but not yet answering exits 4 with `still starting`, not a failure; `status` also prints biffd's pid |
 | `biff install-statusline` | Add biff to your Claude Code status line |

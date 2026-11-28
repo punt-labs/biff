@@ -67,15 +67,27 @@ def test_serve_drops_its_own_identity_variables_and_names_them(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("BIFF_USER", "ambient")
-    monkeypatch.setenv("BIFF_RELAY_URL", "nats://ambient")
+    monkeypatch.setenv("BIFF_OWNER", "ambient")
     run = home / ".punt-labs" / "biff" / "run"
     run.mkdir(parents=True, mode=0o755)
     run.chmod(0o755)  # fail fast after the scrub, before binding
     result = runner.invoke(app, ["daemon", "serve", "--port", "0"])
     assert "BIFF_USER" in result.output
-    assert "BIFF_RELAY_URL" in result.output
+    assert "BIFF_OWNER" in result.output
     assert "BIFF_USER" not in os.environ
-    assert "BIFF_RELAY_URL" not in os.environ
+    assert "BIFF_OWNER" not in os.environ
+
+
+def test_serve_keeps_the_relay_settings_it_was_started_with(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BIFF_RELAY_URL", "nats://started-with")
+    run = home / ".punt-labs" / "biff" / "run"
+    run.mkdir(parents=True, mode=0o755)
+    run.chmod(0o755)  # fail fast after the scrub, before binding
+    result = runner.invoke(app, ["daemon", "serve", "--port", "0"])
+    assert "BIFF_RELAY_URL" not in result.output
+    assert os.environ["BIFF_RELAY_URL"] == "nats://started-with"
 
 
 def test_serve_writes_the_log_file_that_internal_errors_point_at(
