@@ -145,9 +145,10 @@
   read twice and `more` overstated what was left. A message whose ack is not
   confirmed is still returned, so mail is delivered at least once. A caller
   cancelled mid-fetch no longer loses the mail the server already removed: the
-  fetch runs on and files it back. A malformed frame's termination is confirmed
-  too, and a failed session drain restores the mail it consumed even when some
-  of the batch was still queued.
+  fetch runs on and files it back, and closing the relay waits for that. A
+  malformed frame's termination is confirmed too, and a failed session drain
+  restores the mail it consumed even when some of the batch was still queued,
+  without filing a second copy of mail it had already forwarded.
 - A daemon restart no longer forgets harness sessions, which stranded the mail
   waiting in their relay inbox. biffd keeps each harness session's record on disk
   (`~/.punt-labs/biff/harness-sessions/`), builds the sessions again at start, and

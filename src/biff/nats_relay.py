@@ -84,6 +84,7 @@ _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
 # relay caller
 _INITIAL_CONNECT_TIMEOUT = 5
+_FETCH_SETTLE_TIMEOUT = 5.0  # close() waits this long for mail a fetch consumed
 _TEARDOWN_TIMEOUT = 5.0  # bound nc.close()'s wait_closed() so a half-open socket
 # can't hold _connect_lock (taken by _force_reconnect) and freeze the poller
 # and heartbeat; the client is being discarded, so abandoning it is safe
@@ -460,6 +461,7 @@ class NatsRelay(InboxFetch):
         self._wtmp_prefix = f"{stream_prefix}.{repo_name}.wtmp"
         self._names_bucket = f"{stream_prefix}-names"
         self._nc: NatsClient | None = None
+        self._fetches: set[asyncio.Task[object]] = set()
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
         self._names_kv: KeyValue | None = None
@@ -1140,6 +1142,7 @@ class NatsRelay(InboxFetch):
         right here; a reconnect that arrives after sees ``_closed`` set
         inside the lock and never dials at all).
         """
+        await self._settle_fetches(_FETCH_SETTLE_TIMEOUT)
         async with self._connect_lock:
             self._closed = True
             if self._nc is not None:

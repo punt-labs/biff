@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
 from nats.errors import Error as NatsError
 from nats.js.api import ConsumerConfig
@@ -17,7 +17,7 @@ from biff.relay_errors import RELAY_ERRORS
 from biff.wtmp_reader import CONSUMER_INACTIVE_THRESHOLD, FETCH_BATCH, FETCH_TIMEOUT
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Coroutine
 
     from nats.aio.client import Client as NatsClient
     from nats.aio.msg import Msg
@@ -40,12 +40,13 @@ class InboxFetch(SessionRows):
     The caller that asked may be cancelled after that and before it holds the
     mail (a CLI deadline, a daemon stopping), so the fetch runs on to its end
     regardless, and mail whose caller left is filed again where it came from.
+    :meth:`_settle_fetches` waits for that work, so closing the relay does not
+    cut it off.
     """
 
     __slots__ = ()
 
-    _orphans: ClassVar[set[asyncio.Task[None]]] = set()
-
+    _fetches: set[asyncio.Task[object]]
     _subject_prefix: str
     _repo_name: str
     _nc: NatsClient | None
@@ -69,20 +70,44 @@ class InboxFetch(SessionRows):
         broadcast inbox).  The fetch is shielded: a caller cancelled before it
         returns does not stop it, and the mail it consumed is filed again.
         """
-        task = asyncio.ensure_future(self._consume(js, subject, durable, stream))
+        left = asyncio.Event()
+        task = self._track(self._consume_for(js, subject, durable, stream, left))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
-            task.add_done_callback(self._file_again)
+            left.set()
+            if task.done() and not task.cancelled() and task.exception() is None:
+                # Finished before it could see the caller leave.
+                self._track(self._refile(task.result()))
             raise
 
-    def _file_again(self, done: asyncio.Future[list[Message]]) -> None:
-        """File the mail of a fetch whose caller left, so the next fetch finds it."""
-        if done.cancelled() or done.exception() is not None:
-            return
-        refile = asyncio.ensure_future(self._refile(done.result()))
-        InboxFetch._orphans.add(refile)
-        refile.add_done_callback(InboxFetch._orphans.discard)
+    async def _settle_fetches(self, timeout: float) -> None:
+        """Wait up to *timeout* seconds for fetches and refiles still running."""
+        while pending := tuple(self._fetches):
+            _, left = await asyncio.wait(pending, timeout=timeout)
+            if left:
+                logger.warning("%d inbox fetches outlived the wait", len(left))
+                return
+
+    def _track[T](self, work: Coroutine[object, object, T]) -> asyncio.Task[T]:
+        task = asyncio.ensure_future(work)
+        self._fetches.add(task)
+        task.add_done_callback(self._fetches.discard)
+        return task
+
+    async def _consume_for(
+        self,
+        js: JetStreamContext,
+        subject: str,
+        durable: str,
+        stream: str,
+        left: asyncio.Event,
+    ) -> list[Message]:
+        """Consume, and file the mail again if the caller left meanwhile."""
+        messages = await self._consume(js, subject, durable, stream)
+        if left.is_set():
+            await self._refile(messages)
+        return messages
 
     async def _refile(self, messages: list[Message]) -> None:
         for message in messages:

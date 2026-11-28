@@ -37,25 +37,30 @@ class InboxDrain:
         """
         moved: set[uuid.UUID] = set()
         while batch := [m for m in await self.relay.fetch(key) if m.id not in moved]:
-            unmoved = list(batch)
             try:
                 for message in batch:
                     await MailTransfer(self.relay).forward(key, user, message)
                     moved.add(message.id)
-                    unmoved.remove(message)
             except BaseException:
-                await self._restore(key, unmoved)
+                await self._restore(key, batch, moved)
                 raise
 
-    async def _restore(self, key: str, unmoved: list[Message]) -> None:
-        """Put the mail *unmoved* left, and the probe consumed, back in the inbox.
+    async def _restore(
+        self, key: str, batch: list[Message], moved: set[uuid.UUID]
+    ) -> None:
+        """Put the mail of *batch* not yet *moved*, and the probe consumed, back.
 
-        A consuming relay no longer holds an unmoved message after ``fetch``,
+        A consuming relay no longer holds a batch message after ``fetch``,
         unless its ack was never confirmed and it is still queued.  A probe
         fetch finds exactly those, and consumes them with whatever else is
-        queued, so what goes back is the unmoved messages the probe did not
-        find, plus everything it consumed.  A relay that does not consume still
+        queued, so what goes back is the batch messages not moved, plus
+        everything the probe consumed.  A relay that does not consume still
         holds all of it, and nothing is re-delivered.
+
+        A message already in *moved* that the probe found (its ack was not
+        confirmed after the forward) is in the mailbox already.  Filing it
+        again under a new id would let a retry forward it under a new mailbox id,
+        a second copy, so it is dropped.
 
         Restored copies get ids derived from the originals, so repeating the
         restore cannot duplicate them.  One message can still be duplicated:
@@ -66,13 +71,16 @@ class InboxDrain:
         if not self.relay.consumes_on_fetch:
             return
         probe = await self.relay.fetch(key)
-        failed: list[uuid.UUID] = []
-        # By id: an unmoved message the probe found queued is one message.
-        for message in {m.id: m for m in [*unmoved, *probe]}.values():
-            try:
-                await self.relay.deliver(message.refiled())
-            except Exception:
-                failed.append(message.id)
-                logger.exception("Could not restore message %s", message.id)
-        if failed:
-            logger.error("Lost %d (tty=%s)", len(failed), key.partition(":")[2])
+        # By id: a batch message the probe found queued is one message.
+        restore = {m.id: m for m in [*batch, *probe] if m.id not in moved}
+        if lost := [m for m in restore.values() if not await self._refile(m)]:
+            logger.error("Lost %d (tty=%s)", len(lost), key.partition(":")[2])
+
+    async def _refile(self, message: Message) -> bool:
+        """File a copy of *message* in the inbox again; say whether it was filed."""
+        try:
+            await self.relay.deliver(message.refiled())
+        except Exception:
+            logger.exception("Could not restore message %s", message.id)
+            return False
+        return True
