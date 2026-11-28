@@ -47,6 +47,7 @@ from tests._mcp_golden import (
     last_table,
 )
 from tests._state import create_state
+from tests.test_daemon.talk_bus import TalkBus, TalkBusRelay
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
@@ -567,3 +568,50 @@ async def test_the_poll_status_says_when_biffd_cannot_be_asked(rig: _Rig) -> Non
         "Polling: active, interval=2s (2s)\n"
         "biffd: biffd is not installed. Run: biff install"
     )
+
+
+@asynccontextmanager
+async def _talking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncGenerator[tuple[_Rig, _Caller, _Caller]]:
+    """A daemon whose relay carries talk, and two named users on it."""
+    bus = TalkBus()
+
+    def build(resolved: ResolvedSession) -> Relay:
+        return TalkBusRelay(resolved.data_dir, bus)
+
+    async with _running(tmp_path, monkeypatch, build) as rig:
+        kai, eric = await rig.client("kai"), await rig.client("eric")
+        await kai.call("tty", name="kaitty")
+        await eric.call("tty", name="erictty")
+        yield rig, kai, eric
+
+
+async def test_a_conversation_runs_through_biffd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (rig, kai, eric):
+        await eric.call("talk", to="kai:kaitty", message="hello?")
+        invite = await kai.call("talk_listen", timeout=3)
+        accepted = await kai.call("talk", to="eric:erictty", message="hi")
+        reply = await eric.call("talk_listen", timeout=3)
+        ended = await kai.call("talk_end")
+
+    assert ("wants to talk" in invite, "hi" in reply) == (True, True)
+    assert (ended, {"talk", "talk_read", "talk_end"} <= set(rig.asked)) == (
+        "Talk session with eric ended.",
+        True,
+    )
+    assert accepted
+
+
+async def test_listening_with_nothing_to_hear_times_out_with_the_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _talking(tmp_path, monkeypatch) as (_rig, kai, _eric):
+        started = asyncio.get_running_loop().time()
+
+        text = await kai.call("talk_listen", timeout=1)
+        waited = asyncio.get_running_loop().time() - started
+
+    assert (text, 0.8 < waited < 3.0) == ("No pending talk activity.", True)

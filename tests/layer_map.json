@@ -286,5 +286,6 @@
   "biff.nats_session_rows": "engine",
   "biff.session_edit": "engine",
   "biff.server.daemon_calls": "server",
-  "biff.server.daemon_write_tools": "server"
+  "biff.server.daemon_write_tools": "server",
+  "biff.server.daemon_talk_tools": "server"
 }

@@ -11,6 +11,7 @@ from biff.config import ResolvedConfig, load_yaml_config, load_yaml_local, merge
 from biff.mcp_transport import McpTransport
 from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
+from biff.server.daemon_talk_tools import DaemonTalkTools
 from biff.server.daemon_tools import DaemonReadTools
 from biff.server.daemon_write_tools import DaemonWriteTools
 from biff.server.launch import McpLaunch
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 
 __all__ = ["McpAssembly"]
 
-_FAMILIES: Final = (DaemonReadTools, DaemonWriteTools)
+_FAMILIES: Final = (DaemonReadTools, DaemonWriteTools, DaemonTalkTools)
 _MOVED: Final = (
     "mcp.transport: daemon cannot be used with --data-dir or --relay-url: biffd "
     "resolves the relay from the repository, so the read tools would read another "
