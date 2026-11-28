@@ -36,7 +36,6 @@ from uuid import UUID
 from nats.aio.client import DEFAULT_CONNECT_TIMEOUT, Client as NatsClient
 from nats.errors import Error as NatsError
 from nats.js.api import (
-    ConsumerConfig,
     RetentionPolicy,
     StreamConfig,
 )
@@ -60,7 +59,7 @@ from biff.models import (
     WallPost,
 )
 from biff.nats_connection import NatsSupport, Scrub
-from biff.nats_session_rows import SessionRows
+from biff.nats_inbox_fetch import InboxFetch
 from biff.session_edit import SessionChangedError, SessionEdit
 from biff.tty import (
     SID_HINT_NAMESPACE,
@@ -69,9 +68,6 @@ from biff.tty import (
     validate_routing_id,
 )
 from biff.wtmp_reader import (
-    CONSUMER_INACTIVE_THRESHOLD,
-    FETCH_BATCH,
-    FETCH_TIMEOUT,
     WtmpReader,
 )
 
@@ -421,7 +417,7 @@ class _ConnectionHealth:
         return f"{time.monotonic() - self._last_ok:.0f}s"
 
 
-class NatsRelay(SessionRows):
+class NatsRelay(InboxFetch):
     """NATS-backed relay with JetStream messages and KV sessions.
 
     All infrastructure (KV bucket, stream) is provisioned lazily on the
@@ -1606,79 +1602,6 @@ class NatsRelay(SessionRows):
         server-side consumer instead of racing with ephemeral cleanup.
         """
         return f"{self._repo_name}-inbox-{session_key.replace(':', '-')}"
-
-    async def _fetch_from_subject(
-        self, js: JetStreamContext, subject: str, durable: str
-    ) -> list[Message]:
-        """Pull valid frames, ack them, and delete the consumer for a subject.
-
-        Shared implementation for :meth:`fetch` (TTY inbox) and
-        :meth:`fetch_user_inbox` (user broadcast inbox).  A valid frame is
-        acked (WORK_QUEUE deletes it); a malformed frame is ``term()``ed —
-        never acked — so a wire-integrity fault is not silently destroyed as
-        if delivered.  Each ack is confirmed by the server before the consumer
-        is deleted.
-        """
-        sub = await js.pull_subscribe(
-            subject,
-            durable=durable,
-            stream=self._stream_name,
-            config=ConsumerConfig(inactive_threshold=CONSUMER_INACTIVE_THRESHOLD),
-        )
-        try:
-            try:
-                raw_msgs = await sub.fetch(batch=FETCH_BATCH, timeout=FETCH_TIMEOUT)
-            except TimeoutError:
-                raw_msgs = []
-            finally:
-                await sub.unsubscribe()
-
-            messages: list[Message] = []
-            for raw in raw_msgs:
-                try:
-                    msg = Message.model_validate_json(raw.data)
-                except (ValidationError, ValueError) as exc:
-                    # A malformed frame must never be acked: ack removes it from
-                    # the WORK_QUEUE as if delivered, silently destroying the
-                    # evidence of a wire-integrity fault.  term() is JetStream's
-                    # poison-message signal — it stops redelivery (no nak DoS
-                    # loop on a persistently-bad frame) and emits a
-                    # MSG_TERMINATED advisory so the drop is observable off-box.
-                    #
-                    # Never interpolate str(exc): ValidationError.__str__ embeds
-                    # input_value == the raw frame body (private plaintext), and
-                    # term() then deletes the only other copy.  Log field
-                    # locations and error types only, with input/url/context
-                    # scrubbed (PII guard).
-                    logger.error(
-                        "Terminating malformed NATS frame in %s inbox (%d bytes): %s",
-                        ("user", "session")[
-                            subject.removeprefix(self._subject_prefix + ".").count(".")
-                        ],
-                        len(raw.data),
-                        Scrub.validation_error(exc),
-                    )
-                    await raw.term()
-                    continue
-                messages.append(msg)
-                try:
-                    # A plain ack may be unprocessed when the consumer is deleted
-                    # below, leaving the message in the stream to come back.
-                    await raw.ack_sync()
-                except (NatsError, TimeoutError):
-                    # It may come back; returning it now is at-least-once.
-                    logger.warning("%s in %s: ack unconfirmed", msg.id, self._repo_name)
-
-            return messages
-        finally:
-            # Delete consumer after use — frees the server-side slot.
-            # Broad except: any delete_consumer failure must not prevent
-            # returning already-acked messages (WORK_QUEUE deletes on ack).
-            # inactive_threshold provides backup cleanup.
-            try:
-                await js.delete_consumer(self._stream_name, durable)
-            except (NatsError, TimeoutError):
-                logger.debug("Consumer cleanup failed (will expire)")
 
     async def fetch(self, session_key: str) -> list[Message]:
         """Pull and ack all messages — WORK_QUEUE deletes them on ack."""

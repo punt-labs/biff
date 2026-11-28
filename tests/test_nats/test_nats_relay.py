@@ -150,6 +150,17 @@ class TestFetch:
         assert len(first) == 25
         assert await relay.fetch(f"eric:{_ERIC_TTY}") == []
 
+    async def test_a_malformed_frame_is_not_served_again(
+        self, relay: NatsRelay
+    ) -> None:
+        """A terminated frame stays out of the queue; the valid frame beside it is read."""
+        key = f"eric:{_ERIC_TTY}"
+        js, _ = await relay._ensure_connected()
+        await js.publish(relay._subject_for_key(key), b"not a message")
+        await relay.deliver(Message(from_user="kai", to_user=key, body="valid"))
+        assert [m.body for m in await relay.fetch(key)] == ["valid"]
+        assert await relay.fetch(key) == []
+
     async def test_oldest_first(self, relay: NatsRelay) -> None:
         await relay.deliver(
             Message(

@@ -48,12 +48,14 @@ class InboxDrain:
                 raise
 
     async def _restore(self, key: str, unmoved: list[Message]) -> None:
-        """Put *unmoved* back in the session inbox if the relay consumed them.
+        """Put the mail *unmoved* left, and the probe consumed, back in the inbox.
 
-        A consuming relay no longer holds them after ``fetch``, so a probe
-        fetch finds none of their ids and they are re-delivered, along with
-        anything the probe itself consumed.  A non-consuming relay still
-        holds them and the probe finds their ids, so nothing is re-delivered.
+        A consuming relay no longer holds an unmoved message after ``fetch``,
+        unless its ack was never confirmed and it is still queued.  A probe
+        fetch finds exactly those, and consumes them with whatever else is
+        queued, so what goes back is the unmoved messages the probe did not
+        find, plus everything it consumed.  A relay that does not consume still
+        holds all of it, and nothing is re-delivered.
 
         Restored copies get ids derived from the originals, so repeating the
         restore cannot duplicate them.  One message can still be duplicated:
@@ -61,12 +63,12 @@ class InboxDrain:
         lost acknowledgement) is restored too.  A copy is the safe side of
         that ambiguity; losing mail is not.
         """
-        probe = await self.relay.fetch(key)
-        held = {m.id for m in probe}
-        if any(m.id in held for m in unmoved):
+        if not self.relay.consumes_on_fetch:
             return
+        probe = await self.relay.fetch(key)
         failed: list[uuid.UUID] = []
-        for message in [*unmoved, *probe]:
+        # By id: an unmoved message the probe found queued is one message.
+        for message in {m.id: m for m in [*unmoved, *probe]}.values():
             try:
                 await self.relay.deliver(message.refiled())
             except Exception:

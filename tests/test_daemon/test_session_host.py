@@ -417,9 +417,26 @@ class _FailingMailbox(LocalRelay):
 class _ConsumingFetch(_FailingMailbox):
     """Models the NATS work queue: fetch removes what it returns."""
 
+    consumes_on_fetch = True
+
     async def fetch(self, session_key: str) -> list[Message]:
         unread = await super().fetch(session_key)
         await self.mark_read(session_key, [m.id for m in unread])
+        return unread
+
+
+class _UnconfirmedAck(_ConsumingFetch):
+    """A consuming relay whose ack of "two" is unconfirmed: it stays queued once."""
+
+    def __init__(self, data_dir: Path, *, fail_on: int) -> None:
+        super().__init__(data_dir, fail_on=fail_on)
+        self._queued_once = True
+
+    async def fetch(self, session_key: str) -> list[Message]:
+        unread = await _FailingMailbox.fetch(self, session_key)
+        keep = [m for m in unread if m.body == "two" and self._queued_once]
+        self._queued_once = False
+        await self.mark_read(session_key, [m.id for m in unread if m not in keep])
         return unread
 
 
@@ -446,6 +463,25 @@ class TestDrainFailure:
         )
         assert "Lost 1 (tty=safe-session-id)" in caplog.text
         assert "private-login" not in caplog.text
+
+    async def test_a_batch_of_consumed_and_unconfirmed_mail_loses_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """Forwarding fails on a batch where "two" is still queued, "three" is not."""
+        base = _host(tmp_path)
+        record = await base.create("alpha")
+        host = _with_relay(base, _UnconfirmedAck(tmp_path / "relay", fail_on=2))
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        for body in ("one", "two", "three"):
+            await host.relay.deliver(Message(from_user="eric", to_user=key, body=body))
+
+        with pytest.raises(ConnectionError):
+            await host.end(record)
+
+        in_mailbox = [m.body for m in await host.relay.fetch_user_inbox("kai")]
+        in_session = [m.body for m in await host.relay.fetch(key)]
+        assert in_mailbox == ["one"]
+        assert sorted(in_session) == ["three", "two"]
 
     @pytest.mark.parametrize("relay_cls", [_FailingMailbox, _ConsumingFetch])
     async def test_failed_drain_neither_duplicates_nor_loses(
