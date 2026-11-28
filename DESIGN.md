@@ -10099,4 +10099,3 @@ default, the next deletes the in-process server, the last deletes `biff serve`.
   avoids.
 - *Falling back to the in-process server when biffd cannot start.* A person would
   believe the daemon is in use; DES-101 refuses to fall back, and so does this.
-
