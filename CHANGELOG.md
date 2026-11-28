@@ -201,9 +201,11 @@
   already took, beyond its duplicate window, which a newly created inbox stream
   now keeps for 15 minutes instead of 2. `biff status` shows how many spilled,
   shelved and set-aside files there are.
+- `biff doctor` strips control and escape characters from every reason a
+  channel check was not sent, including the text of a refusal biffd relays, so
+  relay-derived bytes no longer reach the terminal.
 - A session the biffd presence row registers first saves its tty reclaim hint, so
   the MCP server that attaches next keeps the same tty address.
-
 - `biff doctor`'s channel check through biffd no longer always fails with
   "seconds must be an integer": the doctor sent its 30.0 s wait as a float. It
   sends whole seconds and biffd caps the wait at 25.
