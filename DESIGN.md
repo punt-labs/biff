@@ -9739,7 +9739,7 @@ the PR that deletes the in-process path.
 deleted in the last PR of the migration (`biff wall` keeps its direct CI path). `_suppress_nats_noise` stays: `biff daemon serve` and
 `biff mcp` run NATS in the process the same callback configures.
 
-## DES-101: `biff mcp` Reads Through biffd Behind `mcp.transport`
+## DES-101: `biff mcp` Goes Through biffd Behind `mcp.transport`
 
 **Date:** 2026-11-27
 **Status:** SETTLED
@@ -9773,11 +9773,10 @@ read-only tools (`who`, `finger`, `last`, `read_messages`) answered by biffd.
    and does the same. In-process the mail was marked read before the text was
    built. Rejected: confirming when the tool returns, which loses the mail when
    the send fails.
-5. **Hybrid until B2.** With `daemon` set, the write and talk tools still use the
-   server's own relay, so the process holds a connection; only the reads move.
-   `update_current_session` stays in the read tools (it stamps `last_tool_at`); a
-   daemon method that touches the session on a request replaces it. A read that
-   finds mail stamps activity too, as in-process: mail routing follows it.
+5. **Hybrid until the channel step.** With `daemon` set the process still holds its
+   own relay connection for the tool descriptions, the status line and the
+   channel events; every tool's answer comes from biffd. Activity is biffd's:
+   it touches the session on each request but a poll.
 6. **Where it applies.** Only to the stdio server: `biff serve` has no caller
    identity to give biffd and keeps its own relay. `--data-dir` and
    `--relay-url` are refused with the daemon transport (biffd resolves the relay
@@ -9790,6 +9789,26 @@ read-only tools (`who`, `finger`, `last`, `read_messages`) answered by biffd.
 7. **A fetch that fails halfway loses nothing.** `Inbox.unread` files the session
    mail again when the broadcast inbox cannot be fetched after a consuming relay
    already gave it up.
+
+**The write side (B2).** The same setting now serves the write and talk tools:
+`write`, `plan`, `mesg`, `tty`, `wall`, `talk`, `talk_read`, `talk_listen`,
+`talk_end`, plus `get_poll_status` (the cadence is this process's configuration,
+the counters are biffd's `status`). Each family registers from its `NAMES`
+(`server/daemon_tools.py`, `daemon_write_tools.py`, `daemon_talk_tools.py`) and
+`McpAssembly` replaces the in-process tools of the same names. What only this
+process can do it does around the call: the plan-gate marker and the expansion of
+a bead id (`plan`), the SessionStart wall marker, the display and the spoken wall
+(`wall`), the status-line flag (`mesg`), the claimed name for talk hints (`tty`).
+`talk_listen` looks at biffd every quarter second until something arrives; events
+replace the look in the channel step. After a talk call this process empties its
+own held talk state, so the description does not keep a `[TALK]` marker for mail
+biffd handed over.
+
+Three behaviours moved into the engine because the MCP text won where the two
+differed: an empty `write` address is answered in text (`WriteRouter.find`), an
+invalid `tty` name reads `Error: ...`, and `wall` posts from the session's tty
+name and takes a `repo`. biffd now counts a request as the session's activity
+(`Methods.call`), so the tools no longer stamp it themselves.
 
 **Layers.** `server` may import `client`, as `docs/design/biffd.md` says
 ("Package layout"); the policy change landed alone, as oo-ratchet requires.

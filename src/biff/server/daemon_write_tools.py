@@ -1,6 +1,5 @@
 """The tools that change something, answered by biffd.
 
-
 Each tool asks the daemon to run the command and returns the text of its reply
 unchanged; what only this process can do (the plan-gate marker, the status-line
 file, the tool descriptions) it does around the call.
