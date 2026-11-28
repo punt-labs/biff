@@ -132,6 +132,24 @@ class TestFetch:
         second = await relay.fetch(f"eric:{_ERIC_TTY}")
         assert second == []
 
+    async def test_a_large_fetch_consumes_every_message(self, relay: NatsRelay) -> None:
+        """Every acked message is gone when fetch returns, not just the first.
+
+        An ack the server had not processed when the consumer was deleted left
+        the message in the stream, so the next fetch returned it again.
+        """
+        for n in range(25):
+            await relay.deliver(
+                Message(
+                    from_user="kai",
+                    to_user=f"eric:{_ERIC_TTY}",
+                    body=f"letter {n:03d} " + "x" * 200,
+                )
+            )
+        first = await relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(first) == 25
+        assert await relay.fetch(f"eric:{_ERIC_TTY}") == []
+
     async def test_oldest_first(self, relay: NatsRelay) -> None:
         await relay.deliver(
             Message(

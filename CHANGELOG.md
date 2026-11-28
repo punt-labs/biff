@@ -139,6 +139,11 @@
 
 ### Fixed
 
+- A NATS read confirms each ack with the server before it deletes its consumer.
+  Acks were plain publishes the server could still be processing at that
+  moment, so a large inbox came back from the next read: messages were read
+  twice and `more` overstated what was left. A message whose ack is not
+  confirmed is still returned, so mail is delivered at least once.
 - biffd's heartbeat carries the plugin hook's per-session activity stamp
   (`~/.punt-labs/biff/unread/<session_id>.active`) into `last_tool_at`, as the
   in-process server does. Without it, a session working through Bash and Edit

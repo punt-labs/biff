@@ -1616,9 +1616,8 @@ class NatsRelay(SessionRows):
         :meth:`fetch_user_inbox` (user broadcast inbox).  A valid frame is
         acked (WORK_QUEUE deletes it); a malformed frame is ``term()``ed —
         never acked — so a wire-integrity fault is not silently destroyed as
-        if delivered.  Acks are fire-and-forget in nats.py, so we
-        flush before deleting the consumer to ensure the server has processed
-        all acks.
+        if delivered.  Each ack is confirmed by the server before the consumer
+        is deleted.
         """
         sub = await js.pull_subscribe(
             subject,
@@ -1662,14 +1661,13 @@ class NatsRelay(SessionRows):
                     await raw.term()
                     continue
                 messages.append(msg)
-                await raw.ack()
-
-            # Acks are fire-and-forget publishes in nats.py.  Flush
-            # ensures the server has received all acks before we delete
-            # the consumer — otherwise the WORK_QUEUE message removal
-            # can race with consumer deletion.
-            if raw_msgs and self._nc is not None:
-                await self._nc.flush()
+                try:
+                    # A plain ack may be unprocessed when the consumer is deleted
+                    # below, leaving the message in the stream to come back.
+                    await raw.ack_sync()
+                except (NatsError, TimeoutError):
+                    # It may come back; returning it now is at-least-once.
+                    logger.warning("%s in %s: ack unconfirmed", msg.id, self._repo_name)
 
             return messages
         finally:
@@ -1743,15 +1741,13 @@ class NatsRelay(SessionRows):
         user_subject = self._user_subject(user)
 
         tty_count = user_count = 0
-        try:
+        with suppress(NotFoundError):
             tty_info = await self._tracked(
                 "stream_info",
                 js.stream_info(self._stream_name, subjects_filter=tty_subject),
             )
             if tty_info.state.subjects:
                 tty_count = tty_info.state.subjects.get(tty_subject, 0)
-        except NotFoundError:
-            pass
         # Re-anchor to the current connection: the first _tracked's await
         # may have let a concurrent loop rebuild self._nc, leaving `js`
         # stale.  Fast path returns cached handles, so `owner = self._nc` at

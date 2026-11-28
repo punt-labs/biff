@@ -34,7 +34,7 @@ def _raw(data: bytes) -> MagicMock:
     """A JetStream ``Msg`` stand-in recording ack/term calls."""
     raw = MagicMock()
     raw.data = data
-    raw.ack = AsyncMock()
+    raw.ack_sync = AsyncMock()
     raw.term = AsyncMock()
     return raw
 
@@ -85,7 +85,7 @@ class TestMalformedFrameNotSilentlyDropped:
         messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
 
         assert messages == []
-        bad.ack.assert_not_awaited()  # never acked-and-deleted as if delivered
+        bad.ack_sync.assert_not_awaited()  # never acked-and-deleted as if delivered
         bad.term.assert_awaited_once()  # dead-lettered via JetStream term
         assert any(
             r.levelno == logging.ERROR and "malformed" in r.getMessage().lower()
@@ -99,8 +99,18 @@ class TestMalformedFrameNotSilentlyDropped:
         messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
 
         assert [m.body for m in messages] == ["ok"]
-        good.ack.assert_awaited_once()  # WORK_QUEUE deletes on ack
+        good.ack_sync.assert_awaited_once()  # WORK_QUEUE deletes on ack
         good.term.assert_not_awaited()
+
+    async def test_an_unconfirmed_ack_still_returns_the_message(self) -> None:
+        """Delivered at least once: an ack the server did not confirm drops nothing."""
+        good = _raw(_valid_payload("keep"))
+        good.ack_sync = AsyncMock(side_effect=TimeoutError)
+        relay, js = _relay_with([good])
+
+        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+
+        assert [m.body for m in messages] == ["keep"]
 
     async def test_mixed_batch_terms_bad_acks_good(self) -> None:
         good = _raw(_valid_payload("keep"))
@@ -110,9 +120,9 @@ class TestMalformedFrameNotSilentlyDropped:
         messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
 
         assert [m.body for m in messages] == ["keep"]
-        good.ack.assert_awaited_once()
+        good.ack_sync.assert_awaited_once()
         good.term.assert_not_awaited()
-        bad.ack.assert_not_awaited()
+        bad.ack_sync.assert_not_awaited()
         bad.term.assert_awaited_once()
 
 
@@ -154,6 +164,6 @@ class TestMalformedFrameLogDoesNotLeakContent:
 
         assert messages == []
         bad.term.assert_awaited_once()  # still poison-terminated
-        bad.ack.assert_not_awaited()
+        bad.ack_sync.assert_not_awaited()
         for record in caplog.records:
             assert _SENTINEL not in record.getMessage()
