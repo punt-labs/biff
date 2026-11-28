@@ -226,9 +226,10 @@ async def test_a_new_relay_client_gets_a_new_subscription(
 ) -> None:
     subject = await _subject(pair.eric)
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
-    before = bus.subscribes
+    before = bus.subscribes_to(subject)
     bus.relays[0].generation += 1  # the relay dialled a fresh client
-    await _eventually(lambda: bus.subscribes > before)  # the new one is queued...
+    # Eric's own new subscription is queued...
+    await _eventually(lambda: bus.subscribes_to(subject) > before)
     # ...and the old one is already released, so one subscription means the new
     # one is confirmed: a frame sent earlier would be lost (core NATS has no replay).
     await _eventually(lambda: bus.subscriber_count(subject) == 1)
@@ -306,8 +307,8 @@ async def test_a_failing_resubscribe_warns_once_then_recovers(
         key = subject.removeprefix("talk.notify.")
         await _eventually(lambda: relay.failed_dials[key] >= 3)  # many ticks fail
         relay.down = False
-        before = bus.subscribes
-        await _eventually(lambda: bus.subscribes > before)
+        before = bus.subscribes_to(subject)
+        await _eventually(lambda: bus.subscribes_to(subject) > before)
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 2  # once per session, however many ticks failed
     assert "recovered" in caplog.records[-1].getMessage()

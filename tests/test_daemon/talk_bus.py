@@ -47,7 +47,7 @@ class TalkBus:
     def __init__(self) -> None:
         self._subscribers: dict[str, list[Callback]] = {}
         self.published: list[tuple[str, bytes]] = []
-        self.subscribes = 0
+        self.subscribed: Counter[str] = Counter()  # per subject
         self.broken = False
         self.subscribe_delay = 0.0
         self.subscribe_block: asyncio.Event | None = None
@@ -69,7 +69,7 @@ class TalkBus:
         await asyncio.sleep(self.subscribe_delay)
         if self.subscribe_block is not None:
             await self.subscribe_block.wait()
-        self.subscribes += 1
+        self.subscribed[subject] += 1
         # As with NATS, the server acts on the subscription only once the client
         # has flushed it: until then a frame for the subject is lost.
         self._queued.append((subject, cb))
@@ -95,6 +95,15 @@ class TalkBus:
 
     def total_subscribers(self) -> int:
         return sum(len(callbacks) for callbacks in self._subscribers.values())
+
+    def subscribes_to(self, subject: str) -> int:
+        """Return how many subscriptions to *subject* were ever requested.
+
+        Counted per subject on purpose: every session on the relay resubscribes when
+        its generation rises, so a total would rise for a neighbour's subscription
+        while this subject still holds its old one.
+        """
+        return self.subscribed[subject]
 
     def subscriber_count(self, subject: str) -> int:
         return len(self._subscribers.get(subject, []))
