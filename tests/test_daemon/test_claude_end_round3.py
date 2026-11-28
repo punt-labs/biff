@@ -37,9 +37,15 @@ class CappedRelay(ConsumingRelay):
 class SlowForwardingRelay(CappedRelay):
     """A capped relay whose every publish takes 3 ms, as a loaded server's does."""
 
-    async def deliver(self, message: Message) -> None:
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
         await asyncio.sleep(0.003)
-        await super().deliver(message)
+        await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
 
 
 # The test is about volume, not the timeout: 250 forwards at 3 ms take 0.75 s,
