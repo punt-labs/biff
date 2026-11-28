@@ -284,6 +284,12 @@
 
 ### Changed
 
+- `biff mcp` and the Claude Code SessionStart and SessionEnd hooks go through biffd
+  by default: `mcp.transport` (and `BIFF_MCP_TRANSPORT`) defaults to `daemon`.
+  Set `inprocess` to keep the in-process server for now; it is deleted in the next
+  release of the migration, with the setting. `--data-dir` and `--relay-url` are
+  refused with the daemon transport (biffd resolves the relay from the repository);
+  set `mcp.transport: inprocess` to use them until then.
 - `biff session new`, `ls`, `use` and `end` run in biffd, which now owns the
   session records. The CLI keeps only the repo pointer and the `-s` name. biffd
   sweeps stale records once at start and every 10 minutes, for every repository
