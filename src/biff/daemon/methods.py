@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from biff import commands
+from biff.daemon.channel_check_methods import ChannelCheckMethods
 from biff.daemon.params import Params
 from biff.daemon.plan_method import PlanMethod
 from biff.daemon.read_batch import ReadBatcher
@@ -89,6 +90,7 @@ class Methods:
             "talk": TalkMethods.talk,
             "talk_read": TalkMethods.talk_read,
             "talk_end": TalkMethods.talk_end,
+            "channel_check": ChannelCheckMethods.check,
         }
         return self
 

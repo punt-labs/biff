@@ -7,6 +7,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Protocol, Self, cast, final, runtime_checkable
 
+from biff.channel_check_wire import CheckRequest
+from biff.daemon.check_hop import CheckHop
 from biff.daemon.tasks import Supervised
 from biff.daemon.wakes import Wakes
 from biff.relay_errors import RELAY_ERRORS
@@ -38,6 +40,10 @@ class PushTransport(Protocol):
         """Return the subject a targeted message's wake poke rides."""
         ...
 
+    def channel_check_subject(self, session_key: str) -> str:
+        """Return the subject a doctor's channel check request rides."""
+        ...
+
     def inbox_notify_subject(self, repo: str, user: str) -> str:
         """Return the subject a broadcast message's wake poke rides."""
         ...
@@ -66,6 +72,7 @@ class PushFeed:
     """
 
     __slots__ = (
+        "_checks",
         "_generation",
         "_handles",
         "_interval",
@@ -83,6 +90,7 @@ class PushFeed:
     _user: str
     _repo: str
     _wakes: Wakes
+    _checks: CheckHop
     _interval: float
     _handles: list[TalkSubscription]
     _generation: int
@@ -105,6 +113,7 @@ class PushFeed:
         self._user = user
         self._repo = repo
         self._wakes = Wakes()
+        self._checks = CheckHop()
         self._interval = interval
         self._handles = []
         self._generation = 0
@@ -127,6 +136,11 @@ class PushFeed:
     def wakes(self) -> Wakes:
         """The wake flags this feed sets."""
         return self._wakes
+
+    @property
+    def checks(self) -> CheckHop:
+        """The channel check this feed's requests are made into."""
+        return self._checks
 
     def start(self) -> None:
         """Begin feeding, unless running or the relay pushes nothing."""
@@ -164,6 +178,7 @@ class PushFeed:
             generation = relay.connection_generation
             taps: tuple[tuple[str, Callable[[TalkMessage], Awaitable[None]]], ...] = (
                 (relay.talk_notify_subject(self._session_key), self._on_talk),
+                (relay.channel_check_subject(self._session_key), self._on_check),
                 (relay.inbox_notify_subject(self._repo, self._user), self._on_poke),
                 (relay.wall_notify_subject(self._repo), self._on_poke),
             )
@@ -184,6 +199,15 @@ class PushFeed:
                 await handle.unsubscribe()
             except RELAY_ERRORS:
                 logger.debug("push unsubscribe failed", exc_info=True)
+
+    async def _on_check(self, msg: TalkMessage) -> None:
+        """Turn a doctor's request into a token, or drop what is not a request."""
+        try:
+            request = CheckRequest.from_payload(msg.data)
+        except ValueError:
+            logger.debug("channel check request dropped: malformed", exc_info=True)
+            return
+        self._checks.request(request.reply)
 
     async def _on_poke(self, _msg: TalkMessage) -> None:
         self._wakes.poke()

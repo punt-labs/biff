@@ -4,6 +4,10 @@
 
 ### Added
 
+- biffd carries the channel check: a doctor's request on a session's check subject
+  becomes one `channel_check_request` event (a 128-bit token, at most one request a
+  minute), the new `channel_ack` method relays one acknowledgement to the doctor,
+  and `channel_check` lets `biff doctor` ask through the daemon.
 - biffd pushes the arrival notice: it subscribes to the relay's wake pokes for mail
   and walls, so a mail or wall event reaches a subscribed client at once instead
   of at the next poll. A repeated or lost push changes nothing; the poll still

@@ -365,6 +365,8 @@ daemon. The in-process MCP text is the oracle for every text a method returns.
 | `status` | `relay_counters` | `{"attempts": int, "timeouts": int}` for a relay that counts its requests (NATS), `null` for the local relay. The counters are the daemon's relay for the session's repository, shared by every session on it, so they count since the relay was opened, not since one client started. The status text is unchanged. |
 | `end` | none | Ends the caller's own harness session (`claude-session-end.tex`, `EndOwnSession`). A connection of the current run only: one of a replaced run is refused `session_replaced` and nothing changes; a shell session is refused `invalid_params` and ends with `session_end`. New requests are refused and those running are waited for, then, each idempotent: held and unread mail is forwarded to the user mailbox (a consuming relay's mail is held in the outbox until forwarded, so a relay that drops keeps it), the row is deleted, mail accepted meanwhile is forwarded, the tty name is released by compare-and-delete, a `logout` is appended. The record is dropped only when all are done; a step that fails leaves it and lifts the refusal, and the next `end` finishes. Afterwards every request of the session answers `session_ended`, and a second `end` succeeds and does nothing. |
 | `arrivals` | none | The snapshot a client starts from or checks against, read-only (`notification-mail-event.tex`: it marks no mail read): `data` `{mark, unread, wall, invites, talk_pending}`. `mark` is the high-water mark of the session's inbox; `unread` is the relay's count plus the mail the daemon holds; `wall` is the active wall or `null`; `invites` lists `{from, tty}` of pending talk invites and `talk_pending` counts queued talk frames. The `mail` event now carries `{count, mark}`; the mark orders what a client was told. |
+| `channel_ack` | `token` | The model's acknowledgement of a channel check (`channel-check.tex`, `Acknowledge`). The pending token is spent and one acknowledgement is relayed to the doctor's reply subject; a wrong or repeated token changes nothing and answers `biff channel token not accepted; nothing changed.` A relayed acknowledgement answers `biff channel live.` |
+| `channel_check` | `to` (`user:tty`), `seconds` (at most 25) | The doctor's ask: publish a request to the session's check subject through the daemon's relay and wait for its acknowledgement. `data` `{"confirmed": bool}`. A relay without NATS answers an error. |
 
 **The heartbeat carries the activity stamp.** The PostToolUse hook touches
 `<unread_dir>/<session_id>.active` after every tool call, and DES-097 has the
@@ -395,6 +397,16 @@ covered by the interval, and the pass reads every kind, so a kind that keeps
 arriving cannot starve another (`PushWake` and `PollWake` in
 `notification-mail-event.tex`). The feed subscribes again when the relay dials a
 new client, as the talk feed does.
+
+**The channel check hop.** A doctor's request reaches the daemon on the session's
+check subject (`PushFeed`). `CheckHop` accepts it as `Request` does: a reply that is
+an inbox, at most one request a minute, a fresh 128-bit token that retires the
+older. Every subscription of the session is sent one `channel_check_request` event
+`{"token"}`; a subscription that starts while a token is pending is sent it too,
+so delivery to the client is at least once, and the client makes one channel event
+per token. `channel_ack` spends the token and relays the acknowledgement once; a
+request frame replayed after the acknowledgement makes no event and no second
+acknowledgement, because the token is spent.
 
 ## Z specification obligations
 

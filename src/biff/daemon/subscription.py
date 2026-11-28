@@ -69,11 +69,18 @@ class Subscription:
         whenever a push wakes it; talk arrivals are pushed by the session's talk
         feed, so a conversation is not paced by the interval.
         """
-        with self._session.wakes.listen() as wake:
+        push = self._session.push
+        with push.wakes.listen() as wake, push.checks.listen() as checks:
             poll = ArrivalPoll(self._session, self._emit, self._interval, wake)
             async with asyncio.TaskGroup() as group:
                 group.create_task(poll.run())
                 group.create_task(self._session.talk.announce(self._emit))
+                group.create_task(self._announce_checks(checks))
+
+    async def _announce_checks(self, tokens: asyncio.Queue[str]) -> None:
+        """Send each channel check token, the pending one first: at least once."""
+        while True:
+            await self._emit("channel_check_request", {"token": await tokens.get()})
 
     async def _emit(self, kind: EventKind, data: JsonValue) -> None:
         await self._send(Event(seq=next(self._seq), kind=kind, data=data))

@@ -2,18 +2,45 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
 from typing import TYPE_CHECKING, final
 
+from biff.channel_check_wire import CheckAck, CheckRequest
 from tests.test_daemon.talk_bus import TalkBusRelay
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from biff.models import Message, WallPost
-    from tests.test_daemon.talk_bus import TalkBus
+    from tests.test_daemon.talk_bus import BusMessage, TalkBus
 
 logger = logging.getLogger(__name__)
+
+
+@final
+class FakePending:
+    """The doctor's wait for one session's acknowledgement."""
+
+    def __init__(self, session_key: str) -> None:
+        self._session_key = session_key
+        self._acks: asyncio.Queue[CheckAck] = asyncio.Queue()
+
+    async def receive(self, msg: BusMessage) -> None:
+        self._acks.put_nowait(CheckAck.from_payload(msg.data))
+
+    async def confirmed(self, timeout: float) -> bool:
+        try:
+            async with asyncio.timeout(timeout):
+                while (await self._acks.get()).session_key != self._session_key:
+                    continue
+        except TimeoutError:
+            return False
+        return True
+
+    async def close(self) -> None:
+        """Nothing to release."""
 
 
 @final
@@ -49,6 +76,22 @@ class PushRelay(TalkBusRelay):
     async def set_wall(self, wall: WallPost | None) -> None:
         await super().set_wall(wall)
         await self._poke(self.wall_notify_subject("test"))
+
+    async def publish_channel_check_ack(
+        self, reply: str, session_key: str, token: str
+    ) -> None:
+        await self._poke_bus.publish(reply, CheckAck(session_key, token).to_payload())
+
+    async def request_channel_check(self, session_key: str) -> FakePending:
+        """Publish a doctor's request as the NATS relay does, and wait on its reply."""
+        reply = f"_INBOX.{uuid.uuid4().hex}"
+        pending = FakePending(session_key)
+        await self._poke_bus.subscribe(reply, pending.receive)
+        await self._poke_bus.flush()
+        await self._poke_bus.publish(
+            self.channel_check_subject(session_key), CheckRequest(reply).to_payload()
+        )
+        return pending
 
     async def _poke(self, subject: str) -> None:
         """Publish best effort: a lost poke never fails the delivery."""

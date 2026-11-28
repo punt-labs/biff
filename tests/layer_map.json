@@ -60,6 +60,8 @@
   "biff.daemon.app": "daemon",
   "biff.daemon.attachment": "daemon",
   "biff.daemon.cli": "daemon",
+  "biff.daemon.channel_check_methods": "daemon",
+  "biff.daemon.check_hop": "daemon",
   "biff.daemon.connection": "daemon",
   "biff.daemon.environment": "daemon",
   "biff.daemon.foreground": "daemon",

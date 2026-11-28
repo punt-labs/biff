@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from biff.daemon.relays import RelayPool, RelayTarget, ResolvedSession
-    from biff.daemon.wakes import Wakes
     from biff.frame_client import Hello
     from biff.relay import Relay
 
@@ -208,9 +207,9 @@ class Session:
         return self._talk
 
     @property
-    def wakes(self) -> Wakes:
-        """The flags the relay's pushes of mail and wall arrivals set."""
-        return self._push.wakes
+    def push(self) -> PushFeed:
+        """The session's push subscriptions: wakes for its poll, channel checks."""
+        return self._push
 
     @property
     def is_dormant(self) -> bool:
