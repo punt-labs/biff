@@ -6,7 +6,13 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, final
 
-from biff._stdlib import biff_data_dir, find_git_root, get_repo_slug, sanitize_repo_name
+from biff._stdlib import (
+    biff_data_dir,
+    find_git_root,
+    get_repo_common_root,
+    get_repo_slug,
+    sanitize_repo_name,
+)
 from biff.client.connection import ClientIdentity
 from biff.client.host import HostConnector
 from biff.models import UnreadSummary
@@ -96,7 +102,7 @@ class DaemonSessionOpener:
         key = str(status["session_key"])
         root = find_git_root(Path(where)) or Path(where)
         repo_name = sanitize_repo_name(get_repo_slug(root) or root.name)
-        write_marker(repo_name, key, str(root))
+        write_marker(repo_name, key, get_repo_common_root(where))
         write_unread_file(
             routing.unread_path(self._unread_dir),
             UnreadSummary(count=0),

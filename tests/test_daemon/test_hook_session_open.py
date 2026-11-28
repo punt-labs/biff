@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
+from biff._stdlib import active_dir
 from biff.client.connection import ClientIdentity, DaemonClient
 from biff.plugins.claude_code.daemon_session import DaemonSessionOpener
 from biff.relay import LocalRelay
@@ -88,3 +90,39 @@ async def test_open_gives_up_at_its_deadline_when_biffd_does_not_answer(
 
     with pytest.raises(TimeoutError):
         await opener.open({"session_id": "sess-1", "cwd": str(tmp_path)})
+
+
+async def test_open_records_the_repo_common_root_in_the_active_marker(
+    harness: Harness, tmp_path: Path
+) -> None:
+    repo = tmp_path / "work" / "repo"
+    repo.mkdir(parents=True)
+    git = [
+        "git",
+        "-C",
+        str(repo),
+        "-c",
+        "user.email=t@e",
+        "-c",
+        "user.name=t",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    subprocess.run([*git, "init", "-q"], check=True)  # noqa: S603
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)  # noqa: S603
+    linked = tmp_path / "linked"
+    subprocess.run([*git, "worktree", "add", "-q", str(linked)], check=True)  # noqa: S603
+    opener = DaemonSessionOpener(
+        connect=_connector(harness),
+        unread_dir=tmp_path / "unread",
+        handles=SessionHandleStore(tmp_path / "sessions"),
+        deadline=5.0,
+    )
+
+    # From a linked worktree the marker still names the main checkout, the one
+    # root every worktree of the repo shares, as collision detection compares.
+    key = await opener.open({"session_id": "sess-1", "cwd": str(linked)})
+
+    assert key is not None
+    marker = active_dir() / key.replace(":", "-")
+    assert marker.read_text().splitlines()[2] == str(repo.resolve())

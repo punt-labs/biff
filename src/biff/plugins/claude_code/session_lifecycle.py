@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Self, final
 
-from biff._stdlib import get_repo_common_root
+from biff._stdlib import find_git_root
 from biff.mcp_transport import McpTransport
 from biff.plugins.claude_code.daemon_session import DaemonSessionOpener
 from biff.plugins.claude_code.daemon_session_end import DaemonSessionCloser
@@ -53,8 +53,9 @@ class SessionLifecycle:
     def end_through_biffd(self) -> bool:
         """End the session the payload names through biffd, if the transport says so.
 
-        Returns whether biffd was asked; ``False`` leaves the in-process cleanup
-        to the caller.
+        Returns whether the end was handled here; ``False`` leaves the in-process
+        cleanup to the caller.  A ``resume`` end is handled by doing nothing: the
+        session carries on under the same id.
 
         Raises:
             ConnectionError: biffd is absent, cannot start, or sent an
@@ -63,6 +64,10 @@ class SessionLifecycle:
         """
         if not isinstance(self._data.get("session_id"), str):
             return False
+        if self._data.get("reason") == "resume":
+            # The same session id starts again at once; this end may run after
+            # that start, and must not close the session it just reopened.
+            return self._transport() is McpTransport.DAEMON
         if self._transport() is not McpTransport.DAEMON:
             return False
         asyncio.run(DaemonSessionCloser.for_host().end(self._data))
@@ -70,5 +75,7 @@ class SessionLifecycle:
 
     def _transport(self) -> McpTransport:
         cwd = self._data.get("cwd")
-        root = get_repo_common_root(cwd if isinstance(cwd, str) and cwd else None)
-        return RepoTransport.of(Path(root) if root else None, os.environ)
+        # The checkout's own root, as the MCP server reads it: a linked worktree
+        # carries its own config files, which may choose another transport.
+        root = find_git_root(Path(cwd) if isinstance(cwd, str) and cwd else None)
+        return RepoTransport.of(root, os.environ)
