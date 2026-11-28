@@ -177,6 +177,17 @@ class BiffDaemon:
         self._spill_task = Supervised.spawn(
             self._spill.keep_filing(self._core), "spill retry"
         )
+        try:
+            await self._listen()
+        except BaseException:
+            # A start that fails leaves nothing running: stop() is not called.
+            refiling, self._spill_task = self._spill_task, None
+            refiling.cancel()
+            await asyncio.gather(refiling, return_exceptions=True)
+            raise
+
+    async def _listen(self) -> None:
+        """Restore the sessions, bind the listener and record its port."""
         await self._restore.run()
         handler = ConnectionHandler(self._run_dir.ensure_token(), self._core)
         self._server = await serve(

@@ -35,7 +35,7 @@ class Outbox:
 
     _held: dict[uuid.UUID, Message]
     _retains: bool
-    _sink: Callable[[Sequence[Message]], None] | None
+    _sink: Callable[[Sequence[Message]], object] | None
 
     def __new__(cls, *, retains: bool) -> Self:
         """Create an empty outbox; *retains* is whether the relay consumes on fetch."""
@@ -73,7 +73,7 @@ class Outbox:
             fetched = list(self._held.values())
         return sorted(fetched, key=lambda m: (m.timestamp, m.id))
 
-    def seal(self, sink: Callable[[Sequence[Message]], None]) -> None:
+    def seal(self, sink: Callable[[Sequence[Message]], object]) -> None:
         """Stop holding: what is fetched from now on goes to *sink*.
 
         For a daemon that is stopping: it gives back what is held, and a fetch

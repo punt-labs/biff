@@ -48,7 +48,11 @@ class Handback:
     """The most the stop waits for the listener to close its connections."""
     SETTLE_SECONDS: ClassVar[float] = 5.0
     REFILE_SECONDS: ClassVar[float] = 15.0
-    STOP_SECONDS: ClassVar[float] = CLOSE_SECONDS + SETTLE_SECONDS + REFILE_SECONDS
+    POOL_CLOSE_SECONDS: ClassVar[float] = 8.0
+    """The most the stop waits for the relays to close (they close in parallel)."""
+    STOP_SECONDS: ClassVar[float] = (
+        CLOSE_SECONDS + SETTLE_SECONDS + REFILE_SECONDS + POOL_CLOSE_SECONDS
+    )
     LOCK_SECONDS: ClassVar[float] = 2.0
     """How long to wait for a read of a session to let go of it before spilling."""
 
@@ -60,25 +64,35 @@ class Handback:
         that are left, and the mail held so far is given back, within
         :attr:`REFILE_SECONDS` in all.  Whatever could not be given back, or
         arrives from a read that ends later, goes to *spill* for the next start.
-        The relays are closed even if giving the mail back raised.
+        The relays are closed even if giving the mail back raised, within
+        :attr:`POOL_CLOSE_SECONDS`: a relay on a half-open network must not keep
+        the stop past the supervisor's deadline.
         """
         try:
             await Uncancellable.settle(Handback.SETTLE_SECONDS)
             await Handback._give_back(core, spill)
         finally:
-            await core.pool.close()
+            try:
+                async with asyncio.timeout(Handback.POOL_CLOSE_SECONDS):
+                    await core.pool.close()
+            except TimeoutError:
+                logger.warning(
+                    "the relays did not close within %g s; stopping anyway",
+                    Handback.POOL_CLOSE_SECONDS,
+                )
 
     @staticmethod
     async def _give_back(core: DaemonCore, spill: Spill) -> None:
         """Spill everything held, then file it back and remove what was filed."""
         core.sessions.seal(spill.hold)  # after the wait; sessions made later too
         sessions = core.sessions.snapshot()
-        Handback._spill_all(sessions.values(), spill)  # the durable copy first
+        # The durable copy first.
+        unspilled = Handback._spill_all(sessions.values(), spill)
         try:
             async with asyncio.timeout(Handback.REFILE_SECONDS):
                 for key, session in sessions.items():
                     try:
-                        await Handback._refile_one(session, spill)
+                        await Handback._refile_one(session, spill, unspilled)
                     except RELAY_ERRORS:
                         logger.warning(
                             "could not give back the mail held for session %s",
@@ -87,13 +101,24 @@ class Handback:
                         )
         except TimeoutError:
             logger.error(
-                "%d held messages were not given back within %g s; they are spilled",
+                "%d held messages were not given back within %g s; %s",
                 sum(len(s.outbox) for s in sessions.values()),
                 Handback.REFILE_SECONDS,
+                Handback._where(unspilled),
             )
 
     @staticmethod
-    async def _refile_one(session: Session, spill: Spill) -> None:
+    def _where(unspilled: set[str]) -> str:
+        """Say where the mail that was not given back is, from what was spilled."""
+        if not unspilled:
+            return "it is in the spill"
+        return (
+            "the mail of sessions "
+            f"{', '.join(sorted(unspilled))} could not be spilled and is in memory only"
+        )
+
+    @staticmethod
+    async def _refile_one(session: Session, spill: Spill, unspilled: set[str]) -> None:
         """Give back *session*'s held mail while no read of it is mid-fetch.
 
         A read fetching under the session's lock could take the copy this files
@@ -109,9 +134,12 @@ class Handback:
                     await held.enter_async_context(session.exclusive())
             except TimeoutError:
                 logger.warning(
-                    "a read of session %s is still fetching; its held mail stays "
-                    "in the spill",
+                    "a read of session %s is still fetching; its held mail is not "
+                    "given back, and %s",
                     session.session_id,
+                    "it stays in the spill"
+                    if session.session_id not in unspilled
+                    else "it could not be spilled and is in memory only",
                 )
                 return
             before = session.outbox.held()
@@ -122,12 +150,20 @@ class Handback:
                 spill.release(session, [m for m in before if m.id not in still])
 
     @staticmethod
-    def _spill_all(sessions: Iterable[Session], spill: Spill) -> None:
-        """Spill what each session holds; one failing does not stop the rest."""
+    def _spill_all(sessions: Iterable[Session], spill: Spill) -> set[str]:
+        """Spill what each session holds; return the ids of those that could not be.
+
+        One failing does not stop the rest.
+        """
+        failed: set[str] = set()
         for session in sessions:
             try:
-                spill.hold(session, session.outbox.held())
+                stored = spill.hold(session, session.outbox.held())
             except Exception:
                 logger.exception(
                     "could not spill the mail held for session %s", session.session_id
                 )
+                stored = False
+            if not stored:
+                failed.add(session.session_id)
+        return failed

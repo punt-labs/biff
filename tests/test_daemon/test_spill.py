@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import errno
 import json
 import logging
+import pathlib
 import stat
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 
 from biff.commands._result import CommandResult
 from biff.daemon.durable_file import DurableFile, UnsyncedError
+from biff.daemon.handback import Handback
 from biff.daemon.outbox import Outbox
 from biff.daemon.server import BiffDaemon
 from biff.daemon.spill import Spill
-from biff.daemon.spill_file import Held, Spilled, SpillFile
+from biff.daemon.spill_entry import Held, Spilled
+from biff.daemon.spill_file import SpillFile
 from biff.models import Message
+from biff.nats_relay import INBOX_DUPLICATE_WINDOW_SECONDS
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
 from tests.test_daemon.claude_seats import until
@@ -36,6 +42,7 @@ class PickyRelay(ConsumingRelay):
     """A consuming relay that refuses one body and can be slow."""
 
     poison = ""
+    crash = ""
     pace = 0.0
 
     async def deliver(
@@ -48,6 +55,9 @@ class PickyRelay(ConsumingRelay):
         if type(self).poison and message.body == type(self).poison:
             msg = "the relay refuses this message"
             raise OSError(msg)
+        if type(self).crash and message.body == type(self).crash:
+            msg = "a bug in the relay, not an error it reports"
+            raise ValueError(msg)
         await asyncio.sleep(type(self).pace)
         await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
 
@@ -469,7 +479,12 @@ async def test_fresh_mail_is_not_shelved_with_the_old_mail_of_its_session(
     tried = Spill.UNDELIVERABLE_ATTEMPTS
     entry = _spilled("s-one").keeping(
         (
-            Held(message=_message("poison"), since=old, attempts=tried),
+            Held(
+                message=_message("poison"),
+                since=old,
+                attempts=tried,
+                failing_for=timedelta(days=8).total_seconds(),
+            ),
             Held(message=_message("poison")),  # spilled just now
         )
     )
@@ -623,6 +638,7 @@ async def test_mail_that_failed_many_times_over_a_week_is_shelved(
         message=_message("poison"),
         since=old,
         attempts=Spill.UNDELIVERABLE_ATTEMPTS - 1,
+        failing_for=timedelta(days=8).total_seconds(),
     )
     _seed(tmp_path, _spilled("s-one").keeping((tried,)))
 
@@ -630,6 +646,98 @@ async def test_mail_that_failed_many_times_over_a_week_is_shelved(
     await spill.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
 
     assert (spill.pending(), spill.undeliverable()) == (0, 1)
+
+
+async def test_days_with_the_daemon_off_are_not_days_of_failing(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 20 failed tries in 100 minutes, then 8 days of downtime: the first failed
+    # try at the next start must not shelve the mail.
+    await _session(harness)
+    monkeypatch.setattr(PickyRelay, "poison", "poison")
+    stale = Held(
+        message=_message("poison"),
+        since=datetime.now(UTC) - timedelta(days=8),
+        attempts=Spill.UNDELIVERABLE_ATTEMPTS,
+    )
+    _seed(tmp_path, _spilled("s-one").keeping((stale,)))
+
+    spill = _spill(tmp_path)
+    await spill.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+
+    assert (spill.pending(), spill.undeliverable()) == (1, 0)
+
+
+async def test_the_shelf_is_tried_again_while_the_daemon_runs(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _session(harness)
+    monkeypatch.setattr(Spill, "RETRY_DELAYS", (0.02,))
+    monkeypatch.setattr(Spill, "RETRY_INTERVAL", 0.02)
+    monkeypatch.setattr(Spill, "UNSHELVE_INTERVAL", 0.0)
+    SpillFile(*_files(tmp_path)).shelve(_spilled("s-one", "shelved"))
+    spill = _spill(tmp_path)
+    keeping = asyncio.create_task(
+        spill.keep_filing(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+    )
+    try:
+        await until(lambda: spill.undeliverable() == 0 and spill.pending() == 0)
+    finally:
+        keeping.cancel()
+        await asyncio.gather(keeping, return_exceptions=True)
+
+    assert await _mailbox(harness) == ["shelved"]
+
+
+class _SlowClose(PickyRelay):
+    """A relay on a half-open network: it takes a while to close, or never does."""
+
+    closing = 0.0
+    closed: ClassVar[list[str]] = []
+
+    async def close(self) -> None:
+        await asyncio.sleep(type(self).closing)
+        type(self).closed.append("closed")
+
+
+async def test_closing_the_relays_is_bounded_at_stop(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.factory.relay_type = _SlowClose
+    await harness.connect("s-kai", "kai")
+    monkeypatch.setattr(_SlowClose, "closing", 60.0)
+    monkeypatch.setattr(Handback, "POOL_CLOSE_SECONDS", 0.2)
+    monkeypatch.setattr(Handback, "SETTLE_SECONDS", 0.05)
+
+    async with asyncio.timeout(3.0):
+        await Handback.close_relays(
+            harness.daemon._core,  # pyright: ignore[reportPrivateUsage]
+            _spill(tmp_path),
+        )
+
+
+async def test_relays_close_at_the_same_time_not_one_after_another(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.factory.relay_type = _SlowClose
+    await harness.connect("s-kai", "kai")
+    pool = harness.daemon._core.pool  # pyright: ignore[reportPrivateUsage]
+    (target, *_) = pool._relays  # pyright: ignore[reportPrivateUsage]
+    other = dataclasses.replace(target, repo_name="another-repo")
+    pool._relays[other] = _SlowClose(harness.relays_dir / "second")  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(_SlowClose, "closing", 0.3)
+    monkeypatch.setattr(_SlowClose, "closed", [])
+
+    async with asyncio.timeout(
+        0.5
+    ):  # two closes of 0.3 s, one after the other, take 0.6
+        await pool.close()
+
+    assert _SlowClose.closed == ["closed", "closed"]
+
+
+def test_the_inbox_stream_remembers_ids_longer_than_the_spill_retries() -> None:
+    assert INBOX_DUPLICATE_WINDOW_SECONDS >= 2 * Spill.RETRY_INTERVAL
 
 
 async def test_the_shelf_is_retried_at_every_start(
@@ -743,3 +851,215 @@ async def test_a_spilled_message_is_replaced_by_its_copy_not_kept_beside_it() ->
     replaced = entry.with_mail([original.refiled()])
 
     assert [m.id for m in replaced.messages] == [original.refiled().id]
+
+
+# -- silent failures ---------------------------------------------------------
+
+
+def _two_snapshots(tmp_path: Path) -> tuple[Path, Path]:
+    """Make a newer primary holding y, and a stale second copy holding x and y."""
+    primary, fallback = _files(tmp_path)
+    SpillFile(primary, fallback).write({("s-one", False): _spilled("s-one", "x", "y")})
+    stale = primary.read_bytes()
+    newer = SpillFile(primary, fallback)
+    newer.read()
+    newer.write({("s-one", False): _spilled("s-one", "y")})
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_bytes(stale)
+    return primary, fallback
+
+
+def _unreadable_by_io(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
+    real = pathlib.Path.read_text
+
+    def failing(self: pathlib.Path, *args: str, **kwargs: str) -> str:
+        if self == path:
+            raise OSError(errno.EIO, "input/output error")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", failing)
+
+
+def test_an_io_error_on_the_newest_snapshot_does_not_move_it_aside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    primary, fallback = _two_snapshots(tmp_path)
+    _unreadable_by_io(monkeypatch, primary)
+
+    with caplog.at_level(logging.CRITICAL, logger="biff.daemon.spill_file"):
+        SpillFile(primary, fallback).read()
+
+    assert (
+        primary.exists(),
+        list(tmp_path.glob("spill.unreadable-*.json")),
+        "not in the live spill" in caplog.text,
+    ) == (True, [], True)
+
+
+def test_an_unreadable_only_snapshot_is_left_in_place_and_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    primary, fallback = _files(tmp_path)
+    SpillFile(primary, fallback).write({("s-one", False): _spilled("s-one", "x")})
+    _unreadable_by_io(monkeypatch, primary)
+
+    with caplog.at_level(logging.CRITICAL, logger="biff.daemon.spill_file"):
+        SpillFile(primary, fallback).read()
+
+    assert (
+        primary.exists(),
+        list(tmp_path.glob("spill.unreadable-*.json")),
+        "only snapshot" in caplog.text,
+    ) == (True, [], True)
+
+
+def test_an_emptied_spill_is_kept_while_the_older_file_cannot_be_dropped(
+    tmp_path: Path,
+) -> None:
+    primary, fallback = _files(tmp_path)
+    spill = SpillFile(primary, fallback)
+    spill.write({("s-one", False): _spilled("s-one", "x")})
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_bytes(primary.read_bytes())  # a stale copy that stays
+    fallback.parent.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        spill.read()
+        spill.write({})  # everything was filed
+    finally:
+        fallback.parent.chmod(stat.S_IRWXU)
+
+    assert SpillFile(primary, fallback).read() == {}
+
+
+def test_entries_that_could_not_be_set_aside_are_not_lost_by_the_next_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary, fallback = _files(tmp_path)
+    SpillFile(primary, fallback).write({("s-good", False): _spilled("s-good", "kept")})
+    data = json.loads(primary.read_text())
+    data["spilled"].append({"session_id": "s-bad-marker", "held": [{}]})
+    primary.write_text(json.dumps(data))
+    real = DurableFile.replace
+
+    def refusing(directory: pathlib.Path, name: str, text: str) -> None:
+        if ".corrupt-" in name:
+            raise OSError(errno.ENOSPC, "no space left")
+        real(directory, name, text)
+
+    monkeypatch.setattr(DurableFile, "replace", staticmethod(refusing))
+    spill = SpillFile(primary, fallback)
+    kept = spill.read()
+    spill.write(kept)  # the next write must not drop the entry it could not set aside
+
+    saved = primary.read_text() + "".join(p.read_text() for p in tmp_path.glob("*"))
+    assert "s-bad-marker" in saved
+
+
+async def test_a_spill_that_cannot_be_serialized_never_raises_into_the_read(
+    harness: Harness,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session = await _session(harness)
+
+    def failing(_self: SpillFile, _entries: object) -> None:
+        msg = "not serializable"
+        raise TypeError(msg)
+
+    monkeypatch.setattr(SpillFile, "write", failing)
+    spill = _spill(tmp_path)
+
+    with caplog.at_level(logging.CRITICAL, logger="biff.daemon.spill"):
+        stored = spill.hold(session, [_message("m1")])
+
+    assert (stored, '"body":"m1"' in caplog.text, spill.pending()) == (False, True, 1)
+
+
+async def test_a_message_that_breaks_the_relay_does_not_stop_the_ones_after_it(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _session(harness)
+    monkeypatch.setattr(PickyRelay, "crash", "bad")
+    _seed(tmp_path, _spilled("s-one", "bad", "after"))
+
+    spill = _spill(tmp_path)
+    await spill.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+
+    (left,) = SpillFile(*_files(tmp_path)).read().values()
+    assert (await _mailbox(harness), _bodies(left.messages)) == (["after"], ["bad"])
+
+
+async def test_a_try_is_counted_only_for_messages_that_were_tried(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _session(harness)
+    monkeypatch.setattr(Spill, "REFILE_SECONDS", 0.2)
+    monkeypatch.setattr(PickyRelay, "pace", 0.15)  # m1 filed, m2 cut off, m3 not tried
+    _seed(tmp_path, _spilled("s-one", "m1", "m2", "m3"))
+
+    spill = _spill(tmp_path)
+    await spill.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+
+    (left,) = SpillFile(*_files(tmp_path)).read().values()
+    assert {h.message.body: h.attempts for h in left.held} == {"m2": 1, "m3": 0}
+
+
+async def test_the_stop_says_which_sessions_it_could_not_spill(
+    harness: Harness, tmp_path: Path
+) -> None:
+    session = await _session(harness)
+    session.outbox.merge([_message("m1")])
+    spill = _spill(tmp_path)
+    for directory in (tmp_path / "run", tmp_path):
+        directory.mkdir(exist_ok=True)
+        directory.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        failed = Handback._spill_all([session], spill)  # pyright: ignore[reportPrivateUsage]
+    finally:
+        for directory in (tmp_path / "run", tmp_path):
+            directory.chmod(stat.S_IRWXU)
+
+    assert failed == {session.session_id}
+
+
+async def test_a_start_that_fails_leaves_no_retry_task_behind(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def failing(_self: object) -> None:
+        msg = "cannot restore"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr("biff.daemon.session_restore.SessionRestore.run", failing)
+    factory = CountingFactory()
+    daemon = BiffDaemon(
+        run_dir=RunDir(tmp_path / "run-fail"),
+        port=0,
+        sessions=harness.sessions,
+        resolver=FakeResolver(harness.relays_dir),
+        relay_factory=factory,
+    )
+
+    def retrying() -> set[asyncio.Task[object]]:
+        return {
+            t
+            for t in asyncio.all_tasks()
+            if t.get_name() == "spill retry" and not t.done()
+        }
+
+    before = retrying()  # the harness daemon's own
+    with pytest.raises(RuntimeError, match="cannot restore"):
+        await daemon.start()
+    await asyncio.sleep(0)
+
+    assert retrying() - before == set()
+
+
+def test_a_status_call_does_not_set_a_corrupt_shelf_aside(tmp_path: Path) -> None:
+    primary, fallback = _files(tmp_path)
+    shelf = primary.with_suffix(".undeliverable")
+    shelf.write_text("{corrupt")
+
+    Spill(primary, fallback).undeliverable()
+
+    assert (shelf.exists(), list(tmp_path.glob("spill.unreadable-*"))) == (True, [])

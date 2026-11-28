@@ -145,14 +145,20 @@
   run directory if that cannot be written), then files it back and removes what it
   filed, so a process killed at any point after that has the mail on disk. A read
   still fetching delivers late into the file too. The stop bounds its wait for the
-  listener, and the launchd plist sets `ExitTimeOut` above the stop budget (a
-  restart waits longer than that). The next start files the spill back before it
-  serves, a running daemon keeps trying (after 5, 15 and 45 s, then every five
-  minutes), and mail goes to `handback-spill.undeliverable` only after 20 failed
-  tries over seven days; the shelf is tried again at every start. A file or entry
-  that cannot be read is set aside under a new name, never overwritten, and
-  counted. `biff status` shows how many spilled, shelved and set-aside files there
-  are.
+  listener and the closing of the relays (they close in parallel), and the launchd
+  plist sets `ExitTimeOut` above the whole stop budget (a restart waits longer than
+  that); an existing LaunchAgent keeps launchd's default kill timeout until
+  `biff daemon install` rewrites its plist. The next start files the spill back
+  before it serves, a running daemon keeps trying (after 5, 15 and 45 s, then every
+  five minutes), and mail goes to `handback-spill.undeliverable` only after 20
+  failed tries and seven days of failing (days with the daemon off do not count);
+  the shelf is tried again at every start and once a day. A file that cannot be
+  parsed is set aside under a new name, never overwritten, and counted; one that
+  cannot be read for an I/O reason is left where it is and logged. Delivery is at
+  least once: a refile after a restart can still duplicate a message the relay
+  already took, beyond its duplicate window, which a newly created inbox stream
+  now keeps for 15 minutes instead of 2. `biff status` shows how many spilled,
+  shelved and set-aside files there are.
 - A NATS read confirms each ack with the server, all at once, before it deletes
   its consumer. Acks were plain publishes the server could still be processing
   at that moment, so a large inbox came back from the next read: messages were

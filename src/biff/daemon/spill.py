@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import timedelta
 from typing import TYPE_CHECKING, ClassVar, Self, cast, final
 
 from biff.commands._result import CommandResult
 from biff.daemon.mail_transfer import MailTransfer
-from biff.daemon.spill_file import Held, Spilled, SpillFile, SpillKey
+from biff.daemon.spill_entry import Held, Spilled, SpillKey, Tries
+from biff.daemon.spill_file import SpillFile
 from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
@@ -44,7 +46,7 @@ class Spill:
     start files the rest back, and a running daemon keeps trying.
     """
 
-    __slots__ = ("_file", "_pending", "_unsaved")
+    __slots__ = ("_file", "_pending", "_unsaved", "_unshelved_at")
 
     REFILE_SECONDS: ClassVar[float] = 15.0
     """The most all sessions' refiling may take in one pass."""
@@ -52,13 +54,17 @@ class Spill:
     """Waits before the first tries after start, as a network that is not up yet."""
     RETRY_INTERVAL: ClassVar[float] = 300.0
     """Seconds between tries once those are used."""
+    UNSHELVE_INTERVAL: ClassVar[float] = 86400.0
+    """How often a running daemon puts the shelf back in the spill to try it again."""
     UNDELIVERABLE_AFTER: ClassVar[timedelta] = timedelta(days=7)
     UNDELIVERABLE_ATTEMPTS: ClassVar[int] = 20
-    """Mail goes to the shelf only after this many failed tries over that long."""
+    """Mail goes to the shelf only after this many failed tries, spread over this
+    much time the daemon spent failing (time it was not running does not count)."""
 
     _file: SpillFile
     _pending: dict[SpillKey, Spilled] | None
     _unsaved: bool
+    _unshelved_at: float
 
     def __new__(cls, path: Path, fallback: Path) -> Self:
         """Keep the spill in *path*, and in *fallback* if *path* cannot be written."""
@@ -66,6 +72,7 @@ class Spill:
         self._file = SpillFile(path, fallback)
         self._pending = None
         self._unsaved = False
+        self._unshelved_at = time.monotonic()
         return self
 
     def pending(self) -> int:
@@ -104,36 +111,53 @@ class Spill:
             error=status.error,
         )
 
-    def hold(self, session: Session, messages: Sequence[Message]) -> None:
-        """Keep *messages*, held for *session*, on disk; never raises over a write.
+    def hold(self, session: Session, messages: Sequence[Message]) -> bool:
+        """Keep *messages*, held for *session*, on disk; say whether the file has them.
 
-        A batch that cannot be written stays in memory and is written with the
-        next one, or by the next try at filing.
+        Nothing here raises: this runs inside a read whose relay already gave the
+        mail up, and the mail would be nowhere.  A batch that cannot be written
+        stays in memory and is written with the next one, or by the next try at
+        filing; one that cannot even be built is logged whole.
         """
         if not messages:
-            return
-        merged = dict(self._load())
-        key = (session.session_id, session.is_agent)
-        config = session.context.config
-        spilled = merged.get(key) or Spilled(
-            session_id=session.session_id,
-            agent=session.is_agent,
-            cwd=session.cwd,
-            user=session.context.user,
-            session_key=session.context.session_key,
-            relay=Spilled.relay_id(config.relay_url, config.repo_name),
-            held=(),
-        )
-        merged[key] = spilled.with_mail(messages)
-        if not self._store(merged):
-            logger.critical(
-                "LOST unless found here: %d messages of session %s could not be "
-                "spilled (%d already spilled): %s",
-                len(messages),
-                session.session_id,
-                self.pending(),
-                ", ".join(str(m.id) for m in messages),
+            return True
+        try:
+            merged = dict(self._load())
+            key = (session.session_id, session.is_agent)
+            config = session.context.config
+            spilled = merged.get(key) or Spilled(
+                session_id=session.session_id,
+                agent=session.is_agent,
+                cwd=session.cwd,
+                user=session.context.user,
+                session_key=session.context.session_key,
+                relay=Spilled.relay_id(config.relay_url, config.repo_name),
+                held=(),
             )
+            merged[key] = spilled.with_mail(messages)
+            if self._store(merged):
+                return True
+        except Exception:
+            logger.exception(
+                "could not build the spill for session %s", session.session_id
+            )
+        logger.critical(
+            "LOST unless found here: %d messages of session %s could not be "
+            "spilled (%d already spilled): %s",
+            len(messages),
+            session.session_id,
+            self.pending(),
+            "; ".join(self._whole(m) for m in messages),
+        )
+        return False
+
+    @staticmethod
+    def _whole(message: Message) -> str:
+        """Return *message* as JSON for the log, or its repr if it will not dump."""
+        try:
+            return message.model_dump_json()
+        except ValueError:
+            return repr(message)
 
     def release(self, session: Session, filed: Sequence[Message]) -> None:
         """Forget *filed*, which was given back to the relay."""
@@ -177,8 +201,10 @@ class Spill:
         A session whose mail cannot be filed now (the relay is down, the
         repository is gone) stays in the file with each message's failed tries
         counted; one that failed often enough over long enough goes to the shelf
-        beside it.  Refiled copies carry derived ids, so a message filed twice is
-        one.
+        beside it.  Delivery is at least once: a refiled copy carries an id derived
+        from the original's, which the relay drops as a duplicate only inside its
+        duplicate window, so a refile that landed but was reported failed can be
+        delivered twice by a later try.
         """
         pending = dict(self._load())
         if not pending:
@@ -212,13 +238,20 @@ class Spill:
             await self._retry(core)
 
     async def _retry(self, core: DaemonCore) -> None:
-        """Write what could not be written, then file what is spilled."""
+        """Write what could not be written, then file what is spilled.
+
+        The shelf is put back in the spill once a day, so mail shelved while the
+        daemon runs is tried again without waiting for a restart.
+        """
         if self._unsaved:
             self._store(self._load())
+        if time.monotonic() - self._unshelved_at >= self.UNSHELVE_INTERVAL:
+            self._unshelve()
         await self.refile(core)
 
     def _unshelve(self) -> None:
         """Put the shelf back in the spill, as new mail, and drop the shelf."""
+        self._unshelved_at = time.monotonic()
         shelved = self._file.take_shelf()
         if not shelved:
             return
@@ -240,7 +273,7 @@ class Spill:
         self._unsaved = True
         try:
             self._file.write(items)
-        except OSError:
+        except (OSError, TypeError, ValueError):
             logger.exception("could not write the spill")
             return False
         self._unsaved = False
@@ -254,11 +287,11 @@ class Spill:
         item: Spilled,
     ) -> None:
         """File *item* back; what was filed is recorded even if the budget cuts in."""
-        filed = set[object]()
+        tries = Tries()
         try:
-            await self._file_back(core, item, filed)
+            await self._file_back(core, item, tries)
         finally:
-            rest = self._remaining(item, filed)
+            rest = self._remaining(item, tries)
             if rest is None:
                 del pending[key]
             else:
@@ -266,10 +299,8 @@ class Spill:
             if not self._store(pending):
                 logger.error("could not record the progress of filing the spill")
 
-    async def _file_back(
-        self, core: DaemonCore, item: Spilled, filed: set[object]
-    ) -> None:
-        """File *item*'s messages, noting each one that went in *filed*."""
+    async def _file_back(self, core: DaemonCore, item: Spilled, tries: Tries) -> None:
+        """File *item*'s messages, noting in *tries* what was tried and what went."""
         try:
             async with asyncio.timeout(core.attach_timeout):
                 resolved = await core.resolver.resolve(item.hello())
@@ -277,6 +308,7 @@ class Spill:
                     resolved.config.relay_url, resolved.config.repo_name
                 )
                 if item.relay and item.relay != now:
+                    tries.session_failed = True
                     logger.error(
                         "the mail of session %s came from relay %s, which is not the "
                         "one the repository names now (%s): kept, not filed",
@@ -285,13 +317,24 @@ class Spill:
                         now,
                     )
                 else:
-                    await self._deliver(core.pool.acquire(resolved), item, filed)
+                    await self._deliver(core.pool.acquire(resolved), item, tries)
         except Exception:
+            # Before any message was tried the whole session failed; after, the
+            # ones not yet tried were not at fault.
+            tries.session_failed = tries.session_failed or not tries.tried
             logger.exception("could not file the spilled mail of %s", item.session_id)
 
-    def _remaining(self, item: Spilled, filed: set[object]) -> Spilled | None:
-        """Return what of *item* is not filed, tries counted; ``None``: nothing."""
-        left = tuple(h.failed() for h in item.held if h.message.id not in filed)
+    def _remaining(self, item: Spilled, tries: Tries) -> Spilled | None:
+        """Return what of *item* is not filed, tries counted; ``None``: nothing.
+
+        A try counts against a message only if it was tried, or its whole session
+        could not be reached.
+        """
+        left = tuple(
+            h.failed() if tries.session_failed or h.message.id in tries.tried else h
+            for h in item.held
+            if h.message.id not in tries.filed
+        )
         left = self._shelve_old(item, left)
         if not left:
             return None
@@ -304,12 +347,16 @@ class Spill:
         return item.keeping(left)
 
     def _shelve_old(self, item: Spilled, left: tuple[Held, ...]) -> tuple[Held, ...]:
-        """Move what has failed often enough, long enough, to the shelf."""
+        """Move what has failed often enough, for long enough, to the shelf.
+
+        How long is the time the daemon spent failing, not the time since the mail
+        was spilled: days with the daemon off are not days of failing.
+        """
         old = [
             h
             for h in left
             if h.attempts >= self.UNDELIVERABLE_ATTEMPTS
-            and h.age() > self.UNDELIVERABLE_AFTER
+            and h.failing() > self.UNDELIVERABLE_AFTER
         ]
         if not old or not self._file.shelve(item.keeping(old)):
             return left
@@ -319,22 +366,26 @@ class Spill:
             len(old),
             item.session_id,
             max(h.attempts for h in old),
-            max(h.age() for h in old),
+            max(h.failing() for h in old),
         )
         return tuple(h for h in left if h not in old)
 
     @staticmethod
-    async def _deliver(relay: Relay, item: Spilled, filed: set[object]) -> None:
-        """File each message of *item* with *relay*, noting the ones that went.
+    async def _deliver(relay: Relay, item: Spilled, tries: Tries) -> None:
+        """File each message of *item* with *relay*, noting what was tried and went.
 
         A session the relay no longer lists has ended: its mail goes to its user's
         mailbox, as an end would have sent it, not to an inbox nobody reads.  The
-        copy's id is derived from the message's, so a try cut short and made again
-        files one.
+        copy's id is derived from the message's, and the relay drops a repeat of
+        it only inside its duplicate window, so a try made again later after one
+        that landed unseen can deliver the message twice: at least once.
+
+        One message that fails, for any reason, does not stop the ones after it.
         """
         key = item.session_key
         ended = bool(key) and await relay.get_session(key) is None
         for message in item.messages:
+            tries.tried.add(message.id)
             try:
                 if ended:
                     await MailTransfer(relay).forward(key, item.user, message)
@@ -342,8 +393,12 @@ class Spill:
                     await relay.deliver(message.refiled())
             except RELAY_ERRORS:
                 logger.exception("could not file spilled %s", message.id)
+            except Exception:
+                logger.exception(
+                    "spilled %s could not be filed (not a relay error)", message.id
+                )
             else:
-                filed.add(message.id)
+                tries.filed.add(message.id)
 
     def _load(self) -> dict[SpillKey, Spilled]:
         """Return what the files hold, read once."""

@@ -79,6 +79,11 @@ logger = logging.getLogger(__name__)
 
 _KV_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — shared bucket, all repos' sessions
 _STREAM_MAX_BYTES = 100 * 1024 * 1024  # 100 MiB — shared stream, all repos' messages
+# The window in which the server drops a publish whose Nats-Msg-Id it has seen.
+# The daemon's spill files mail back under an id derived from the original's, and
+# retries run every few minutes, so the default 2 minutes is too short.  A stream
+# that already exists keeps the window it was created with.
+INBOX_DUPLICATE_WINDOW_SECONDS = 15 * 60.0
 _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
@@ -927,6 +932,7 @@ class NatsRelay(InboxFetch):
             subjects=[f"{self._stream_prefix}.*.inbox.>"],
             retention=RetentionPolicy.WORK_QUEUE,
             max_bytes=_STREAM_MAX_BYTES,
+            duplicate_window=INBOX_DUPLICATE_WINDOW_SECONDS,
         )
         try:
             await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]

@@ -10,7 +10,8 @@ from biff.client.connection import ClientIdentity, DaemonClient
 from biff.daemon.held_mail import HeldMail
 from biff.daemon.outbox import Outbox
 from biff.daemon.server import BiffDaemon
-from biff.daemon.spill_file import Held, Spilled, SpillFile
+from biff.daemon.spill_entry import Held, Spilled
+from biff.daemon.spill_file import SpillFile
 from biff.models import Message
 from biff.run_dir import RunDir
 from tests.test_daemon.conftest import CountingFactory, FakeResolver

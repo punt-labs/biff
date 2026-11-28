@@ -373,7 +373,7 @@ class SessionTable:
     _interval: float
     _org_interval: float
     _records: HarnessRecords
-    _sink: Callable[[Session, Sequence[Message]], None] | None
+    _sink: Callable[[Session, Sequence[Message]], object] | None
     _sessions: dict[SessionKey, Session]
     _locks: defaultdict[SessionKey, asyncio.Lock]
     _users: Counter[SessionKey]
@@ -463,7 +463,7 @@ class SessionTable:
             key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
             self._records.mark(key, datetime.now(UTC))
 
-    def seal(self, sink: Callable[[Session, Sequence[Message]], None]) -> None:
+    def seal(self, sink: Callable[[Session, Sequence[Message]], object]) -> None:
         """Seal every outbox, and the outbox of every session created from now on.
 
         For a daemon that is stopping: mail fetched after this goes to *sink*.
