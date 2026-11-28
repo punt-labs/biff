@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, ClassVar, cast
 
+import pytest
+
 from biff.models import Message
 from biff.relay import LocalRelay
 from tests.test_daemon.claude_seats import (
@@ -16,8 +18,6 @@ from tests.test_daemon.claude_seats import (
 from tests.test_daemon.consuming import ConsumingRelay
 
 if TYPE_CHECKING:
-    import pytest
-
     from tests.test_daemon.conftest import Harness
 
 _ = logging_relay
@@ -34,10 +34,21 @@ class CappedRelay(ConsumingRelay):
         return batch
 
 
+class SlowForwardingRelay(CappedRelay):
+    """A capped relay whose every publish takes 3 ms, as a loaded server's does."""
+
+    async def deliver(self, message: Message) -> None:
+        await asyncio.sleep(0.003)
+        await super().deliver(message)
+
+
+# The test is about volume, not the timeout: 250 forwards at 3 ms take 0.75 s,
+# over the harness's default 0.5 s request budget, so it sets its own.
+@pytest.mark.parametrize("harness", [10.0], indirect=True)
 async def test_an_end_forwards_more_mail_than_one_fetch_returns(
     harness: Harness,
 ) -> None:
-    harness.factory.relay_type = CappedRelay
+    harness.factory.relay_type = SlowForwardingRelay
     s = await seat(harness, "s-many")
     for n in range(250):
         await s.viewer.deliver(

@@ -735,9 +735,14 @@ class TestInRequestNotify:
     ) -> None:
         async with _served(monkeypatch, self._register) as client:
             await client.call(2, "poke")
-            await anyio.sleep(0.1)
-
-            assert "notifications/tools/list_changed" in client.received_methods()
+            # The client's reader task records the notification some time after
+            # the call returns; wait for it rather than guess how long a loaded
+            # machine takes.
+            with anyio.fail_after(5):
+                while "notifications/tools/list_changed" not in (
+                    client.received_methods()
+                ):
+                    await anyio.sleep(0.01)
         assert not _descriptions.handshake_delivery._pending_notify
 
     async def test_a_dropped_notification_stays_owed(
