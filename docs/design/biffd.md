@@ -384,6 +384,18 @@ records in memory, so a restart forgets them (`claude-session-end.tex` models th
 record as durable): rows of sessions that never reattach age out by the relay's own
 row lifetime, and the held batch is lost with the outbox (PL-1753).
 
+**Push and poll are one path.** The relay publishes a wake poke when mail or a
+wall arrives (a frame to the user's repository subject, the repository's wall
+subject, or the recipient session's talk subject). The daemon's `PushFeed`
+subscribes to those subjects for each attached session and sets a wake flag in
+its `Wakes`; the session's poll (`ArrivalPoll`) waits on that flag or on its
+interval, and runs the same pass either way: read the mark and the wall, announce
+what rose. A poke repeated changes nothing (a flag, not a count), a poke lost is
+covered by the interval, and the pass reads every kind, so a kind that keeps
+arriving cannot starve another (`PushWake` and `PollWake` in
+`notification-mail-event.tex`). The feed subscribes again when the relay dials a
+new client, as the talk feed does.
+
 ## Z specification obligations
 
 The daemon adds states the current specs do not have. Per the repository's

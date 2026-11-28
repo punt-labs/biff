@@ -70,6 +70,8 @@
   "biff.daemon.outbox": "daemon",
   "biff.daemon.params": "daemon",
   "biff.daemon.presence": "daemon",
+  "biff.daemon.push_feed": "daemon",
+  "biff.daemon.wakes": "daemon",
   "biff.daemon.read_batch": "daemon",
   "biff.daemon.refusal": "daemon",
   "biff.daemon.relays": "daemon",

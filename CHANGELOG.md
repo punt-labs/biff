@@ -4,6 +4,10 @@
 
 ### Added
 
+- biffd pushes the arrival notice: it subscribes to the relay's wake pokes for mail
+  and walls, so a mail or wall event reaches a subscribed client at once instead
+  of at the next poll. A repeated or lost push changes nothing; the poll still
+  runs on its interval.
 - The biffd `arrivals` method answers `{mark, unread, wall, invites, talk_pending}`
   without marking any mail read. The `mail` event, and so `biff watch`, now carries
   the inbox's high-water `mark` next to the `count`.

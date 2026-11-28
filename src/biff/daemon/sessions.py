@@ -15,6 +15,7 @@ from biff.daemon.heartbeat import Heartbeat
 from biff.daemon.orgs import OrgRepos
 from biff.daemon.outbox import Outbox
 from biff.daemon.presence import PresenceRow
+from biff.daemon.push_feed import PushFeed
 from biff.daemon.refusal import RefusalError
 from biff.daemon.run_ledger import RunLedger
 from biff.daemon.session_hold import SessionHold
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from biff.daemon.relays import RelayPool, RelayTarget, ResolvedSession
+    from biff.daemon.wakes import Wakes
     from biff.frame_client import Hello
     from biff.relay import Relay
 
@@ -69,6 +71,7 @@ class Session:
         "_outbox",
         "_presence",
         "_pulse",
+        "_push",
         "_runs",
         "_session_id",
         "_talk",
@@ -83,6 +86,7 @@ class Session:
     _orgs: OrgRepos
     _outbox: Outbox
     _talk: TalkChannel
+    _push: PushFeed
     _runs: RunLedger
     _attachments: set[Attachment]
     _pulse: Heartbeat
@@ -118,6 +122,7 @@ class Session:
             talk=context.talk,
             interval=min(heartbeat_interval, _TALK_CHECK_SECONDS),
         )
+        self._push = PushFeed.of(context, min(heartbeat_interval, _TALK_CHECK_SECONDS))
         self._runs = RunLedger(run)
         self._attachments = set()
         self._pulse = Heartbeat(
@@ -201,6 +206,11 @@ class Session:
     def talk(self) -> TalkChannel:
         """The session's talk subscription, and the notices it raises."""
         return self._talk
+
+    @property
+    def wakes(self) -> Wakes:
+        """The flags the relay's pushes of mail and wall arrivals set."""
+        return self._push.wakes
 
     @property
     def is_dormant(self) -> bool:
@@ -316,6 +326,7 @@ class Session:
         attachment = Attachment(self, run)
         self._attachments.add(attachment)
         self._talk.start()
+        self._push.start()
         if self._beat is None or self._beat.done():
             self._beat = Supervised.spawn(
                 self._pulse.run(self._refresh_orgs), f"heartbeat {self._session_id}"
@@ -332,6 +343,7 @@ class Session:
         if not self._attachments:
             self._idle_since = time.monotonic()
             self._talk.stop()
+            self._push.stop()
             Supervised.spawn(self._hang_up(), f"talk hang-up {self._session_id}")
             if self._beat is not None:
                 self._beat.cancel()
