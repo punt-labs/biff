@@ -10090,6 +10090,21 @@ default, the next deletes the in-process server, the last deletes `biff serve`.
    default would start a real biffd on the machine, so `tests/conftest.py` sets
    `BIFF_MCP_TRANSPORT=inprocess` for every test; a test of the daemon transport
    sets `daemon`, and the default is tested on the settings alone.
+5. **Relay overrides in the environment are refused, loudly, not carried.** A
+   client with a `BIFF_RELAY_*` variable cannot talk to biffd (the daemon owns the
+   relay configuration, DES-095), and the refusal names the variable and the way
+   out (`BIFF_MCP_TRANSPORT=inprocess` or `mcp.transport: inprocess`). A hook that
+   cannot open or end its session logs why, says so in the SessionStart context,
+   and still cleans up locally; nothing falls back to the in-process server. Runners
+   that have no persistent biffd and hand biff its relay in the environment (Devin,
+   CI, the agent containers) therefore pin `inprocess` until biffd is seeded from
+   the environment of the process that starts it, which is the next change, before
+   the in-process server is deleted.
+6. **Still hybrid.** Under the default `biff mcp` also builds the in-process state
+   and opens its own relay connection for the tool descriptions, the status line and
+   the display queue (the tools and the channel events come from biffd, DES-102).
+   Dropping that connection is the first change of the PR that deletes the
+   in-process server, not this one.
 
 **Rejected.**
 

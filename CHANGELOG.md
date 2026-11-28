@@ -290,6 +290,11 @@
   release of the migration, with the setting. `--data-dir` and `--relay-url` are
   refused with the daemon transport (biffd resolves the relay from the repository);
   set `mcp.transport: inprocess` to use them until then.
+  `BIFF_RELAY_*` variables in the environment are refused under the default too,
+  by name, with `BIFF_MCP_TRANSPORT=inprocess` as the way out (biffd cannot carry
+  them yet); the Devin plugin pins `inprocess` for that reason. A hook that cannot
+  open or end its session through biffd logs why, tells the model in the start
+  context, and cleans up its local files.
 - `biff session new`, `ls`, `use` and `end` run in biffd, which now owns the
   session records. The CLI keeps only the repo pointer and the `-s` name. biffd
   sweeps stale records once at start and every 10 minutes, for every repository
