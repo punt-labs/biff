@@ -9,6 +9,7 @@ import pytest
 
 from biff._cli_runtime import CliInvocation
 from biff.mcp_transport import McpTransport
+from biff.repo_transport import RepoTransport
 from biff.server.entrypoints import McpServerOptions
 from biff.server.mcp_assembly import McpAssembly
 
@@ -67,14 +68,14 @@ class TestFromTheRepo:
     ) -> None:
         repo = self._repo(tmp_path, "mcp:\n  transport: daemon\n")
 
-        assert McpTransport.for_repo(repo, {}) is McpTransport.DAEMON
+        assert RepoTransport.of(repo, {}) is McpTransport.DAEMON
 
     def test_a_repo_that_does_not_set_it_keeps_the_in_process_server(
         self, tmp_path: Path
     ) -> None:
         repo = self._repo(tmp_path, "team: []\n")
 
-        assert McpTransport.for_repo(repo, {}) is McpTransport.INPROCESS
+        assert RepoTransport.of(repo, {}) is McpTransport.INPROCESS
 
 
 class TestWhereTheDaemonIsUsed:

@@ -319,9 +319,10 @@ A client never hangs and never silently does nothing (R-D.7). The sequence:
    - Installed but down: `biffd is installed but did not start within 5
      seconds. Run: biff daemon status, then biff doctor`
 
-A hook that cannot reach the daemon within its time limit exits without
-blocking the harness and records the failure in
-`~/.punt-labs/biff/hook-errors.log`. An MCP tool call returns the same error
+A hook that cannot reach the daemon within its time limit (8 s for the session
+hooks, under the 10 s the SessionEnd script allows) exits without blocking the
+harness and records the failure in the hook's durable log,
+`~/.punt-labs/biff/logs/biff.log`. An MCP tool call returns the same error
 text as a tool error, so the model and the user both see the cause.
 
 ## Sessions across concurrent clients

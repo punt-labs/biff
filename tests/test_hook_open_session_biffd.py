@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import patch
-
-import pytest
 
 from biff.plugins.claude_code.daemon_session import DaemonSessionOpener
 from biff.plugins.claude_code.hook import _open_session
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class _Recording:
@@ -20,7 +22,7 @@ class _Recording:
 
 
 class _Down:
-    async def open(self, data: dict[str, object]) -> str:  # noqa: ARG002
+    async def open(self, data: dict[str, object]) -> str:
         msg = "biffd is down"
         raise ConnectionError(msg)
 

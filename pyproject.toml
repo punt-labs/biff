@@ -266,6 +266,7 @@ prefixes = [
     "nats_relay",
     "nostr_directory",
     "relay_errors",
+    "repo_transport",
     "changed_file",
     "channel_check_wire",
     "check_stamp_file",

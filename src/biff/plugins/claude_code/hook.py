@@ -10,7 +10,6 @@ Layer 2: Git hooks — capture code lifecycle events.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -20,9 +19,12 @@ import select
 import subprocess
 import sys
 from contextlib import suppress
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import typer
+
+if TYPE_CHECKING:
+    from biff.plugins.claude_code.session_lifecycle import SessionLifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -710,34 +712,25 @@ def _detect_collisions(data: dict[str, object] | None = None) -> list[str]:
     return collisions
 
 
+def _lifecycle(data: dict[str, object]) -> SessionLifecycle:
+    """Return the handler of a session hook payload (lazy: it loads biffd's client)."""
+    from biff.plugins.claude_code.session_lifecycle import (  # noqa: PLC0415
+        SessionLifecycle,
+    )
+
+    return SessionLifecycle(data)
+
+
 def _open_session(data: dict[str, object]) -> None:
     """Register the Claude session named by the SessionStart payload.
 
     SessionStart is the harness declaring ``session_id`` to biff, so this is
-    where the durable record is opened (relay row, unread file, active
-    marker, handle).  Best-effort: a failure forfeits presence until the
-    first tool call opens the session instead, but must never break session
-    startup, so it is logged and swallowed.
+    where the durable record is opened.  Best-effort: a failure forfeits
+    presence until the first tool call opens the session instead, but must
+    never break session startup, so it is logged and swallowed.
     """
-    from biff.mcp_transport import McpTransport  # noqa: PLC0415
-
     try:
-        root = _repo_common_root(data)
-        transport = McpTransport.for_repo(
-            pathlib.Path(root) if root else None, os.environ
-        )
-        if transport is McpTransport.DAEMON:
-            from biff.plugins.claude_code.daemon_session import (  # noqa: PLC0415
-                DaemonSessionOpener,
-            )
-
-            asyncio.run(DaemonSessionOpener.for_host().open(data))
-        else:
-            from biff.session_open import (  # noqa: PLC0415
-                open_session_from_payload,
-            )
-
-            asyncio.run(open_session_from_payload(data))
+        _lifecycle(data).open()
     except (Exception, SystemExit):
         logger.warning("Failed to open session at SessionStart", exc_info=True)
 
@@ -842,19 +835,8 @@ def handle_session_end(data: dict[str, object] | None = None) -> int:
             reply.
         TimeoutError: biffd did not answer in time.
     """
-    from biff.mcp_transport import McpTransport  # noqa: PLC0415
-
-    if data and isinstance(data.get("session_id"), str):
-        transport = McpTransport.for_repo(
-            pathlib.Path(_repo_common_root(data)), os.environ
-        )
-        if transport is McpTransport.DAEMON:
-            from biff.plugins.claude_code.daemon_session_end import (  # noqa: PLC0415
-                DaemonSessionCloser,
-            )
-
-            asyncio.run(DaemonSessionCloser.for_host().end(data))
-            return 1
+    if data and _lifecycle(data).end_through_biffd():
+        return 1
     from biff._stdlib import (  # noqa: PLC0415
         active_dir,
         find_git_root,

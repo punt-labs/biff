@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, final
 
@@ -91,7 +90,7 @@ class DaemonSessionOpener:
         except SessionIdError:
             return None
         cwd = data.get("cwd")
-        where = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+        where = cwd if isinstance(cwd, str) and cwd else str(Path.cwd())
         async with asyncio.timeout(self._deadline):
             status = await self._status(routing, where)
         key = str(status["session_key"])
@@ -117,7 +116,8 @@ class DaemonSessionOpener:
             reply = await client.request("status")
         finally:
             await client.close()
-        if not isinstance(reply, dict) or not isinstance(reply.get("data"), dict):
+        facts = reply.get("data") if isinstance(reply, dict) else None
+        if not isinstance(facts, dict):
             msg = "biffd answered status without the session's facts"
             raise ConnectionError(msg)
-        return dict(reply["data"])
+        return {**facts}

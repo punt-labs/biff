@@ -37,7 +37,8 @@ class HostConnector:
     async def connect(self, identity: ClientIdentity) -> DaemonClient:
         """Start biffd if it is down, then say hello as *identity*."""
         # Blocking: it can wait on the service manager, so it leaves the loop.
-        port = await asyncio.to_thread(DaemonNudge.for_host(self._run_dir).ensure_running)
+        nudge = DaemonNudge.for_host(self._run_dir)
+        port = await asyncio.to_thread(nudge.ensure_running)
         return await DaemonClient.connect(
             run_dir=self._run_dir, port=port, identity=identity
         )

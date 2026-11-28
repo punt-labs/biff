@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, final
 
 from biff._stdlib import biff_data_dir, remove_active_session
@@ -14,7 +14,6 @@ from biff.session_routing import SessionIdError, SessionRouting
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from pathlib import Path
 
     from biff.client.connection import DaemonClient
 
@@ -83,7 +82,7 @@ class DaemonSessionCloser:
         except SessionIdError:
             return
         cwd = data.get("cwd")
-        where = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+        where = cwd if isinstance(cwd, str) and cwd else str(Path.cwd())
         async with asyncio.timeout(self._deadline):
             client = await self._connect(
                 ClientIdentity(client="hook", session_id=routing.session_id, cwd=where)

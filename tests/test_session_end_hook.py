@@ -110,7 +110,9 @@ def _run_hook(repo: Path, env: dict[str, str], payload: str = "") -> float:
     return time.monotonic() - start
 
 
-def _payload_recording_biff_hook_on_path(bin_dir: Path, *, record: Path) -> dict[str, str]:
+def _payload_recording_biff_hook_on_path(
+    bin_dir: Path, *, record: Path
+) -> dict[str, str]:
     """Create a ``biff-hook`` stub that copies its stdin to *record*."""
     bin_dir.mkdir(parents=True, exist_ok=True)
     stub = bin_dir / "biff-hook"

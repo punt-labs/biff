@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final
 
 from biff.config import ResolvedConfig
 from biff.mcp_transport import McpTransport
+from biff.repo_transport import RepoTransport
 from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
 from biff.server.daemon_talk_tools import DaemonTalkTools
@@ -52,7 +53,7 @@ class McpAssembly:
         Only the stdio server does: the HTTP server (``biff serve``) has no
         caller identity of its own to give biffd, so it keeps its relay.
         """
-        choice = McpTransport.for_repo(repo_root, environ)
+        choice = RepoTransport.of(repo_root, environ)
         return transport == "stdio" and choice is McpTransport.DAEMON
 
     def server(self) -> ChannelServer[ServerState]:

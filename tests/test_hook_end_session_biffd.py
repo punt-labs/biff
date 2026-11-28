@@ -20,7 +20,7 @@ class _Recording:
 
 
 class _Down:
-    async def end(self, data: dict[str, object]) -> None:  # noqa: ARG002
+    async def end(self, data: dict[str, object]) -> None:
         msg = "biffd is down"
         raise ConnectionError(msg)
 
