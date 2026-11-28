@@ -10,7 +10,7 @@ from biff.client.connection import ClientIdentity, DaemonClient
 from biff.daemon.held_mail import HeldMail
 from biff.daemon.outbox import Outbox
 from biff.daemon.server import BiffDaemon
-from biff.daemon.spill_file import Spilled, SpillFile
+from biff.daemon.spill_file import Held, Spilled, SpillFile
 from biff.models import Message
 from biff.run_dir import RunDir
 from tests.test_daemon.conftest import CountingFactory, FakeResolver
@@ -148,7 +148,7 @@ async def test_the_status_counts_the_spilled_mail_that_could_not_be_filed(
         agent=False,
         cwd="/work/repo",
         user="kai",
-        messages=(_message("stuck"),),
+        held=(Held(message=_message("stuck")),),
     )
     fallback = tmp_path / "run-restarted" / "handback-spill.json"
     SpillFile(_spill_path(harness), fallback).write({stuck.key: stuck})

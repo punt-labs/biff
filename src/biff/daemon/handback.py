@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, ClassVar, final
 
 from biff.daemon.held_mail import HeldMail
@@ -41,6 +42,8 @@ class Handback:
 
     SETTLE_SECONDS: ClassVar[float] = 5.0
     REFILE_SECONDS: ClassVar[float] = 15.0
+    LOCK_SECONDS: ClassVar[float] = 2.0
+    """How long to wait for a read of a session to let go of it before spilling."""
 
     @staticmethod
     async def close_relays(core: DaemonCore, spill: Spill) -> None:
@@ -67,7 +70,7 @@ class Handback:
             async with asyncio.timeout(Handback.REFILE_SECONDS):
                 for key, session in sessions.items():
                     try:
-                        await HeldMail.refile(session)
+                        await Handback._refile_one(session)
                     except RELAY_ERRORS:
                         logger.warning(
                             "could not give back the mail held for session %s",
@@ -82,6 +85,27 @@ class Handback:
             )
         finally:
             Handback._spill_rest(sessions.values(), spill)
+
+    @staticmethod
+    async def _refile_one(session: Session) -> None:
+        """Give back *session*'s held mail while no read of it is mid-fetch.
+
+        A read fetching under the session's lock could take the copy this files
+        back before the original is let go, and lose both.  So the lock is taken
+        first; if a read keeps it past :attr:`LOCK_SECONDS` the mail it holds is
+        spilled instead (by the caller), and the read's own late fetch with it.
+        """
+        async with AsyncExitStack() as held:
+            try:
+                async with asyncio.timeout(Handback.LOCK_SECONDS):
+                    await held.enter_async_context(session.exclusive())
+            except TimeoutError:
+                logger.warning(
+                    "a read of session %s is still fetching; its held mail is spilled",
+                    session.session_id,
+                )
+                return
+            await HeldMail.refile(session)
 
     @staticmethod
     def _spill_rest(sessions: Iterable[Session], spill: Spill) -> None:

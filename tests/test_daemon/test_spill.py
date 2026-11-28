@@ -15,7 +15,7 @@ from biff.commands._result import CommandResult
 from biff.daemon.durable_file import DurableFile, UnsyncedError
 from biff.daemon.outbox import Outbox
 from biff.daemon.spill import Spill
-from biff.daemon.spill_file import Spilled, SpillFile
+from biff.daemon.spill_file import Held, Spilled, SpillFile
 from biff.models import Message
 from biff.relay import LocalRelay
 from tests.test_daemon.consuming import ConsumingRelay
@@ -52,15 +52,19 @@ def _message(body: str) -> Message:
     return Message(from_user="eric", to_user="kai", body=body)
 
 
+def _message_to(address: str, body: str) -> Message:
+    return Message(from_user="eric", to_user=address, body=body)
+
+
 def _spilled(session_id: str, *bodies: str, since: datetime | None = None) -> Spilled:
-    spilled = Spilled(
+    stamp = {} if since is None else {"since": since}
+    return Spilled(
         session_id=session_id,
         agent=False,
         cwd="/work/repo",
         user="kai",
-        messages=tuple(_message(b) for b in bodies),
+        held=tuple(Held(message=_message(b), **stamp) for b in bodies),
     )
-    return spilled if since is None else spilled.model_copy(update={"since": since})
 
 
 def _files(tmp_path: Path) -> tuple[Path, Path]:
@@ -145,7 +149,7 @@ async def test_one_bad_entry_does_not_quarantine_the_good_ones(
     _seed(tmp_path, _spilled("s-good", "kept"))
     path = _files(tmp_path)[0]
     data = json.loads(path.read_text())
-    data["spilled"].append({"session_id": 3, "messages": [{}, {}]})
+    data["spilled"].append({"session_id": 3, "held": [{}, {}]})
     path.write_text(json.dumps(data))
 
     with caplog.at_level(logging.ERROR, logger="biff.daemon.spill_file"):
@@ -407,14 +411,14 @@ async def test_spilled_mail_of_a_session_that_ended_goes_to_its_users_mailbox(
         cwd="/work/repo",
         user="kai",
         session_key="kai:no-row-for-this",  # the relay lists no such session
-        messages=(Message(from_user="eric", to_user="kai:ghost", body="for the dead"),),
+        held=(Held(message=_message_to("kai:ghost", "dead")),),
     )
     _seed(tmp_path, ended)
 
     spill = _spill(tmp_path)
     await spill.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
 
-    assert (await _mailbox(harness), spill.pending()) == (["for the dead"], 0)
+    assert (await _mailbox(harness), spill.pending()) == (["dead"], 0)
 
 
 async def test_spilled_mail_is_not_filed_in_a_relay_the_repository_names_now(
@@ -432,3 +436,123 @@ async def test_spilled_mail_is_not_filed_in_a_relay_the_repository_names_now(
 
     kept = "kept, not filed" in caplog.text
     assert (await _mailbox(harness), spill.pending(), kept) == ([], 1, True)
+
+
+async def test_a_stale_fallback_that_cannot_be_deleted_costs_the_next_session_nothing(
+    harness: Harness, tmp_path: Path
+) -> None:
+    session = await _session(harness)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "spill.json").write_text(json.dumps({"spilled": []}))
+    primary = tmp_path / "spill.json"
+    spill = Spill(primary, elsewhere / "spill.json")
+    elsewhere.chmod(stat.S_IRUSR | stat.S_IXUSR)  # the stale fallback stays
+    try:
+        spill.hold(session, [_message("a")])
+        spill.hold(session, [_message("b")])
+    finally:
+        elsewhere.chmod(stat.S_IRWXU)
+
+    assert Spill(primary, elsewhere / "spill.json").pending() == 2
+
+
+async def test_a_stale_primary_is_not_merged_with_the_newer_fallback(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = await _session(harness)
+    monkeypatch.setattr(PickyRelay, "poison", "y")
+    spill = _spill(tmp_path)
+    spill.hold(session, [_message("x"), _message("y")])
+    tmp_path.chmod(stat.S_IRUSR | stat.S_IXUSR)  # the primary cannot be replaced
+    try:
+        await spill.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+    finally:
+        tmp_path.chmod(stat.S_IRWXU)
+
+    # x was filed and y stays; the next start must not see x again.
+    assert _spill(tmp_path).pending() == 1
+
+
+async def test_fresh_mail_is_not_shelved_with_the_old_mail_of_its_session(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _session(harness)
+    monkeypatch.setattr(PickyRelay, "poison", "poison")
+    old = datetime.now(UTC) - timedelta(days=8)
+    entry = Spilled(
+        session_id="s-one",
+        agent=False,
+        cwd="/work/repo",
+        user="kai",
+        held=(
+            Held(message=_message("poison"), since=old),
+            Held(message=_message("poison")),  # spilled just now
+        ),
+    )
+    _seed(tmp_path, entry)
+
+    spill = _spill(tmp_path)
+    await spill.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+
+    assert (spill.pending(), spill.undeliverable()) == (1, 1)
+
+
+async def test_shelved_mail_stays_counted_in_the_status_and_is_reported_at_start(
+    harness: Harness,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    await _session(harness)
+    monkeypatch.setattr(PickyRelay, "poison", "poison")
+    old = datetime.now(UTC) - timedelta(days=8)
+    _seed(tmp_path, _spilled("s-one", "poison", since=old))
+    await _spill(tmp_path).refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+
+    again = _spill(tmp_path)  # the next start
+    with caplog.at_level(logging.ERROR, logger="biff.daemon.spill"):
+        await again.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+    shown = again.annotate(CommandResult(text="biff", json_data={"user": "kai"}))
+
+    assert (
+        again.undeliverable(),
+        "1 spilled messages are shelved as undeliverable" in caplog.text,
+        "undeliverable: 1 spilled messages are shelved" in shown.text,
+        shown.json_data,
+    ) == (1, True, True, {"user": "kai", "undeliverable_messages": 1})
+
+
+async def test_no_log_line_carries_the_userinfo_of_a_relay_url(
+    harness: Harness, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    await _session(harness)
+    secret = Spilled.relay_id("nats://alice:s3cret-token@old-server:4222", "repo")
+    entry = _spilled("s-moved", "stays").model_copy(update={"relay": secret})
+    _seed(tmp_path, entry)
+
+    with caplog.at_level(logging.DEBUG):
+        await _spill(tmp_path).refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+
+    text = caplog.text + (_files(tmp_path)[0]).read_text()
+    assert ("old-server:4222" in text, "s3cret" in text, "alice" in text) == (
+        True,
+        False,
+        False,
+    )
+
+
+async def test_the_newer_snapshot_wins_whichever_file_holds_it(tmp_path: Path) -> None:
+    primary, fallback = _files(tmp_path)
+    older = SpillFile(primary, fallback)
+    older.write({("s-one", False): _spilled("s-one", "x", "y")})
+    newer = SpillFile(primary, fallback)
+    newer.read()
+    text = json.loads(primary.read_text())
+    only_y = _spilled("s-one", "y").model_dump(mode="json")
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text(json.dumps({"seq": text["seq"] + 1, "spilled": [only_y]}))
+
+    (item,) = SpillFile(primary, fallback).read().values()
+
+    assert [m.body for m in item.messages] == ["y"]

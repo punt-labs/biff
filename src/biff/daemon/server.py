@@ -59,6 +59,7 @@ class DaemonStatus:
     relay_connections: int
     sessions: tuple[SessionStatus, ...]
     spilled: int
+    undeliverable: int
 
 
 @final
@@ -162,6 +163,7 @@ class BiffDaemon:
             relay_connections=self._core.pool.connection_count,
             sessions=self._core.sessions.statuses,
             spilled=self._spill.pending(),
+            undeliverable=self._spill.undeliverable(),
         )
 
     async def start(self) -> None:

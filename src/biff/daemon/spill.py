@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, ClassVar, Self, cast, final
 
 from biff.commands._result import CommandResult
 from biff.daemon.mail_transfer import MailTransfer
-from biff.daemon.spill_file import Spilled, SpillFile, SpillKey
+from biff.daemon.spill_file import Held, Spilled, SpillFile, SpillKey
 from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
@@ -56,23 +56,37 @@ class Spill:
 
     def pending(self) -> int:
         """Return how many spilled messages wait to be filed back."""
-        return sum(len(item.messages) for item in self._load().values())
+        return sum(len(item.held) for item in self._load().values())
+
+    def undeliverable(self) -> int:
+        """Return how many spilled messages are shelved as undeliverable."""
+        return self._file.shelved()
 
     def annotate(self, status: CommandResult) -> CommandResult:
         """Return the status *status* with the spilled mail it should show.
 
         No spilled mail, no line: ``biff status`` stays as it was.
         """
-        waiting = sum(len(item.messages) for item in self._load().values())
-        if not waiting:
+        shown = {
+            "spilled_messages": sum(len(i.held) for i in self._load().values()),
+            "undeliverable_messages": self._file.shelved(),
+        }
+        counts = {name: n for name, n in shown.items() if n}
+        if not counts:
             return status
+        lines = [
+            f"spilled: {n} messages pending to be filed"
+            if name == "spilled_messages"
+            else f"undeliverable: {n} spilled messages are shelved"
+            for name, n in counts.items()
+        ]
         data = status.json_data
-        shown: object = data
+        merged: object = data
         if isinstance(data, dict):
-            shown = {**cast("dict[str, object]", data), "spilled_messages": waiting}
+            merged = {**cast("dict[str, object]", data), **counts}
         return CommandResult(
-            text=f"{status.text}\nspilled: {waiting} messages pending to be filed",
-            json_data=shown,
+            text="\n".join([status.text, *lines]),
+            json_data=merged,
             error=status.error,
         )
 
@@ -90,7 +104,7 @@ class Spill:
             user=session.context.user,
             session_key=session.context.session_key,
             relay=Spilled.relay_id(config.relay_url, config.repo_name),
-            messages=(),
+            held=(),
         )
         merged[key] = spilled.with_mail(messages)
         try:
@@ -116,6 +130,8 @@ class Spill:
         than :attr:`UNDELIVERABLE_AFTER` goes to the shelf beside it.  Refiled
         copies carry derived ids, so a message filed twice is one.
         """
+        if shelved := self._file.shelved():
+            logger.error("%d spilled messages are shelved as undeliverable", shelved)
         pending = dict(self._load())
         if not pending:
             return
@@ -155,39 +171,49 @@ class Spill:
         try:
             async with asyncio.timeout(core.attach_timeout):
                 resolved = await core.resolver.resolve(item.hello())
-                if item.relay and item.relay != Spilled.relay_id(
+                now = Spilled.relay_id(
                     resolved.config.relay_url, resolved.config.repo_name
-                ):
+                )
+                if item.relay and item.relay != now:
                     logger.error(
                         "the mail of session %s came from relay %s, which is not the "
                         "one the repository names now (%s): kept, not filed",
                         item.session_id,
                         item.relay,
-                        resolved.config.relay_url,
+                        now,
                     )
                 else:
                     await self._deliver(core.pool.acquire(resolved), item, filed)
         except Exception:
             logger.exception("could not file the spilled mail of %s", item.session_id)
-        left = tuple(m for m in item.messages if m.id not in filed)
-        if not left:
-            return None
-        rest = item.model_copy(update={"messages": left})
-        if rest.age() <= self.UNDELIVERABLE_AFTER:
-            logger.error(
-                "%d spilled messages of session %s are still unfiled after %s",
-                len(left),
-                item.session_id,
-                item.age(),
-            )
-            return rest
+        left = tuple(h for h in item.held if h.message.id not in filed)
+        return self._keep(item, self._shelve_old(item, left))
+
+    def _shelve_old(self, item: Spilled, left: tuple[Held, ...]) -> tuple[Held, ...]:
+        """Move what has failed past :attr:`UNDELIVERABLE_AFTER` to the shelf."""
+        old = [h for h in left if h.age() > self.UNDELIVERABLE_AFTER]
+        if not old or not self._file.shelve(item.keeping(old)):
+            return left
         logger.error(
             "%d spilled messages of session %s failed for %s: shelved as undeliverable",
+            len(old),
+            item.session_id,
+            max(h.age() for h in old),
+        )
+        return tuple(h for h in left if h not in old)
+
+    @staticmethod
+    def _keep(item: Spilled, left: tuple[Held, ...]) -> Spilled | None:
+        """Return *item* holding *left*, or ``None`` when nothing is left."""
+        if not left:
+            return None
+        logger.error(
+            "%d spilled messages of session %s are still unfiled (oldest %s)",
             len(left),
             item.session_id,
-            item.age(),
+            max(h.age() for h in left),
         )
-        return None if self._file.shelve(rest) else rest
+        return item.keeping(left)
 
     @staticmethod
     async def _deliver(relay: Relay, item: Spilled, filed: set[object]) -> None:
