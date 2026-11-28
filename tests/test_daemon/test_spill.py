@@ -395,3 +395,40 @@ def test_a_failed_replace_leaves_the_old_file_and_no_temporary(
 
     left = [p.name for p in tmp_path.iterdir()]
     assert ((tmp_path / "file.json").read_text(), left) == ("old", ["file.json"])
+
+
+async def test_spilled_mail_of_a_session_that_ended_goes_to_its_users_mailbox(
+    harness: Harness, tmp_path: Path
+) -> None:
+    await _session(harness)
+    ended = Spilled(
+        session_id="s-gone",
+        agent=False,
+        cwd="/work/repo",
+        user="kai",
+        session_key="kai:no-row-for-this",  # the relay lists no such session
+        messages=(Message(from_user="eric", to_user="kai:ghost", body="for the dead"),),
+    )
+    _seed(tmp_path, ended)
+
+    spill = _spill(tmp_path)
+    await spill.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+
+    assert (await _mailbox(harness), spill.pending()) == (["for the dead"], 0)
+
+
+async def test_spilled_mail_is_not_filed_in_a_relay_the_repository_names_now(
+    harness: Harness, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    await _session(harness)
+    elsewhere = _spilled("s-moved", "stays").model_copy(
+        update={"relay": "nats://old-server|repo"}
+    )
+    _seed(tmp_path, elsewhere)
+
+    spill = _spill(tmp_path)
+    with caplog.at_level(logging.ERROR, logger="biff.daemon.spill"):
+        await spill.refile(harness.daemon._core)  # pyright: ignore[reportPrivateUsage]
+
+    kept = "kept, not filed" in caplog.text
+    assert (await _mailbox(harness), spill.pending(), kept) == ([], 1, True)

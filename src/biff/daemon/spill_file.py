@@ -45,8 +45,17 @@ class Spilled(BaseModel):
     agent: bool
     cwd: str
     user: str
+    session_key: str = ""
+    """The session's relay key; empty in a file written before it was kept."""
+    relay: str = ""
+    """Which relay the mail came from (see :meth:`relay_id`); empty: not known."""
     since: datetime = Field(default_factory=_now)
     messages: tuple[Message, ...]
+
+    @staticmethod
+    def relay_id(relay_url: str | None, repo_name: str) -> str:
+        """Return what tells one relay from another for a session, without a secret."""
+        return f"{relay_url or 'local'}|{repo_name}"
 
     @property
     def key(self) -> SpillKey:

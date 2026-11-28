@@ -139,6 +139,14 @@
 
 ### Fixed
 
+- A graceful stop of biffd no longer loses mail a consuming relay had already given
+  up. What the hand-back cannot file within its budget, a relay refused, or a read
+  still fetching delivers late is written to `~/.punt-labs/biff/handback-spill.json`
+  (0600, synced; a second copy goes to the run directory if that cannot be written),
+  and the next start files it back before it serves. A file or entry that cannot be
+  read is set aside under a new name, never overwritten; mail that cannot be filed
+  for seven days goes to `handback-spill.undeliverable`. `biff status` shows how
+  many spilled messages are pending.
 - A daemon restart no longer forgets harness sessions, which stranded the mail
   waiting in their relay inbox. biffd keeps each harness session's record on disk
   (`~/.punt-labs/biff/harness-sessions/`), builds the sessions again at start, and

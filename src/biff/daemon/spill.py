@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, ClassVar, Self, cast, final
 
 from biff.commands._result import CommandResult
+from biff.daemon.mail_transfer import MailTransfer
 from biff.daemon.spill_file import Spilled, SpillFile, SpillKey
 from biff.relay_errors import RELAY_ERRORS
 
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
     from biff.daemon.connection import DaemonCore
     from biff.daemon.sessions import Session
     from biff.models import Message
+    from biff.relay import Relay
 
 __all__ = ["Spill"]
 
@@ -80,11 +82,14 @@ class Spill:
             return
         merged = dict(self._load())
         key = (session.session_id, session.is_agent)
+        config = session.context.config
         spilled = merged.get(key) or Spilled(
             session_id=session.session_id,
             agent=session.is_agent,
             cwd=session.cwd,
             user=session.context.user,
+            session_key=session.context.session_key,
+            relay=Spilled.relay_id(config.relay_url, config.repo_name),
             messages=(),
         )
         merged[key] = spilled.with_mail(messages)
@@ -150,14 +155,18 @@ class Spill:
         try:
             async with asyncio.timeout(core.attach_timeout):
                 resolved = await core.resolver.resolve(item.hello())
-                relay = core.pool.acquire(resolved)
-                for message in item.messages:
-                    try:
-                        await relay.deliver(message.refiled())
-                    except RELAY_ERRORS:
-                        logger.exception("could not file spilled %s", message.id)
-                    else:
-                        filed.add(message.id)
+                if item.relay and item.relay != Spilled.relay_id(
+                    resolved.config.relay_url, resolved.config.repo_name
+                ):
+                    logger.error(
+                        "the mail of session %s came from relay %s, which is not the "
+                        "one the repository names now (%s): kept, not filed",
+                        item.session_id,
+                        item.relay,
+                        resolved.config.relay_url,
+                    )
+                else:
+                    await self._deliver(core.pool.acquire(resolved), item, filed)
         except Exception:
             logger.exception("could not file the spilled mail of %s", item.session_id)
         left = tuple(m for m in item.messages if m.id not in filed)
@@ -179,6 +188,26 @@ class Spill:
             item.age(),
         )
         return None if self._file.shelve(rest) else rest
+
+    @staticmethod
+    async def _deliver(relay: Relay, item: Spilled, filed: set[object]) -> None:
+        """File each message of *item* with *relay*, noting the ones that went.
+
+        A session the relay no longer lists has ended: its mail goes to its user's
+        mailbox, as an end would have sent it, not to an inbox nobody reads.
+        """
+        key = item.session_key
+        ended = bool(key) and await relay.get_session(key) is None
+        for message in item.messages:
+            try:
+                if ended:
+                    await MailTransfer(relay).forward(key, item.user, message)
+                else:
+                    await relay.deliver(message.refiled())
+            except RELAY_ERRORS:
+                logger.exception("could not file spilled %s", message.id)
+            else:
+                filed.add(message.id)
 
     def _load(self) -> dict[SpillKey, Spilled]:
         """Return what the files hold, read once."""
