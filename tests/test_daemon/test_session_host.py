@@ -6,7 +6,8 @@ import asyncio
 import dataclasses
 import threading
 import time
-from collections.abc import Callable, Coroutine
+import uuid
+from collections.abc import Callable, Coroutine, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -417,10 +418,34 @@ class _FailingMailbox(LocalRelay):
 class _ConsumingFetch(_FailingMailbox):
     """Models the NATS work queue: fetch removes what it returns."""
 
+    consumes_on_fetch = True
+
     async def fetch(self, session_key: str) -> list[Message]:
         unread = await super().fetch(session_key)
         await self.mark_read(session_key, [m.id for m in unread])
         return unread
+
+
+class _UnconfirmedAck(_ConsumingFetch):
+    """A consuming relay whose ack of one body is unconfirmed: it stays queued once."""
+
+    unconfirmed = "two"
+
+    def __init__(self, data_dir: Path, *, fail_on: int) -> None:
+        super().__init__(data_dir, fail_on=fail_on)
+        self._queued_once = True
+
+    async def fetch(self, session_key: str) -> list[Message]:
+        unread = await _FailingMailbox.fetch(self, session_key)
+        keep = [m for m in unread if m.body == self.unconfirmed and self._queued_once]
+        self._queued_once = False
+        await LocalRelay.mark_read(
+            self, session_key, [m.id for m in unread if m not in keep]
+        )
+        return unread
+
+    async def mark_read(self, session_key: str, ids: Sequence[uuid.UUID]) -> None:
+        """Do nothing: the NATS relay consumed the mail at fetch."""
 
 
 def _with_relay(host: SessionHost, relay: LocalRelay) -> SessionHost:
@@ -443,9 +468,53 @@ class TestDrainFailure:
                     body="hi",
                 )
             ],
+            set(),
         )
         assert "Lost 1 (tty=safe-session-id)" in caplog.text
         assert "private-login" not in caplog.text
+
+    async def test_a_batch_of_consumed_and_unconfirmed_mail_loses_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """Forwarding fails on a batch where "two" is still queued, "three" is not."""
+        base = _host(tmp_path)
+        record = await base.create("alpha")
+        host = _with_relay(base, _UnconfirmedAck(tmp_path / "relay", fail_on=2))
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        for body in ("one", "two", "three"):
+            await host.relay.deliver(Message(from_user="eric", to_user=key, body=body))
+
+        with pytest.raises(ConnectionError):
+            await host.end(record)
+
+        in_mailbox = [m.body for m in await host.relay.fetch_user_inbox("kai")]
+        in_session = [m.body for m in await host.relay.fetch(key)]
+        assert in_mailbox == ["one"]
+        assert sorted(in_session) == ["three", "two"]
+
+    async def test_a_retry_after_an_unconfirmed_forward_makes_one_copy(
+        self, tmp_path: Path
+    ) -> None:
+        """The ack of forwarded "one" is unconfirmed; the drain then fails on "two"."""
+
+        class OneUnconfirmed(_UnconfirmedAck):
+            unconfirmed = "one"
+
+        base = _host(tmp_path)
+        record = await base.create("alpha")
+        host = _with_relay(base, OneUnconfirmed(tmp_path / "relay", fail_on=2))
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        for body in ("one", "two"):
+            await host.relay.deliver(Message(from_user="eric", to_user=key, body=body))
+
+        with pytest.raises(ConnectionError):
+            await host.end(record)
+        await host.end(record)
+
+        in_mailbox = [m.body for m in await host.relay.fetch_user_inbox("kai")]
+        in_session = [m.body for m in await host.relay.fetch(key)]
+        assert sorted(in_mailbox) == ["one", "two"]
+        assert in_session == []
 
     @pytest.mark.parametrize("relay_cls", [_FailingMailbox, _ConsumingFetch])
     async def test_failed_drain_neither_duplicates_nor_loses(
