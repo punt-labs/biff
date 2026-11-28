@@ -14,6 +14,7 @@ import pytest
 
 from biff.client.connection import ClientIdentity, DaemonClient, RequestTimeoutError
 from biff.daemon.connection import ConnectionHandler
+from biff.frame_reply import Reply
 from biff.relay import LocalRelay
 from tests.test_daemon.consuming import ConsumingRelay
 
@@ -21,6 +22,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from websockets.asyncio.server import ServerConnection
+
+    from biff.frame_proof import Proof
+    from biff.frames import Event
     from biff.models import Message, UnreadSummary
     from tests.test_daemon.conftest import Harness
 
@@ -144,21 +149,31 @@ async def _short_patience_client(harness: Harness, timeout: float) -> DaemonClie
 async def test_a_reply_the_client_gave_up_on_does_not_consume_the_mail(
     harness: Harness,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
     relay_type: Callable[[Path], LocalRelay],
 ) -> None:
     harness.factory.relay_type = relay_type
+    carried: list[Reply] = []
+    written = asyncio.Event()
+    send = ConnectionHandler._send  # pyright: ignore[reportPrivateUsage]
+
+    async def recording_send(
+        ws: ServerConnection, frame: Reply | Event | Proof
+    ) -> bool:
+        sent = await send(ws, frame)
+        if sent and isinstance(frame, Reply) and frame.needs_ack:
+            carried.append(frame)  # a success reply that carries mail
+            written.set()
+        return sent
+
     kai = await _short_patience_client(harness, 0.1)
     eric = await harness.connect("s-eric", "eric")
     await eric.request("write", to="kai", message="do not lose me")
     monkeypatch.setattr(relay_type, "delay", 0.25)
+    monkeypatch.setattr(ConnectionHandler, "_send", staticmethod(recording_send))
     with pytest.raises(RequestTimeoutError):
         await kai.request("read")  # the daemon replies after the client left
-    # The client logs a reply to a request it abandoned, so that line proves the
-    # daemon finished the read and its late reply was written and discarded.
-    async with asyncio.timeout(_WAIT):
-        while "answered after it was abandoned" not in caplog.text:
-            await asyncio.sleep(0.01)
+    await asyncio.wait_for(written.wait(), _WAIT)  # the late reply was written
+    assert _bodies(carried[0].result) == ["do not lose me"]
     monkeypatch.setattr(relay_type, "delay", 0.0)
     assert _bodies(await kai.request("read")) == ["do not lose me"]
 
