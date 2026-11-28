@@ -143,6 +143,16 @@ class TestSystemdUnit:
         text = SystemdBackend(BIFFD_SPEC).unit_text()
         assert "StartLimitIntervalSec=" in text and "StartLimitBurst=" in text
 
+    def test_systemd_waits_for_the_daemons_whole_stop_before_it_kills_it(
+        self, home: Path
+    ) -> None:
+        # The same ordering as launchd's ExitTimeOut: above the stop, below the
+        # limit of the call that waits for it.
+        lines = SystemdBackend(BIFFD_SPEC).unit_text().splitlines()
+        (given,) = (ln for ln in lines if ln.startswith("TimeoutStopSec="))
+        seconds = float(given.partition("=")[2])
+        assert Handback.STOP_SECONDS < seconds < Supervisor.STOP_TIMEOUT_SECONDS
+
     def test_a_permanent_failure_status_is_not_restarted(self, home: Path) -> None:
         text = SystemdBackend(BIFFD_SPEC).unit_text()
         assert f"RestartPreventExitStatus={BIFFD_SPEC.permanent_exit_status}" in text

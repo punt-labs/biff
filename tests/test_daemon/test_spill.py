@@ -9,6 +9,7 @@ import json
 import logging
 import pathlib
 import stat
+import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, ClassVar
 
@@ -963,6 +964,34 @@ def test_an_emptied_snapshot_written_while_a_file_was_unread_is_not_replayed(
     monkeypatch.undo()
 
     assert SpillFile(primary, fallback).read() == {}
+
+
+def test_a_clock_behind_the_unread_file_still_ranks_new_snapshots_above_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary, fallback = _files(tmp_path)
+    SpillFile(primary, fallback).write({("s-one", False): _spilled("s-one", "old")})
+    ahead = time.time_ns()  # the steady-state sequence of an earlier run
+    primary.write_text(
+        json.dumps(
+            {
+                "seq": ahead,
+                "spilled": [_spilled("s-one", "old").model_dump(mode="json")],
+            }
+        )
+    )
+    _unreadable_by_io(monkeypatch, primary)
+    daemon = SpillFile(primary, fallback)
+    behind = ahead - 3_600 * 10**9  # the host booted with its clock an hour back
+    monkeypatch.setattr(time, "time_ns", lambda: behind)
+    daemon.read()
+    daemon.write({("s-two", False): _spilled("s-two", "FRESH")})
+    monkeypatch.undo()
+
+    restarted = SpillFile(primary, fallback)
+    got = restarted.read()
+
+    assert sorted(m.body for item in got.values() for m in item.messages) == ["FRESH"]
 
 
 def test_an_unreadable_only_snapshot_is_left_in_place_and_logged(

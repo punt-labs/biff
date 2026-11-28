@@ -70,8 +70,11 @@ class SpillFile:
         if self._unread:
             # A file that could not be read has a sequence we do not know, so the
             # next snapshot must outrank any it can have: the clock does, now and
-            # after a restart, and the counter carries on from it.
-            self._seq = max(self._seq, time.time_ns())
+            # after a restart, and the counter carries on from it.  A clock that
+            # was set back is no bound, but the file was last written after its
+            # sequence was taken, so its modification time is one.
+            floor = max((self._mtime_ns(p) for p in self._unread), default=0)
+            self._seq = max(self._seq, time.time_ns(), floor + 1)
             self._say_unread(seq, items)
         if len(self.asides("unreadable")) > before and items:
             logger.critical(
@@ -79,6 +82,14 @@ class SpillFile:
                 "snapshot is used, and it may replay mail already filed back"
             )
         return {item.key: item for item in items}
+
+    @staticmethod
+    def _mtime_ns(path: Path) -> int:
+        """Return when *path* was last modified; 0 if it cannot even be examined."""
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return 0
 
     def _say_unread(self, seq: int, items: Sequence[Spilled]) -> None:
         """Say what an I/O failure reading a snapshot means for the mail."""

@@ -19,6 +19,9 @@ __all__ = ["SystemdBackend"]
 
 _START_LIMIT_SECONDS = 60
 _START_LIMIT_BURST = 5
+# How long systemd waits for biffd's stop before it kills it: above the daemon's
+# own stop budget, below the limit of the supervisor call that waits for it.
+_STOP_TIMEOUT_SECONDS = 45
 
 
 @final
@@ -85,6 +88,7 @@ class SystemdBackend:
             ExecStart={exec_start}
             Restart={restart}
             RestartSec=5
+            TimeoutStopSec={_STOP_TIMEOUT_SECONDS}
             RestartPreventExitStatus={self._spec.permanent_exit_status}
 
             [Install]

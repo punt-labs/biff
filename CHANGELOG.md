@@ -186,8 +186,9 @@
   plist sets `ExitTimeOut` above the whole stop budget (a restart waits longer than
   that), and the `systemctl` and `launchctl` calls that wait for the stop (stop,
   restart, install, uninstall) give it 60 s, so an install no longer rolls the unit
-  back in the middle of the hand-back; an existing LaunchAgent keeps launchd's
-  default kill timeout until `biff daemon install` rewrites its plist. The next start files the spill back
+  back in the middle of the hand-back; the systemd unit sets `TimeoutStopSec=45` to
+  match, and an existing LaunchAgent or unit keeps its old kill timeout until
+  `biff daemon install` rewrites it. The next start files the spill back
   before it serves, a running daemon keeps trying (after 5, 15 and 45 s, then every
   five minutes), and mail goes to `handback-spill.undeliverable` only after 20
   failed tries and seven days of failing (days with the daemon off do not count);
