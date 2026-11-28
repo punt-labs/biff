@@ -13,11 +13,13 @@ from biff._stdlib import (
     sanitize_repo_name,
 )
 from biff.models import UnreadSummary
+from biff.plugins.claude_code.daemon_session_end import DaemonSessionCloser
 from biff.plugins.claude_code.hook_daemon import HookDaemon
 from biff.plugins.claude_code.unread_file import write_unread_file
 from biff.session_registry import write_marker
 
 if TYPE_CHECKING:
+    from biff.client.connection import DaemonClient
     from biff.session_routing import SessionRouting
 
 __all__ = ["DaemonSessionOpener"]
@@ -66,9 +68,33 @@ class DaemonSessionOpener:
         if (routing := daemon.routing_of(data)) is None:
             return None
         where = daemon.cwd_of(data)
-        async with daemon.deadline():
-            status = await self._status(routing, where)
-        key = str(status["session_key"])
+        started = False
+        key = ""
+        try:
+            async with daemon.deadline():
+                # The run is recorded now, so a late end from an older process is
+                # refused.
+                client = await daemon.client(
+                    routing, where, run=daemon.run_of(os.environ)
+                )
+                started = True  # biffd has the session from the hello on
+                status = await self._status(client)
+            key = str(status["session_key"])
+            self._leave_files(routing, where, key, status)
+        except (TimeoutError, KeyError, OSError):
+            if started:
+                await self._abandon(routing, data, key)
+            raise
+        return key
+
+    def _leave_files(
+        self,
+        routing: SessionRouting,
+        where: str,
+        key: str,
+        status: dict[str, object],
+    ) -> None:
+        daemon = self._daemon
         root = find_git_root(Path(where)) or Path(where)
         repo_name = sanitize_repo_name(get_repo_slug(root) or root.name)
         write_marker(repo_name, key, get_repo_common_root(where))
@@ -81,13 +107,16 @@ class DaemonSessionOpener:
             biff_enabled=True,
         )
         daemon.handles.write(routing, key)
-        return key
 
-    async def _status(self, routing: SessionRouting, cwd: str) -> dict[str, object]:
-        # The run is recorded now, so a late end from an older process is refused.
-        client = await self._daemon.client(
-            routing, cwd, run=self._daemon.run_of(os.environ)
-        )
+    async def _abandon(
+        self, routing: SessionRouting, data: dict[str, object], key: str
+    ) -> None:
+        """Undo a partial open: biffd has the session, the files are not all here."""
+        self._daemon.forget(routing, key or None)
+        await DaemonSessionCloser(self._daemon).end(data)
+
+    @staticmethod
+    async def _status(client: DaemonClient) -> dict[str, object]:
         try:
             reply = await client.request("status")
         finally:

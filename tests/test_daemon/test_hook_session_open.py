@@ -171,3 +171,35 @@ async def test_open_records_the_repo_common_root_in_the_active_marker(
     assert key is not None
     marker = active_dir() / key.replace(":", "-")
     assert marker.read_text().splitlines()[2] == str(repo.resolve())
+
+
+async def test_a_partial_open_ends_the_session_it_started(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "work" / "repo"
+    repo.mkdir(parents=True)
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        msg = "disk full"
+        raise OSError(msg)
+
+    monkeypatch.setattr(
+        "biff.plugins.claude_code.daemon_session.write_unread_file", broken
+    )
+    handles = SessionHandleStore(tmp_path / "sessions")
+    opener = DaemonSessionOpener(
+        HookDaemon(
+            connect=_connector(harness),
+            unread_dir=tmp_path / "unread",
+            handles=handles,
+            deadline=5.0,
+        ),
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        await opener.open({"session_id": "sess-1", "cwd": str(repo)})
+
+    # The daemon has no session without the files that go with it.
+    assert harness.daemon.status().sessions == ()
+    assert handles.read(SessionRouting("sess-1")) is None
+    assert not active_dir().exists() or not list(active_dir().iterdir())

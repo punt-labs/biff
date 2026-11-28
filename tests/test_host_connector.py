@@ -40,3 +40,23 @@ def test_a_slow_service_manager_does_not_outlive_the_deadline(
         asyncio.run(attempt())
 
     assert time.monotonic() - start < _SLOW / 2
+
+
+def _unstartable_for_host(_run_dir: RunDir) -> DaemonNudge:
+    msg = "biffd is not installed"
+    raise ConnectionError(msg)
+
+
+def test_a_biffd_that_cannot_start_is_a_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(DaemonNudge, "for_host", staticmethod(_unstartable_for_host))
+    connector = HostConnector(RunDir(tmp_path / "run"))
+    identity = ClientIdentity(client="hook", session_id="s1", cwd=str(tmp_path))
+
+    with caplog.at_level("WARNING"), pytest.raises(ConnectionError):
+        asyncio.run(connector.connect(identity))
+
+    assert "could not reach or start biffd" in caplog.text

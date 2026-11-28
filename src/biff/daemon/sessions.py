@@ -334,6 +334,16 @@ class Session:
             for held in tuple(self._attachments):
                 if held.replaced_by(run):
                     held.replace()
+        return self.attach_as(run)
+
+    def attach_as(self, run: str) -> Attachment:
+        """Attach a connection that claims *run* without admitting it.
+
+        The run is not recorded, so it cannot replace the session's current run.
+        A connection that ends the session uses this: when a newer run is
+        admitted later, this one is replaced like any other of the older run, and
+        its end is refused.
+        """
         attachment = Attachment(self, run)
         self._attachments.add(attachment)
         self._talk.start()
@@ -489,7 +499,7 @@ class SessionTable:
                 msg = f"biffd holds no session {hello.session_id}; nothing to end"
                 raise RefusalError.of(ErrorCode.SESSION_ENDED, msg)
             session.check_ends_for(hello)
-            return session.attach("")
+            return session.attach_as(hello.main_agent_id)
 
     def holding(self, session_id: str) -> Session | None:
         """Return the shell session *session_id* if the daemon holds it."""

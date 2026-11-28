@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from typing import TYPE_CHECKING
 
@@ -15,11 +16,15 @@ if TYPE_CHECKING:
 
 
 class _Recording:
-    def __init__(self) -> None:
-        self.ended: list[dict[str, object]] = []
+    """A closer that records what it was asked and answers as configured."""
 
-    async def end(self, data: dict[str, object]) -> None:
+    def __init__(self, *, settles: bool = True) -> None:
+        self.ended: list[dict[str, object]] = []
+        self._settles = settles
+
+    async def end(self, data: dict[str, object]) -> bool:
         self.ended.append(data)
+        return self._settles
 
 
 def _checkout(path: Path, transport: str) -> Path:
@@ -61,15 +66,43 @@ def test_a_checkout_that_chose_in_process_is_left_to_the_sentinel_path(
     assert closer.ended == []
 
 
-def test_a_resume_end_does_not_close_the_session_that_carries_on(
-    closer: _Recording, tmp_path: Path
+@pytest.mark.parametrize("reason", ["resume", "clear", "logout", "other"])
+def test_every_reason_ends_the_session(
+    closer: _Recording, tmp_path: Path, reason: str
 ) -> None:
+    # /resume inside a session switches to a different session id: the old one
+    # has ended whatever the reason says, and the run check protects a session
+    # that is really reopened.
     root = _checkout(tmp_path / "a", "daemon")
-    data: dict[str, object] = {
-        "session_id": "s1",
-        "cwd": str(root),
-        "reason": "resume",
-    }
+    data: dict[str, object] = {"session_id": "s1", "cwd": str(root), "reason": reason}
 
     assert SessionLifecycle(data).end_through_biffd() is True
+    assert closer.ended == [data]
+
+
+def test_a_closer_that_could_not_settle_leaves_the_sentinel_cleanup_to_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("BIFF_MCP_TRANSPORT", raising=False)
+    recording = _Recording(settles=False)
+    monkeypatch.setattr(DaemonSessionCloser, "for_host", lambda: recording)
+    root = _checkout(tmp_path / "a", "daemon")
+
+    handled = SessionLifecycle(
+        {"session_id": "s1", "cwd": str(root)}
+    ).end_through_biffd()
+
+    assert handled is False
+
+
+def test_a_payload_without_a_session_id_is_logged_and_runs_no_reaper(
+    closer: _Recording, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    root = _checkout(tmp_path / "a", "daemon")
+
+    with caplog.at_level(logging.WARNING):
+        handled = SessionLifecycle({"cwd": str(root)}).end_through_biffd()
+
+    assert handled is True  # biffd may hold the session; the reaper must not run
     assert closer.ended == []
+    assert "no usable session_id" in caplog.text

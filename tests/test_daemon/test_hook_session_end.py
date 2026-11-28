@@ -6,8 +6,6 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import pytest
-
 from biff._stdlib import active_dir
 from biff.client.connection import ClientIdentity, DaemonClient
 from biff.plugins.claude_code.daemon_session import DaemonSessionOpener
@@ -120,5 +118,5 @@ async def test_end_gives_up_at_its_deadline_when_biffd_does_not_answer(
         ),
     )
 
-    with pytest.raises(TimeoutError):
-        await closer.end({"session_id": "sess-1", "cwd": str(tmp_path)})
+    # Not confirmed: the caller falls back to the sentinel cleanup.
+    assert await closer.end({"session_id": "sess-1", "cwd": str(tmp_path)}) is False

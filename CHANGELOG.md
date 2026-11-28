@@ -10,8 +10,18 @@
   status file and handle; SessionEnd sends `end`, then removes those files. Each
   call has an 8 s deadline, and a failure is logged without breaking the session.
   `session-end.sh` now hands the hook payload to its detached call, with a read
-  bounded at 2 s, so the call knows which session ended. The sentinel path stays
-  for the in-process transport.
+  bounded at 2 s, so the call knows which session ended. SessionEnd ends the
+  session for every reason (`/resume` inside a session switches to another
+  session id), and the run check protects a session that is really reopened: the
+  end hello is attached with its own run and not admitted, so a newer run admitted
+  meanwhile gets the end refused. The hook's budget (15 s) counts from its
+  process start, under the script's 20 s kill limit; biffd runs an end it has
+  begun to the finish even if the caller goes away. When biffd cannot be reached
+  or refuses the end hello (an older biffd), the failure is logged at WARNING and
+  the sentinel cleanup runs; once the end was sent the outcome is uncertain, so
+  local files are kept and the retention sweep finishes it. A session opened
+  partly (a write failed, the deadline passed) is ended again. The sentinel path
+  stays for the in-process transport.
 - The hello frame has an optional `ends` flag. A client that sets it only ends
   the session: biffd attaches it to the session it holds, on the relay that
   session lives on, and creates or revives nothing. The SessionEnd hook uses it,

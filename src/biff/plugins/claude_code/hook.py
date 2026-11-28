@@ -731,7 +731,7 @@ def _open_session(data: dict[str, object]) -> None:
     """
     try:
         _lifecycle(data).open()
-    except (Exception, SystemExit):
+    except Exception:
         logger.warning("Failed to open session at SessionStart", exc_info=True)
 
 
@@ -823,19 +823,18 @@ def handle_pre_compact(data: dict[str, object] | None = None) -> str:
 def handle_session_end(data: dict[str, object] | None = None) -> int:
     """End the session of the SessionEnd payload through biffd, or reap markers.
 
-    With ``mcp.transport: daemon`` and a payload that names a session, biffd
-    ends that one session.  Otherwise active-session markers become sentinels
-    for the reaper.  Only sessions of the **current repo** are processed, so
-    ending one Claude Code session never reaps sessions of unrelated repos.
+    With ``mcp.transport: daemon`` biffd ends the one session the payload names.
+    Otherwise, or when biffd could not be asked, active-session markers become
+    sentinels for the reaper.  Only sessions of the **current repo** are
+    processed, so ending one Claude Code session never reaps sessions of
+    unrelated repos.
 
     Returns the number of sessions cleaned up.
 
     Raises:
-        ConnectionError: biffd is absent, cannot start, or sent an unreadable
-            reply.
-        TimeoutError: biffd did not answer in time.
+        SystemExit: The ``mcp.transport`` setting is invalid.
     """
-    if data and _lifecycle(data).end_through_biffd():
+    if _lifecycle(data or {}).end_through_biffd():
         return 1
     from biff._stdlib import (  # noqa: PLC0415
         active_dir,

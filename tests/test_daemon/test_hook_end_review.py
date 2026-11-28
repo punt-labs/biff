@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.client.connection import ClientIdentity, DaemonClient
+import pytest
+
+from biff.client.connection import (
+    ClientIdentity,
+    ConnectionLostError,
+    DaemonClient,
+    DaemonError,
+)
 from biff.plugins.claude_code.daemon_session import DaemonSessionOpener
 from biff.plugins.claude_code.daemon_session_end import DaemonSessionCloser
 from biff.plugins.claude_code.hook_daemon import HookDaemon
@@ -15,8 +22,6 @@ from tests.test_daemon.claude_seats import LoggingRelay, logging_relay, seat, un
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
-
-    import pytest
 
     from tests.test_daemon.conftest import Harness
 
@@ -133,3 +138,31 @@ async def test_a_session_the_hook_opened_is_ended_only_by_its_own_run(
     monkeypatch.setenv("CLAUDE_PID", "4242")
     await closer.end(payload)
     assert await relay.get_session(key) is None
+
+
+async def test_a_run_admitted_after_the_closer_attached_is_not_ended_by_it(
+    harness: Harness,
+) -> None:
+    s = await seat(harness, "s-race", run="4242")
+    closer = await DaemonClient.connect(  # run A's closer has passed the run check
+        run_dir=harness.run_dir,
+        port=harness.daemon.port,
+        identity=ClientIdentity(
+            client="hook",
+            session_id="s-race",
+            cwd="/work/repo",
+            main_agent_id="4242",
+            ends=True,
+        ),
+    )
+    # claude --resume right after the exit: run B's SessionStart is admitted.
+    newer = await harness.connect("s-race", "kai", client="hook", main_agent_id="4243")
+
+    try:
+        with pytest.raises((DaemonError, ConnectionLostError)):
+            await closer.request("end")
+    finally:
+        await closer.close()
+
+    assert await s.row_present() is True
+    await newer.request("status")  # run B still holds the session

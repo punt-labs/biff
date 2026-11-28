@@ -21,11 +21,14 @@ command -v biff-hook >/dev/null 2>&1 || exit 0
 # with timeout when available so a wedged startup cannot leave a process
 # lingering. `timeout` (GNU coreutils) is optional — not on a clean macOS —
 # so degrade: gtimeout, then no timeout. The child configures its own durable
-# diagnostics; the model does not consume its stdout or stderr.
+# diagnostics; the model does not consume its stdout or stderr. The limit
+# outlasts the call's own budget (15 s counted from its start, in
+# biff.plugins.claude_code.hook_daemon), so the call finishes or gives up, and
+# cleans up after itself, before this kills it mid-request.
 if command -v timeout >/dev/null 2>&1; then
-    _BIFF_TIMEOUT=(timeout 10)
+    _BIFF_TIMEOUT=(timeout 20)
 elif command -v gtimeout >/dev/null 2>&1; then
-    _BIFF_TIMEOUT=(gtimeout 10)
+    _BIFF_TIMEOUT=(gtimeout 20)
 else
     _BIFF_TIMEOUT=()
 fi

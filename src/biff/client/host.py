@@ -64,7 +64,7 @@ class HostConnector:
             try:
                 port = DaemonNudge.for_host(self._run_dir).ensure_running()
             except Exception as exc:
-                logger.debug("could not reach or start biffd", exc_info=True)
+                logger.warning("could not reach or start biffd", exc_info=True)
                 found.set_exception(exc)
             else:
                 found.set_result(port)

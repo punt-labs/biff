@@ -124,6 +124,25 @@ def _payload_recording_biff_hook_on_path(
     return env
 
 
+class TestSessionEndKeepsItsOwnBudget:
+    """The script's kill limit must outlast the call's own deadline."""
+
+    def test_the_limit_outlasts_the_calls_budget(self) -> None:
+        import re
+
+        from biff.plugins.claude_code.hook_daemon import DEADLINE_SECONDS
+
+        limits = {
+            int(n)
+            for n in re.findall(
+                r"_BIFF_TIMEOUT=\((?:g?timeout) (\d+)\)", _HOOK.read_text()
+            )
+        }
+
+        assert limits, "session-end.sh sets no timeout for the detached call"
+        assert min(limits) > DEADLINE_SECONDS
+
+
 class TestSessionEndPassesThePayload:
     """The detached call learns which session ended from the hook payload."""
 
