@@ -103,14 +103,26 @@ class SessionRows:
         key = f"{user}.{name}"
         try:
             entry = await names.get(key)
-            if not entry.value or entry.value.decode() != owner:
-                return False
-            await names.delete(key, last=entry.revision)
+        except (KeyNotFoundError, BucketNotFoundError):
+            return False
+        if not entry.value or entry.value.decode() != owner:
+            return False
+        return await self._delete_at(names, key, entry.revision)
+
+    @staticmethod
+    async def _delete_at(kv: KeyValue, key: str, revision: int | None) -> bool:
+        """Delete *key* only if it is still at *revision*; say whether it was.
+
+        ``KeyValue.delete`` does not translate a stale revision as ``update``
+        does: the server's wrong-last-sequence answer arrives as a
+        ``BadRequestError``.  A key that is already gone counts as not deleted.
+        *revision* is optional only in nats-py's types; an entry just read has one.
+        """
+        try:
+            await kv.delete(key, last=revision)
         except (KeyNotFoundError, BucketNotFoundError, KeyWrongLastSequenceError):
             return False
         except BadRequestError as exc:
-            # ``KeyValue.delete`` does not translate a stale revision as ``update``
-            # does: the server's wrong-last-sequence answer arrives as this error.
             if exc.err_code != _WRONG_LAST_SEQUENCE:
                 raise
             return False

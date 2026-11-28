@@ -489,3 +489,40 @@ async def test_a_request_timeout_names_the_log_the_daemon_writes(
     async for client in _client_of(run_dir, silent, request_timeout=0.1):
         with pytest.raises(RequestTimeoutError, match=re.escape(LOG_HINT)):
             await client.request("who")
+
+
+async def _answers_after_a_wait(ws: ServerConnection) -> None:
+    request = json.loads(str(await ws.recv()))
+    await asyncio.sleep(0.3)
+    result = {"confirmed": True}
+    reply = {"type": "reply", "version": 1, "id": request["id"], "result": result}
+    await ws.send(json.dumps(reply))
+    await ws.wait_closed()
+
+
+async def test_a_request_within_a_longer_deadline_outwaits_the_request_timeout(
+    run_dir: RunDir,
+) -> None:
+    async for client in _client_of(run_dir, _answers_after_a_wait, request_timeout=0.1):
+        assert await client.request_within(_WAIT, "channel_check") == {
+            "confirmed": True
+        }
+
+
+async def test_a_plain_request_gives_up_before_a_slow_answer(
+    run_dir: RunDir,
+) -> None:
+    async for client in _client_of(run_dir, _answers_after_a_wait, request_timeout=0.1):
+        with pytest.raises(RequestTimeoutError, match="channel_check"):
+            await client.request("channel_check")
+
+
+async def test_a_request_within_still_times_out_at_its_own_deadline(
+    run_dir: RunDir,
+) -> None:
+    async def silent(ws: ServerConnection) -> None:
+        await ws.wait_closed()
+
+    async for client in _client_of(run_dir, silent, request_timeout=5.0):
+        with pytest.raises(RequestTimeoutError, match=r"within 0\.1s"):
+            await client.request_within(0.1, "channel_check")

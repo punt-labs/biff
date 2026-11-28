@@ -199,6 +199,21 @@ async def test_channel_ack_refuses_params_it_does_not_know(rig: Rig) -> None:
         await kai.request("channel_ack", token="x", session_key="eric:abc")
 
 
+async def test_a_pending_check_follows_the_whole_summary_of_wall_and_mail(
+    rig: Rig,
+) -> None:
+    _, key = await _session(rig)
+    eric = await rig.harness.connect("s-eric", "eric")
+    await eric.request("wall", message="deploy freeze", duration="1h")
+    await eric.request("write", to=key, message="hello")
+    await _ask(rig, key)
+    again = await rig.harness.connect("s-kai", "kai", client="mcp")
+    await again.subscribe()
+    kinds = [(await _next(again)).kind for _ in range(3)]
+    assert kinds[-1] == "channel_check_request"
+    assert "channel_check_request" not in kinds[:-1]
+
+
 async def test_a_pending_check_never_precedes_the_summary(rig: Rig) -> None:
     kai, key = await _session(rig)
     await _ask(rig, key)

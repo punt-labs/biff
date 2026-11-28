@@ -258,6 +258,21 @@ async def test_unsupported_version_names_both_versions_and_the_fix(
     assert "biff daemon serve" in message
 
 
+async def test_a_version_one_client_is_told_to_upgrade_at_the_hello(
+    harness: Harness,
+) -> None:
+    """Version 1 predates the channel check event; it would drop mid-stream."""
+    opened = await _open(harness)
+    hello = opened.hello(harness.run_dir.read_token(), version=1)
+    async with opened.ws:
+        await opened.ws.send(Frames.encode(hello))
+        reply = Frames.decode(str(await opened.ws.recv()))
+    assert isinstance(reply, Reply)
+    assert reply.error is not None
+    assert reply.error.code is ErrorCode.UNSUPPORTED_VERSION
+    assert "client speaks protocol 1, biffd speaks 2" in reply.error.message
+
+
 async def test_unsupported_version_registers_no_session(harness: Harness) -> None:
     opened = await _open(harness)
     hello = opened.hello(harness.run_dir.read_token(), version=PROTOCOL_VERSION + 1)

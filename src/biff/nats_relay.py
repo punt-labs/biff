@@ -2277,8 +2277,10 @@ class NatsRelay(SessionRows):
             # outer ``kv`` is bound to, stranding this delete on a closed
             # connection instead of rebuilding.
             _, kv = await self._ensure_connected()
-            with suppress(KeyNotFoundError, BucketNotFoundError):
-                await kv.delete(key)
+            # Delete at the revision read: a wall posted since then is not
+            # ours to remove, so read again and return that one.
+            if not await self._delete_at(kv, key, entry.revision):
+                return await self.get_wall(repo=repo)
             return None
         return wall
 

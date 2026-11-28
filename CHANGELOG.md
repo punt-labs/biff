@@ -136,6 +136,13 @@
 
 ### Fixed
 
+- Reading an expired NATS wall deletes it at the revision that was read, so a wall
+  posted between the read and the delete is kept and returned instead of lost.
+- A client can wait longer than the request timeout for a method that waits itself
+  (`DaemonClient.request_within`); a channel check holds its reply up to 25 s.
+- The biffd protocol is version 2. Version 1 clients rejected the new
+  `channel_check_request` event and dropped the connection mid-stream; they are now
+  refused at the hello with a message naming both versions and the fix.
 - biffd's heartbeat carries the plugin hook's per-session activity stamp
   (`~/.punt-labs/biff/unread/<session_id>.active`) into `last_tool_at`, as the
   in-process server does. Without it, a session working through Bash and Edit
