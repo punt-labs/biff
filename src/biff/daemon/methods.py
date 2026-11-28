@@ -16,6 +16,7 @@ from biff.daemon.read_batch import ReadBatcher
 from biff.daemon.read_steps import ReadSteps
 from biff.daemon.refusal import RefusalError
 from biff.daemon.talk_methods import TalkMethods
+from biff.daemon.uncancellable import Uncancellable
 from biff.frame_base import MAX_FRAME_BYTES
 from biff.frame_reply import ErrorCode
 
@@ -141,10 +142,12 @@ class Methods:
         much as fits the read budget in bytes; a message larger than the budget
         alone is clipped, never sent whole.  ``more`` counts what the batch
         leaves: held mail and mail still on the relay behind a bounded fetch.
+
+        The request timeout cancels the caller, not the read: a fetch that
+        consumed mail runs on to where the mail is held.
         """
         p.done()
-        async with session.exclusive():
-            return await self._read_locked(session)
+        return await Uncancellable.holding(session, self._read_locked, "read")
 
     async def _read_locked(self, session: Session) -> Outcome:
         if session.is_ended:
@@ -167,9 +170,8 @@ class Methods:
         left += await ReadSteps.backlog(inbox)
         if left > 0:
             result["more"] = left
-        if not batch:
-            return Outcome(result)
-        return Outcome(result, partial(ReadSteps.delivered, session, inbox, batch))
+        ack = partial(ReadSteps.delivered, session, inbox, batch) if batch else None
+        return Outcome(result, ack)
 
     @staticmethod
     async def _who(ctx: CliContext, p: Params) -> CommandResult:
