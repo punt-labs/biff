@@ -41,6 +41,10 @@ class Hello(FrameBase):
     cwd: str
     # Overrides the configured identity, as ``--user`` does for the CLI.
     user: str = ""
+    # The client only means to end this session: biffd attaches it to the session
+    # it already holds, on the relay that session lives on, and never creates or
+    # revives one.  ``main_agent_id`` then names the run the client ends for.
+    ends: bool = False
 
 
 class Request(FrameBase):

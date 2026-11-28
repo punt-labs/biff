@@ -42,33 +42,18 @@ def write_marker(repo_name: str, session_key: str, worktree_root: str) -> None:
         logger.warning("Failed to write active marker: %s", type(exc).__name__)
 
 
-async def register_session(
+async def claim_resumable_name(
     relay: Relay,
     user: str,
     tty_hex: str,
-    *,
-    display_name: str,
-    kind: str,
-    hostname: str,
-    pwd: str,
-    repo: str,
-    launched_by: str = "",
-    owner_git: str = "",
+    session_key: str,
     preferred_name: str | None = None,
-    on_claim: Callable[[str], None] = lambda _name: None,
-) -> tuple[UserSession, str]:
-    """Claim a TTY name, then write the session row once with tty_name set.
+) -> str:
+    """Claim a TTY name for a session, preferring the alias it last held.
 
-    Single atomic registration: if the TTY claim fails, no KV row is
-    written; if the claim succeeds, the row is written exactly once with
-    ``tty_name`` already populated.  Replaces the previous two-write
-    pattern (write-then-claim-then-write) that left half-initialised
-    rows in KV when anything failed between the two writes.
-
-    Returns ``(session, tty_name)``.  Does not write an active-marker
-    file; the caller owns that.
+    Raises:
+        ValueError: *preferred_name* was requested explicitly and is taken.
     """
-    session_key = build_session_key(user, tty_hex)
     # Resume reclaim: when no name is explicitly requested, prefer
     # the ttyN this session_id last held so a resumed session keeps its alias.
     # The routing token (tty_hex) is the session_id under identity routing.
@@ -105,6 +90,39 @@ async def register_session(
             preferred_name,
             tty_name,
         )
+    return tty_name
+
+
+async def register_session(
+    relay: Relay,
+    user: str,
+    tty_hex: str,
+    *,
+    display_name: str,
+    kind: str,
+    hostname: str,
+    pwd: str,
+    repo: str,
+    launched_by: str = "",
+    owner_git: str = "",
+    preferred_name: str | None = None,
+    on_claim: Callable[[str], None] = lambda _name: None,
+) -> tuple[UserSession, str]:
+    """Claim a TTY name, then write the session row once with tty_name set.
+
+    Single atomic registration: if the TTY claim fails, no KV row is
+    written; if the claim succeeds, the row is written exactly once with
+    ``tty_name`` already populated.  Replaces the previous two-write
+    pattern (write-then-claim-then-write) that left half-initialised
+    rows in KV when anything failed between the two writes.
+
+    Returns ``(session, tty_name)``.  Does not write an active-marker
+    file; the caller owns that.
+    """
+    session_key = build_session_key(user, tty_hex)
+    tty_name = await claim_resumable_name(
+        relay, user, tty_hex, session_key, preferred_name
+    )
     on_claim(tty_name)
     # Release any stale TTY name reservation left by a prior process that
     # crashed after writing the KV row but before releasing its name.  The

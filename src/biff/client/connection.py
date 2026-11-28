@@ -60,6 +60,7 @@ class ClientIdentity:
     cwd: str
     main_agent_id: str = ""
     user: str = ""
+    ends: bool = False
 
     def hello(self, mac: str) -> Hello:
         """Return the hello that carries *mac* and these caller facts.
@@ -74,6 +75,7 @@ class ClientIdentity:
             main_agent_id=self.main_agent_id,
             cwd=self.cwd,
             user=ClientEnvironment.user(self.user, os.environ),
+            ends=self.ends,
         )
 
 

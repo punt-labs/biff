@@ -201,6 +201,8 @@ class ConnectionHandler:
         core = self._core
         try:
             async with asyncio.timeout(core.attach_timeout):
+                if hello.ends:
+                    return await core.sessions.attach_ending(hello)
                 resolved = await core.resolver.resolve(hello)
                 return await core.sessions.open(hello, resolved, core.pool)
         except RefusalError:

@@ -12,6 +12,7 @@ from biff._stdlib import active_dir
 from biff.client.connection import ClientIdentity, DaemonClient
 from biff.plugins.claude_code.daemon_session import DaemonSessionOpener
 from biff.plugins.claude_code.daemon_session_end import DaemonSessionCloser
+from biff.plugins.claude_code.hook_daemon import HookDaemon
 from biff.relay import LocalRelay
 from biff.session_handle import SessionHandleStore
 from biff.session_routing import SessionRouting
@@ -42,10 +43,12 @@ async def test_end_deletes_the_row_and_removes_the_local_files(
     repo.mkdir(parents=True)
     payload: dict[str, object] = {"session_id": "sess-1", "cwd": str(repo)}
     key = await DaemonSessionOpener(
-        connect=_connector(harness),
-        unread_dir=unread_dir,
-        handles=handles,
-        deadline=5.0,
+        HookDaemon(
+            connect=_connector(harness),
+            unread_dir=unread_dir,
+            handles=handles,
+            deadline=5.0,
+        ),
     ).open(payload)
     assert key is not None
     relay = LocalRelay(tmp_path / "relays" / "repo")
@@ -53,10 +56,12 @@ async def test_end_deletes_the_row_and_removes_the_local_files(
     routing = SessionRouting("sess-1")
 
     await DaemonSessionCloser(
-        connect=_connector(harness),
-        unread_dir=unread_dir,
-        handles=handles,
-        deadline=5.0,
+        HookDaemon(
+            connect=_connector(harness),
+            unread_dir=unread_dir,
+            handles=handles,
+            deadline=5.0,
+        ),
     ).end(payload)
 
     assert await relay.get_session(key) is None
@@ -69,10 +74,12 @@ async def test_end_of_a_session_that_is_already_ended_succeeds(
     harness: Harness, tmp_path: Path
 ) -> None:
     closer = DaemonSessionCloser(
-        connect=_connector(harness),
-        unread_dir=tmp_path / "unread",
-        handles=SessionHandleStore(tmp_path / "sessions"),
-        deadline=5.0,
+        HookDaemon(
+            connect=_connector(harness),
+            unread_dir=tmp_path / "unread",
+            handles=SessionHandleStore(tmp_path / "sessions"),
+            deadline=5.0,
+        ),
     )
     payload: dict[str, object] = {"session_id": "sess-9", "cwd": str(tmp_path)}
 
@@ -86,10 +93,12 @@ async def test_end_without_a_usable_session_id_asks_nothing(tmp_path: Path) -> N
         raise AssertionError(msg)
 
     closer = DaemonSessionCloser(
-        connect=refuse,
-        unread_dir=tmp_path / "unread",
-        handles=SessionHandleStore(tmp_path / "sessions"),
-        deadline=5.0,
+        HookDaemon(
+            connect=refuse,
+            unread_dir=tmp_path / "unread",
+            handles=SessionHandleStore(tmp_path / "sessions"),
+            deadline=5.0,
+        ),
     )
 
     await closer.end({"cwd": str(tmp_path)})
@@ -103,10 +112,12 @@ async def test_end_gives_up_at_its_deadline_when_biffd_does_not_answer(
         raise AssertionError
 
     closer = DaemonSessionCloser(
-        connect=never,
-        unread_dir=tmp_path / "unread",
-        handles=SessionHandleStore(tmp_path / "sessions"),
-        deadline=0.2,
+        HookDaemon(
+            connect=never,
+            unread_dir=tmp_path / "unread",
+            handles=SessionHandleStore(tmp_path / "sessions"),
+            deadline=0.2,
+        ),
     )
 
     with pytest.raises(TimeoutError):

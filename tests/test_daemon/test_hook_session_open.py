@@ -13,8 +13,10 @@ import pytest
 from biff._stdlib import active_dir
 from biff.client.connection import ClientIdentity, DaemonClient
 from biff.plugins.claude_code.daemon_session import DaemonSessionOpener
+from biff.plugins.claude_code.hook_daemon import HookDaemon
 from biff.relay import LocalRelay
 from biff.session_handle import SessionHandleStore
+from biff.session_registry import register_session
 from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
@@ -42,10 +44,12 @@ async def test_open_registers_the_row_and_writes_the_local_files(
     repo = tmp_path / "work" / "repo"
     repo.mkdir(parents=True)
     opener = DaemonSessionOpener(
-        connect=_connector(harness),
-        unread_dir=unread_dir,
-        handles=handles,
-        deadline=5.0,
+        HookDaemon(
+            connect=_connector(harness),
+            unread_dir=unread_dir,
+            handles=handles,
+            deadline=5.0,
+        ),
     )
 
     key = await opener.open({"session_id": "sess-1", "cwd": str(repo)})
@@ -64,10 +68,12 @@ async def test_open_without_a_usable_session_id_does_nothing(
     harness: Harness, tmp_path: Path
 ) -> None:
     opener = DaemonSessionOpener(
-        connect=_connector(harness),
-        unread_dir=tmp_path / "unread",
-        handles=SessionHandleStore(tmp_path / "sessions"),
-        deadline=5.0,
+        HookDaemon(
+            connect=_connector(harness),
+            unread_dir=tmp_path / "unread",
+            handles=SessionHandleStore(tmp_path / "sessions"),
+            deadline=5.0,
+        ),
     )
 
     assert await opener.open({"cwd": str(tmp_path)}) is None
@@ -82,14 +88,51 @@ async def test_open_gives_up_at_its_deadline_when_biffd_does_not_answer(
         raise AssertionError
 
     opener = DaemonSessionOpener(
-        connect=never,
-        unread_dir=tmp_path / "unread",
-        handles=SessionHandleStore(tmp_path / "sessions"),
-        deadline=0.2,
+        HookDaemon(
+            connect=never,
+            unread_dir=tmp_path / "unread",
+            handles=SessionHandleStore(tmp_path / "sessions"),
+            deadline=0.2,
+        ),
     )
 
     with pytest.raises(TimeoutError):
         await opener.open({"session_id": "sess-1", "cwd": str(tmp_path)})
+
+
+async def test_the_tty_address_the_hook_opened_is_the_one_the_server_attaches_with(
+    harness: Harness, tmp_path: Path
+) -> None:
+    repo = tmp_path / "work" / "repo"
+    repo.mkdir(parents=True)
+    opener = DaemonSessionOpener(
+        HookDaemon(
+            connect=_connector(harness),
+            unread_dir=tmp_path / "unread",
+            handles=SessionHandleStore(tmp_path / "sessions"),
+            deadline=5.0,
+        ),
+    )
+    key = await opener.open({"session_id": "sess-1", "cwd": str(repo)})
+    assert key is not None
+    relay = LocalRelay(tmp_path / "relays" / "repo")
+    opened = await relay.get_session(key)
+    assert opened is not None
+
+    # The MCP server registers in-process, claiming the alias this session
+    # last held, as a resumed session does.
+    _, attached = await register_session(
+        relay,
+        "kai",
+        key.partition(":")[2],
+        display_name="",
+        kind="agent",
+        hostname="h",
+        pwd=str(repo),
+        repo="test",
+    )
+
+    assert attached == opened.tty_name
 
 
 async def test_open_records_the_repo_common_root_in_the_active_marker(
@@ -113,10 +156,12 @@ async def test_open_records_the_repo_common_root_in_the_active_marker(
     linked = tmp_path / "linked"
     subprocess.run([*git, "worktree", "add", "-q", str(linked)], check=True)  # noqa: S603
     opener = DaemonSessionOpener(
-        connect=_connector(harness),
-        unread_dir=tmp_path / "unread",
-        handles=SessionHandleStore(tmp_path / "sessions"),
-        deadline=5.0,
+        HookDaemon(
+            connect=_connector(harness),
+            unread_dir=tmp_path / "unread",
+            handles=SessionHandleStore(tmp_path / "sessions"),
+            deadline=5.0,
+        ),
     )
 
     # From a linked worktree the marker still names the main checkout, the one

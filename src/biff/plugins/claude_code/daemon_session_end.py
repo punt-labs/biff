@@ -2,70 +2,52 @@
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-from typing import TYPE_CHECKING, Final, Self, final
+import logging
+import os
+from typing import TYPE_CHECKING, Self, final
 
-from biff._stdlib import biff_data_dir, remove_active_session
-from biff.client.connection import ClientIdentity
-from biff.client.host import HostConnector
-from biff.session_handle import SessionHandleStore
-from biff.session_routing import SessionIdError, SessionRouting
+from biff._stdlib import remove_active_session
+from biff.client.connection import DaemonError
+from biff.frame_reply import ErrorCode
+from biff.plugins.claude_code.hook_daemon import HookDaemon
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from biff.session_routing import SessionRouting
 
-    from biff.client.connection import DaemonClient
+__all__ = ["DaemonSessionCloser"]
 
-__all__ = ["DEADLINE_SECONDS", "DaemonSessionCloser"]
-
-DEADLINE_SECONDS: Final = 8.0
-"""Under the 10 s the SessionEnd script allows its detached call."""
+logger = logging.getLogger(__name__)
 
 
 @final
 class DaemonSessionCloser:
     """Asks biffd to end the session a SessionEnd payload names.
 
-    biffd deletes the presence row, forwards the session's unread mail to its
-    owner's mailbox and frees the tty alias; ending a session already ended
-    succeeds.  Afterwards the closer removes the active marker, the unread
-    status files and the handle, which no one else owns.
+    The hello says it only ends: biffd attaches it to the session it holds, on
+    the relay that session lives on, and creates or revives nothing, so a relay
+    setting changed since the session opened, or presence the MCP server already
+    removed, does not matter.  The hello also names the run the hook belongs to,
+    and only the session's current run ends it.  biffd deletes the presence row,
+    forwards the unread mail to its owner's mailbox and frees the tty alias;
+    ending a session already ended, or one biffd no longer holds, succeeds.
+    Afterwards the closer removes the active marker, the unread status files and
+    the handle.
     """
 
-    __slots__ = ("_connect", "_deadline", "_handles", "_unread_dir")
+    __slots__ = ("_daemon",)
 
-    _connect: Callable[[ClientIdentity], Awaitable[DaemonClient]]
-    _unread_dir: Path
-    _handles: SessionHandleStore
-    _deadline: float
+    _daemon: HookDaemon
 
-    def __new__(
-        cls,
-        *,
-        connect: Callable[[ClientIdentity], Awaitable[DaemonClient]],
-        unread_dir: Path,
-        handles: SessionHandleStore,
-        deadline: float,
-    ) -> Self:
-        """End sessions with *connect*, giving biffd *deadline* seconds."""
+    def __new__(cls, daemon: HookDaemon) -> Self:
+        """End sessions through *daemon*."""
         self = super().__new__(cls)
-        self._connect = connect
-        self._unread_dir = unread_dir
-        self._handles = handles
-        self._deadline = deadline
+        self._daemon = daemon
         return self
 
     @classmethod
     def for_host(cls) -> Self:
-        """Return the closer for this host's biffd, started on demand."""
-        data_root = biff_data_dir()
-        return cls(
-            connect=HostConnector.for_host().connect,
-            unread_dir=data_root / "unread",
-            handles=SessionHandleStore(data_root / "sessions"),
-            deadline=DEADLINE_SECONDS,
-        )
+        """Return the one for this host's biffd, started on demand."""
+        return cls(HookDaemon.for_host())
 
     async def end(self, data: dict[str, object]) -> None:
         """End the session *data* names; do nothing when it names none.
@@ -76,28 +58,35 @@ class DaemonSessionCloser:
                 unreadable reply.
             DaemonError: biffd refused the request.
         """
-        raw = data.get("session_id")
-        try:
-            routing = SessionRouting(raw if isinstance(raw, str) else "")
-        except SessionIdError:
+        daemon = self._daemon
+        if (routing := daemon.routing_of(data)) is None:
             return
-        cwd = data.get("cwd")
-        where = cwd if isinstance(cwd, str) and cwd else str(Path.cwd())
-        async with asyncio.timeout(self._deadline):
-            client = await self._connect(
-                ClientIdentity(client="hook", session_id=routing.session_id, cwd=where)
-            )
-            try:
-                await client.request("end")
-            finally:
-                await client.close()
+        run = daemon.run_of(os.environ)
+        try:
+            async with daemon.deadline():
+                client = await daemon.client(
+                    routing, daemon.cwd_of(data), ends=True, run=run
+                )
+                try:
+                    await client.request("end")
+                finally:
+                    await client.close()
+        except DaemonError as exc:
+            if exc.code is ErrorCode.SESSION_REPLACED:
+                logger.info(
+                    "session %s belongs to a newer run; left", routing.session_id
+                )
+                return
+            if exc.code is not ErrorCode.SESSION_ENDED:
+                raise
         self._clear(routing)
 
     def _clear(self, routing: SessionRouting) -> None:
         """Remove the marker, status files and handle of an ended session."""
-        if (key := self._handles.read(routing)) is not None:
+        handles = self._daemon.handles
+        if (key := handles.read(routing)) is not None:
             remove_active_session(key)
-        unread = routing.unread_path(self._unread_dir)
+        unread = routing.unread_path(self._daemon.unread_dir)
         for path in (unread, *map(unread.with_suffix, (".nudged", ".active"))):
             path.unlink(missing_ok=True)
-        self._handles.remove(routing)
+        handles.remove(routing)

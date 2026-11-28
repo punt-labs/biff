@@ -301,5 +301,6 @@
   "biff.plugins.claude_code.daemon_session": "claude_code",
   "biff.plugins.claude_code.daemon_session_end": "claude_code",
   "biff.plugins.claude_code.session_lifecycle": "claude_code",
-  "biff.repo_transport": "engine"
+  "biff.repo_transport": "engine",
+  "biff.plugins.claude_code.hook_daemon": "claude_code"
 }
