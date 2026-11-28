@@ -184,7 +184,10 @@ async def test_two_ends_at_once_end_the_session_once(
     table = harness.daemon._core.sessions
     await until(lambda: table._users[key] == 2)  # queued behind the first end
     release.set()
-    await asyncio.gather(one, two, return_exceptions=True)
+    for reply in await asyncio.gather(
+        one, two
+    ):  # the queued end succeeds, doing nothing
+        assert cast("dict[str, object]", reply)["error"] is False
     logouts = [e for e in LoggingRelay.events if e.event == "logout"]
     assert len(logouts) == 1
     assert await first.row_present() is False
@@ -196,8 +199,9 @@ async def test_another_connection_of_an_ended_session_cannot_rebuild_its_row(
     ender = await seat(harness, "s-shared")
     other = await harness.connect("s-shared", "kai", client="mcp", main_agent_id="a1")
     await ender.client.request("end")
-    with pytest.raises((DaemonError, ConnectionLostError)):
+    with pytest.raises(DaemonError) as caught:
         await other.request("tty", name="revived")
+    assert caught.value.code is ErrorCode.SESSION_ENDED
     assert await ender.row_present() is False
 
 
@@ -230,3 +234,14 @@ async def test_a_second_end_succeeds_and_does_nothing_more(harness: Harness) -> 
     assert again["error"] is False
     logouts = [e for e in LoggingRelay.events if e.event == "logout"]
     assert len(logouts) == 1
+
+
+async def test_a_shell_session_that_ended_is_still_refused_by_end(
+    harness: Harness,
+) -> None:
+    shell = await harness.connect("s-shell-over", "kai", client="cli")
+    for session in harness.daemon._core.sessions.snapshot().values():
+        session.mark_ended()  # the shell's own session_end did this
+    with pytest.raises(DaemonError) as caught:
+        await shell.request("end")
+    assert caught.value.code is ErrorCode.INVALID_PARAMS

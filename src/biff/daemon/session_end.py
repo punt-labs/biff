@@ -65,10 +65,10 @@ class SessionEnd:
                 ``session_end``.
         """
         p.done()
-        key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
-        if not session.is_ended and self._live.snapshot().get(key) is not session:
+        if not session.is_agent:
             msg = "end applies to a harness session; shell sessions use session_end"
             raise RefusalError.of(ErrorCode.INVALID_PARAMS, msg)
+        key = SessionKey(session.session_id, CLAUDE_CODE_ROLE)
         async with self._live.guard(key):
             if not session.is_ended:  # another end may have finished while this waited
                 await session.begin_end()

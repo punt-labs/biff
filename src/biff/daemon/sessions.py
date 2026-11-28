@@ -214,11 +214,15 @@ class Session:
         which nothing may rebuild.  A shell's session is let through, its end being
         the shell's own command, which goes on.
         """
-        agent = self._context.tty == derive_routing_id(
-            self._session_id, CLAUDE_CODE_ROLE
-        )
         return self._hold.requests(
-            counted=method != "end", refuse=agent and self._is_ended
+            counted=method != "end", refuse=self.is_agent and self._is_ended
+        )
+
+    @property
+    def is_agent(self) -> bool:
+        """Whether this is an agent's session, not a shell's."""
+        return self._context.tty == derive_routing_id(
+            self._session_id, CLAUDE_CODE_ROLE
         )
 
     async def begin_end(self) -> None:

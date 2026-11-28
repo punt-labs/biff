@@ -11,8 +11,9 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 import pytest
 
-from biff.client.connection import ConnectionLostError, DaemonError
+from biff.client.connection import DaemonError
 from biff.daemon.session_key import SessionKey
+from biff.frame_reply import ErrorCode
 from biff.models import Message
 from biff.session_id import CLAUDE_CODE_ROLE
 from tests.test_daemon.claude_seats import (
@@ -43,8 +44,9 @@ async def test_every_request_of_an_ended_session_is_refused(
     ender = await seat(harness, "s-dead")
     other = await harness.connect("s-dead", "kai", client="mcp", main_agent_id="a1")
     await ender.client.request("end")
-    with pytest.raises((DaemonError, ConnectionLostError)):
+    with pytest.raises(DaemonError) as caught:
         await other.request(method, **params)
+    assert caught.value.code is ErrorCode.SESSION_ENDED
     assert await ender.row_present() is False
 
 
@@ -161,7 +163,8 @@ async def test_a_queued_end_after_a_queued_hello_does_not_end_the_reopened_sessi
     await until(lambda: table._users[key] == 3)  # and the second end behind it
     release.set()
     reopened = await hello
-    await asyncio.gather(ending, stale, return_exceptions=True)
+    for reply in await asyncio.gather(ending, stale):  # both succeed, one doing nothing
+        assert cast("dict[str, object]", reply)["error"] is False
     status = cast("dict[str, dict[str, str]]", await reopened.request("status"))
     assert await first.viewer.get_session(status["data"]["session_key"]) is not None
     assert len(harness.daemon.status().sessions) == 1
