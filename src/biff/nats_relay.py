@@ -36,7 +36,6 @@ from uuid import UUID
 from nats.aio.client import DEFAULT_CONNECT_TIMEOUT, Client as NatsClient
 from nats.errors import Error as NatsError
 from nats.js.api import (
-    ConsumerConfig,
     RetentionPolicy,
     StreamConfig,
 )
@@ -60,7 +59,7 @@ from biff.models import (
     WallPost,
 )
 from biff.nats_connection import NatsSupport, Scrub
-from biff.nats_session_rows import SessionRows
+from biff.nats_inbox_fetch import InboxFetch
 from biff.session_edit import SessionChangedError, SessionEdit
 from biff.tty import (
     SID_HINT_NAMESPACE,
@@ -69,9 +68,6 @@ from biff.tty import (
     validate_routing_id,
 )
 from biff.wtmp_reader import (
-    CONSUMER_INACTIVE_THRESHOLD,
-    FETCH_BATCH,
-    FETCH_TIMEOUT,
     WtmpReader,
 )
 
@@ -88,6 +84,7 @@ _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
 # relay caller
 _INITIAL_CONNECT_TIMEOUT = 5
+_FETCH_SETTLE_TIMEOUT = 5.0  # close() waits this long for mail a fetch consumed
 _TEARDOWN_TIMEOUT = 5.0  # bound nc.close()'s wait_closed() so a half-open socket
 # can't hold _connect_lock (taken by _force_reconnect) and freeze the poller
 # and heartbeat; the client is being discarded, so abandoning it is safe
@@ -421,7 +418,7 @@ class _ConnectionHealth:
         return f"{time.monotonic() - self._last_ok:.0f}s"
 
 
-class NatsRelay(SessionRows):
+class NatsRelay(InboxFetch):
     """NATS-backed relay with JetStream messages and KV sessions.
 
     All infrastructure (KV bucket, stream) is provisioned lazily on the
@@ -464,6 +461,7 @@ class NatsRelay(SessionRows):
         self._wtmp_prefix = f"{stream_prefix}.{repo_name}.wtmp"
         self._names_bucket = f"{stream_prefix}-names"
         self._nc: NatsClient | None = None
+        self._fetches: set[asyncio.Task[object]] = set()
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
         self._names_kv: KeyValue | None = None
@@ -1144,6 +1142,7 @@ class NatsRelay(SessionRows):
         right here; a reconnect that arrives after sees ``_closed`` set
         inside the lock and never dials at all).
         """
+        await self._settle_fetches(_FETCH_SETTLE_TIMEOUT)
         async with self._connect_lock:
             self._closed = True
             if self._nc is not None:
@@ -1607,81 +1606,6 @@ class NatsRelay(SessionRows):
         """
         return f"{self._repo_name}-inbox-{session_key.replace(':', '-')}"
 
-    async def _fetch_from_subject(
-        self, js: JetStreamContext, subject: str, durable: str
-    ) -> list[Message]:
-        """Pull valid frames, ack them, and delete the consumer for a subject.
-
-        Shared implementation for :meth:`fetch` (TTY inbox) and
-        :meth:`fetch_user_inbox` (user broadcast inbox).  A valid frame is
-        acked (WORK_QUEUE deletes it); a malformed frame is ``term()``ed —
-        never acked — so a wire-integrity fault is not silently destroyed as
-        if delivered.  Acks are fire-and-forget in nats.py, so we
-        flush before deleting the consumer to ensure the server has processed
-        all acks.
-        """
-        sub = await js.pull_subscribe(
-            subject,
-            durable=durable,
-            stream=self._stream_name,
-            config=ConsumerConfig(inactive_threshold=CONSUMER_INACTIVE_THRESHOLD),
-        )
-        try:
-            try:
-                raw_msgs = await sub.fetch(batch=FETCH_BATCH, timeout=FETCH_TIMEOUT)
-            except TimeoutError:
-                raw_msgs = []
-            finally:
-                await sub.unsubscribe()
-
-            messages: list[Message] = []
-            for raw in raw_msgs:
-                try:
-                    msg = Message.model_validate_json(raw.data)
-                except (ValidationError, ValueError) as exc:
-                    # A malformed frame must never be acked: ack removes it from
-                    # the WORK_QUEUE as if delivered, silently destroying the
-                    # evidence of a wire-integrity fault.  term() is JetStream's
-                    # poison-message signal — it stops redelivery (no nak DoS
-                    # loop on a persistently-bad frame) and emits a
-                    # MSG_TERMINATED advisory so the drop is observable off-box.
-                    #
-                    # Never interpolate str(exc): ValidationError.__str__ embeds
-                    # input_value == the raw frame body (private plaintext), and
-                    # term() then deletes the only other copy.  Log field
-                    # locations and error types only, with input/url/context
-                    # scrubbed (PII guard).
-                    logger.error(
-                        "Terminating malformed NATS frame in %s inbox (%d bytes): %s",
-                        ("user", "session")[
-                            subject.removeprefix(self._subject_prefix + ".").count(".")
-                        ],
-                        len(raw.data),
-                        Scrub.validation_error(exc),
-                    )
-                    await raw.term()
-                    continue
-                messages.append(msg)
-                await raw.ack()
-
-            # Acks are fire-and-forget publishes in nats.py.  Flush
-            # ensures the server has received all acks before we delete
-            # the consumer — otherwise the WORK_QUEUE message removal
-            # can race with consumer deletion.
-            if raw_msgs and self._nc is not None:
-                await self._nc.flush()
-
-            return messages
-        finally:
-            # Delete consumer after use — frees the server-side slot.
-            # Broad except: any delete_consumer failure must not prevent
-            # returning already-acked messages (WORK_QUEUE deletes on ack).
-            # inactive_threshold provides backup cleanup.
-            try:
-                await js.delete_consumer(self._stream_name, durable)
-            except (NatsError, TimeoutError):
-                logger.debug("Consumer cleanup failed (will expire)")
-
     async def fetch(self, session_key: str) -> list[Message]:
         """Pull and ack all messages — WORK_QUEUE deletes them on ack."""
         js, _ = await self._ensure_connected()
@@ -1689,6 +1613,7 @@ class NatsRelay(SessionRows):
             js,
             subject=self._subject_for_key(session_key),
             durable=self._durable_name(session_key),
+            stream=self._stream_name,
         )
 
     async def mark_read(self, session_key: str, ids: Sequence[UUID]) -> None:
@@ -1704,6 +1629,7 @@ class NatsRelay(SessionRows):
             js,
             subject=self._user_subject(user),
             durable=self._user_durable_name(user),
+            stream=self._stream_name,
         )
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[UUID]) -> None:
@@ -1743,15 +1669,13 @@ class NatsRelay(SessionRows):
         user_subject = self._user_subject(user)
 
         tty_count = user_count = 0
-        try:
+        with suppress(NotFoundError):
             tty_info = await self._tracked(
                 "stream_info",
                 js.stream_info(self._stream_name, subjects_filter=tty_subject),
             )
             if tty_info.state.subjects:
                 tty_count = tty_info.state.subjects.get(tty_subject, 0)
-        except NotFoundError:
-            pass
         # Re-anchor to the current connection: the first _tracked's await
         # may have let a concurrent loop rebuild self._nc, leaving `js`
         # stale.  Fast path returns cached handles, so `owner = self._nc` at

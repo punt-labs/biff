@@ -132,6 +132,41 @@ class TestFetch:
         second = await relay.fetch(f"eric:{_ERIC_TTY}")
         assert second == []
 
+    async def test_a_large_fetch_consumes_every_message(self, relay: NatsRelay) -> None:
+        """Every acked message is gone when fetch returns, not just the first.
+
+        An ack the server had not processed when the consumer was deleted left
+        the message in the stream, so the next fetch returned it again.
+        """
+        for n in range(25):
+            await relay.deliver(
+                Message(
+                    from_user="kai",
+                    to_user=f"eric:{_ERIC_TTY}",
+                    body=f"letter {n:03d} " + "x" * 200,
+                )
+            )
+        first = await relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(first) == 25
+        assert await relay.fetch(f"eric:{_ERIC_TTY}") == []
+
+    async def test_a_malformed_frame_is_terminated_in_the_stream(
+        self, relay: NatsRelay
+    ) -> None:
+        """The server holds no frame after a fetch: the malformed one was terminated.
+
+        A frame the fetch skips without telling the server stays queued and is
+        redelivered, which the fetch's own filtering would hide from a caller.
+        """
+        key = f"eric:{_ERIC_TTY}"
+        subject = relay._subject_for_key(key)
+        js, _ = await relay._ensure_connected()
+        await js.publish(subject, b"not a message")
+        await relay.deliver(Message(from_user="kai", to_user=key, body="valid"))
+        assert [m.body for m in await relay.fetch(key)] == ["valid"]
+        info = await js.stream_info(relay._stream_name, subjects_filter=subject)
+        assert not (info.state.subjects or {}).get(subject)
+
     async def test_oldest_first(self, relay: NatsRelay) -> None:
         await relay.deliver(
             Message(
