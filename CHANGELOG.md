@@ -156,6 +156,10 @@
 - A session the biffd presence row registers first saves its tty reclaim hint, so
   the MCP server that attaches next keeps the same tty address.
 
+- A daemon restart no longer forgets harness sessions, which stranded the mail
+  waiting in their relay inbox. biffd keeps each harness session's record on disk
+  (`~/.punt-labs/biff/harness-sessions/`), builds the sessions again at start, and
+  an end or the retention sweep then drains that mail into the user's mailbox.
 - biffd's heartbeat carries the plugin hook's per-session activity stamp
   (`~/.punt-labs/biff/unread/<session_id>.active`) into `last_tool_at`, as the
   in-process server does. Without it, a session working through Bash and Edit

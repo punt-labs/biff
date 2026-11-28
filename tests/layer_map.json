@@ -77,6 +77,8 @@
   "biff.daemon.mail_transfer": "daemon",
   "biff.daemon.run_ledger": "daemon",
   "biff.daemon.session_hold": "daemon",
+  "biff.daemon.harness_records": "daemon",
+  "biff.daemon.session_restore": "daemon",
   "biff.daemon.session_end": "daemon",
   "biff.daemon.session_host": "daemon",
   "biff.daemon.session_key": "daemon",

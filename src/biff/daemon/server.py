@@ -18,10 +18,12 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 
 from biff.daemon.connection import ConnectionHandler, DaemonCore
 from biff.daemon.handback import Handback
+from biff.daemon.harness_records import HarnessRecords
 from biff.daemon.methods import READ_BUDGET_BYTES, Methods
 from biff.daemon.relays import RelayPool
 from biff.daemon.resolver import DiskResolver
 from biff.daemon.session_methods import SessionMethods
+from biff.daemon.session_restore import SessionRestore
 from biff.daemon.session_sweep import SessionSweeper
 from biff.daemon.sessions import SessionTable
 from biff.daemon.tasks import Supervised
@@ -64,6 +66,7 @@ class BiffDaemon:
     __slots__ = (
         "_core",
         "_port",
+        "_restore",
         "_run_dir",
         "_server",
         "_started",
@@ -75,6 +78,7 @@ class BiffDaemon:
     _run_dir: RunDir
     _port: int
     _core: DaemonCore
+    _restore: SessionRestore
     _server: Server | None
     _started: float
     _sweeper: SessionSweeper
@@ -110,9 +114,11 @@ class BiffDaemon:
         self._port = port
         resolver = resolver or DiskResolver()
         pool = RelayPool(relay_factory or RelayPool.selecting())
+        records = HarnessRecords(sessions.root.parent / "harness-sessions")
         live = SessionTable(
             heartbeat_interval=heartbeat_interval,
             org_refresh_interval=org_refresh_interval,
+            records=records,
         )
         self._core = DaemonCore(
             resolver=resolver,
@@ -124,6 +130,7 @@ class BiffDaemon:
             attach_timeout=attach_timeout,
             request_timeout=request_timeout,
         )
+        self._restore = SessionRestore(records, self._core)
         self._server = None
         self._started = 0.0
         self._sweeper = SessionSweeper(sessions, resolver, pool, live)
@@ -145,6 +152,7 @@ class BiffDaemon:
 
     async def start(self) -> None:
         """Create the token, bind the loopback listener and record its port."""
+        await self._restore.run()
         handler = ConnectionHandler(self._run_dir.ensure_token(), self._core)
         self._server = await serve(
             handler.handle,
@@ -172,6 +180,7 @@ class BiffDaemon:
         still propagates.  The port file is removed only while it still names
         this daemon's port, so a late stop cannot erase its replacement's record.
         """
+        await self._restore.stop()
         server, self._server = self._server, None
         sweep, self._sweep_task = self._sweep_task, None
         if sweep is not None:
