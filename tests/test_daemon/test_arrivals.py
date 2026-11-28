@@ -116,3 +116,19 @@ async def test_arrivals_reports_whether_the_session_takes_messages(
     await kai.request("mesg", value="n")
 
     assert (await _arrivals(kai))["mesg"] is False
+
+
+async def test_an_invite_nobody_has_read_yet_is_listed_as_live(
+    harness: Harness, bus: object
+) -> None:
+    assert bus is not None
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    status = cast("dict[str, dict[str, str]]", await kai.request("status"))
+    await eric.request("talk", to=f"kai:{status['data']['tty_name']}", message="")
+    await asyncio.sleep(0.2)  # the invite is queued, not yet drained by talk_read
+
+    data = await _arrivals(kai)
+
+    invites = cast("list[dict[str, str]]", data["invites"])
+    assert [i["from"] for i in invites] == ["eric"]

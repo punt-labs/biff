@@ -60,14 +60,18 @@ class ArrivalsReading:
         wall = await ctx.relay.get_wall()
         row = await ctx.relay.get_session(ctx.session_key)
         queued, invites = ctx.talk.peek()
+        # An invite is live from the moment it is queued, before talk_read drains it.
+        live = {(terminal_safe(i.user), terminal_safe(i.tty)) for i in invites.values()}
+        live |= {
+            (terminal_safe(n.nfrom), terminal_safe(n.nfrom_tty))
+            for n in queued
+            if n.is_invite
+        }
         data = {
             "mark": mark,
             "unread": unread,
             "wall": None if wall is None else wall.model_dump(mode="json"),
-            "invites": [
-                {"from": terminal_safe(i.user), "tty": terminal_safe(i.tty)}
-                for i in invites.values()
-            ],
+            "invites": [{"from": user, "tty": tty} for user, tty in sorted(live)],
             "talk_pending": len(queued),
             # The session record holds mesg; an absent record is not off.
             "mesg": row is None or row.biff_enabled,
