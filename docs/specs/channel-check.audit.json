@@ -1,12 +1,12 @@
 {
   "specification": "docs/specs/channel-check.tex",
   "testDirectory": "tests/",
-  "timestamp": "2026-11-27T20:00:00Z",
+  "timestamp": "2026-11-28T00:00:00Z",
   "summary": {
-    "covered": 3,
+    "covered": 9,
     "total": 9,
-    "percentage": 33,
-    "gaps": 6
+    "gaps": 0,
+    "percentage": 100
   },
   "constraints": [
     {
@@ -34,44 +34,51 @@
       "text": "emitted t <= 1: one channel event per request however often it is delivered",
       "category": "invariant",
       "source": "HopInv",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_channel_emitter.py::TestChannelCheck::test_the_same_request_delivered_twice_emits_one_event; tests/test_daemon/test_channel_feed.py::test_a_request_frame_delivered_twice_reaches_the_sink_once",
+      "confidence": "high",
+      "verifiedBy": "read on main 066c551. The emitter test owes the same token twice with a check pass after each: 'assert rig.sink.metas == [{\"kind\": \"channel_check\"}]' fails if the replay emits a second frame. The feed test hands the client's feed the same request frame again after the first was sent: 'assert rig.sink.kinds().count(\"channel_check\") == 1'. Only the emitter and feed halves depend on ChannelCheck.owe ignoring a replayed token. Gap: the replay is injected into the feed (_replay calls the feed's _take), not redelivered by biffd end to end: PL-1789"
     },
     {
       "text": "relayed t <= 1: the acknowledgement is relayed to the doctor once however often it arrives",
       "category": "invariant",
       "source": "HopInv",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_channel_check_hop.py::test_the_acknowledgement_is_relayed_once_to_the_reply_subject; tests/test_daemon/test_channel_check_hop.py::test_a_repeated_acknowledgement_changes_nothing; tests/test_daemon/test_channel_check_hop.py::test_a_wrong_token_relays_nothing",
+      "confidence": "high",
+      "verifiedBy": "a real daemon over a push relay: the first ack publishes one CheckAck to the reply subject; a second ack answers 'not accepted' and the published count stays 1; a wrong token publishes nothing. The assertion that would fail if the property broke: 'assert len(rig.acks()) == 1' after a repeated channel_ack in test_a_repeated_acknowledgement_changes_nothing"
     },
     {
       "text": "sent t => emitted t = 1",
       "category": "invariant",
       "source": "HopInv",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_channel_emitter.py::TestChannelCheck::test_a_request_held_by_the_gate_is_emitted_once_when_released; tests/test_daemon/test_channel_feed.py::test_a_channel_check_event_carries_biffds_token_and_the_ack_goes_through",
+      "confidence": "high",
+      "verifiedBy": "daemon-sourced half: the feed test (main afcb2b3), 'assert reply[\"text\"] == \"biff channel live.\"' and 'assert [a.token for a in acks] == [token]'. Client half: test_a_request_held_by_the_gate_is_emitted_once_when_released owes a token before the client is initialised, replays it while held ('assert rig.sink.metas == []'), opens the gate and checks twice: 'assert rig.sink.metas == [{\"kind\": \"channel_check\"}]'. Proved by the author by removing 'self._is_unsent = False' in take_unsent, which yields two frames; I read the test and the code (take_unsent clears _is_unsent) but did not re-run the removal. The same end-to-end gap: PL-1789"
     },
     {
       "text": "DeliverRequest: at-least-once delivery of the request frame to the session client",
       "category": "effect",
       "source": "DeliverRequest",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_channel_check_hop.py::test_a_new_subscription_gets_the_pending_request_again",
+      "confidence": "high",
+      "verifiedBy": "a pending check is delivered to the first subscription, then a second subscription of the same session receives unread and the same request again, before any acknowledgement; the ack is then relayed once"
     },
     {
       "text": "SendEvent: needs the request to have reached the client",
       "category": "precondition",
       "source": "SendEvent",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_channel_feed.py::test_a_channel_check_event_carries_biffds_token_and_the_ack_goes_through; tests/test_daemon/test_channel_check_hop.py::test_a_pending_check_never_precedes_the_summary",
+      "confidence": "high",
+      "verifiedBy": "read on main afcb2b3. The feed test starts the client's DaemonChannelFeed over a real daemon, publishes a CheckRequest on the bus and waits for a channel_check frame in the client's sink; it then reads the 128-bit token out of that frame and calls channel_ack with it. The assertions that fail if the client sent without the request reaching it: 'await rig.wait_for(lambda: \"channel_check\" in rig.sink.kinds())' (no frame without the request) and 'assert reply[\"text\"] == \"biff channel live.\"' (the daemon accepts only the token it issued for that request, so a frame with an invented token is refused). The daemon test shows the pending request follows the unread summary. The emitter's 'waits for the client to be initialised' test does not exercise this constraint"
     },
     {
       "text": "DeliverRequest: a request frame replayed after the acknowledgement (afterAck >= 1) makes no second event and no second relayed ack",
       "category": "effect",
       "source": "DeliverRequest",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_channel_emitter.py::TestChannelCheck::test_a_request_replayed_after_the_ack_emits_nothing; tests/test_channel_emitter.py::TestChannelCheck::test_a_repeated_ack_after_a_replay_changes_nothing; tests/test_daemon/test_channel_feed.py::test_a_request_replayed_after_the_ack_emits_nothing_and_acks_nothing; tests/test_daemon/test_channel_check_hop.py::test_a_request_replayed_after_the_acknowledgement_makes_nothing",
+      "confidence": "medium",
+      "verifiedBy": "read on main 066c551. Emitter: after an acknowledged token is replayed and checked, 'assert rig.sink.metas == [{\"kind\": \"channel_check\"}]' (no second event); and the repeated ack returns None. Feed: after the ack, the same frame is handed to the feed again: 'assert rig.sink.kinds().count(\"channel_check\") == 1'. Only these event-count assertions depend on the owe fix; in the feed test 'assert again[\"text\"] != \"biff channel live.\"' and 'assert len(acks) == 1' pass anyway because biffd refuses a spent token. The replay is injected, not redelivered by biffd end to end: PL-1789. Medium for that reason"
     }
   ],
-  "notes": "The daemon hop does not exist on main; its clauses are owed by the code PR."
+  "notes": "Written by hand on main 066c551: the z-spec check tool reports the plugin is not enabled in the worktree and the audit tool was unavailable to the author, so the next /z-spec:audit run should reproduce this file; a difference is a finding. fuzz -t is clean. Redelivery of a request frame by biffd to the client, end to end, is not tested (PL-1789).",
+  "branch": "audit-channel-mail (main 066c551)"
 }

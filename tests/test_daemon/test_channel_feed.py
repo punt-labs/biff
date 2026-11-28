@@ -310,6 +310,54 @@ async def test_a_channel_check_event_carries_biffds_token_and_the_ack_goes_throu
     assert [a.token for a in acks] == [token]
 
 
+async def _check_token_sent(rig: Rig) -> tuple[DaemonClient, str]:
+    """Publish one check request, wait for its frame, return the tools and token."""
+    await rig.start()
+    tools = await rig.harness.connect("s-kai", "kai", client="mcp")
+    key = cast("dict[str, dict[str, str]]", await tools.request("status"))["data"][
+        "session_key"
+    ]
+    await rig.wait_for(lambda: rig.opens >= 1)
+    await asyncio.sleep(0.2)  # the subscription is up
+    await rig.bus.publish(f"channel.check.{key}", CheckRequest(_REPLY).to_payload())
+    await rig.wait_for(lambda: "channel_check" in rig.sink.kinds())
+    content = rig.sink.sent[rig.sink.kinds().index("channel_check")][0]
+    return tools, cast("re.Match[str]", re.search(r"token ([0-9a-f]{32})", content))[1]
+
+
+def _replay(rig: Rig, token: str) -> None:
+    """Hand the feed the request frame again, as biffd's at-least-once delivery may."""
+    event = Event(seq=99, kind="channel_check_request", data={"token": token})
+    rig.feed._take(event)  # pyright: ignore[reportPrivateUsage]
+    rig.feed.poke()
+
+
+async def test_a_request_frame_delivered_twice_reaches_the_sink_once(rig: Rig) -> None:
+    _, token = await _check_token_sent(rig)
+
+    _replay(rig, token)
+    await asyncio.sleep(_QUIET)
+
+    assert rig.sink.kinds().count("channel_check") == 1
+
+
+async def test_a_request_replayed_after_the_ack_emits_nothing_and_acks_nothing(
+    rig: Rig,
+) -> None:
+    tools, token = await _check_token_sent(rig)
+    first = cast("dict[str, str]", await tools.request("channel_ack", token=token))
+    assert first["text"] == "biff channel live."
+
+    _replay(rig, token)
+    await asyncio.sleep(_QUIET)
+    again = cast("dict[str, str]", await tools.request("channel_ack", token=token))
+
+    assert rig.sink.kinds().count("channel_check") == 1
+    assert again["text"] != "biff channel live."
+    acks = [p for subject, p in rig.bus.published if subject == _REPLY]
+    assert len(acks) == 1
+
+
 async def test_a_live_subscription_that_drops_is_opened_again_and_logged(
     rig: Rig, caplog: pytest.LogCaptureFixture
 ) -> None:

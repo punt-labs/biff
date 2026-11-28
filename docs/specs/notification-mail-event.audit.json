@@ -1,12 +1,12 @@
 {
   "specification": "docs/specs/notification-mail-event.tex",
   "testDirectory": "tests/",
-  "timestamp": "2026-11-27T20:00:00Z",
+  "timestamp": "2026-11-28T00:00:00Z",
   "summary": {
-    "covered": 5,
+    "covered": 10,
     "total": 10,
-    "percentage": 50,
-    "gaps": 5
+    "gaps": 0,
+    "percentage": 100
   },
   "constraints": [
     {
@@ -27,8 +27,9 @@
       "text": "unreadN + readN = arrivedN: the arrivals reading is read-only",
       "category": "invariant",
       "source": "MailEventInv",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_arrivals.py::test_arrivals_marks_nothing_read; tests/test_daemon/test_arrivals.py::test_arrivals_marks_nothing_read_on_a_consuming_relay",
+      "confidence": "high",
+      "verifiedBy": "three arrivals calls leave unread at 1 and a following read returns the message, on a keeping relay and on a consuming one (where a fetch would have removed it)"
     },
     {
       "text": "ReadCommit: a mail arriving during the send survives it",
@@ -41,22 +42,25 @@
       "text": "ReadBegin under the emitter lock: two wakes cannot both find an arrival newer",
       "category": "precondition",
       "source": "ReadBegin",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_channel_emitter.py::TestWakes::test_two_wakes_at_once_announce_an_arrival_once",
+      "confidence": "high",
+      "verifiedBy": "two emitter passes run together with a send that yields to the other pass; one mail event with count 1. Without the lock the second pass would find the arrival still unsent and send again"
     },
     {
       "text": "PushWake: a daemon push of a mail or wall arrival wakes the same poll path",
       "category": "effect",
       "source": "PushWake",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_daemon/test_push.py::test_a_push_of_mail_wakes_the_poll_at_once; tests/test_daemon/test_push.py::test_a_push_of_mail_addressed_to_the_session_wakes_it; tests/test_daemon/test_push.py::test_a_push_of_a_wall_wakes_the_poll_at_once; tests/test_daemon/test_push.py::test_a_duplicated_push_announces_an_arrival_once",
+      "confidence": "high",
+      "verifiedBy": "the rig polls every 30 s, so an event inside 2 s can only come from the push: mail to the user, mail to the tty and a wall each reach the subscriber at once; five duplicate pokes after the event add none"
     },
     {
       "text": "PollWake: the poll wakes every kind with or without a push",
       "category": "effect",
       "source": "PollWake",
-      "coveredBy": "GAP: owed by the code PR",
-      "confidence": "high"
+      "coveredBy": "tests/test_channel_emitter.py::TestWakes::test_a_pass_reads_every_kind_with_no_push; tests/test_daemon/test_push.py::test_a_pushed_pass_reads_every_kind; tests/test_daemon/test_push.py::test_a_lost_push_is_covered_by_the_poll",
+      "confidence": "high",
+      "verifiedBy": "a bare emitter pass sends mail and wall; with both pokes lost and one poke for mail, the pass reads the wall too; with the poke lost the 20 ms poll still announces the mail"
     },
     {
       "text": "enabled(PollWake) with no wake; enabled(ReadBegin), enabled(ReadCommit); EF the event covering the arrival that triggered owed mail (trig) has gone out (coverage, not the mark)",
@@ -76,9 +80,11 @@
       "text": "per-kind fairness: mail is not starved by wall work (ReadBegin strongly fair per kind; PollWake re-enables every kind)",
       "category": "invariant",
       "source": "fairness assumption",
-      "coveredBy": "GAP: owed by the code PR (a test with competing wall work and mail pending)",
-      "confidence": "high"
+      "coveredBy": "tests/test_channel_emitter.py::TestWakes::test_mail_goes_out_while_a_wall_is_held_by_its_rate_window; tests/test_channel_emitter.py::TestWakes::test_mail_pending_is_announced_while_wall_work_competes",
+      "confidence": "medium",
+      "verifiedBy": "the first holds the wall by its rate window (a second wall arrives a moment after the first) while mail is pending: mail is sent, the wall stays held. The second changes the wall before every pass for four turns but advances the clock 120 s each turn, so no window is ever closed: it shows no starvation when windows are open, not under contention. The fairness assumption (strong fairness per kind) is exercised by the first test only. The assertion that would fail if mail were starved by the wall: 'assert [m[\"kind\"] for m in rig.sink.metas] == [\"wall\", \"mail\"]' in test_mail_goes_out_while_a_wall_is_held_by_its_rate_window (with the wall held, mail would be missing). The contention test is not the evidence"
     }
   ],
-  "notes": "The daemon push for mail and wall is owed by the code PR; the emitter's own tests cover the existing poll path."
+  "notes": "Re-audited by hand on main 3f8ca8e; fuzz -t is clean. The push rows are covered by test_push.py against a push relay with a 30 s poll. The fairness row is medium: the competing-wall test never closes a window. Written by hand: the audit tool was unavailable to the author, so the next /z-spec:audit run should reproduce this file.",
+  "branch": "audit-channel-mail (main 3f8ca8e)"
 }
