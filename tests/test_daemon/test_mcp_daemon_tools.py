@@ -29,7 +29,7 @@ from biff.daemon.relays import ResolvedSession
 from biff.daemon.server import BiffDaemon
 from biff.daemon.session_store import CliSessionStore
 from biff.markers import clear_plan_marker, read_plan_marker, read_wall_marker
-from biff.models import BiffConfig
+from biff.models import BiffConfig, WallPost
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
 from biff.server.app import create_server
@@ -615,3 +615,82 @@ async def test_listening_with_nothing_to_hear_times_out_with_the_notice(
         waited = asyncio.get_running_loop().time() - started
 
     assert (text, 0.8 < waited < 3.0) == ("No pending talk activity.", True)
+
+
+async def test_a_mesg_biffd_never_got_is_not_taken_as_set_here(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flags: list[bool] = []
+
+    def record(*, enabled: bool) -> None:
+        flags.append(enabled)
+
+    monkeypatch.setattr("biff.server.daemon_write_tools.set_biff_enabled", record)
+
+    async def refused(_identity: ClientIdentity) -> DaemonClient:
+        msg = "biffd is not installed. Run: biff install"
+        raise DaemonUnreachableError(msg)
+
+    kai = await rig.client(
+        "kai", McpLink(user="kai", cwd="/work/repo", connect=refused)
+    )
+
+    with pytest.raises(ToolError):
+        await kai.call("mesg", enabled=False)
+
+    assert flags == []
+
+
+class _HeartbeatDown(LocalRelay):
+    """A local relay whose presence heartbeat is refused once told to be."""
+
+    down = False
+
+    async def heartbeat(self, session_key: str, at: datetime | None = None) -> None:
+        if _HeartbeatDown.down:
+            msg = "presence is unreachable"
+            raise ConnectionError(msg)
+        await super().heartbeat(session_key, at)
+
+
+async def test_a_presence_stamp_biffd_cannot_make_does_not_stop_the_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def build(resolved: ResolvedSession) -> Relay:
+        return _HeartbeatDown(resolved.data_dir)
+
+    async with _running(tmp_path, monkeypatch, build) as rig:
+        kai = await rig.client("kai")
+        await kai.call("who")
+        _HeartbeatDown.down = True
+
+        text = await kai.call("who")
+
+    assert "kai" in text
+
+
+async def test_a_wall_that_landed_but_failed_is_shown_as_the_relay_holds_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _WallRefused(LocalRelay):
+        refusing = False
+
+        async def set_wall(self, wall: WallPost | None) -> None:
+            await super().set_wall(wall)
+            if _WallRefused.refusing:
+                msg = "relay answered too late"
+                raise ConnectionError(msg)
+
+    def build(resolved: ResolvedSession) -> Relay:
+        return _WallRefused(resolved.data_dir)
+
+    async with _running(tmp_path, monkeypatch, build) as rig:
+        kai = await rig.client("kai")
+        root = str(Path())
+        await kai.call("wall", message="first", duration="1h")
+        _WallRefused.refusing = True
+
+        with pytest.raises(ToolError, match="relay answered too late"):
+            await kai.call("wall", message="second", duration="1h")
+
+    assert read_wall_marker(root) == "second"

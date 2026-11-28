@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, Literal, Self, final
 
+from fastmcp.exceptions import ToolError
+
 from biff._stdlib import expand_bead_id
 from biff.markers import clear_wall_marker, write_wall_marker
 from biff.models import WallPost
@@ -25,6 +27,7 @@ from biff.server.tools.wall import WALL_BASE_DESCRIPTION
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
+    from pydantic import JsonValue
 
     from biff.server.mcp_link import McpLink
     from biff.server.state import ServerState
@@ -150,8 +153,8 @@ class DaemonWriteTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        set_biff_enabled(enabled=enabled)
         reply = await self._calls.ask("mesg", value="y" if enabled else "n")
+        set_biff_enabled(enabled=enabled)
         await refresh_read_messages(self._mcp, self._state)
         return reply.text
 
@@ -208,23 +211,44 @@ class DaemonWriteTools:
             ToolError: biffd is not installed, did not start, or refused the call;
                 the message names the cause and the command that repairs it.
         """
-        state = self._state
-        reply = await self._calls.ask(
-            "wall", message=message, duration=duration, clear=clear, repo=repo
-        )
+        try:
+            reply = await self._calls.ask(
+                "wall", message=message, duration=duration, clear=clear, repo=repo
+            )
+        except ToolError:
+            await self._shown_as_held()
+            raise
         data = reply.data
         if reply.error or not isinstance(data, dict):
+            await self._shown_as_held()
             return reply.text
         # The display, the SessionStart marker and the spoken wall are this
         # process's: biffd has none of them.
-        root = str(state.repo_common_root)
-        if clear:
-            await refresh_wall(self._mcp, state, wall=None)
-            clear_wall_marker(root)
-        elif data.get("status") == "inactive":
-            await refresh_wall(self._mcp, state, wall=None)
-        elif message.strip() and "text" in data:
-            post = WallPost.model_validate(data)
-            await refresh_wall(self._mcp, state, wall=post)
-            write_wall_marker(root, post.text, post.expires_at)
+        if clear or message.strip() or "text" not in data:
+            await self._show_wall(data)
         return reply.text
+
+    async def _shown_as_held(self) -> None:
+        """Show the wall the relay holds, after a write that may have half landed.
+
+        A post or clear that failed for one repository may have changed another's,
+        and only the relay knows which; if biffd cannot be asked either, the
+        display stays as it was.
+        """
+        try:
+            held = (await self._calls.ask("wall")).data
+        except ToolError:
+            return
+        if isinstance(held, dict):
+            await self._show_wall(held)
+
+    async def _show_wall(self, data: dict[str, JsonValue]) -> None:
+        """Show *data*, a wall or the news that there is none, here."""
+        root = str(self._state.repo_common_root)
+        if "text" not in data:
+            await refresh_wall(self._mcp, self._state, wall=None)
+            clear_wall_marker(root)
+            return
+        post = WallPost.model_validate(data)
+        await refresh_wall(self._mcp, self._state, wall=post)
+        write_wall_marker(root, post.text, post.expires_at)

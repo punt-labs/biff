@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from biff import commands
+from biff.daemon.activity_count import ActivityCount
 from biff.daemon.params import Params
 from biff.daemon.plan_method import PlanMethod
 from biff.daemon.read_batch import ReadBatcher
@@ -118,7 +119,7 @@ class Methods:
         if method == "read":
             return await self._read(session, Params(method, raw))
         if method not in _POLLS:
-            await session.touch()
+            await ActivityCount.of(session)
         if method in self._sessions.names:
             result = await self._sessions.call(session, method, Params(method, raw))
             return self._outcome(result)
@@ -175,7 +176,7 @@ class Methods:
             result["more"] = left
         if not batch:
             return Outcome(result)
-        await session.touch()
+        await ActivityCount.of(session)
         return Outcome(result, partial(ReadSteps.delivered, session, inbox, batch))
 
     @staticmethod

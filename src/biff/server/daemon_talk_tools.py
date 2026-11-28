@@ -165,7 +165,12 @@ class DaemonTalkTools:
         return await self._shown(await self._calls.ask("talk_end"))
 
     async def _shown(self, reply: Reply) -> str:
-        """Return *reply*'s text after emptying this process's mirror of the talk."""
-        self._state.talk.drain_for_agent()
+        """Return *reply*'s text after emptying this process's mirror of the talk.
+
+        An answer of "nothing" leaves the mirror alone: a frame this process has
+        and biffd lacks (it subscribed later) is still news.
+        """
+        if reply.text != TalkReadout.NO_ACTIVITY:
+            self._state.talk.drain_for_agent()
         await refresh_talk(self._mcp, self._state)
         return reply.text
