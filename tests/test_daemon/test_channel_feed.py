@@ -8,6 +8,7 @@ inbox mark; a channel check token is made by biffd and acknowledged through it.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import re
 from typing import TYPE_CHECKING, cast
@@ -41,12 +42,16 @@ class _Sink:
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, dict[str, str]]] = []
+        self.delay = 0.0
+        self.entered = asyncio.Event()
 
     @property
     def is_open(self) -> bool:
         return True
 
     async def send(self, content: str, meta: Mapping[str, str]) -> None:
+        self.entered.set()
+        await asyncio.sleep(self.delay)
         self.sent.append((content, dict(meta)))
 
     def kinds(self) -> list[str]:
@@ -56,8 +61,9 @@ class _Sink:
 class _Dropping:
     """A connected client whose subscription drops once it is waiting for events."""
 
-    def __init__(self, real: DaemonClient) -> None:
+    def __init__(self, real: DaemonClient, lives: float) -> None:
         self._real = real
+        self._lives = lives
 
     async def request(self, method: str, **params: object) -> object:
         return await self._real.request(method, **params)  # type: ignore[arg-type]
@@ -66,6 +72,7 @@ class _Dropping:
         await self._real.subscribe()
 
     async def next_event(self) -> Event:
+        await asyncio.sleep(self._lives)
         msg = "biffd closed the connection"
         raise ConnectionLostError(msg)
 
@@ -74,21 +81,34 @@ class _Dropping:
 
 
 class Rig:
-    def __init__(self, harness: Harness, bus: TalkBus, limit: RateLimit | None) -> None:
+    def __init__(
+        self,
+        harness: Harness,
+        bus: TalkBus,
+        limit: RateLimit | None,
+        stable_seconds: float = 30.0,
+    ) -> None:
         self.harness = harness
         self.bus = bus
         self.sink = _Sink()
         self.link = McpLink(user="kai", cwd="/work/repo", connect=self._connect)
         self.feed = DaemonChannelFeed(
-            link=self.link, check=ChannelCheck(), retry_seconds=0.05, limit=limit
+            link=self.link,
+            check=ChannelCheck(),
+            retry_seconds=0.05,
+            limit=limit,
+            stable_seconds=stable_seconds,
         )
         self.opens = 0
         self.refuse_first = 0
         self.drop_first = 0  # the first opens' subscriptions drop once live
+        self.drop_lives = 0.0  # how long such a subscription lasts
+        self.open_times: list[float] = []
         self.surprise_first = 0  # the first opens fail in a way nobody expects
 
     async def _connect(self, identity: ClientIdentity) -> DaemonClient:
         self.opens += 1
+        self.open_times.append(asyncio.get_running_loop().time())
         if self.refuse_first >= self.opens:
             msg = "biffd is down"
             raise ConnectionError(msg)
@@ -101,7 +121,7 @@ class Rig:
             identity=identity,
         )
         if self.drop_first >= self.opens:
-            return cast("DaemonClient", _Dropping(real))
+            return cast("DaemonClient", _Dropping(real, self.drop_lives))
         return real
 
     async def start(self, session_id: str = "s-kai") -> None:
@@ -335,14 +355,38 @@ async def test_a_check_request_without_a_token_is_dropped_and_logged(
     assert rig.sink.sent == []
 
 
-async def test_the_backoff_starts_again_once_a_subscription_is_up(rig: Rig) -> None:
-    rig.refuse_first = 3  # waits grow: 0.05, 0.1, 0.2
+def _gaps(rig: Rig) -> list[float]:
+    times = rig.open_times
+    return [later - earlier for earlier, later in itertools.pairwise(times)]
+
+
+async def test_a_subscription_that_dies_at_once_does_not_reset_the_backoff(
+    rig: Rig,
+) -> None:
+    rig.drop_first = 1000  # every subscription dies the moment it is up
 
     await rig.start()
-    await rig.wait_for(lambda: rig.opens >= 4)
-    await asyncio.sleep(_QUIET)  # the fourth open is subscribed
+    await asyncio.sleep(1.5)
 
-    assert abs(rig.feed._wait - 0.05) < 1e-9  # pyright: ignore[reportPrivateUsage]
+    gaps = _gaps(rig)
+    assert len(gaps) >= 3
+    assert gaps[-1] > gaps[0] * 2  # 0.05, 0.1, 0.2, 0.4: it backs off
+
+
+async def test_a_subscription_that_stayed_up_starts_the_backoff_again(
+    harness: Harness, bus_relay: TalkBus
+) -> None:
+    rig = Rig(harness, bus_relay, RateLimit(per_kind=0.1), stable_seconds=0.1)
+    rig.drop_first = 1000
+    rig.drop_lives = 0.3  # each lives past the stable time, then drops
+
+    await rig.start()
+    await asyncio.sleep(1.8)
+    await rig.feed.close()
+
+    gaps = _gaps(rig)
+    assert len(gaps) >= 3
+    assert max(gaps) < 0.6  # about 0.3 up and the base 0.05 wait, never longer
 
 
 async def test_a_new_session_with_a_lower_mark_is_announced(rig: Rig) -> None:
@@ -477,3 +521,32 @@ async def test_an_invite_that_came_in_a_reconnect_gap_is_not_also_a_line(
     await asyncio.sleep(_QUIET)
 
     assert rig.sink.kinds() == ["talk_invite"]
+
+
+async def test_a_move_during_a_slow_deferred_send_does_not_carry_its_record_over(
+    harness: Harness, bus_relay: TalkBus
+) -> None:
+    rig = Rig(harness, bus_relay, RateLimit(per_kind=0.2))
+    try:
+        await rig.start()
+        first = await rig.harness.connect("s-kai", "kai", client="mcp")
+        second = await rig.harness.connect("s-kai2", "kai", client="mcp")
+        eric = await _eric(rig)
+        first_at, second_at = f"kai:{await _tty(first)}", f"kai:{await _tty(second)}"
+        await eric.request("write", to=first_at, message="m1")
+        await rig.wait_for(lambda: "mail" in rig.sink.kinds())
+        rig.sink.delay = 0.5
+        rig.sink.entered.clear()
+        await eric.request("write", to=first_at, message="m2")  # held, then sent slowly
+        await asyncio.wait_for(rig.sink.entered.wait(), timeout=_SOON)
+
+        rig.feed.bind(SessionRouting("s-kai2"))  # /clear, mid-send
+        rig.sink.delay = 0.0
+        await asyncio.sleep(0.2)
+        await eric.request("write", to=second_at, message="n1")
+
+        await rig.wait_for(lambda: rig.sink.sent[-1][1].get("count") == "1")
+        await asyncio.sleep(0.8)
+        assert [m.get("count") for _, m in rig.sink.sent] == ["1", "1"]
+    finally:
+        await rig.feed.close()

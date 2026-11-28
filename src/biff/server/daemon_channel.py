@@ -26,6 +26,9 @@ RETRY_SECONDS: Final = 1.0
 
 MAX_RETRY_SECONDS: Final = 10.0
 
+STABLE_SECONDS: Final = 30.0
+"""How long a subscription must stay up before its loss starts the backoff afresh."""
+
 
 @final
 class DaemonChannelFeed:
@@ -46,7 +49,9 @@ class DaemonChannelFeed:
         "_link",
         "_pass",
         "_retry",
+        "_stable",
         "_task",
+        "_up_since",
         "_wait",
     )
 
@@ -57,6 +62,8 @@ class DaemonChannelFeed:
     _pass: asyncio.Event
     _task: asyncio.Task[None] | None
     _wait: float
+    _stable: float
+    _up_since: float | None
 
     def __new__(
         cls,
@@ -65,6 +72,7 @@ class DaemonChannelFeed:
         check: ChannelCheck,
         retry_seconds: float = RETRY_SECONDS,
         limit: RateLimit | None = None,
+        stable_seconds: float = STABLE_SECONDS,
     ) -> Self:
         """Feed an emitter, made here, from the subscriptions *link* opens.
 
@@ -84,6 +92,8 @@ class DaemonChannelFeed:
         )
         self._retry = retry_seconds
         self._wait = retry_seconds
+        self._stable = stable_seconds
+        self._up_since = None
         self._pass = asyncio.Event()
         self._task = None
         return self
@@ -100,16 +110,25 @@ class DaemonChannelFeed:
     def bind(self, routing: SessionRouting) -> None:
         """Follow the session *routing* names, leaving the one it followed.
 
-        What was sent, seen and known of the old session is dropped: an inbox's
-        mark orders mail within that inbox only, so a new session may start lower.
+        What was sent, seen and known of the old session is dropped once nothing
+        of it is in flight: an inbox's mark orders mail within that inbox only, so
+        a new session may start lower, and a send still running for the old one
+        must not record its mark against the new one.
         """
-        if self._task is not None:
-            self._task.cancel()
-        self._arrivals.forget()
+        previous = self._task
         self._task = asyncio.create_task(
-            self._follow(routing.session_id), name="channel feed"
+            self._move(previous, routing.session_id), name="channel feed"
         )
         self._task.add_done_callback(self._ended)
+
+    async def _move(self, previous: asyncio.Task[None] | None, session_id: str) -> None:
+        """Stop the old session's feed and sends, forget it, then follow the new."""
+        if previous is not None:
+            previous.cancel()
+            await asyncio.gather(previous, return_exceptions=True)
+        await self._emitter.reset()
+        self._arrivals.forget()
+        await self._follow(session_id)
 
     @staticmethod
     def _ended(task: asyncio.Task[None]) -> None:
@@ -147,6 +166,7 @@ class DaemonChannelFeed:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._backoff_after_loss()
                 logger.warning(
                     "channel events from biffd stopped: %s; opening again in %.1fs",
                     exc,
@@ -155,6 +175,16 @@ class DaemonChannelFeed:
                 )
                 await asyncio.sleep(self._wait)
                 self._wait = min(self._wait * 2, MAX_RETRY_SECONDS)
+
+    def _backoff_after_loss(self) -> None:
+        """Start the wait afresh if the lost subscription had stayed up long enough.
+
+        One that dies at once (biffd crash-looping, or a pass that raises every
+        time) must back off, not retry at the base delay for ever.
+        """
+        up, self._up_since = self._up_since, None
+        if up is not None and asyncio.get_running_loop().time() - up >= self._stable:
+            self._wait = self._retry
 
     async def _subscribed(self, session_id: str) -> None:
         """Run one subscription: summary, then each arrival, until it is lost."""
@@ -167,7 +197,7 @@ class DaemonChannelFeed:
             await self._refresh(client)
             self._arrivals.subscribed()  # what waited before this subscription
             self._emitter.reconnected()  # what came while no subscription ran
-            self._wait = self._retry  # it is up: the next loss starts afresh
+            self._up_since = asyncio.get_running_loop().time()
             try:
                 async with asyncio.TaskGroup() as group:
                     group.create_task(self._passes(client))

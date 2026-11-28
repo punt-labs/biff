@@ -17,7 +17,6 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Hashable
-from contextlib import suppress
 from datetime import datetime
 from typing import TYPE_CHECKING, Self, cast
 
@@ -259,16 +258,25 @@ class ChannelEmitter:
         The channel loop calls it when the connection ends, before the relay
         closes, so a timer can never read a relay that is going away.
         """
+        await self.reset()
+        self._link = None
+
+    async def reset(self) -> None:
+        """Forget what is held or owed: the session this serves has changed.
+
+        The timer is cancelled and a firing in progress is ended and waited for,
+        so a send for the old session cannot record itself against the new one.
+        """
         self._cancel_timer()
         task, self._timer_task = self._timer_task, None
         if task is not None and not task.done():
             task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-        self._link = None
+            # Not a suppress: a cancellation aimed at the caller must reach it.
+            await asyncio.gather(task, return_exceptions=True)
         self._due.clear()
         self._retried.clear()
         self._misses.clear()
+        self._dormant.clear()
 
     async def deferred_send(self) -> None:
         """Handle the one-shot timer: send, drop or release each kind that is due.
