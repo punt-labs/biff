@@ -19,8 +19,17 @@ _READ_BY_DEPENDENCIES = frozenset({"BIFF_TELEMETRY"})
 
 
 def test_ambient_biff_settings_are_stripped() -> None:
-    leaked = [name for name in _AMBIENT_BIFF_SETTINGS if name in os.environ]
+    leaked = [
+        name
+        for name in _AMBIENT_BIFF_SETTINGS
+        if name in os.environ and name != "BIFF_MCP_TRANSPORT"
+    ]
     assert leaked == []
+
+
+def test_the_suite_pins_the_in_process_transport() -> None:
+    # biffd is the product's default; a test that took it would start a real one.
+    assert os.environ["BIFF_MCP_TRANSPORT"] == "inprocess"
 
 
 def test_strip_removes_settings_that_were_set(
