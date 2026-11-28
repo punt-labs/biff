@@ -9889,12 +9889,25 @@ second group of daemon additions for PL-1670. Model:
   dormant and has been for the row's lifetime. A hello that reattaches first wins
   (the sweep re-checks under the session's guard).
 
+**Stops.** The spec has two kinds of daemon stop. A graceful stop
+(`GracefulStop`, `BiffDaemon.stop`) waits for in-flight reads, bounded by the
+request timeout, then files every session's held outbox back to the relay
+(`Handback.close_relays`) before closing. A read still running when the bound
+expires loses the mail it had consumed and not yet handed to the outbox
+(`lastStop = sTimedOut`, `lostN`); unread mail in the relay is untouched. The
+bound is the price of a stop that returns. A process loss (`ProcessLoss`: a
+crash or kill) loses the outbox and any read in flight, as before (PL-1753); no
+code path can file mail back from a dead process. The conservation invariant
+counts in-flight mail (`flightN`), so a stop that skips the hand-back
+(`claude-session-end-nograceful.tex`) violates it.
+
 **Divergence from the model.** The durable model keeps the record across a daemon
-restart (`DaemonRestart`). The daemon holds harness records in memory, so a
-restart forgets them, which the spec states as `DaemonRestartForget`: the
-unconfirmed batch is lost with the outbox (PL-1753), and the unread mail in the
-restarted session's own relay inbox is never drained, which the spec counts as
-`strandedN`. Stranded mail is that session-inbox mail only: mail already filed in
+stop. The daemon holds harness records in memory, so any stop forgets them, which
+the spec states as `GracefulStopForget` and `ProcessLossForget`. After a
+graceful stop nothing is lost: the outbox is back in the relay, and the unread
+mail in the restarted session's own relay inbox is never drained, which the spec
+counts as `strandedN`. After a process loss the outbox is lost as well. Stranded
+mail is that session-inbox mail only: mail already filed in
 the user's mailbox (by an end, or addressed to the user) is untouched by the loss
 of a record. It stays in the relay until its own retention, and is found again if
 the session resumes under the same id. The row and the tty name stay as well, and
@@ -9902,13 +9915,17 @@ age out by the relay's own lifetime on NATS (`RowAgesOut`, `TtyAgesOut`). The
 local relay (no relay URL) keeps a name reservation as a lockfile with no
 lifetime, so there `TtyAgesOut` does not happen and a forgotten session holds its
 name until something releases it. That is not wholly safe: a forgotten session
-holds its name and its unread session-inbox mail is stranded. The spec keeps both
-restarts; the properties about the record hold unless the restart forgot it.
-Persisting the records, or scanning the relay's rows at start, closes it: PL-1771.
+holds its name and its unread session-inbox mail is stranded. The spec keeps the
+durable and the forgetting stops; the properties about the record hold unless the
+stop forgot it. Persisting the records, or scanning the relay's rows at start,
+closes it: PL-1771. The two tests of the graceful stop restart a daemon that has
+forgotten its records, so they exercise `GracefulStopForget`; no test makes the
+settle step expire.
 
-**Audit status.** `claude-session-end.audit.json` reports 13 of 13 clauses covered
+**Audit status.** `claude-session-end.audit.json` reports 14 of 14 clauses covered
 and zero GAP. It was reconciled by reading the tests against each clause (the
-z-spec audit tool was not run), and its rows name the tests. The residual after
+z-spec audit tool was not run), and its rows name the tests. The settle timeout
+and the process loss are listed as limits without a test. The residual after
 this change is PL-1770: the unconditional tty name releases in the in-process
 paths (`session_registry`, `tty.py`), which go with the in-process server.
 

@@ -1,11 +1,11 @@
 {
   "specification": "docs/specs/claude-session-end.tex",
   "testDirectory": "tests/",
-  "branch": "pl-1670-m2-end (724a243)",
-  "timestamp": "2026-11-27T23:30:00Z",
+  "branch": "spec-graceful-stop (off main 67f90da); tests read on pl-consuming-read-cancel 9aa72c8",
+  "timestamp": "2026-11-27T00:00:00Z",
   "summary": {
-    "covered": 13,
-    "total": 13,
+    "covered": 14,
+    "total": 14,
     "percentage": 100,
     "gaps": 0
   },
@@ -35,12 +35,12 @@
       "verifiedBy": "the test releases the old session's reservation, reserves the name for kai:someone-else, ends the session, and asserts the owner is still kai:someone-else"
     },
     {
-      "text": "outboxN + sessN + userN + shownN + lostN + strandedN = issuedN: an end files the held batch and drains the session inbox into the user's mailbox; a restart loses the outbox and strands the session inbox",
+      "text": "outboxN + flightN + sessN + userN + shownN + lostN + strandedN = issuedN: an end files the held batch and drains the session inbox into the user's mailbox; a graceful stop files the outbox (and an in-flight read, if it settles) back to the relay; a process loss loses the outbox and the in-flight read",
       "category": "invariant",
       "source": "EndInv",
-      "coveredBy": "tests/test_daemon/test_claude_end.py::test_an_end_files_back_the_mail_the_session_holds; tests/test_daemon/test_claude_end.py::test_an_end_loses_no_mail_still_in_the_inbox; tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail",
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_an_end_files_back_the_mail_the_session_holds; tests/test_daemon/test_claude_end.py::test_an_end_loses_no_mail_still_in_the_inbox; tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail; tests/test_daemon/test_shutdown_reads.py::test_mail_a_read_took_while_the_daemon_stopped_is_there_after_a_restart (PR 675, branch pl-consuming-read-cancel); tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_keeps_the_mail_a_read_held (PR 675)",
       "confidence": "high",
-      "verifiedBy": "the first holds an unconfirmed batch (consuming relay) and asserts it is in the user mailbox after the end; the second asserts both inbox messages reach the user mailbox; the third asserts a restart loses the unconfirmed batch on a consuming relay and keeps it on one that retains. shownN is not asserted"
+      "verifiedBy": "the first holds an unconfirmed batch (consuming relay) and asserts it is in the user mailbox after the end; the second asserts both inbox messages reach the user mailbox; the third asserts a restart loses the unconfirmed batch on a consuming relay and keeps it on one that retains. shownN is not asserted; the two PR 675 tests assert the stop side of the equation: no mail is lost on a graceful stop. shownN is not asserted. flightN is asserted only through the first PR 675 test (a read mid-fetch when the stop arrives)"
     },
     {
       "text": "recState = rsEnding => endRun = currentRun: a replaced run cannot end the session",
@@ -107,22 +107,42 @@
       "verifiedBy": "a reply is handed over (request_held), never confirmed, the client closes, a new connection reads and finds the message still unread. It shows no consumption without a confirming client, which is what the model's connected-client guard stands for"
     },
     {
-      "text": "DaemonRestart (live or dormant): the outbox is the daemon's memory and is lost; the relay's mail is not (PL-1753)",
+      "text": "ProcessLoss (live or dormant): a crash loses the daemon's outbox and any read in flight; the relay's mail is not lost (PL-1753)",
       "category": "effect",
-      "source": "DaemonRestart",
-      "coveredBy": "tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail",
-      "confidence": "medium",
-      "verifiedBy": "a connected session holds an unconfirmed batch; the daemon is stopped and a new one started; on a consuming relay the batch is gone, on one that keeps mail it is read again. A restart while dormant is not exercised; the code forgets the whole record on any restart"
+      "source": "ProcessLoss",
+      "coveredBy": "tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail (on main; PR 675 replaces it, see limitsWithoutTest)",
+      "confidence": "low",
+      "verifiedBy": "on main the test stops the daemon and asserts the unconfirmed batch is gone on a consuming relay. That stop is a graceful stop whose hand-back the code does not yet perform; it is the nearest test of the loss, not a test of a crash. PR 675 deletes it: after the merge nothing exercises the loss of an outbox"
+    },
+    {
+      "text": "GracefulStop / GracefulStopForget (settled? = ztrue): the held outbox of every session, and mail of a read that settled, is filed back to the relay before the daemon closes; the relay's mail is untouched",
+      "category": "effect",
+      "source": "GracefulStop, GracefulStopForget",
+      "coveredBy": "tests/test_daemon/test_shutdown_reads.py::test_mail_a_read_took_while_the_daemon_stopped_is_there_after_a_restart; tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_keeps_the_mail_a_read_held",
+      "confidence": "high",
+      "verifiedBy": "read from branch pl-consuming-read-cancel (head 9aa72c8). The first: a consuming relay whose fetch_user_inbox consumes the mail and stalls 0.3 s; harness.daemon.stop() is called while a read is mid-fetch; a new BiffDaemon (request_timeout 0.5) is queried by a cli client for the session and returns the mail ('do not lose me'): the settle step waits for the read and the hand-over files it. The second is parametrised over consuming and non-consuming relays: a seat holds an unconfirmed batch (request_held 'read'), the daemon is stopped and revived, and a reattached read returns it ('in flight'). Both restart a daemon that has forgotten its harness records, so they exercise GracefulStopForget, not the durable GracefulStop; the filing is the same step"
     }
   ],
   "limitsWithoutTest": [
     {
-      "text": "DaemonRestartForget, RowAgesOut, TtyAgesOut: the code keeps harness records in memory, so a restart forgets them; the row and (on NATS) the name age out by the relay's lifetime, the local relay's name reservation has no lifetime, and the restarted session's own relay inbox is stranded (strandedN; the user's mailbox is untouched)",
+      "text": "GracefulStop with settled? = zfalse (the settle step times out with a read in flight): the mail that read consumed and had not handed to the outbox is lost; unread relay mail is safe",
+      "reason": "Handback.close_relays runs Uncancellable.settle(core.request_timeout), which only logs a warning when a task outlives the timeout. Neither PR 675 test makes a read outlast the bound (the first stalls 0.3 s against a 0.5 s timeout). The model states the loss as lostN > 0 with lastStop = sTimedOut; the loss is the price of a bounded stop, not a defect, but nothing in tests/ shows it happens as modelled. A test needs a fetch that stalls beyond request_timeout and asserts the warning and the lost batch"
+    },
+    {
+      "text": "ProcessLoss: the crash loses the outbox and any read in flight (PL-1753), and the forgotten harness records (PL-1771)",
+      "reason": "PR 675 replaces the only test that asserted a loss, because a graceful stop no longer loses the outbox. A crash cannot be tested in-process; the loss is a documented limit, kept in the model as ProcessLoss and ProcessLossForget"
+    },
+    {
+      "text": "GracefulStopForget, ProcessLossForget, RowAgesOut, TtyAgesOut: the code keeps harness records in memory, so a restart forgets them; the row and (on NATS) the name age out by the relay's lifetime, the local relay's name reservation has no lifetime, and the restarted session's own relay inbox is stranded (strandedN; the user's mailbox is untouched)",
       "reason": "a divergence from the durable-record model, reported as a finding (PL-1771 tracks the code fix): a name held up to the row lifetime, or for good on the local relay, and unread session-inbox mail never drained to the user mailbox. No test asserts the forgotten record or the stranding"
     },
     {
       "text": "claude-session-end-unordered-owned.tex: the owner check alone keeps the new session's name",
       "reason": "model result (2,351 states, invariant holds); the code's check is covered by test_a_name_another_session_took_is_not_freed_by_the_end"
+    },
+    {
+      "text": "claude-session-end-nograceful.tex: a graceful stop that skips the hand-back violates conservation",
+      "reason": "model result (397 states; counterexample MailFetch, MailHandOver, GracefulStop); the code's hand-back is covered by the two PR 675 tests above"
     }
   ],
   "notes": "The z-spec audit tool is not available to this agent; the audit was done by hand following /z-spec:audit: each row's tests were read, not matched by name (see verifiedBy)."
