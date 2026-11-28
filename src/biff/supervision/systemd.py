@@ -109,7 +109,12 @@ class SystemdBackend:
         try:
             self._require("install", "daemon-reload")
             self._require("install", "enable", "--now", self._unit)
-            self._require("install", "restart", self._unit)
+            self._require(
+                "install",
+                "restart",
+                self._unit,
+                timeout=Supervisor.STOP_TIMEOUT_SECONDS,
+            )
         except (ServiceActionFailedError, OSError, subprocess.TimeoutExpired):
             self._roll_back()
             raise
@@ -128,9 +133,17 @@ class SystemdBackend:
         """
         existed = self._unit_path.exists()
         if existed:
-            self._require("uninstall", "disable", "--now", self._unit)
+            self._require(
+                "uninstall",
+                "disable",
+                "--now",
+                self._unit,
+                timeout=Supervisor.STOP_TIMEOUT_SECONDS,
+            )
         elif self.is_active():
-            self._require("uninstall", "stop", self._unit)
+            self._require(
+                "uninstall", "stop", self._unit, timeout=Supervisor.STOP_TIMEOUT_SECONDS
+            )
         if self.is_active():
             msg = self._spec.failure_message(
                 "uninstall", f"{self._unit} is still active after it was stopped"
@@ -159,7 +172,9 @@ class SystemdBackend:
         Raises:
             ServiceActionFailedError: systemctl refused; the error carries its stderr.
         """
-        self._require("stop", "stop", self._unit)
+        self._require(
+            "stop", "stop", self._unit, timeout=Supervisor.STOP_TIMEOUT_SECONDS
+        )
         return True
 
     def restart(self) -> bool:
@@ -168,7 +183,9 @@ class SystemdBackend:
         Raises:
             ServiceActionFailedError: systemctl refused; the error carries its stderr.
         """
-        self._require("restart", "restart", self._unit)
+        self._require(
+            "restart", "restart", self._unit, timeout=Supervisor.STOP_TIMEOUT_SECONDS
+        )
         return True
 
     def is_active(self) -> bool:
@@ -212,14 +229,31 @@ class SystemdBackend:
             "log out. Run: loginctl enable-linger"
         )
 
-    def _require(self, action: str, *args: str) -> None:
-        """Run ``systemctl --user`` *args*; raise with its stderr when it fails."""
-        Supervisor.require(self._spec, action, "systemctl", "--user", *args)
+    def _require(
+        self,
+        action: str,
+        *args: str,
+        timeout: float | None = None,  # None: the default limit
+    ) -> None:
+        """Run ``systemctl --user`` *args*; raise with its stderr when it fails.
+
+        A command that waits for biffd to stop is given ``STOP_TIMEOUT_SECONDS``.
+        """
+        Supervisor.require(
+            self._spec, action, "systemctl", "--user", *args, timeout=timeout
+        )
 
     def _roll_back(self) -> None:
         """Undo a partial install; each step is best effort and the unit always goes."""
         with suppress(OSError, subprocess.TimeoutExpired):
-            Supervisor.run("systemctl", "--user", "disable", "--now", self._unit)
+            Supervisor.run(
+                "systemctl",
+                "--user",
+                "disable",
+                "--now",
+                self._unit,
+                timeout=Supervisor.STOP_TIMEOUT_SECONDS,
+            )
         self._unit_path.unlink(missing_ok=True)
         with suppress(OSError, subprocess.TimeoutExpired):
             Supervisor.run("systemctl", "--user", "daemon-reload")

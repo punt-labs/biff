@@ -898,6 +898,73 @@ def test_an_io_error_on_the_newest_snapshot_does_not_move_it_aside(
     ) == (True, [], True)
 
 
+def _three_writes(primary: Path, fallback: Path, *bodies: str) -> None:
+    """Leave *primary* a snapshot with sequence 3 holding *bodies*."""
+    writer = SpillFile(primary, fallback)
+    for _ in range(3):
+        writer.write({("s-one", False): _spilled("s-one", *bodies)})
+
+
+def test_a_write_after_an_io_failed_read_outranks_the_file_that_was_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary, fallback = _files(tmp_path)
+    _three_writes(primary, fallback, "old")
+    _unreadable_by_io(monkeypatch, primary)
+    daemon = SpillFile(primary, fallback)
+    daemon.read()  # the primary, sequence 3, cannot be read
+    daemon.write({("s-two", False): _spilled("s-two", "FRESH")})
+    monkeypatch.undo()  # the error was momentary
+
+    restarted = SpillFile(primary, fallback)
+    got = restarted.read()
+    restarted.write(got)  # the first store at start
+
+    bodies = sorted(m.body for item in got.values() for m in item.messages)
+    assert ("FRESH" in bodies, fallback.exists() or primary.exists()) == (True, True)
+
+
+def test_a_snapshot_written_while_a_file_was_unread_is_not_replayed_by_that_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary, fallback = _files(tmp_path)
+    _three_writes(primary, fallback, "x", "y")  # sequence 3: x and y
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text(
+        json.dumps(
+            {"seq": 2, "spilled": [_spilled("s-one", "x", "y").model_dump(mode="json")]}
+        )
+    )
+    _unreadable_by_io(monkeypatch, primary)
+    daemon = SpillFile(primary, fallback)
+    daemon.read()  # the second place, sequence 2, is what can be read
+    daemon.write({("s-one", False): _spilled("s-one", "y")})  # x was filed
+    monkeypatch.undo()
+
+    (item,) = SpillFile(primary, fallback).read().values()
+    assert [m.body for m in item.messages] == ["y"]
+
+
+def test_an_emptied_snapshot_written_while_a_file_was_unread_is_not_replayed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary, fallback = _files(tmp_path)
+    _three_writes(primary, fallback, "x", "y")
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text(
+        json.dumps(
+            {"seq": 2, "spilled": [_spilled("s-one", "x", "y").model_dump(mode="json")]}
+        )
+    )
+    _unreadable_by_io(monkeypatch, primary)
+    daemon = SpillFile(primary, fallback)
+    daemon.read()
+    daemon.write({})  # everything was filed
+    monkeypatch.undo()
+
+    assert SpillFile(primary, fallback).read() == {}
+
+
 def test_an_unreadable_only_snapshot_is_left_in_place_and_logged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

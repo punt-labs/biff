@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from typing import TYPE_CHECKING, Final, final
+from typing import TYPE_CHECKING, ClassVar, Final, final
 
 from biff.supervision.errors import ServiceActionFailedError
 
@@ -24,6 +24,11 @@ _EXCERPT_LINES: Final = 8
 @final
 class Supervisor:
     """Runs ``systemctl``, ``launchctl``, ``claude`` and a detached ``biffd``."""
+
+    STOP_TIMEOUT_SECONDS: ClassVar[float] = 60.0
+    """How long a call that waits for biffd to stop may run: its stop takes up to
+    33 s (``Handback.STOP_SECONDS``) and the call must outwait it, or an install
+    rolls the unit back in the middle of the hand-back."""
 
     @staticmethod
     def run(
@@ -94,16 +99,23 @@ class Supervisor:
         return "\n".join(wanted or text.splitlines()[:_EXCERPT_LINES])
 
     @staticmethod
-    def require(spec: ServiceSpec, action: str, *argv: str) -> None:
+    def require(
+        spec: ServiceSpec,
+        action: str,
+        *argv: str,
+        timeout: float | None = None,  # None: the default limit
+    ) -> None:
         """Run *argv* as *spec*'s *action*; raise with the supervisor's own words.
 
         Raises:
             ServiceActionFailedError: *argv* exited non-zero; the error carries its
                 stderr and names the log.
             OSError: The program is missing or cannot be run.
-            subprocess.TimeoutExpired: The supervisor did not answer in 30 seconds.
+            subprocess.TimeoutExpired: The supervisor did not answer within
+                *timeout* seconds (30 by default).
         """
-        result = Supervisor.run(*argv)
+        limit = _TIMEOUT_SECONDS if timeout is None else timeout
+        result = Supervisor.run(*argv, timeout=limit)
         if result.returncode != 0:
             said = result.stderr.strip() or result.stdout.strip() or "no output"
             detail = f"`{' '.join(argv)}` exited {result.returncode}: {said}"

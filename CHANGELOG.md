@@ -160,14 +160,18 @@
   still fetching delivers late into the file too. The stop bounds its wait for the
   listener and the closing of the relays (they close in parallel), and the launchd
   plist sets `ExitTimeOut` above the whole stop budget (a restart waits longer than
-  that); an existing LaunchAgent keeps launchd's default kill timeout until
-  `biff daemon install` rewrites its plist. The next start files the spill back
+  that), and the `systemctl` and `launchctl` calls that wait for the stop (stop,
+  restart, install, uninstall) give it 60 s, so an install no longer rolls the unit
+  back in the middle of the hand-back; an existing LaunchAgent keeps launchd's
+  default kill timeout until `biff daemon install` rewrites its plist. The next start files the spill back
   before it serves, a running daemon keeps trying (after 5, 15 and 45 s, then every
   five minutes), and mail goes to `handback-spill.undeliverable` only after 20
   failed tries and seven days of failing (days with the daemon off do not count);
   the shelf is tried again at every start and once a day. A file that cannot be
   parsed is set aside under a new name, never overwritten, and counted; one that
-  cannot be read for an I/O reason is left where it is and logged. Delivery is at
+  cannot be read for an I/O reason is left where it is and logged, and the
+  snapshots written meanwhile outrank it, so it cannot replay mail already filed
+  or hide mail spilled since. Delivery is at
   least once: a refile after a restart can still duplicate a message the relay
   already took, beyond its duplicate window, which a newly created inbox stream
   now keeps for 15 minutes instead of 2. `biff status` shows how many spilled,

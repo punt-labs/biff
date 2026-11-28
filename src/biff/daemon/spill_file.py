@@ -68,6 +68,10 @@ class SpillFile:
         (seq, items), _ = max(found, key=lambda f: (f[0][0], f[1]))
         self._seq = max(seq, 0)
         if self._unread:
+            # A file that could not be read has a sequence we do not know, so the
+            # next snapshot must outrank any it can have: the clock does, now and
+            # after a restart, and the counter carries on from it.
+            self._seq = max(self._seq, time.time_ns())
             self._say_unread(seq, items)
         if len(self.asides("unreadable")) > before and items:
             logger.critical(

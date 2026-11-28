@@ -235,7 +235,9 @@ class LaunchdBackend:
         """Boot the job out if it is loaded, and wait until launchd has let it go."""
         if not self.is_loaded():
             return
-        self._require("stop", "bootout", self._target)
+        self._require(
+            "stop", "bootout", self._target, timeout=Supervisor.STOP_TIMEOUT_SECONDS
+        )
         deadline = time.monotonic() + self.UNLOAD_WAIT_SECONDS
         while self.is_loaded():
             if time.monotonic() >= deadline:
@@ -251,5 +253,10 @@ class LaunchdBackend:
         except FileNotFoundError:
             return b""
 
-    def _require(self, action: str, *args: str) -> None:
-        Supervisor.require(self._spec, action, "launchctl", *args)
+    def _require(
+        self,
+        action: str,
+        *args: str,
+        timeout: float | None = None,  # None: the default limit
+    ) -> None:
+        Supervisor.require(self._spec, action, "launchctl", *args, timeout=timeout)

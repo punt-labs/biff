@@ -295,6 +295,47 @@ class TestLaunchdPlist:
         ]
 
 
+class TestTheSupervisorOutwaitsTheDaemonsStop:
+    """The daemon's stop takes up to Handback.STOP_SECONDS; a supervisor call that
+    waits for it must not give up first, or install rolls back mid hand-back."""
+
+    LIMIT = Handback.STOP_SECONDS + 15
+
+    def test_the_limit_for_a_stop_exceeds_the_stop_budget(self) -> None:
+        assert Supervisor.STOP_TIMEOUT_SECONDS >= self.LIMIT
+
+    @pytest.mark.parametrize("verb", ["stop", "restart"])
+    def test_systemctl_stop_and_restart(
+        self, home: Path, script: ScriptedSupervisor, verb: str
+    ) -> None:
+        backend = SystemdBackend(BIFFD_SPEC)
+        getattr(backend, verb)()
+        limit = script.timeout_of("systemctl", "--user", verb)
+        assert limit >= self.LIMIT
+
+    def test_systemctl_restart_inside_install(
+        self, home: Path, script: ScriptedSupervisor
+    ) -> None:
+        SystemdBackend(BIFFD_SPEC).install()
+        limit = script.timeout_of("systemctl", "--user", "restart")
+        assert limit >= self.LIMIT
+
+    def test_systemctl_disable_now_inside_uninstall(
+        self, home: Path, script: ScriptedSupervisor
+    ) -> None:
+        installed_unit(home)
+        script.answer("systemctl", "--user", "is-active", rc=3, out="inactive\n")
+        SystemdBackend(BIFFD_SPEC).uninstall()
+        limit = script.timeout_of("systemctl", "--user", "disable", "--now")
+        assert limit >= self.LIMIT
+
+    def test_launchctl_bootout(self, home: Path, script: ScriptedSupervisor) -> None:
+        script.answer_in_turn("launchctl", "print", rcs=[0, 113])
+        LaunchdBackend(BIFFD_SPEC).stop()
+        limit = script.timeout_of("launchctl", "bootout")
+        assert limit >= self.LIMIT
+
+
 class TestLaunchd:
     @pytest.fixture
     def plist(self, home: Path) -> Path:
