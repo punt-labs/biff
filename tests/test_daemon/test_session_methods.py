@@ -30,7 +30,7 @@ from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
 from biff.tty import get_hostname
 from tests.test_daemon.conftest import CountingFactory, FakeResolver
-from tests.test_daemon.test_read_delivery import ConsumingRelay
+from tests.test_daemon.consuming import ConsumingRelay
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable

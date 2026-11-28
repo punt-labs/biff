@@ -6,12 +6,11 @@ import logging
 import uuid
 from dataclasses import dataclass
 
+from biff.daemon.mail_transfer import MailTransfer
 from biff.models import Message
 from biff.relay import Relay
 
 logger = logging.getLogger(__name__)
-
-_TRANSFER_NS = uuid.UUID("5d0c3f0e-8f4e-4f43-9a6f-0d2d6f1b7e11")
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,16 +40,7 @@ class InboxDrain:
             unmoved = list(batch)
             try:
                 for message in batch:
-                    await self.relay.deliver(
-                        message.model_copy(
-                            update={
-                                "id": self._transfer_id(message.id),
-                                "to_user": user,
-                                "read": False,
-                            }
-                        )
-                    )
-                    await self.relay.mark_read(key, [message.id])
+                    await MailTransfer(self.relay).forward(key, user, message)
                     moved.add(message.id)
                     unmoved.remove(message)
             except BaseException:
@@ -84,8 +74,3 @@ class InboxDrain:
                 logger.exception("Could not restore message %s", message.id)
         if failed:
             logger.error("Lost %d (tty=%s)", len(failed), key.partition(":")[2])
-
-    @staticmethod
-    def _transfer_id(source: uuid.UUID) -> uuid.UUID:
-        """Stable id of *source*'s copy in the user mailbox."""
-        return uuid.uuid5(_TRANSFER_NS, str(source))

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from biff.daemon.resolver import ResolveError
+from biff.daemon.session_end import RETENTION_SECONDS, SessionEnd
 from biff.daemon.session_host import SessionHost
 from biff.daemon.session_pointer import CurrentPointer
 from biff.daemon.session_select import SessionSelector
@@ -83,8 +84,13 @@ class SessionSweeper:
         """
         try:
             await self._sweep_all()
+            await self._expire_claude()
         finally:
             self._completed += 1
+
+    async def _expire_claude(self) -> None:
+        """End the harness sessions whose retention is spent."""
+        await SessionEnd(self._live).expire(RETENTION_SECONDS)
 
     async def _sweep_all(self) -> None:
         try:
@@ -114,18 +120,13 @@ class SessionSweeper:
             if not held.is_dormant and record.state != "ended":
                 await self._renew(record)
                 return
-            await held.refile_held()
+            await SessionEnd.refile_held(held)
             await self._judge(record)
-            if self._is_gone(record.session_id):
+            try:
+                self._store.read(record.session_id)
+            except FileNotFoundError:  # the judgement expired it
                 held.mark_ended()
                 self._live.retire(record.session_id)
-
-    def _is_gone(self, session_id: str) -> bool:
-        try:
-            self._store.read(session_id)
-        except FileNotFoundError:
-            return True
-        return False
 
     async def _renew(self, record: CliSessionRecord) -> None:
         async with self._store.lifecycle(record.session_id):

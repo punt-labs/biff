@@ -9847,3 +9847,73 @@ retry (three tries, then `SessionChangedError`) reads the manual plan and keeps
 it. The model's goal for the stamp is a heartbeat that moved the clock past the
 value it read (`beatAt > seenTool`), which no biff call can have caused, since
 a call between the read and the commit makes the commit fail.
+
+## DES-101: A Harness Session Ends in the Daemon, on Request or at Retention
+
+**Date:** 2026-11-27
+**Status:** SETTLED
+**Topic:** The `end` method and the retention sweep for harness sessions, the
+second group of daemon additions for PL-1670. Model:
+`docs/specs/claude-session-end.tex`. Detail: `docs/design/biffd.md`.
+
+**Decision.**
+
+- `end` (no params) ends the caller's own session. It first refuses new requests
+  and waits for those running (a request already running would write the row
+  back), then runs the effects in this order, each idempotent: forward the held
+  and unread mail to the user mailbox, delete the row (new mail stops routing
+  here), forward again (what was accepted while the row went), release the tty
+  name, append the logout. The record is dropped and marked ended only after all
+  of them. A failure, a failed logout included, leaves the record and lifts the
+  refusal, so there is no state in which a row outlives its record (`BadOrphan`),
+  and the next `end` finishes (`rsEnding` reaches `rsNone`).
+- Mail is forwarded at least once. A consuming relay gives up a message at fetch,
+  so it is held in the session's outbox until it is filed in the user mailbox
+  under an id derived from its own; a relay that drops in between leaves it held
+  for the next attempt. (This is the A2 requirement of DES-099: the unconfirmed
+  batch is forwarded before the record is dropped.)
+- The name is released by `Relay.release_tty_name_if(user, name, owner)`, a
+  compare-and-delete (a file lock locally, `kv.delete` at the revision the check
+  read in NATS), which is the model's owner-conditioned `ReleaseTty`: the model
+  keeps the old end before the new hello and checks that the owner condition alone
+  is enough when the order is not kept (`claude-session-end-unordered-owned.tex`
+  holds; releasing by name, `-unordered.tex`, frees the new session's name). The
+  shell session end uses it too. The in-process paths that still check and then release
+  (`session_registry`, `tty.py`) go with the in-process server.
+- A second `end`, or one queued behind the first, answers success and does
+  nothing: it compares the session object it was sent to, not the id, so an end
+  queued behind a hello that reopened the id cannot end the new session.
+- A connection of a replaced run is refused by the daemon's existing run check
+  before the method runs (`EndRefused`).
+- Retention: `ExpireClaude` runs in the session sweep for a session that is
+  dormant and has been for the row's lifetime. A hello that reattaches first wins
+  (the sweep re-checks under the session's guard).
+
+**Divergence from the model.** The durable model keeps the record across a daemon
+restart (`DaemonRestart`). The daemon holds harness records in memory, so a
+restart forgets them, which the spec states as `DaemonRestartForget`: the
+unconfirmed batch is lost with the outbox (PL-1753), and the unread mail in the
+restarted session's own relay inbox is never drained, which the spec counts as
+`strandedN`. Stranded mail is that session-inbox mail only: mail already filed in
+the user's mailbox (by an end, or addressed to the user) is untouched by the loss
+of a record. It stays in the relay until its own retention, and is found again if
+the session resumes under the same id. The row and the tty name stay as well, and
+age out by the relay's own lifetime on NATS (`RowAgesOut`, `TtyAgesOut`). The
+local relay (no relay URL) keeps a name reservation as a lockfile with no
+lifetime, so there `TtyAgesOut` does not happen and a forgotten session holds its
+name until something releases it. That is not wholly safe: a forgotten session
+holds its name and its unread session-inbox mail is stranded. The spec keeps both
+restarts; the properties about the record hold unless the restart forgot it.
+Persisting the records, or scanning the relay's rows at start, closes it: PL-1771.
+
+**Audit status.** `claude-session-end.audit.json` reports 13 of 13 clauses covered
+and zero GAP. It was reconciled by reading the tests against each clause (the
+z-spec audit tool was not run), and its rows name the tests. The residual after
+this change is PL-1770: the unconditional tty name releases in the in-process
+paths (`session_registry`, `tty.py`), which go with the in-process server.
+
+**Rejected.**
+
+- *A path or session id in `end`.* Only the caller's own session ends; another
+  session's end is the sweep's.
+- *Releasing the tty name by name, or after a separate owner check.* It would free a name a new session took.

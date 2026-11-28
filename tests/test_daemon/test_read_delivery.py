@@ -23,54 +23,18 @@ from biff.daemon.outbox import Outbox
 from biff.daemon.read_steps import ReadSteps
 from biff.daemon.session_drain import InboxDrain
 from biff.frame_reply import ErrorCode
-from biff.models import Message, UnreadSummary
+from biff.models import Message
 from biff.relay import LocalRelay
 from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
+from tests.test_daemon.consuming import ConsumingRelay
 
 if TYPE_CHECKING:
-    import uuid
-    from collections.abc import Sequence
     from pathlib import Path
 
     from biff.cli_context import CliContext
     from biff.daemon.sessions import Session
     from tests.test_daemon.conftest import Harness
-
-
-class ConsumingRelay(LocalRelay):
-    """A relay faithful to ``NatsRelay`` fetch semantics: fetching consumes.
-
-    ``NatsRelay.fetch`` acks every frame it pulls, a work queue deletes an acked
-    frame, and ``mark_read`` is a no-op because the mail is already gone.
-    """
-
-    def __init__(self, data_dir: Path) -> None:
-        super().__init__(data_dir)
-
-    consumes_on_fetch = True
-
-    async def get_unread_summary(self, session_key: str) -> UnreadSummary:
-        """Count without consuming: the NATS relay counts from stream info."""
-        tty = await LocalRelay.fetch(self, session_key)
-        user = await LocalRelay.fetch_user_inbox(self, session_key.split(":")[0])
-        return UnreadSummary(count=len(tty) + len(user))
-
-    async def fetch(self, session_key: str) -> list[Message]:
-        unread = await super().fetch(session_key)
-        await super().mark_read(session_key, [m.id for m in unread])
-        return unread
-
-    async def fetch_user_inbox(self, user: str) -> list[Message]:
-        unread = await super().fetch_user_inbox(user)
-        await super().mark_read_user_inbox(user, [m.id for m in unread])
-        return unread
-
-    async def mark_read(self, session_key: str, ids: Sequence[uuid.UUID]) -> None:
-        return None
-
-    async def mark_read_user_inbox(self, user: str, ids: Sequence[uuid.UUID]) -> None:
-        return None
 
 
 class RefusingRelay(ConsumingRelay):

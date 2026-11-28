@@ -3,28 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from biff.cli_context import CliContext
-from biff.commands.inbox import Inbox
 from biff.daemon.attachment import Attachment
 from biff.daemon.heartbeat import Heartbeat
 from biff.daemon.orgs import OrgRepos
 from biff.daemon.outbox import Outbox
 from biff.daemon.presence import PresenceRow
 from biff.daemon.refusal import RefusalError
+from biff.daemon.run_ledger import RunLedger
+from biff.daemon.session_hold import SessionHold
 from biff.daemon.session_key import SessionKey
 from biff.daemon.talk_channel import TalkChannel
 from biff.daemon.tasks import Supervised
 from biff.frame_reply import ErrorCode
-from biff.session_id import CLI_ROLE
+from biff.session_id import CLAUDE_CODE_ROLE, CLI_ROLE, derive_routing_id
 from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+    from contextlib import AbstractAsyncContextManager
 
     from biff.daemon.relays import RelayPool, RelayTarget, ResolvedSession
     from biff.frame_client import Hello
@@ -32,7 +35,6 @@ if TYPE_CHECKING:
 
 __all__ = ["Session", "SessionStatus", "SessionTable"]
 
-_MAX_RETIRED_RUNS = 64
 _TALK_CHECK_SECONDS = 2.0
 
 
@@ -58,17 +60,16 @@ class Session:
     __slots__ = (
         "_attachments",
         "_beat",
-        "_busy",
         "_context",
         "_cwd",
+        "_hold",
+        "_idle_since",
         "_is_ended",
         "_orgs",
         "_outbox",
         "_presence",
         "_pulse",
-        "_queued",
-        "_retired",
-        "_run",
+        "_runs",
         "_session_id",
         "_talk",
         "_target",
@@ -82,14 +83,13 @@ class Session:
     _orgs: OrgRepos
     _outbox: Outbox
     _talk: TalkChannel
-    _run: str
-    _retired: dict[str, None]
+    _runs: RunLedger
     _attachments: set[Attachment]
     _pulse: Heartbeat
     _beat: asyncio.Task[None] | None
-    _busy: asyncio.Lock
-    _queued: int
     _is_ended: bool
+    _idle_since: float
+    _hold: SessionHold
 
     def __new__(
         cls,
@@ -118,16 +118,15 @@ class Session:
             talk=context.talk,
             interval=min(heartbeat_interval, _TALK_CHECK_SECONDS),
         )
-        self._run = run
-        self._retired = {}
+        self._runs = RunLedger(run)
         self._attachments = set()
         self._pulse = Heartbeat(
             context.relay, context.session_key, session_id, heartbeat_interval
         )
         self._beat = None
-        self._busy = asyncio.Lock()
-        self._queued = 0
         self._is_ended = False
+        self._idle_since = time.monotonic()
+        self._hold = SessionHold()
         return self
 
     @classmethod
@@ -191,7 +190,7 @@ class Session:
     @property
     def run(self) -> str:
         """The main agent id of the session's current run."""
-        return self._run
+        return self._runs.current
 
     @property
     def outbox(self) -> Outbox:
@@ -208,6 +207,36 @@ class Session:
         """Whether no connection is attached."""
         return not self._attachments
 
+    def requests(self, method: str) -> AbstractAsyncContextManager[None]:
+        """Hold the session open for one request, which ``end`` does not.
+
+        An agent's session that is ended refuses it: the end deleted the row,
+        which nothing may rebuild.  A shell's session is let through, its end being
+        the shell's own command, which goes on.
+        """
+        return self._hold.requests(
+            counted=method != "end", refuse=self.is_agent and self._is_ended
+        )
+
+    @property
+    def is_agent(self) -> bool:
+        """Whether this is an agent's session, not a shell's."""
+        return self._context.tty == derive_routing_id(
+            self._session_id, CLAUDE_CODE_ROLE
+        )
+
+    async def begin_end(self) -> None:
+        """Refuse new requests, and wait for those running to finish."""
+        await self._hold.begin_end()
+
+    def abort_end(self) -> None:
+        """Accept requests again: the end failed, and the session goes on."""
+        self._hold.abort_end()
+
+    def idle_for(self) -> float:
+        """Return the seconds since the last connection left, or since the start."""
+        return time.monotonic() - self._idle_since
+
     @property
     def status(self) -> SessionStatus:
         """The session as the daemon reports it."""
@@ -215,7 +244,7 @@ class Session:
             session_id=self._session_id,
             user=self._context.user,
             attached=len(self._attachments),
-            run=self._run,
+            run=self.run,
         )
 
     def check_same(self, resolved: ResolvedSession) -> None:
@@ -245,29 +274,14 @@ class Session:
         """Count a command from a shell as activity on the session's presence row."""
         await self._presence.touch()
 
-    @asynccontextmanager
-    async def exclusive(self) -> AsyncGenerator[None]:
-        """Hold the session while mail moves in or out of its outbox.
-
-        A read holds it from the fetch to the merge into the outbox, and ending
-        or expiring the session holds it while it files the outbox back and drains
-        the relay, so neither can run between the other's steps.
-        """
-        self._queued += 1
-        try:
-            async with self._busy:
-                yield
-        finally:
-            self._queued -= 1
+    def exclusive(self) -> AbstractAsyncContextManager[None]:
+        """Hold the session while mail moves in or out of its outbox."""
+        return self._hold.exclusive()
 
     @property
     def queued(self) -> int:
-        """How many callers hold :meth:`exclusive` or wait for it.
-
-        Nothing in the daemon reads it: a test waits for it to reach a number to
-        know a caller is parked at the hold, instead of guessing how long that takes.
-        """
-        return self._queued
+        """How many callers hold :meth:`exclusive` or wait for it."""
+        return self._hold.queued
 
     @property
     def is_ended(self) -> bool:
@@ -277,17 +291,6 @@ class Session:
     def mark_ended(self) -> None:
         """Record that the session was ended."""
         self._is_ended = True
-
-    async def refile_held(self) -> None:
-        """Give the relay back every message the outbox holds, one by one.
-
-        A consuming relay removed that mail at fetch, so while it is held here
-        it is out of reach of the drain that ends or expires the session.
-        """
-        inbox = Inbox(self._context, (), ())
-        for message in self._outbox.held():
-            if await inbox.refile(message):
-                self._outbox.forget([message])
 
     def end_attachments(self) -> None:
         """Tell every connection attached that the session ended."""
@@ -306,19 +309,10 @@ class Session:
         Raises:
             RefusalError: *run* is the id of a run that was replaced.
         """
-        if run in self._retired:
-            msg = (
-                f"run {run} of session {self._session_id} was replaced by a newer "
-                "run and cannot come back; start a new run with a fresh run id"
-            )
-            raise RefusalError.of(ErrorCode.SESSION_REPLACED, msg)
-        if run and run != self._run:
-            if self._run:
-                self._retire(self._run)
-                for held in tuple(self._attachments):
-                    if held.replaced_by(run):
-                        held.replace()
-            self._run = run
+        if self._runs.admit(self._session_id, run):
+            for held in tuple(self._attachments):
+                if held.replaced_by(run):
+                    held.replace()
         attachment = Attachment(self, run)
         self._attachments.add(attachment)
         self._talk.start()
@@ -328,12 +322,6 @@ class Session:
             )
         return attachment
 
-    def _retire(self, run: str) -> None:
-        """Remember *run* as replaced; only the most recent ones are kept."""
-        self._retired[run] = None
-        while len(self._retired) > _MAX_RETIRED_RUNS:
-            del self._retired[next(iter(self._retired))]
-
     def detach(self, attachment: Attachment) -> None:
         """Forget *attachment*; when no connection remains, stop heartbeating.
 
@@ -342,6 +330,7 @@ class Session:
         """
         self._attachments.discard(attachment)
         if not self._attachments:
+            self._idle_since = time.monotonic()
             self._talk.stop()
             Supervised.spawn(self._hang_up(), f"talk hang-up {self._session_id}")
             if self._beat is not None:
@@ -401,7 +390,7 @@ class SessionTable:
             RefusalError: The session id belongs to another user or relay.
         """
         key = SessionKey.of(hello)
-        async with self._guard(key):
+        async with self.guard(key):
             session = self._sessions.get(key)
             if session is None:
                 session = await Session.register(
@@ -425,21 +414,28 @@ class SessionTable:
         return self._sessions.get(SessionKey(session_id, CLI_ROLE))
 
     def retire(self, session_id: str, *, spare: Session | None = None) -> None:
-        """Forget the shell session *session_id*, which was ended.
+        """Forget the shell session *session_id*, which was ended."""
+        self.forget(SessionKey(session_id, CLI_ROLE), spare=spare)
+
+    def forget(self, key: SessionKey, *, spare: Session | None = None) -> None:
+        """Drop the session kept under *key*, which was ended.
 
         Every connection attached to it is told, except those of *spare*, the
         session that asked: its connection ends with its command, after the
         reply.
         """
-        key = SessionKey(session_id, CLI_ROLE)
         session = self._sessions.pop(key, None)
         if self._users[key] == 0:
-            self._locks.pop(key, None)  # _guard drops it only while no session
+            self._locks.pop(key, None)  # guard drops it only while no session
         if session is not None and session is not spare:
             session.end_attachments()
 
+    def snapshot(self) -> dict[SessionKey, Session]:
+        """Return a copy of every session held, safe to iterate while awaiting."""
+        return dict(self._sessions)
+
     @asynccontextmanager
-    async def _guard(self, key: SessionKey) -> AsyncGenerator[None]:
+    async def guard(self, key: SessionKey) -> AsyncGenerator[None]:
         """Serialize work on one session key, dropping its lock once it is idle."""
         self._users[key] += 1
         try:
