@@ -8,13 +8,15 @@ inbox mark; a channel check token is made by biffd and acknowledged through it.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from biff.channel_check_wire import CheckAck, CheckRequest
-from biff.client.connection import ClientIdentity, DaemonClient
+from biff.client.connection import ClientIdentity, ConnectionLostError, DaemonClient
+from biff.frames import Event
 from biff.server.channel_check import ChannelCheck
 from biff.server.channel_rate import RateLimit
 from biff.server.daemon_channel import DaemonChannelFeed
@@ -51,6 +53,26 @@ class _Sink:
         return [meta["kind"] for _, meta in self.sent]
 
 
+class _Dropping:
+    """A connected client whose subscription drops once it is waiting for events."""
+
+    def __init__(self, real: DaemonClient) -> None:
+        self._real = real
+
+    async def request(self, method: str, **params: object) -> object:
+        return await self._real.request(method, **params)  # type: ignore[arg-type]
+
+    async def subscribe(self) -> None:
+        await self._real.subscribe()
+
+    async def next_event(self) -> Event:
+        msg = "biffd closed the connection"
+        raise ConnectionLostError(msg)
+
+    async def close(self) -> None:
+        await self._real.close()
+
+
 class Rig:
     def __init__(self, harness: Harness, bus: TalkBus, limit: RateLimit | None) -> None:
         self.harness = harness
@@ -62,17 +84,25 @@ class Rig:
         )
         self.opens = 0
         self.refuse_first = 0
+        self.drop_first = 0  # the first opens' subscriptions drop once live
+        self.surprise_first = 0  # the first opens fail in a way nobody expects
 
     async def _connect(self, identity: ClientIdentity) -> DaemonClient:
         self.opens += 1
         if self.refuse_first >= self.opens:
             msg = "biffd is down"
             raise ConnectionError(msg)
-        return await DaemonClient.connect(
+        if self.surprise_first >= self.opens:
+            msg = "not a connection error"
+            raise RuntimeError(msg)
+        real = await DaemonClient.connect(
             run_dir=self.harness.run_dir,
             port=self.harness.daemon.port,
             identity=identity,
         )
+        if self.drop_first >= self.opens:
+            return cast("DaemonClient", _Dropping(real))
+        return real
 
     async def start(self, session_id: str = "s-kai") -> None:
         self.feed.emitter.serve(self.sink)
@@ -258,3 +288,117 @@ async def test_a_channel_check_event_carries_biffds_token_and_the_ack_goes_throu
         if subject == _REPLY
     ]
     assert [a.token for a in acks] == [token]
+
+
+async def test_a_live_subscription_that_drops_is_opened_again_and_logged(
+    rig: Rig, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig.drop_first = 1  # biffd restarts: the first subscription dies once live
+    eric = await _eric(rig)
+    await rig.harness.connect("s-kai", "kai", client="mcp")
+
+    with caplog.at_level(logging.WARNING):
+        await rig.start()
+        await rig.wait_for(lambda: rig.opens >= 2)
+        await eric.request("write", to="kai", message="after the restart")
+        await rig.wait_for(lambda: "mail" in rig.sink.kinds())
+
+    assert "channel events from biffd stopped" in caplog.text
+
+
+async def test_an_error_nobody_expected_does_not_end_the_feed(
+    rig: Rig, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig.surprise_first = 1
+    eric = await _eric(rig)
+    await rig.harness.connect("s-kai", "kai", client="mcp")
+    await eric.request("write", to="kai", message="waiting")
+
+    with caplog.at_level(logging.WARNING):
+        await rig.start()
+        await rig.wait_for(lambda: "mail" in rig.sink.kinds())
+
+    assert "not a connection error" in caplog.text
+
+
+@pytest.mark.parametrize("data", [None, {}, {"token": 7}, {"token": ""}])
+async def test_a_check_request_without_a_token_is_dropped_and_logged(
+    rig: Rig, data: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    event = Event(seq=1, kind="channel_check_request", data=data)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING):
+        rig.feed._take(event)  # pyright: ignore[reportPrivateUsage]
+
+    assert "channel check request" in caplog.text
+    await rig.feed.emitter.check()  # nothing is owed: nothing is sent
+    assert rig.sink.sent == []
+
+
+async def test_the_backoff_starts_again_once_a_subscription_is_up(rig: Rig) -> None:
+    rig.refuse_first = 3  # waits grow: 0.05, 0.1, 0.2
+
+    await rig.start()
+    await rig.wait_for(lambda: rig.opens >= 4)
+    await asyncio.sleep(_QUIET)  # the fourth open is subscribed
+
+    assert rig.feed._wait == pytest.approx(0.05)  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_a_new_session_with_a_lower_mark_is_announced(rig: Rig) -> None:
+    await rig.start()
+    first = await rig.harness.connect("s-kai", "kai", client="mcp")
+    second = await rig.harness.connect("s-kai2", "kai", client="mcp")
+    eric = await _eric(rig)
+    first_at, second_at = f"kai:{await _tty(first)}", f"kai:{await _tty(second)}"
+    for n in range(3):  # the first inbox's mark rises to 3
+        await eric.request("write", to=first_at, message=f"m{n}")
+        await asyncio.sleep(0.15)
+    await rig.wait_for(lambda: rig.sink.sent[-1][1].get("count") == "3")
+    announced = len(rig.sink.sent)
+
+    rig.feed.bind(SessionRouting("s-kai2"))  # /clear: a session whose mark is 0
+    await asyncio.sleep(0.3)
+    await eric.request("write", to=second_at, message="first of the new session")
+
+    await rig.wait_for(lambda: len(rig.sink.sent) > announced)
+    assert rig.sink.sent[-1][1] == {"kind": "mail", "count": "1"}
+
+
+async def test_closing_a_feed_that_already_died_logs_its_error_and_returns(
+    rig: Rig, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def dies() -> None:
+        msg = "the feed fell over"
+        raise RuntimeError(msg)
+
+    task = asyncio.ensure_future(dies())
+    await asyncio.sleep(0)
+    rig.feed._task = task  # pyright: ignore[reportPrivateUsage]
+
+    with caplog.at_level(logging.WARNING):
+        await rig.feed.close()
+
+    assert "the feed fell over" in caplog.text
+
+
+async def test_a_cancellation_aimed_at_close_is_not_swallowed(rig: Rig) -> None:
+    release = asyncio.Event()
+
+    async def stubborn() -> None:
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()  # ignores the first cancellation
+
+    task = asyncio.ensure_future(stubborn())
+    await asyncio.sleep(0)
+    rig.feed._task = task  # pyright: ignore[reportPrivateUsage]
+    closing = asyncio.ensure_future(rig.feed.close())
+    await asyncio.sleep(0.05)
+
+    closing.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await closing

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Self, final
+import logging
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from biff._formatting import terminal_safe
 from biff.commands._result import CommandResult
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
     from biff.daemon.sessions import Session
 
 __all__ = ["ArrivalsReading"]
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -27,6 +30,9 @@ class ArrivalsReading:
     """
 
     __slots__ = ("_session",)
+
+    _unrowed: ClassVar[set[str]] = set()
+    """Sessions already reported as having no row, so each is said once."""
 
     _session: Session
 
@@ -59,6 +65,13 @@ class ArrivalsReading:
         unread = await reading.unread()
         wall = await ctx.relay.get_wall()
         row = await ctx.relay.get_session(ctx.session_key)
+        if row is None and ctx.session_key not in ArrivalsReading._unrowed:
+            ArrivalsReading._unrowed.add(ctx.session_key)
+            logger.warning(
+                "session %s has no session row; mesg is reported on, so events "
+                "are not held",
+                ctx.session_key,
+            )
         queued, invites = ctx.talk.peek()
         # An invite is live from the moment it is queued, before talk_read drains it.
         live = {(terminal_safe(i.user), terminal_safe(i.tty)) for i in invites.values()}

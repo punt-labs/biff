@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
 from typing import TYPE_CHECKING, Final, Self, cast, final
 
-from biff.client.connection import DaemonError
 from biff.server.channel_emitter import ChannelEmitter
 from biff.server.daemon_arrivals import ArrivalsSnapshot, DaemonArrivals, DaemonGate
-from biff.server.mcp_link import FAILURES
 
 if TYPE_CHECKING:
     from biff.client.connection import DaemonClient
@@ -50,6 +47,7 @@ class DaemonChannelFeed:
         "_pass",
         "_retry",
         "_task",
+        "_wait",
     )
 
     _link: McpLink
@@ -58,6 +56,7 @@ class DaemonChannelFeed:
     _retry: float
     _pass: asyncio.Event
     _task: asyncio.Task[None] | None
+    _wait: float
 
     def __new__(
         cls,
@@ -84,6 +83,7 @@ class DaemonChannelFeed:
             gate=DaemonGate(self._arrivals),
         )
         self._retry = retry_seconds
+        self._wait = retry_seconds
         self._pass = asyncio.Event()
         self._task = None
         return self
@@ -98,37 +98,56 @@ class DaemonChannelFeed:
         self._pass.set()
 
     def bind(self, routing: SessionRouting) -> None:
-        """Follow the session *routing* names, leaving the one it followed."""
+        """Follow the session *routing* names, leaving the one it followed.
+
+        What was sent, seen and known of the old session is dropped: an inbox's
+        mark orders mail within that inbox only, so a new session may start lower.
+        """
         if self._task is not None:
             self._task.cancel()
+        self._arrivals.forget()
         self._task = asyncio.create_task(
             self._follow(routing.session_id), name="channel feed"
         )
 
     async def close(self) -> None:
-        """Stop following; the connection closes with the task."""
+        """Stop following; the connection closes with the task.
+
+        A feed that already died has its error logged, not raised here; a
+        cancellation aimed at the caller is the caller's own and propagates.
+        """
         task, self._task = self._task, None
-        if task is not None:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+        if task is None:
+            return
+        if task.done():
+            if not task.cancelled() and (exc := task.exception()) is not None:
+                logger.warning("the channel feed had ended with %s", exc, exc_info=exc)
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     async def _follow(self, session_id: str) -> None:
-        """Hold a subscription for *session_id*, opening it again when it is lost."""
-        wait = self._retry
+        """Hold a subscription for *session_id*, opening it again when it is lost.
+
+        Whatever ends a subscription, an unexpected error included, is logged and
+        followed by another try: a feed that stopped quietly would leave the
+        channel dead until the next ``/clear``.
+        """
+        self._wait = self._retry
         while True:
             try:
                 await self._subscribed(session_id)
-            except (*FAILURES, DaemonError) as exc:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 logger.warning(
-                    "channel events from biffd stopped: %s; opening again in %.0fs",
+                    "channel events from biffd stopped: %s; opening again in %.1fs",
                     exc,
-                    wait,
+                    self._wait,
+                    exc_info=True,
                 )
-                await asyncio.sleep(wait)
-                wait = min(wait * 2, MAX_RETRY_SECONDS)
-            else:
-                wait = self._retry
+                await asyncio.sleep(self._wait)
+                self._wait = min(self._wait * 2, MAX_RETRY_SECONDS)
 
     async def _subscribed(self, session_id: str) -> None:
         """Run one subscription: summary, then each arrival, until it is lost."""
@@ -140,9 +159,15 @@ class DaemonChannelFeed:
             await client.subscribe()
             await self._refresh(client)
             self._emitter.reconnected()  # what came while no subscription ran
-            async with asyncio.TaskGroup() as group:
-                group.create_task(self._passes(client))
-                group.create_task(self._events(client))
+            self._wait = self._retry  # it is up: the next loss starts afresh
+            try:
+                async with asyncio.TaskGroup() as group:
+                    group.create_task(self._passes(client))
+                    group.create_task(self._events(client))
+            except ExceptionGroup as failed:
+                # One task failed and the group cancelled the other: report the
+                # cause itself, so the caller sees a connection error, not a group.
+                raise failed.exceptions[0] from failed
         finally:
             await client.close()
 
@@ -155,8 +180,14 @@ class DaemonChannelFeed:
 
     def _take(self, event: Event) -> None:
         if event.kind == "channel_check_request":
-            token = cast("dict[str, str]", event.data)["token"]
-            self._emitter.owe_check(token)
+            data = event.data
+            token = data.get("token") if isinstance(data, dict) else None
+            if isinstance(token, str) and token:
+                self._emitter.owe_check(token)
+            else:
+                logger.warning(
+                    "dropped a channel check request with no token (data: %r)", data
+                )
         elif event.kind == "recovered":
             self._emitter.reconnected()
         else:

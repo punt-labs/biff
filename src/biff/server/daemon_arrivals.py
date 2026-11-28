@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, cast, final
+
+from pydantic import ValidationError
 
 from biff.models import WallPost
 from biff.server.channel_content import ChannelEvent, EventKind, Sender
@@ -17,6 +20,8 @@ if TYPE_CHECKING:
     from biff.frames import Event
 
 __all__ = ["ArrivalsSnapshot", "DaemonArrivals", "DaemonGate"]
+
+logger = logging.getLogger(__name__)
 
 type WallKey = tuple[datetime, str, str]
 
@@ -43,12 +48,12 @@ class ArrivalsSnapshot:
             ValueError: *data* is not an ``arrivals`` reply.
         """
         try:
-            wall = data["wall"]
+            wall = cls._wall(data["wall"])
             invites = cast("list[dict[str, str]]", data["invites"])
             return cls(
                 mark=int(cast("int", data["mark"])),
                 unread=int(cast("int", data["unread"])),
-                wall=None if wall is None else WallPost.model_validate(wall),
+                wall=wall,
                 invites=tuple((i["from"], i["tty"]) for i in invites),
                 talk_pending=int(cast("int", data["talk_pending"])),
                 mesg_on=bool(data.get("mesg", True)),
@@ -56,6 +61,17 @@ class ArrivalsSnapshot:
         except (KeyError, TypeError) as exc:
             msg = f"biffd answered arrivals with {sorted(data)}"
             raise ValueError(msg) from exc
+
+    @staticmethod
+    def _wall(raw: object) -> WallPost | None:
+        """Return the wall *raw* describes; a malformed one is logged and skipped."""
+        if raw is None:
+            return None
+        try:
+            return WallPost.model_validate(raw)
+        except ValidationError:
+            logger.warning("biffd sent a malformed wall; ignored", exc_info=True)
+            return None
 
 
 @final
@@ -116,6 +132,21 @@ class DaemonArrivals:
         """Say which user, and which tty names, the session's own wall carries."""
         self._user = user
         self._names = names
+
+    def forget(self) -> None:
+        """Drop everything of the session followed: records, counters, snapshot.
+
+        The next session's inbox has its own mark, so what was sent for this one
+        must not suppress that one's mail, and its mesg is unknown until read.
+        """
+        self._snapshot = None
+        self._mail_sent = 0
+        self._walls_sent = set()
+        self._invites_seen = 0
+        self._invites_sent = 0
+        self._messages_seen = 0
+        self._messages_sent = 0
+        self._invites.clear()
 
     def refresh(self, snapshot: ArrivalsSnapshot) -> None:
         """Take *snapshot* as what is true now."""

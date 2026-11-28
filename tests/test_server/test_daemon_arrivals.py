@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -176,3 +177,32 @@ async def test_an_emitter_with_no_relay_sends_mail_from_the_daemon_reader() -> N
 def test_an_emitter_with_no_source_needs_its_own_reader() -> None:
     with pytest.raises(ValueError, match="own arrivals"):
         ChannelEmitter(None, lambda: None)
+
+
+def test_a_malformed_wall_is_logged_and_skipped_not_fatal(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    data: dict[str, object] = {
+        "mark": 1,
+        "unread": 0,
+        "wall": {"text": "", "from_user": "eric"},  # no text, no expiry
+        "invites": [],
+        "talk_pending": 0,
+        "mesg": True,
+    }
+
+    with caplog.at_level(logging.WARNING):
+        snapshot = ArrivalsSnapshot.of(data)
+
+    assert snapshot.wall is None
+    assert snapshot.mark == 1  # the rest of the snapshot is kept
+    assert "malformed wall" in caplog.text
+
+
+def test_forgetting_a_session_clears_what_was_sent_and_what_was_known() -> None:
+    arrivals = DaemonArrivals()
+    arrivals.refresh(_snapshot(mark=5, unread=1, mesg_on=False))
+
+    arrivals.forget()
+
+    assert arrivals.mesg_on is None  # no snapshot of the new session yet

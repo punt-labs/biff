@@ -8,10 +8,12 @@ mark it announces, so a client orders what it was told.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from biff.relay import LocalRelay
 from tests.test_daemon.consuming import ConsumingRelay
 
 if TYPE_CHECKING:
@@ -132,3 +134,20 @@ async def test_an_invite_nobody_has_read_yet_is_listed_as_live(
 
     invites = cast("list[dict[str, str]]", data["invites"])
     assert [i["from"] for i in invites] == ["eric"]
+
+
+async def test_a_session_whose_row_is_gone_is_logged_once_as_mesg_on(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    kai = await harness.connect("s-kai", "kai")
+    key = cast("dict[str, dict[str, str]]", await kai.request("status"))["data"][
+        "session_key"
+    ]
+    await LocalRelay(harness.factory.built[0]).delete_session(key)
+
+    with caplog.at_level(logging.WARNING, logger="biff.daemon.arrivals_reading"):
+        first = await _arrivals(kai)
+        second = await _arrivals(kai)
+
+    assert first["mesg"] is True and second["mesg"] is True
+    assert caplog.text.count("has no session row") == 1
