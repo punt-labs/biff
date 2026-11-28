@@ -17,6 +17,7 @@ import pytest
 from fastmcp.client.transports import FastMCPTransport
 from fastmcp.exceptions import ToolError
 
+from biff._stdlib import get_repo_common_root
 from biff.client.connection import (
     ClientIdentity,
     ConnectionLostError,
@@ -26,6 +27,7 @@ from biff.client.connection import (
 from biff.daemon.relays import ResolvedSession
 from biff.daemon.server import BiffDaemon
 from biff.daemon.session_store import CliSessionStore
+from biff.markers import clear_plan_marker, read_plan_marker
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
@@ -438,6 +440,34 @@ async def test_a_write_goes_to_biffd_and_an_empty_address_is_answered_in_text(
         "Message sent to eric.",
         "Empty user: give a user or user:tty to write to.",
         2,
+    )
+
+
+async def test_a_plan_goes_to_biffd_and_its_marker_is_written_here(rig: _Rig) -> None:
+    kai = await rig.client("kai")
+    root = get_repo_common_root()
+
+    await kai.call("plan", message="mine")
+
+    assert (rig.asked.count("plan"), read_plan_marker(root, "kai-session")) == (
+        1,
+        "mine",
+    )
+
+
+async def test_an_auto_plan_that_keeps_the_manual_one_rewrites_the_marker(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai")
+    root = get_repo_common_root()
+    await kai.call("plan", message="mine")
+    clear_plan_marker(root, "kai-session")
+
+    text = await kai.call("plan", message="from a hook", source="auto")
+
+    assert (text, read_plan_marker(root, "kai-session")) == (
+        "Plan unchanged (manual):\n   mine",
+        "mine",
     )
 
 
