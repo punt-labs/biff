@@ -12,6 +12,12 @@
   `session-end.sh` now hands the hook payload to its detached call, with a read
   bounded at 2 s, so the call knows which session ended. The sentinel path stays
   for the in-process transport.
+- The hello frame has an optional `ends` flag. A client that sets it only ends
+  the session: biffd attaches it to the session it holds, on the relay that
+  session lives on, and creates or revives nothing. The SessionEnd hook uses it,
+  so a relay changed mid-session, or presence the MCP server already removed,
+  neither strands mail nor records a false login, and an end from a run that is
+  not the current one leaves the session alone.
 - The biffd `end` method ends the caller's own harness session: it files the mail
   the session holds back, drains its inbox into the user mailbox, releases its
   tty name (only if it still holds it), deletes its row and appends a logout. A
@@ -146,6 +152,9 @@
   `runner` with its backends; no other module changes.
 
 ### Fixed
+
+- A session the biffd presence row registers first saves its tty reclaim hint, so
+  the MCP server that attaches next keeps the same tty address.
 
 - biffd's heartbeat carries the plugin hook's per-session activity stamp
   (`~/.punt-labs/biff/unread/<session_id>.active`) into `last_tool_at`, as the
