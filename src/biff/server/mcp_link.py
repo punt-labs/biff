@@ -223,7 +223,15 @@ class McpLink:
         self, session_id: str, method: str, params: dict[str, JsonValue]
     ) -> HeldReply:
         await self._settle(session_id)
-        client = await self._client(session_id)  # a failure here sent nothing
+        try:
+            client = await self._client(session_id)
+        except ConnectionLostError:
+            # The handshake dropped: nothing was sent, so a look may be asked
+            # again; anything else reports the handshake's own diagnostic.
+            if method not in _REPEATABLE:
+                raise
+            logger.info("the handshake with biffd dropped; opening it again")
+            client = await self._client(session_id)
         try:
             return await client.request_held(method, **params)
         except ConnectionLostError as exc:

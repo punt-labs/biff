@@ -755,6 +755,45 @@ async def test_a_write_that_never_left_does_not_claim_it_may_have_been_delivered
     assert "may have been carried out" not in str(refused.value)
 
 
+def _first_hello_dropped(rig: _Rig) -> tuple[McpLink, list[int]]:
+    """A link whose first handshake fails and whose later ones succeed."""
+    attempts: list[int] = []
+
+    async def connect(identity: ClientIdentity) -> DaemonClient:
+        attempts.append(1)
+        if len(attempts) == 1:
+            msg = "biffd closed the connection during the hello"
+            raise ConnectionLostError(msg)
+        client = await DaemonClient.connect(
+            run_dir=rig.run_dir, port=rig.daemon.port, identity=identity
+        )
+        rig.connected.append(client)
+        return client
+
+    return McpLink(user="kai", cwd="/work/repo", connect=connect), attempts
+
+
+async def test_a_read_is_asked_again_after_a_handshake_that_dropped(rig: _Rig) -> None:
+    link, attempts = _first_hello_dropped(rig)
+    kai = await rig.client("kai", link)
+
+    text = await kai.call("who")
+
+    assert ("kai" in text, len(attempts)) == (True, 2)
+
+
+async def test_a_write_is_not_asked_again_after_a_handshake_that_dropped(
+    rig: _Rig,
+) -> None:
+    link, attempts = _first_hello_dropped(rig)
+    kai = await rig.client("kai", link)
+
+    with pytest.raises(ToolError, match="closed the connection during the hello"):
+        await kai.call("write", to="eric", message="hi")
+
+    assert attempts == [1]
+
+
 async def test_a_write_whose_reply_was_lost_is_not_sent_again(
     rig: _Rig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
