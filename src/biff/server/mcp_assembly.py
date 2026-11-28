@@ -12,6 +12,8 @@ from biff.mcp_transport import McpTransport
 from biff.repo_transport import RepoTransport
 from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
+from biff.server.daemon_channel import DaemonChannelFeed
+from biff.server.daemon_channel_tools import DaemonChannelAck
 from biff.server.daemon_talk_tools import DaemonTalkTools
 from biff.server.daemon_tools import DaemonReadTools
 from biff.server.daemon_write_tools import DaemonWriteTools
@@ -26,7 +28,12 @@ if TYPE_CHECKING:
 
 __all__ = ["McpAssembly"]
 
-_FAMILIES: Final = (DaemonReadTools, DaemonWriteTools, DaemonTalkTools)
+_FAMILIES: Final = (
+    DaemonReadTools,
+    DaemonWriteTools,
+    DaemonTalkTools,
+    DaemonChannelAck,
+)
 _MOVED: Final = (
     "mcp.transport: daemon cannot be used with --data-dir or --relay-url: biffd "
     "resolves the relay from the repository, so the read tools would read another "
@@ -69,13 +76,27 @@ class McpAssembly:
         if asks_biffd and any(o is not None for o in self.overrides):
             raise SystemExit(_MOVED)
         state = McpLaunch(self.resolved, self.toggle).state()
+        link = None
+        if asks_biffd:
+            link = McpLink.for_host(user=self.resolved.config.user, cwd=str(Path.cwd()))
+            self.feed_channel_from(link, state)
         caller = CallerPolicy.for_launch(self.user, self.transport)
         server = create_server(state, default_caller=caller)
-        if asks_biffd:
-            cwd = str(Path.cwd())
-            link = McpLink.for_host(user=self.resolved.config.user, cwd=cwd)
+        if link is not None:
             self.answer_from(link, server, state)
         return server
+
+    @staticmethod
+    def feed_channel_from(link: McpLink, state: ServerState) -> None:
+        """Have *state*'s channel events come from biffd's subscription.
+
+        The emitter is replaced before the server is created, so the channel
+        loop serves the one that reads biffd; the feed follows the session the
+        server binds to.
+        """
+        feed = DaemonChannelFeed(link=link, check=state.channel_check)
+        object.__setattr__(state, "emitter", feed.emitter)
+        object.__setattr__(state, "session_bound", feed.bind)
 
     @staticmethod
     def answer_from(

@@ -187,6 +187,10 @@ class ChannelEmitter:
             self._is_listening = True
             relay.add_reconnect_listener(self.reconnected)
 
+    def owe_check(self, token: str) -> None:
+        """Owe the channel check event for *token*, which biffd made and accepted."""
+        self._check.owe(token)
+
     def initializing(self) -> None:
         """Close the gate: the client sent ``initialize`` and is not yet ready."""
         self._gate.initializing()
