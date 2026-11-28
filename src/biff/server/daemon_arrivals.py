@@ -38,6 +38,7 @@ class ArrivalsSnapshot:
     wall: WallPost | None
     invites: tuple[tuple[str, str], ...]
     talk_pending: int
+    talk_lines: int
     mesg_on: bool
 
     @classmethod
@@ -56,6 +57,7 @@ class ArrivalsSnapshot:
                 wall=wall,
                 invites=tuple((i["from"], i["tty"]) for i in invites),
                 talk_pending=int(cast("int", data["talk_pending"])),
+                talk_lines=int(cast("int", data.get("talk_lines", 0))),
                 mesg_on=bool(data.get("mesg", True)),
             )
         except (KeyError, TypeError) as exc:
@@ -175,7 +177,7 @@ class DaemonArrivals:
             if (seq := self._arrived(sender, tty)) is not None:
                 self._snap_entries[seq] = (sender, tty)
         self._live = live
-        if snapshot.talk_pending == 0:
+        if snapshot.talk_lines == 0:
             self._pending_sent = 0  # the lines were read: the next one is news
 
     def subscribed(self) -> None:
@@ -188,7 +190,7 @@ class DaemonArrivals:
         snap = self._snapshot
         if (
             snap is not None
-            and snap.talk_pending > self._pending_sent
+            and snap.talk_lines > self._pending_sent
             and self._messages_seen <= self._messages_sent
         ):
             self._messages_seen = self._messages_sent + 1
@@ -298,7 +300,7 @@ class DaemonArrivals:
 
     def _message(self) -> Reading:
         count = self._messages_seen
-        pending = 0 if self._snapshot is None else self._snapshot.talk_pending
+        pending = 0 if self._snapshot is None else self._snapshot.talk_lines
         queued = pending > 0
         event = ChannelEvent.talk_message() if queued else None
         return Reading(

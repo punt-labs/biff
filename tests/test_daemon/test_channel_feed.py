@@ -448,3 +448,32 @@ async def test_a_feed_task_that_ends_anyway_says_what_ended_it(
         await asyncio.sleep(0.1)
 
     assert "channel feed ended" in caplog.text
+
+
+async def test_a_queued_invite_is_announced_as_an_invite_and_not_as_a_line(
+    rig: Rig,
+) -> None:
+    tools = await rig.harness.connect("s-kai", "kai", client="mcp")
+    eric = await _eric(rig)
+    await eric.request("talk", to=f"kai:{await _tty(tools)}", message="")
+
+    await rig.start()
+    await rig.wait_for(lambda: "talk_invite" in rig.sink.kinds())
+    await asyncio.sleep(_QUIET)
+
+    assert rig.sink.kinds() == ["talk_invite"]
+
+
+async def test_an_invite_that_came_in_a_reconnect_gap_is_not_also_a_line(
+    rig: Rig,
+) -> None:
+    tools = await rig.harness.connect("s-kai", "kai", client="mcp")
+    eric = await _eric(rig)
+    rig.refuse_first = 2  # biffd cannot be opened: the gap
+    await rig.start()
+    await eric.request("talk", to=f"kai:{await _tty(tools)}", message="")
+
+    await rig.wait_for(lambda: "talk_invite" in rig.sink.kinds())
+    await asyncio.sleep(_QUIET)
+
+    assert rig.sink.kinds() == ["talk_invite"]

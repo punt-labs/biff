@@ -34,6 +34,7 @@ def _snapshot(
     wall: WallPost | None = None,
     invites: tuple[tuple[str, str], ...] = (),
     talk_pending: int = 0,
+    talk_lines: int = 0,
     mesg_on: bool = True,
 ) -> ArrivalsSnapshot:
     return ArrivalsSnapshot(
@@ -42,6 +43,7 @@ def _snapshot(
         wall=wall,
         invites=invites,
         talk_pending=talk_pending,
+        talk_lines=talk_lines,
         mesg_on=mesg_on,
     )
 
@@ -126,12 +128,12 @@ async def test_an_invite_that_arrives_again_is_owed_again() -> None:
 async def test_a_talk_line_is_owed_while_something_waits() -> None:
     arrivals = DaemonArrivals()
     arrivals.count(_event("talk_line"))
-    arrivals.refresh(_snapshot(talk_pending=1))
+    arrivals.refresh(_snapshot(talk_pending=1, talk_lines=1))
     reading = await arrivals.reading(EventKind.TALK_MESSAGE)
     assert reading.is_owed
     reading.commit()
 
-    arrivals.refresh(_snapshot(talk_pending=0))
+    arrivals.refresh(_snapshot(talk_pending=0, talk_lines=0))
     arrivals.count(_event("talk_line"))
 
     assert not (await arrivals.reading(EventKind.TALK_MESSAGE)).is_owed
@@ -188,6 +190,7 @@ def test_a_malformed_wall_is_logged_and_skipped_not_fatal(
         "wall": {"text": "", "from_user": "eric"},  # no text, no expiry
         "invites": [],
         "talk_pending": 0,
+        "talk_lines": 0,
         "mesg": True,
     }
 
@@ -241,7 +244,7 @@ async def test_an_invite_withdrawn_and_made_again_in_a_gap_is_owed_again() -> No
 
 async def test_talk_lines_waiting_when_the_feed_subscribes_are_owed_once() -> None:
     arrivals = DaemonArrivals()
-    arrivals.refresh(_snapshot(talk_pending=2))
+    arrivals.refresh(_snapshot(talk_pending=2, talk_lines=2))
     arrivals.subscribed()
     reading = await arrivals.reading(EventKind.TALK_MESSAGE)
     assert reading.is_owed
@@ -251,8 +254,20 @@ async def test_talk_lines_waiting_when_the_feed_subscribes_are_owed_once() -> No
 
     assert not (await arrivals.reading(EventKind.TALK_MESSAGE)).is_newer
 
-    arrivals.refresh(_snapshot(talk_pending=0))  # read
-    arrivals.refresh(_snapshot(talk_pending=1))  # a new line came in a gap
+    arrivals.refresh(_snapshot(talk_pending=0, talk_lines=0))  # read
+    arrivals.refresh(_snapshot(talk_pending=1, talk_lines=1))  # a line, in a gap
     arrivals.subscribed()
 
     assert (await arrivals.reading(EventKind.TALK_MESSAGE)).is_owed
+
+
+async def test_a_queued_invite_alone_is_not_a_talk_line_waiting() -> None:
+    arrivals = DaemonArrivals()
+    # biffd's queue holds the invite frame: one frame queued, no line among them.
+    arrivals.refresh(
+        _snapshot(invites=(("eric", "tty1"),), talk_pending=1, talk_lines=0)
+    )
+
+    arrivals.subscribed()
+
+    assert not (await arrivals.reading(EventKind.TALK_MESSAGE)).is_owed

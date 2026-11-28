@@ -134,6 +134,8 @@ async def test_an_invite_nobody_has_read_yet_is_listed_as_live(
 
     invites = cast("list[dict[str, str]]", data["invites"])
     assert [i["from"] for i in invites] == ["eric"]
+    # The queued frame is the invite: it is a frame waiting, but not a talk line.
+    assert (data["talk_pending"], data["talk_lines"]) == (1, 0)
 
 
 async def test_a_session_whose_row_is_gone_is_logged_once_as_mesg_on(

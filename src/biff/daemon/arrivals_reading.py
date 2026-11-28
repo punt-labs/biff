@@ -72,8 +72,11 @@ class ArrivalsReading:
             )
         return True
 
-    def invites(self) -> tuple[list[dict[str, str]], int]:
-        """Return the live invites, and how many talk frames are queued.
+    def talk(self) -> tuple[list[dict[str, str]], int, int]:
+        """Return the live invites, the frames queued, and the lines among them.
+
+        The queue holds invites, accepts and ends as well as lines, so a client
+        that wants to know whether a line waits needs the third number.
 
         An invite is live from the moment it is queued, before talk_read drains it.
         """
@@ -85,7 +88,8 @@ class ArrivalsReading:
             if n.is_invite
         }
         listed = [{"from": user, "tty": tty} for user, tty in sorted(live)]
-        return listed, len(queued)
+        lines = sum(1 for n in queued if n.ntype == "message")
+        return listed, len(queued), lines
 
     @staticmethod
     async def handle(
@@ -97,13 +101,14 @@ class ArrivalsReading:
         mark = await reading.mark()  # the mark first: the count is read after it
         unread = await reading.unread()
         wall = await session.context.relay.get_wall()
-        invites, talk_pending = reading.invites()
+        invites, talk_pending, talk_lines = reading.talk()
         data = {
             "mark": mark,
             "unread": unread,
             "wall": None if wall is None else wall.model_dump(mode="json"),
             "invites": invites,
             "talk_pending": talk_pending,
+            "talk_lines": talk_lines,
             "mesg": await reading.mesg(),
         }
         return CommandResult(text=f"unread: {unread}", json_data=data)
