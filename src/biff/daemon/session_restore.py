@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from biff.daemon.resolver import ResolveError
+from biff.daemon.session_end import RETENTION_SECONDS
 from biff.daemon.session_key import SessionKey
 from biff.daemon.tasks import Supervised
 from biff.relay_errors import RELAY_ERRORS
@@ -101,11 +102,11 @@ class SessionRestore:
         hello = kept.hello
         if SessionKey.of(hello) in self._core.sessions.snapshot():
             return True  # a hello came first: its record is newer than this one
-        if kept.relay_seed != self._core.relay_seed.describe():
+        if kept.relay_seed != self._core.relay_seed.identity():
             return self._keep_dormant(
-                hello,
+                kept,
                 f"it was opened with relay settings {kept.relay_seed} "
-                f"and biffd now has {self._core.relay_seed.describe()}",
+                f"and biffd now has {self._core.relay_seed.identity()}",
             )
         try:
             async with asyncio.timeout(self._core.attach_timeout):
@@ -122,7 +123,7 @@ class SessionRestore:
             )
             return False
         except RelayConflictError as exc:
-            return self._keep_dormant(hello, str(exc))
+            return self._keep_dormant(kept, str(exc))
         except (TimeoutError, *RELAY_ERRORS):
             logger.warning(
                 "could not restore session %s", hello.session_id, exc_info=True
@@ -140,13 +141,28 @@ class SessionRestore:
         self._records.mark(SessionKey(hello.session_id, CLAUDE_CODE_ROLE), since)
         return True
 
-    @staticmethod
-    def _keep_dormant(hello: Hello, why: str) -> bool:
-        """Leave the record of *hello* unopened and say why; never drop it."""
+    def _keep_dormant(self, kept: KeptSession, why: str) -> bool:
+        """Leave the record unopened and say why, until its relay row is gone anyway.
+
+        The record is never dropped for the seed alone.  Dormant for longer than a
+        relay row lives, the session is gone from any relay, so the record is
+        dropped then; one with no dormant time yet starts its clock now.
+        """
+        session_id = kept.hello.session_id
+        since = kept.dormant_since
+        if since is None:
+            self._records.mark(
+                SessionKey(session_id, CLAUDE_CODE_ROLE), datetime.now(UTC)
+            )
+        elif (datetime.now(UTC) - since).total_seconds() > RETENTION_SECONDS:
+            self._drop(
+                kept, f"dormant past the {RETENTION_SECONDS:g}s a relay row lives"
+            )
+            return True
         logger.warning(
             "session %s is kept dormant: %s; it comes back when biffd runs with "
             "the relay settings it was opened under",
-            hello.session_id,
+            session_id,
             why,
         )
         return True

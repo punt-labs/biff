@@ -75,7 +75,9 @@ def test_a_client_spelling_the_seeded_file_another_way_equals_the_seed(
 
 
 def _daemon_seed(creds: Path) -> RelaySeed:
-    return RelaySeed.for_daemon({**_URL, "BIFF_RELAY_USER_CREDENTIALS": str(creds)})
+    return RelaySeed.for_daemon(
+        {**_URL, "BIFF_RELAY_USER_CREDENTIALS": str(creds)}, b"k" * 32
+    )
 
 
 def test_a_symlink_made_and_re_pointed_after_start_is_judged_as_it_is_now(

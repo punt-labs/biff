@@ -16,6 +16,7 @@ from punt_observe.logging import Role
 
 from biff.daemon.environment import DaemonEnvironment
 from biff.daemon.handshake_log import HandshakeLog
+from biff.daemon.seed_key import SeedKey
 from biff.daemon.session_store import CliSessionStore
 from biff.logging_config import configure_logging
 from biff.relay_seed import RelaySeed
@@ -77,8 +78,10 @@ class Foreground:
             )
         # Names only: the values are secrets and never reach a log or a screen.
         try:
-            seed = RelaySeed.for_daemon(os.environ)
-        except ValueError as exc:
+            run_dir.ensure()
+            key = SeedKey(run_dir.path / "relay-seed.key").load()
+            seed = RelaySeed.for_daemon(os.environ, key)
+        except (OSError, ValueError) as exc:
             self._fail(str(exc))
         logger.info("biffd relay settings from its environment: %s", seed.describe())
         # Loaded here, after the line above: the relay stack is most of biffd's

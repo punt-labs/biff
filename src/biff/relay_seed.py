@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Self, final
-from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -72,11 +73,14 @@ class RelaySeed:
     empty value counts as unset, as the relay configuration reads it.
     """
 
-    __slots__ = ("_digests", "_files", "_host")
+    __slots__ = ("_credential", "_digests", "_files", "_relay")
 
     _digests: Mapping[RelayVariable, str]
-    # The relay's host and port, no credential: what a client may be told.
-    _host: str
+    # The relay URL without userinfo, query or fragment: what a client may be told.
+    _relay: str
+    # Which credential biffd was started with, for telling two accounts on one relay
+    # apart: a file's resolved path, or a keyed hash of a token.  Never the value.
+    _credential: str
     # (device, inode) of each credential file biffd was started with: the file
     # itself, whatever name a later session gives it.  Never printed.
     _files: frozenset[tuple[int, int]]
@@ -84,13 +88,15 @@ class RelaySeed:
     def __new__(
         cls,
         digests: Mapping[RelayVariable, str],
-        host: str = "",
+        relay: str = "",
         files: frozenset[tuple[int, int]] = frozenset(),
+        credential: str = "",
     ) -> Self:
         """Create the seed that holds *digests*, keyed by variable name."""
         self = super().__new__(cls)
         self._digests = dict(digests)
-        self._host = host
+        self._relay = relay
+        self._credential = credential
         self._files = files
         return self
 
@@ -100,10 +106,11 @@ class RelaySeed:
         environ: Mapping[str, str],
         *,
         files: frozenset[tuple[int, int]] = frozenset(),
+        credential: str = "",
     ) -> Self:
         """Return the seed of *environ*: one digest per relay variable it sets.
 
-        *files* are the identities of the credential files it names, which only
+        *files* and *credential* identify the credential it names, which only
         biffd records.
         """
         return cls(
@@ -112,9 +119,29 @@ class RelaySeed:
                 for name in RELAY_VARIABLES
                 if cls._is_setting(name, environ.get(name, ""))
             },
-            host=urlsplit(environ.get("BIFF_RELAY_URL", "")).netloc.rpartition("@")[2],
+            relay=cls._relay_of(environ.get("BIFF_RELAY_URL", "")),
             files=files,
+            credential=credential,
         )
+
+    @staticmethod
+    def _relay_of(url: str) -> str:
+        """Return *url* as shown, with no userinfo, query or fragment.
+
+        What is shown is built from the text after the one ``@``, never the text
+        before it, so a secret in the userinfo cannot reach it whatever characters it
+        holds.  A URL with more than one ``@`` is ambiguous and shown as unparseable.
+        """
+        scheme, sep, rest = url.strip().partition("://")
+        if not sep or rest.count("@") > 1:
+            return "unparseable" if url.strip() else ""
+        _userinfo, at, tail = rest.rpartition("@")
+        # With userinfo the path is dropped too: a ``/`` before the ``@`` is not
+        # where the host ends, and the text after it is all that is shown.
+        host = re.split("[/?#]" if at else "[?#]", tail, maxsplit=1)[0].rstrip("/")
+        if not host or " " in host:
+            return "unparseable"
+        return f"{scheme}://{host}".casefold()
 
     @staticmethod
     def _identity(name: RelayVariable, path: str) -> tuple[int, int] | None:
@@ -215,13 +242,14 @@ class RelaySeed:
         )
 
     @classmethod
-    def for_daemon(cls, environ: Mapping[str, str]) -> Self:
+    def for_daemon(cls, environ: Mapping[str, str], key: bytes) -> Self:
         """Return the seed biffd starts with, or say why it cannot.
 
         biffd sends the credentials it was started with only to the relay it was
         started with, so it needs one URL and at most one credential.  A key or
         credentials file is read by biffd from its own directory, so it must be an
-        absolute path to a file that exists.
+        absolute path to a file that exists.  *key* keys the hash that tells one
+        token from another in what biffd keeps.
 
         Raises:
             RelayConflictError: A credential has no ``BIFF_RELAY_URL``, there is
@@ -235,7 +263,25 @@ class RelaySeed:
             if (raw := environ.get(name, ""))
             and (identity := cls._require_file(name, raw)) is not None
         }
-        return cls.of(environ, files=frozenset(files))
+        return cls.of(
+            environ,
+            files=frozenset(files),
+            credential=cls._credential_of(environ, key),
+        )
+
+    @staticmethod
+    def _credential_of(environ: Mapping[str, str], key: bytes) -> str:
+        """Name the credential in *environ* without giving it away.
+
+        A credentials file is named by its resolved path, which is no secret.  A
+        token is named by a hash keyed with a random key biffd keeps private, so
+        that a low-entropy token cannot be guessed offline from what biffd stores.
+        """
+        for name in _CREDENTIAL_PATHS:
+            if environ.get(name):
+                return os.path.realpath(environ[name])
+        token = environ.get("BIFF_RELAY_TOKEN", "")
+        return hmac.new(key, token.encode(), "sha256").hexdigest() if token else ""
 
     def require_whole(self) -> None:
         """Refuse a seed with a credential and no URL, or with two credentials.
@@ -303,7 +349,21 @@ class RelaySeed:
     def describe(self) -> str:
         """Say which variables are set and the relay's host, never a value."""
         names = self.listed()
-        return f"{names} (relay {self._host})" if self._host else names
+        return f"{names} (relay {self._relay})" if self._relay else names
+
+    def identity(self) -> str:
+        """Say which relay and which credential this seed names, for biffd to keep.
+
+        What biffd compares across a restart: the variable names, the relay URL
+        without userinfo, and which credential.  It holds no secret and no bare
+        digest of one.
+        """
+        described = self.describe()
+        return (
+            f"{described}; credential {self._credential}"
+            if self._credential
+            else described
+        )
 
     def digest_of(self, name: RelayVariable) -> str:
         """Return the digest of *name*'s value, or ``""`` when it is unset."""

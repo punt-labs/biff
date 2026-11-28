@@ -10126,18 +10126,25 @@ relay through the environment could not use the daemon at all.
    Refusing it would strand a session whose end hook runs in another environment
    than the client that opened it.
 7. **A restart with other relay settings keeps the sessions opened under the old
-   ones.** biffd writes the seed's identity to `relay-seed` (0600) in its run
-   directory: the variable names and the relay's host and port, never a value or a
-   digest of one (a low-entropy token can be brute-forced from its digest). A start
-   whose identity differs from the file's, with other names or the same names on
-   another relay, logs a warning and reports it in `/health`, `biff daemon status`
-   and `biff doctor`. Each harness session record carries the identity it was opened
-   under; `SessionRestore` keeps a record whose identity differs from the running
-   biffd's dormant, with a log line, and brings it back when biffd is started with
-   it again. It never drops one for that reason, and so a restore never reads "no
-   row on this relay" as "the session ended" when the relay is not the one the
-   session lives on. Before this, a unit-started biffd came up unseeded, or a client
-   started it on another relay, re-resolved every kept session there, found no row
+   ones.** biffd's seed has an identity: the variable names, the relay URL without
+   userinfo, query or fragment (case folded, no trailing slash; a URL with more than
+   one `@` is shown as `unparseable`, and what is shown is built from the text after
+   the `@`, never before it), and which credential: a credentials file's resolved
+   path, or a hash of the token keyed with a random 32-byte key kept 0600 in the run
+   directory (`relay-seed.key`), never a bare digest, which a low-entropy token
+   could be guessed from. biffd writes the identity to `relay-seed` (0600) in its run
+   directory. A start whose identity differs from the file's (other names, another
+   relay, or another account on the same relay) logs a warning and reports it in
+   `/health`, `biff daemon status` and `biff doctor`. Each harness session record
+   carries the identity it was opened under; `SessionRestore` keeps a record whose
+   identity differs from the running biffd's dormant, with a log line, and brings it
+   back when biffd is started with it again. A restore never reads "no row on this
+   relay" as "the session ended" when the relay is not the one the session lives
+   on. A record kept dormant for the seed starts a clock the first time it is seen,
+   and is dropped, with a log line, once it has been dormant for longer than a
+   relay row lives (`RETENTION_SECONDS`): the session is gone from any relay by
+   then. Before this, a unit-started biffd came up unseeded, or a client started it
+   on another relay or account, re-resolved every kept session there, found no row
    and deleted the record.
 
 **Known limit.** A biffd started by a service manager (a systemd or launchd unit)
@@ -10150,9 +10157,10 @@ through `.punt-labs/biff/config.local.yaml`, or stop the unit and run
 **Not covered.** The digest of a key or credentials path covers the path string,
 not the file, so a rotation under the same path is not noticed, and an open session
 is not admitted again after one until biffd restarts. Absolute and existing paths
-(item 2) remove the relative-path ambiguity. CLI session records carry no seed identity, so a sweep after a change of seed
-resolves them on the new relay and can expire the record while the original row
-waits for its relay TTL.
+(item 2) remove the relative-path ambiguity. CLI session records carry no seed identity, so after retention a sweep under a
+changed seed resolves them on the new relay, releases there and expires the record
+while the original row waits for its relay TTL. Tagging them and skipping the sweep
+when the tag differs is tracked as a Bug (repo:biff).
 
 **Rejected.**
 

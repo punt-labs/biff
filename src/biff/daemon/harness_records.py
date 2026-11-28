@@ -91,7 +91,7 @@ class HarnessRecords:
         """
         self = super().__new__(cls)
         self._root = root
-        self._seed = seed.describe()
+        self._seed = seed.identity()
         return self
 
     def keep(self, hello: Hello) -> None:

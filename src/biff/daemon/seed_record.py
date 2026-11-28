@@ -44,7 +44,7 @@ class SeedRecord:
         The first start has nothing to compare with and says nothing.  A file that
         cannot be written is logged, not raised: biffd serves without the note.
         """
-        names = seed.describe()
+        names = seed.identity()
         try:
             previous = self._path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:

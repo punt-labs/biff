@@ -79,6 +79,7 @@
   "biff.daemon.session_hold": "daemon",
   "biff.daemon.credentials_home_resolver": "daemon",
   "biff.daemon.harness_records": "daemon",
+  "biff.daemon.seed_key": "daemon",
   "biff.daemon.seed_record": "daemon",
   "biff.daemon.session_restore": "daemon",
   "biff.daemon.session_end": "daemon",

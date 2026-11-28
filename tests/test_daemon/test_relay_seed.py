@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from tests.test_daemon.conftest import Harness
 
 _SEEDED = {"BIFF_RELAY_URL": "nats://relay.invalid:4222", "BIFF_RELAY_TOKEN": "tok-A"}
-_SEED_TEXT = "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay relay.invalid:4222)"
+_SEED_TEXT = "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay nats://relay.invalid:4222)"
 
 
 def test_the_seed_holds_digests_not_values() -> None:
@@ -78,13 +78,13 @@ def test_a_tls_value_the_configuration_ignores_is_not_a_setting() -> None:
 
 def test_credentials_without_a_url_are_refused_naming_the_variable() -> None:
     with pytest.raises(RelayConflictError, match="BIFF_RELAY_TOKEN") as refused:
-        RelaySeed.for_daemon({"BIFF_RELAY_TOKEN": "tok-A"})
+        RelaySeed.for_daemon({"BIFF_RELAY_TOKEN": "tok-A"}, b"k" * 32)
     assert "tok-A" not in str(refused.value)
 
 
 def test_a_url_alone_or_with_one_credential_is_a_seed() -> None:
-    assert RelaySeed.for_daemon({"BIFF_RELAY_URL": "nats://x"})
-    assert RelaySeed.for_daemon(_SEEDED)
+    assert RelaySeed.for_daemon({"BIFF_RELAY_URL": "nats://x"}, b"k" * 32)
+    assert RelaySeed.for_daemon(_SEEDED, b"k" * 32)
 
 
 def test_two_credentials_are_refused_naming_both(tmp_path: Path) -> None:
@@ -94,7 +94,7 @@ def test_two_credentials_are_refused_naming_both(tmp_path: Path) -> None:
     with pytest.raises(
         RelayConflictError, match="BIFF_RELAY_TOKEN, BIFF_RELAY_USER_CREDENTIALS"
     ):
-        RelaySeed.for_daemon(environ)
+        RelaySeed.for_daemon(environ, b"k" * 32)
 
 
 @pytest.mark.parametrize("path", ["relative.creds", "/no/such/file.creds"])
@@ -104,14 +104,14 @@ def test_a_credentials_path_must_be_absolute_and_exist(path: str) -> None:
         "BIFF_RELAY_USER_CREDENTIALS": path,
     }
     with pytest.raises(RelayConflictError, match="BIFF_RELAY_USER_CREDENTIALS"):
-        RelaySeed.for_daemon(environ)
+        RelaySeed.for_daemon(environ, b"k" * 32)
 
 
 def test_a_credentials_file_that_exists_is_a_seed(tmp_path: Path) -> None:
     creds = tmp_path / "c.creds"
     creds.write_text("x")
     environ = {"BIFF_RELAY_URL": "nats://x", "BIFF_RELAY_USER_CREDENTIALS": str(creds)}
-    assert RelaySeed.for_daemon(environ)
+    assert RelaySeed.for_daemon(environ, b"k" * 32)
 
 
 def test_the_description_names_variables_and_the_host_never_a_value() -> None:
@@ -119,7 +119,7 @@ def test_the_description_names_variables_and_the_host_never_a_value() -> None:
         {"BIFF_RELAY_URL": "tls://user:pw@relay.example:4222", "BIFF_RELAY_TOKEN": "t"}
     )
     assert seed.describe() == (
-        "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay relay.example:4222)"
+        "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay tls://relay.example:4222)"
     )
 
 

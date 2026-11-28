@@ -22,7 +22,7 @@ def test_the_file_holds_names_only_and_is_private(tmp_path: Path) -> None:
     path = tmp_path / "relay-seed"
     SeedRecord(path).record(RelaySeed.of(_SEEDED))
     assert path.read_text() == (
-        "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay relay.invalid:4222)\n"
+        "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay nats://relay.invalid:4222)\n"
     )
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 

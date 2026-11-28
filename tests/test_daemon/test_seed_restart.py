@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 from biff.client.connection import ClientIdentity, DaemonClient
+from biff.daemon.harness_records import HarnessRecords
 from biff.daemon.server import BiffDaemon
+from biff.daemon.session_end import RETENTION_SECONDS
 from biff.daemon.session_key import SessionKey
 from biff.relay_seed import NO_RELAY_SETTINGS, RelaySeed
 from biff.session_id import CLAUDE_CODE_ROLE
@@ -154,7 +157,10 @@ async def test_the_record_names_the_seed_it_was_opened_under_never_a_value(
         assert (
             json.loads(text)["relay_seed"],
             "tok-A" in text,
-        ) == ("BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay relay.invalid:4222)", False)
+        ) == (
+            "BIFF_RELAY_TOKEN, BIFF_RELAY_URL (relay nats://relay.invalid:4222)",
+            False,
+        )
     finally:
         await seeded.stop()
 
@@ -221,3 +227,95 @@ async def test_a_restart_on_another_relay_with_the_same_names_is_flagged(
         ) == (True, True, False)
     finally:
         await other.stop()
+
+
+async def _dormant_for(harness: Harness, age: timedelta | None) -> BiffDaemon:
+    """Keep a session's record dormant under a seed biffd no longer has, *age* ago."""
+    await harness.daemon.stop()
+    seeded = await _start(harness, seeded=True)
+    client = await _open(harness, seeded)
+    await client.close()
+    await seeded.stop()
+    if age is not None:
+        HarnessRecords(
+            harness.sessions.root.parent / "harness-sessions", RelaySeed.of(_SEEDED)
+        ).mark(_KEY, datetime.now(UTC) - age)
+    return await _start(harness, seeded=False)
+
+
+async def test_a_mismatched_record_dormant_past_the_row_lifetime_is_dropped(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    expired = await _dormant_for(harness, timedelta(seconds=RETENTION_SECONDS + 60))
+    try:
+        said = " ".join(record.getMessage() for record in caplog.records)
+        assert (_records(harness), "s-keep" in said and "dropping" in said) == (
+            [],
+            True,
+        )
+    finally:
+        await expired.stop()
+
+
+async def test_a_mismatched_record_dormant_for_less_is_kept(harness: Harness) -> None:
+    young = await _dormant_for(harness, timedelta(seconds=60))
+    try:
+        assert _records(harness) == ["s-keep"]
+    finally:
+        await young.stop()
+
+
+async def test_the_first_sight_of_a_mismatched_record_starts_its_clock(
+    harness: Harness,
+) -> None:
+    first = await _dormant_for(harness, None)
+    try:
+        (kept,) = HarnessRecords(
+            harness.sessions.root.parent / "harness-sessions", RelaySeed.of(_SEEDED)
+        ).load()
+        assert (_records(harness), kept.dormant_since is not None) == (
+            ["s-keep"],
+            True,
+        )
+    finally:
+        await first.stop()
+
+
+_KEY_BYTES = b"k" * 32
+
+
+async def test_a_restart_on_the_same_host_with_another_token_keeps_the_record(
+    harness: Harness,
+) -> None:
+    await harness.daemon.stop()
+    mine = RelaySeed.for_daemon(_SEEDED, _KEY_BYTES)
+    first = await _start_with(harness, mine, "seeded")
+    client = await _open(harness, first)
+    await client.close()
+    await first.stop()
+    theirs = RelaySeed.for_daemon({**_SEEDED, "BIFF_RELAY_TOKEN": "tok-B"}, _KEY_BYTES)
+    second = await _start_with(harness, theirs, "other")
+    try:
+        assert (_records(harness), "credential" in second.seed_note) == (
+            ["s-keep"],
+            True,
+        )
+    finally:
+        await second.stop()
+
+
+async def _start_with(harness: Harness, seed: RelaySeed, where: str) -> BiffDaemon:
+    daemon = BiffDaemon(
+        run_dir=harness.run_dir,
+        port=0,
+        sessions=harness.sessions,
+        resolver=_SeedAwareResolver(harness.relays_dir, seeded=where == "seeded"),
+        relay_factory=harness.factory,
+        heartbeat_interval=0.05,
+        poll_interval=0.02,
+        attach_timeout=0.3,
+        relay_seed=seed,
+    )
+    await daemon.start()
+    return daemon
