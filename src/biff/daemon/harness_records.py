@@ -51,8 +51,9 @@ class _Stored(BaseModel):
     hello: _StoredHello
     dormant_since: datetime | None = None
     failed_starts: int = 0
-    # What biffd was seeded with when it opened the session: variable names and the
-    # relay's host and port, so the file holds no secret and no digest of one.
+    # biffd's seed identity when it opened the session: the variable names, the
+    # relay's scheme and host, and one keyed hash of all the settings.  The file
+    # holds no secret and no bare digest of one.
     relay_seed: str = NO_RELAY_SETTINGS.describe()
 
 
@@ -66,7 +67,7 @@ class KeptSession:
     failed_starts: int
     """How many starts in a row could not build it again."""
     relay_seed: str
-    """What biffd was seeded with when it opened the session, names and relay host."""
+    """biffd's seed identity when it opened the session (``RelaySeed.identity``)."""
 
 
 @final
@@ -86,7 +87,7 @@ class HarnessRecords:
     def __new__(cls, root: Path, seed: RelaySeed = NO_RELAY_SETTINGS) -> Self:
         """Keep the records under *root*, created when the first is kept.
 
-        Each record is tagged with *seed*'s description, the relay settings biffd
+        Each record is tagged with *seed*'s identity, the relay settings biffd
         holds as it opens the session.
         """
         self = super().__new__(cls)

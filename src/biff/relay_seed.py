@@ -46,6 +46,9 @@ RELAY_VARIABLES: Final[tuple[RelayVariable, ...]] = (
 _TLS_TRUE_VALUES: Final = frozenset({"1", "true", "yes"})
 _TLS_FALSE_VALUES: Final = frozenset({"0", "false", "no"})
 
+_HOST: Final = re.compile(r"[a-z0-9.\-:\[\]]+")
+_SCHEME: Final = re.compile(r"[a-z][a-z0-9+.\-]*")
+
 _CREDENTIALS: Final[tuple[RelayVariable, ...]] = (
     "BIFF_RELAY_NKEYS_SEED",
     "BIFF_RELAY_TOKEN",
@@ -73,14 +76,15 @@ class RelaySeed:
     empty value counts as unset, as the relay configuration reads it.
     """
 
-    __slots__ = ("_credential", "_digests", "_files", "_relay")
+    __slots__ = ("_digests", "_files", "_relay", "_settings")
 
     _digests: Mapping[RelayVariable, str]
-    # The relay URL without userinfo, query or fragment: what a client may be told.
+    # ``scheme://host[:port]`` of the relay, or ``unparseable``: what may be shown.
     _relay: str
-    # Which credential biffd was started with, for telling two accounts on one relay
-    # apart: a file's resolved path, or a keyed hash of a token.  Never the value.
-    _credential: str
+    # One keyed hash over all the relay settings, the whole URL and every
+    # credential included, so two seeds that differ anywhere differ here and no
+    # value or bare digest of one is kept.  Empty when no key was given.
+    _settings: str
     # (device, inode) of each credential file biffd was started with: the file
     # itself, whatever name a later session gives it.  Never printed.
     _files: frozenset[tuple[int, int]]
@@ -90,13 +94,13 @@ class RelaySeed:
         digests: Mapping[RelayVariable, str],
         relay: str = "",
         files: frozenset[tuple[int, int]] = frozenset(),
-        credential: str = "",
+        settings: str = "",
     ) -> Self:
         """Create the seed that holds *digests*, keyed by variable name."""
         self = super().__new__(cls)
         self._digests = dict(digests)
         self._relay = relay
-        self._credential = credential
+        self._settings = settings
         self._files = files
         return self
 
@@ -106,42 +110,77 @@ class RelaySeed:
         environ: Mapping[str, str],
         *,
         files: frozenset[tuple[int, int]] = frozenset(),
-        credential: str = "",
+        key: bytes = b"",
     ) -> Self:
         """Return the seed of *environ*: one digest per relay variable it sets.
 
-        *files* and *credential* identify the credential it names, which only
-        biffd records.
+        *files* are the identities of the credential files it names and *key* keys
+        the hash of all its settings; only biffd records them.
         """
+        digests: dict[RelayVariable, str] = {
+            name: cls._digest(environ[name], name)
+            for name in RELAY_VARIABLES
+            if cls._is_setting(name, environ.get(name, ""))
+        }
         return cls(
-            {
-                name: cls._digest(environ[name], name)
-                for name in RELAY_VARIABLES
-                if cls._is_setting(name, environ.get(name, ""))
-            },
-            relay=cls._relay_of(environ.get("BIFF_RELAY_URL", "")),
+            digests,
+            relay=cls._display_of(environ.get("BIFF_RELAY_URL", "")),
             files=files,
-            credential=credential,
+            settings=cls._settings_of(environ, key) if key and digests else "",
         )
 
     @staticmethod
-    def _relay_of(url: str) -> str:
-        """Return *url* as shown, with no userinfo, query or fragment.
+    def _display_of(url: str) -> str:
+        """Return *url* as shown: ``scheme://host[:port]``, or ``unparseable``.
 
-        What is shown is built from the text after the one ``@``, never the text
-        before it, so a secret in the userinfo cannot reach it whatever characters it
-        holds.  A URL with more than one ``@`` is ambiguous and shown as unparseable.
+        Built from the text after the last ``@`` only, so userinfo cannot reach it.
+        A ``/``, ``?`` or ``#`` before that ``@`` makes the split ambiguous, and a
+        host or scheme with any character outside the plain set is not shown, so a
+        control character cannot reach a log or a terminal.  Empty for no URL.
         """
         scheme, sep, rest = url.strip().partition("://")
-        if not sep or rest.count("@") > 1:
+        if not sep:
             return "unparseable" if url.strip() else ""
-        _userinfo, at, tail = rest.rpartition("@")
-        # With userinfo the path is dropped too: a ``/`` before the ``@`` is not
-        # where the host ends, and the text after it is all that is shown.
-        host = re.split("[/?#]" if at else "[?#]", tail, maxsplit=1)[0].rstrip("/")
-        if not host or " " in host:
+        head, at, tail = rest.rpartition("@")
+        host = re.split("[/?#]", tail, maxsplit=1)[0].casefold()
+        if (at and re.search("[/?#]", head)) or not _HOST.fullmatch(host):
             return "unparseable"
-        return f"{scheme}://{host}".casefold()
+        if not _SCHEME.fullmatch(scheme.casefold()):
+            return "unparseable"
+        return f"{scheme.casefold()}://{host}"
+
+    @staticmethod
+    def _normalised(url: str) -> str:
+        """Return *url* with its scheme and host case folded and no final ``/``."""
+        scheme, sep, rest = url.strip().partition("://")
+        if not sep:
+            return url.strip()
+        userinfo, at, tail = rest.rpartition("@")
+        cut = re.search("[/?#]", tail)
+        host, after = (tail[: cut.start()], tail[cut.start() :]) if cut else (tail, "")
+        folded = f"{scheme.casefold()}://{userinfo}{at}{host.casefold()}{after}"
+        return folded.rstrip("/")
+
+    @classmethod
+    def _settings_of(cls, environ: Mapping[str, str], key: bytes) -> str:
+        """Return one keyed hash of every relay setting in *environ*.
+
+        The whole URL, userinfo and path included, the token, the resolved paths of
+        the credential files and the parsed TLS flag all go into it, so a difference
+        in any of them is a difference here.  The key is random and private to biffd:
+        a low-entropy token cannot be guessed from what biffd keeps.
+        """
+        fields = [
+            f"url={cls._normalised(environ.get('BIFF_RELAY_URL', ''))}",
+            f"token={environ.get('BIFF_RELAY_TOKEN', '')}",
+            f"tls={cls.tls_value(environ.get('BIFF_RELAY_TLS_HANDSHAKE_FIRST', ''))}",
+            *(
+                f"{name}={os.path.realpath(environ[name])}"
+                for name in _CREDENTIAL_PATHS
+                if environ.get(name)
+            ),
+        ]
+        return hmac.new(key, "\0".join(fields).encode(), "sha256").hexdigest()
 
     @staticmethod
     def _identity(name: RelayVariable, path: str) -> tuple[int, int] | None:
@@ -263,25 +302,7 @@ class RelaySeed:
             if (raw := environ.get(name, ""))
             and (identity := cls._require_file(name, raw)) is not None
         }
-        return cls.of(
-            environ,
-            files=frozenset(files),
-            credential=cls._credential_of(environ, key),
-        )
-
-    @staticmethod
-    def _credential_of(environ: Mapping[str, str], key: bytes) -> str:
-        """Name the credential in *environ* without giving it away.
-
-        A credentials file is named by its resolved path, which is no secret.  A
-        token is named by a hash keyed with a random key biffd keeps private, so
-        that a low-entropy token cannot be guessed offline from what biffd stores.
-        """
-        for name in _CREDENTIAL_PATHS:
-            if environ.get(name):
-                return os.path.realpath(environ[name])
-        token = environ.get("BIFF_RELAY_TOKEN", "")
-        return hmac.new(key, token.encode(), "sha256").hexdigest() if token else ""
+        return cls.of(environ, files=frozenset(files), key=key)
 
     def require_whole(self) -> None:
         """Refuse a seed with a credential and no URL, or with two credentials.
@@ -352,18 +373,29 @@ class RelaySeed:
         return f"{names} (relay {self._relay})" if self._relay else names
 
     def identity(self) -> str:
-        """Say which relay and which credential this seed names, for biffd to keep.
+        """Say which relay settings this seed names, for biffd to keep.
 
-        What biffd compares across a restart: the variable names, the relay URL
-        without userinfo, and which credential.  It holds no secret and no bare
-        digest of one.
+        What biffd compares across a restart: the variable names, the relay's scheme
+        and host, and one keyed hash of all the settings.  It holds no secret and no
+        bare digest of one.
         """
         described = self.describe()
         return (
-            f"{described}; credential {self._credential}"
-            if self._credential
-            else described
+            f"{described}; settings {self._settings}" if self._settings else described
         )
+
+    @staticmethod
+    def explain_change(previous: str, current: str) -> str:
+        """Say how two identities differ, repeating no value.
+
+        Names both hosts when the names or the host differ, and otherwise says that
+        the credentials or the path do.  Empty when they are the same.
+        """
+        before, _, old = previous.partition("; settings ")
+        after, _, new = current.partition("; settings ")
+        if before != after:
+            return f"started with {after}; the last start had {before}"
+        return "credentials or path differs" if old != new else ""
 
     def digest_of(self, name: RelayVariable) -> str:
         """Return the digest of *name*'s value, or ``""`` when it is unset."""

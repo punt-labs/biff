@@ -13,7 +13,7 @@ from biff.daemon.session_end import RETENTION_SECONDS
 from biff.daemon.session_key import SessionKey
 from biff.daemon.tasks import Supervised
 from biff.relay_errors import RELAY_ERRORS
-from biff.relay_seed import RelayConflictError
+from biff.relay_seed import RelayConflictError, RelaySeed
 from biff.session_id import CLAUDE_CODE_ROLE
 from biff.session_routing import SessionRouting
 
@@ -105,8 +105,9 @@ class SessionRestore:
         if kept.relay_seed != self._core.relay_seed.identity():
             return self._keep_dormant(
                 kept,
-                f"it was opened with relay settings {kept.relay_seed} "
-                f"and biffd now has {self._core.relay_seed.identity()}",
+                RelaySeed.explain_change(
+                    kept.relay_seed, self._core.relay_seed.identity()
+                ),
             )
         try:
             async with asyncio.timeout(self._core.attach_timeout):

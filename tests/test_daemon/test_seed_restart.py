@@ -319,3 +319,34 @@ async def _start_with(harness: Harness, seed: RelaySeed, where: str) -> BiffDaem
     )
     await daemon.start()
     return daemon
+
+
+async def test_a_restart_with_only_the_path_changed_keeps_the_record_and_says_so(
+    harness: Harness,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caplog.set_level(logging.INFO)
+    await harness.daemon.stop()
+    path_a = {"BIFF_RELAY_URL": "wss://relay.invalid:443/k-SECRET-PATH-7f3a"}
+    monkeypatch.delenv("BIFF_RELAY_TOKEN")
+    monkeypatch.setenv("BIFF_RELAY_URL", path_a["BIFF_RELAY_URL"])
+    first = await _start_with(
+        harness, RelaySeed.for_daemon(path_a, _KEY_BYTES), "seeded"
+    )
+    client = await _open(harness, first)
+    await client.close()
+    await first.stop()
+    path_b = {"BIFF_RELAY_URL": "wss://relay.invalid:443/k-OTHER-PATH-91cc"}
+    second = await _start_with(
+        harness, RelaySeed.for_daemon(path_b, _KEY_BYTES), "other"
+    )
+    try:
+        said = " ".join(r.getMessage() for r in caplog.records) + second.seed_note
+        assert (
+            _records(harness),
+            "credentials or path differs" in second.seed_note,
+            "secret-path" in said.casefold() or "other-path" in said.casefold(),
+        ) == (["s-keep"], True, False)
+    finally:
+        await second.stop()

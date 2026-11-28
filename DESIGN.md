@@ -10126,26 +10126,34 @@ relay through the environment could not use the daemon at all.
    Refusing it would strand a session whose end hook runs in another environment
    than the client that opened it.
 7. **A restart with other relay settings keeps the sessions opened under the old
-   ones.** biffd's seed has an identity: the variable names, the relay URL without
-   userinfo, query or fragment (case folded, no trailing slash; a URL with more than
-   one `@` is shown as `unparseable`, and what is shown is built from the text after
-   the `@`, never before it), and which credential: a credentials file's resolved
-   path, or a hash of the token keyed with a random 32-byte key kept 0600 in the run
-   directory (`relay-seed.key`), never a bare digest, which a low-entropy token
-   could be guessed from. biffd writes the identity to `relay-seed` (0600) in its run
-   directory. A start whose identity differs from the file's (other names, another
-   relay, or another account on the same relay) logs a warning and reports it in
-   `/health`, `biff daemon status` and `biff doctor`. Each harness session record
-   carries the identity it was opened under; `SessionRestore` keeps a record whose
-   identity differs from the running biffd's dormant, with a log line, and brings it
-   back when biffd is started with it again. A restore never reads "no row on this
-   relay" as "the session ended" when the relay is not the one the session lives
-   on. A record kept dormant for the seed starts a clock the first time it is seen,
-   and is dropped, with a log line, once it has been dormant for longer than a
-   relay row lives (`RETENTION_SECONDS`): the session is gone from any relay by
-   then. Before this, a unit-started biffd came up unseeded, or a client started it
-   on another relay or account, re-resolved every kept session there, found no row
-   and deleted the record.
+   ones.** biffd's seed identity is the variable names, a display form
+   `scheme://host[:port]` and one keyed HMAC over all the relay settings: the whole
+   normalised URL with its userinfo, path and query, the token, the resolved paths of
+   the credential files and the parsed TLS flag. The key is 32 random bytes in
+   `relay-seed.key` (0600) in the run directory, made through a flushed temporary
+   file and a link so a crash leaves no short file; a key that is missing, empty,
+   short, a link, another user's or open to others is replaced with a warning, and
+   the records then stay dormant because their hashes no longer match. What is shown
+   (logs, the hello reply, `/health`, `biff daemon status`) is the names and the
+   display form only. The display form is built from the text after the last `@`;
+   it is `unparseable` when a `/`, `?` or `#` comes before that `@`, or the host or
+   scheme has a character outside `[a-z0-9.:\[\]-]`, so userinfo and control
+   characters never reach it, and the HMAC still tells such URLs apart. biffd
+   writes the identity to `relay-seed` (0600) in its run directory. A start whose
+   identity differs from the file's logs a warning that names both display forms
+   when the names or host differ and says only `credentials or path differs`
+   otherwise, never a value, and reports it in `/health`, `biff daemon status` and
+   `biff doctor`. Each harness session record carries the identity it was opened
+   under; `SessionRestore` keeps a record whose identity differs from the running
+   biffd's dormant, with a log line, and brings it back when biffd is started with
+   it again. A restore never reads "no row on this relay" as "the session ended"
+   when the relay is not the one the session lives on. A record kept dormant for the
+   seed starts a clock the first time it is seen, and is dropped, with a log line,
+   once it has been dormant for longer than a relay row lives
+   (`RETENTION_SECONDS`): the session is gone from any relay by then. Before this, a
+   unit-started biffd came up unseeded, or a client started it on another relay or
+   account, re-resolved every kept session there, found no row and deleted the
+   record.
 
 **Known limit.** A biffd started by a service manager (a systemd or launchd unit)
 does not inherit a client's environment, and exporting a token to the manager would
@@ -10153,6 +10161,15 @@ expose it to every process of the user. Such a biffd is seeded with nothing, so 
 client that carries `BIFF_RELAY_*` is refused naming them. Run that client's relay
 through `.punt-labs/biff/config.local.yaml`, or stop the unit and run
 `biff daemon serve` from the environment that sets them.
+
+**Limits of the hash.** The HMAC protects copies of `relay-seed`, the records, logs
+and status output that leave the run directory; anyone who can read `relay-seed` can
+read `relay-seed.key` beside it, which is acceptable because both are the user's.
+Every hello carries a bare SHA-256 of each relay variable's value, over the
+authenticated loopback connection, so a client and biffd can compare settings. A
+per-connection nonce in the challenge with the client sending HMAC(nonce, value)
+would keep a bare digest of a token off the wire; that changes the protocol and is
+not done here.
 
 **Not covered.** The digest of a key or credentials path covers the path string,
 not the file, so a rotation under the same path is not noticed, and an open session

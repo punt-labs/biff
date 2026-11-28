@@ -6,10 +6,10 @@ import logging
 import os
 from typing import TYPE_CHECKING, Self, final
 
+from biff.relay_seed import RelaySeed
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from biff.relay_seed import RelaySeed
 
 __all__ = ["SeedRecord"]
 
@@ -56,8 +56,8 @@ class SeedRecord:
             self._write(names)
         except OSError:
             logger.warning("could not write %s", self._path, exc_info=True)
-        if previous and previous != names:
-            return f"started with relay settings {names}; the last start had {previous}"
+        if previous:
+            return RelaySeed.explain_change(previous, names)
         return ""
 
     def _write(self, names: str) -> None:

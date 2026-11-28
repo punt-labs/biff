@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import os
 import secrets
 import stat
@@ -12,17 +14,21 @@ if TYPE_CHECKING:
 
 __all__ = ["SeedKey"]
 
+logger = logging.getLogger(__name__)
+
 _BYTES: Final = 32
 _PRIVATE: Final = 0o600
+_RECORD: Final = "relay-seed"
 
 
 @final
 class SeedKey:
     """A 32-byte key in a private file of biffd's run directory.
 
-    It keys the hash that names the seeded token in the records biffd keeps, so a
-    low-entropy token cannot be guessed offline from them.  It is made once and
-    kept for the life of the run directory.
+    It keys the hash of the relay settings in the records biffd keeps, so a
+    low-entropy token cannot be guessed offline from them.  The hash protects copies
+    of those records that leave the run directory; whoever can read the records
+    beside the key can read the key too.  It is made once and kept.
     """
 
     __slots__ = ("_path",)
@@ -36,26 +42,71 @@ class SeedKey:
         return self
 
     def load(self) -> bytes:
-        """Return the key, making it on first use.
+        """Return the key, making it on first use and again when it is unusable.
+
+        A file that is empty, short, a link, another user's or open to others is
+        replaced, with a warning: biffd keeps serving and the records it holds stay
+        dormant, because the hashes made with the old key no longer match.
 
         Raises:
-            ValueError: The file is not private or does not hold a key.
-            OSError: The file cannot be read or made.
+            OSError: The directory cannot be written.
         """
-        try:
-            fd = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE)
-        except FileExistsError:
-            return self._read()
-        with os.fdopen(fd, "wb") as out:
-            out.write(secrets.token_bytes(_BYTES))
-        return self._read()
-
-    def _read(self) -> bytes:
-        if stat.S_IMODE(self._path.stat().st_mode) != _PRIVATE:
-            msg = f"{self._path} must be readable by its owner only; chmod 600 it"
-            raise ValueError(msg)
-        key = self._path.read_bytes()
-        if len(key) != _BYTES:
-            msg = f"{self._path} does not hold a {_BYTES}-byte key; remove it"
-            raise ValueError(msg)
+        key = self._read()
+        if key is not None:
+            return key
+        self._path.unlink(missing_ok=True)
+        key = secrets.token_bytes(_BYTES)
+        self._create(key)
+        key = self._read() or key  # another biffd may have made it first
+        if self._path.with_name(_RECORD).exists():
+            logger.warning(
+                "made a new key at %s beside an existing %s; sessions opened with "
+                "the old key are kept dormant, and a changed 'credentials or path' "
+                "note does not mean another account",
+                self._path,
+                _RECORD,
+            )
         return key
+
+    def _read(self) -> bytes | None:
+        """Return the key if the file is usable, else say why not and return None."""
+        try:
+            info = self._path.lstat()
+        except FileNotFoundError:
+            return None
+        why = ""
+        if not stat.S_ISREG(info.st_mode):
+            why = "is not a regular file"
+        elif info.st_uid != os.getuid():
+            why = "belongs to another user"
+        elif info.st_mode & 0o077:
+            why = "is open to other users"
+        elif info.st_size != _BYTES:
+            why = f"is not {_BYTES} bytes"
+        if why:
+            logger.warning("the key file %s %s; making a new one", self._path, why)
+            return None
+        try:
+            return self._path.read_bytes()
+        except OSError:
+            logger.warning(
+                "the key file %s cannot be read; making a new one", self._path
+            )
+            return None
+
+    def _create(self, key: bytes) -> None:
+        """Write *key* to a flushed private temporary file, then link it into place."""
+        temp = self._path.with_name(f"{self._path.name}.{os.getpid()}.tmp")
+        temp.unlink(missing_ok=True)
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE)
+        try:
+            with os.fdopen(fd, "wb") as out:
+                os.fchmod(out.fileno(), _PRIVATE)
+                out.write(key)
+                out.flush()
+                os.fsync(out.fileno())
+            # A biffd that made the key first wins; the next read takes theirs.
+            with contextlib.suppress(FileExistsError):
+                os.link(temp, self._path)
+        finally:
+            temp.unlink(missing_ok=True)
