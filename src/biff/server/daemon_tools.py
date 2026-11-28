@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
+from fastmcp.exceptions import ToolError
+
 from biff.relay_errors import RELAY_ERRORS
 from biff.server.daemon_calls import DaemonCalls
 from biff.server.tools._activity import track_activity
@@ -40,7 +42,13 @@ READ_MESSAGES_META = {"anthropic/alwaysLoad": True}
 class DaemonReadTools:
     """Registers the read-only tools on a server, backed by one link to biffd."""
 
-    NAMES: ClassVar[tuple[str, ...]] = ("who", "finger", "last", "read_messages")
+    NAMES: ClassVar[tuple[str, ...]] = (
+        "who",
+        "finger",
+        "last",
+        "read_messages",
+        "get_poll_status",
+    )
     """The tools it registers: the in-process tools it replaces."""
 
     __slots__ = ("_calls", "_mcp", "_state")
@@ -67,6 +75,10 @@ class DaemonReadTools:
             guard(self.finger)
         )
         self._mcp.tool(name="last", description=LAST_DESCRIPTION)(guard(self.last))
+        self._mcp.tool(
+            name="get_poll_status",
+            description="Show the current poll interval and whether polling is active.",
+        )(self.get_poll_status)
         self._mcp.tool(
             name="read_messages",
             description=READ_MESSAGES_DESCRIPTION,
@@ -169,3 +181,37 @@ class DaemonReadTools:
 
     async def _delivered(self) -> None:
         await refresh_read_messages(self._mcp, self._state)
+
+    async def get_poll_status(self) -> str:
+        """Inspect the current polling cadence and the relay's timeout counters.
+
+        Call without arguments to diagnose the running server, not pending config
+        changes.  The cadence is this process's configuration; the counters are
+        those of the relay biffd holds.
+
+        Returns:
+            Whether periodic polling is enabled and its interval.  For a relay that
+            counts, the cumulative timeouts and requests when any were made; when
+            biffd cannot be asked, the reason instead.
+        """
+        interval = self._state.config.poll_interval
+        if interval <= 0:
+            status = "Polling: disabled"
+        else:
+            if interval >= 60 and interval % 60 == 0:
+                shown = f"{interval / 60:g}m"
+            else:
+                shown = f"{interval:g}s"
+            status = f"Polling: active, interval={shown} ({interval:g}s)"
+        try:
+            reply = await self._calls.ask("status")
+        except ToolError as exc:
+            return f"{status}\nbiffd: {exc}"
+        data = reply.data
+        counters = data.get("relay_counters") if isinstance(data, dict) else None
+        if isinstance(counters, dict) and counters.get("attempts"):
+            status += (
+                f"\nNATS relay: {counters['timeouts']} timeout(s) / "
+                f"{counters['attempts']} request(s) since server start"
+            )
+        return status

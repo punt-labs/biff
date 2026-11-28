@@ -526,3 +526,44 @@ async def test_a_relay_set_only_in_this_process_is_refused_by_name(
 
     with pytest.raises(ToolError, match="BIFF_RELAY_URL"):
         await kai.call("who")
+
+
+class _CountingRelay(LocalRelay):
+    """A local relay that counts requests, as the NATS relay does."""
+
+    total_attempts = 5
+    total_timeouts = 1
+
+
+async def test_the_poll_status_carries_the_counters_of_the_relay_biffd_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def counting(resolved: ResolvedSession) -> Relay:
+        return _CountingRelay(resolved.data_dir)
+
+    async with _running(tmp_path, monkeypatch, counting) as rig:
+        kai = await rig.client("kai")
+
+        text = await kai.call("get_poll_status")
+
+    assert text == (
+        "Polling: active, interval=2s (2s)\n"
+        "NATS relay: 1 timeout(s) / 5 request(s) since server start"
+    )
+
+
+async def test_the_poll_status_says_when_biffd_cannot_be_asked(rig: _Rig) -> None:
+    async def refused(_identity: ClientIdentity) -> DaemonClient:
+        msg = "biffd is not installed. Run: biff install"
+        raise DaemonUnreachableError(msg)
+
+    kai = await rig.client(
+        "kai", McpLink(user="kai", cwd="/work/repo", connect=refused)
+    )
+
+    text = await kai.call("get_poll_status")
+
+    assert text == (
+        "Polling: active, interval=2s (2s)\n"
+        "biffd: biffd is not installed. Run: biff install"
+    )
