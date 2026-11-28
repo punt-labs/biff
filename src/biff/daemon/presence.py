@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff.models import SessionEvent, UserSession
 from biff.relay_errors import RELAY_ERRORS
-from biff.tty import claim_tty_name, get_hostname
+from biff.session_registry import claim_resumable_name
+from biff.tty import get_hostname
 
 if TYPE_CHECKING:
     from biff.models import BiffConfig
@@ -63,10 +64,13 @@ class PresenceRow:
             await self._relay.heartbeat(self.key)
             return row
         config = self._config
+        tty = self._routing.routing_id
         row = UserSession(
             user=config.user,
-            tty=self._routing.routing_id,
-            tty_name=await claim_tty_name(self._relay, config.user, self.key),
+            tty=tty,
+            tty_name=await claim_resumable_name(
+                self._relay, config.user, tty, self.key
+            ),
             hostname=get_hostname(),
             pwd=self._cwd,
             display_name=config.display_name,
@@ -76,6 +80,9 @@ class PresenceRow:
             repo=config.repo_name,
         )
         await self._relay.update_session(row)
+        # Saved, so the in-process server that attaches next, or a resume after
+        # the name is released, claims the same address.
+        await self._relay.set_session_tty_hint(config.user, tty, row.tty_name)
         await self._login(row)
         return row
 

@@ -4,6 +4,30 @@
 
 ### Added
 
+- With `mcp.transport: daemon`, the Claude Code SessionStart and SessionEnd hooks
+  go through biffd. SessionStart sends a hello as client `hook`, asks `status` for
+  the session key and tty name biffd chose, and writes the active marker, unread
+  status file and handle; SessionEnd sends `end`, then removes those files. Each
+  call has an 8 s deadline, and a failure is logged without breaking the session.
+  `session-end.sh` now hands the hook payload to its detached call, with a read
+  bounded at 2 s, so the call knows which session ended. SessionEnd ends the
+  session for every reason (`/resume` inside a session switches to another
+  session id), and the run check protects a session that is really reopened: the
+  end hello is attached with its own run and not admitted, so a newer run admitted
+  meanwhile gets the end refused. The hook's budget (15 s) counts from its
+  process start, under the script's 20 s kill limit; biffd runs an end it has
+  begun to the finish even if the caller goes away. When biffd cannot be reached
+  or refuses the end hello (an older biffd), the failure is logged at WARNING and
+  the sentinel cleanup runs; once the end was sent the outcome is uncertain, so
+  local files are kept and the retention sweep finishes it. A session opened
+  partly (a write failed, the deadline passed) is ended again. The sentinel path
+  stays for the in-process transport.
+- The hello frame has an optional `ends` flag. A client that sets it only ends
+  the session: biffd attaches it to the session it holds, on the relay that
+  session lives on, and creates or revives nothing. The SessionEnd hook uses it,
+  so a relay changed mid-session, or presence the MCP server already removed,
+  neither strands mail nor records a false login, and an end from a run that is
+  not the current one leaves the session alone.
 - biffd carries the channel check: a doctor's request on a session's check subject
   becomes one `channel_check_request` event (a 128-bit token, at most one request a
   minute), the new `channel_ack` method relays one acknowledgement to the doctor,
@@ -155,6 +179,8 @@
 - `biff doctor` strips control and escape characters from every reason a
   channel check was not sent, including the text of a refusal biffd relays, so
   relay-derived bytes no longer reach the terminal.
+- A session the biffd presence row registers first saves its tty reclaim hint, so
+  the MCP server that attaches next keeps the same tty address.
 - `biff doctor`'s channel check through biffd no longer always fails with
   "seconds must be an integer": the doctor sent its 30.0 s wait as a float. It
   sends whole seconds and biffd caps the wait at 25.

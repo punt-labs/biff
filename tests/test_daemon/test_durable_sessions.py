@@ -220,6 +220,21 @@ async def test_a_session_is_kept_from_its_hello_to_its_end(harness: Harness) -> 
     assert _records(harness) == []
 
 
+async def test_a_connection_that_leaves_an_ended_session_logs_no_warning(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    s = await seat(harness, "s-quiet")
+    await s.client.request("end")
+
+    with caplog.at_level(logging.WARNING, logger="biff.daemon.harness_records"):
+        await s.client.close()
+        await until(lambda: harness.daemon.status().sessions == ())
+        await asyncio.sleep(0.1)
+
+    # The record went with the session; a connection leaving it has none to mark.
+    assert "could not update the record" not in caplog.text
+
+
 async def test_a_file_that_is_not_a_record_does_not_stop_the_start(
     harness: Harness,
 ) -> None:

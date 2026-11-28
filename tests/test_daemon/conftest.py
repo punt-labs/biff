@@ -148,8 +148,9 @@ def bus(harness: Harness) -> TalkBus:
 
 @pytest.fixture
 async def harness(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> AsyncIterator[Harness]:
+    """Run a daemon; ``indirect`` parametrization sets its request timeout."""
     run_dir = RunDir(tmp_path / "run")
     factory = CountingFactory()
     # The daemon finds the session store and the hook's activity stamps under
@@ -167,7 +168,7 @@ async def harness(
         heartbeat_interval=0.05,
         poll_interval=0.02,
         attach_timeout=0.5,
-        request_timeout=0.5,
+        request_timeout=getattr(request, "param", 0.5),
         read_budget=4000,
         org_refresh_interval=0.05,
     )

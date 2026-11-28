@@ -60,9 +60,12 @@ def _cc_session_resume() -> None:
 
 
 def _cc_session_end() -> None:
-    from biff.plugins.claude_code.hook import handle_session_end  # noqa: PLC0415
+    from biff.plugins.claude_code.hook import (  # noqa: PLC0415
+        _read_hook_input,
+        handle_session_end,
+    )
 
-    handle_session_end()
+    handle_session_end(_read_hook_input())
 
 
 def _cc_pre_tool_use() -> None:

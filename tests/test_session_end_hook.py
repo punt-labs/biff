@@ -93,7 +93,7 @@ def _failing_biff_hook_on_path(bin_dir: Path, *, home: Path) -> dict[str, str]:
     return env
 
 
-def _run_hook(repo: Path, env: dict[str, str]) -> float:
+def _run_hook(repo: Path, env: dict[str, str], payload: str = "") -> float:
     """Run session-end.sh from *repo*; return the parent's wall-clock seconds."""
     start = time.monotonic()
     # Run the script by its own shebang (it is executable) rather than via a
@@ -102,11 +102,82 @@ def _run_hook(repo: Path, env: dict[str, str]) -> float:
         [str(_HOOK)],
         cwd=str(repo),
         env=env,
+        input=payload,
         capture_output=True,
         text=True,
         timeout=_STUB_SLEEP * 3,
     )
     return time.monotonic() - start
+
+
+def _payload_recording_biff_hook_on_path(
+    bin_dir: Path, *, record: Path
+) -> dict[str, str]:
+    """Create a ``biff-hook`` stub that copies its stdin to *record*."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "biff-hook"
+    stub.write_text(f'#!/usr/bin/env bash\ncat > "{record}"\n')
+    stub.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    env["HOME"] = str(bin_dir.parent / "home")
+    return env
+
+
+class TestSessionEndKeepsItsOwnBudget:
+    """The script's kill limit must outlast the call's own deadline."""
+
+    def test_the_limit_outlasts_the_calls_budget(self) -> None:
+        import re
+
+        from biff.plugins.claude_code.hook_daemon import DEADLINE_SECONDS
+
+        limits = {
+            int(n)
+            for n in re.findall(
+                r"_BIFF_TIMEOUT=\((?:g?timeout) (\d+)\)", _HOOK.read_text()
+            )
+        }
+
+        assert limits, "session-end.sh sets no timeout for the detached call"
+        assert min(limits) > DEADLINE_SECONDS
+
+
+class TestSessionEndPassesThePayload:
+    """The detached call learns which session ended from the hook payload."""
+
+    def test_the_payload_reaches_the_detached_call(self, tmp_path: Path) -> None:
+        repo = _enabled_repo(tmp_path / "repo")
+        record = tmp_path / "payload.json"
+        env = _payload_recording_biff_hook_on_path(tmp_path / "bin", record=record)
+        payload = '{"session_id": "sess-1", "reason": "clear"}'
+
+        _run_hook(repo, env, payload)
+
+        deadline = time.monotonic() + _STUB_SLEEP
+        while time.monotonic() < deadline and not record.exists():
+            time.sleep(0.05)
+        assert record.read_text().strip() == payload
+
+    def test_a_payload_that_never_ends_does_not_hold_the_exit(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _enabled_repo(tmp_path / "repo")
+        env = _slow_biff_hook_on_path(tmp_path / "bin", sentinel=tmp_path / "ran")
+
+        start = time.monotonic()
+        with subprocess.Popen(  # noqa: S603
+            [str(_HOOK)],
+            cwd=str(repo),
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ) as proc:
+            proc.wait(timeout=_STUB_SLEEP * 3)
+            elapsed = time.monotonic() - start
+
+        assert elapsed < _PARENT_BUDGET + 1.0
 
 
 class TestSessionEndDetaches:

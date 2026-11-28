@@ -33,6 +33,19 @@ def test_hello_round_trips() -> None:
     assert Frames.decode(Frames.encode(hello)) == hello
 
 
+def test_an_ordinary_hello_omits_ends_so_an_older_daemon_still_reads_it() -> None:
+    hello = Hello(mac="ab" * 32, client="mcp", session_id="s1", cwd="/repo")
+
+    assert "ends" not in json.loads(Frames.encode(hello))
+
+
+def test_an_ending_hello_carries_ends_and_round_trips() -> None:
+    hello = Hello(mac="ab" * 32, client="hook", session_id="s1", cwd="/repo", ends=True)
+
+    assert json.loads(Frames.encode(hello))["ends"] is True
+    assert Frames.decode(Frames.encode(hello)) == hello
+
+
 def test_request_round_trips_with_params() -> None:
     request = Request(id=3, method="write", params={"to": "eric", "message": "hi"})
     assert Frames.decode(Frames.encode(request)) == request
