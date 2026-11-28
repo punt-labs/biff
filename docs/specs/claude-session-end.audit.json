@@ -220,6 +220,10 @@
     {
       "text": "claude-session-end-nopersist.tex: the records are not kept (the old forgetting behaviour) and the mail is stranded with no drop behind it",
       "reason": "model result (invariant 8, strandedN > 0 => dropCause in the drop causes, violated by MailArrive, ProcessLoss); the code keeps the records, covered by the restore rows above"
+    },
+    {
+      "text": "RestoreRecord after TtyAgesOut: the restored session keeps the row's tty name and does not claim one; the reservation, if aged out, is not taken again",
+      "reason": "code read: SessionRestore._open drops a record whose row is gone (dRowGone), and Session.register -> PresenceRow.ensure keeps an existing row's tty_name, claiming a name only when the row is missing. The model matches (RestoreRecord leaves ttyOwner as is). No test ages the name reservation under a stopped record or checks the restored name. A row that expires between the lookup and the registration would claim a new name; not modelled"
     }
   ],
   "notes": "The z-spec audit tool is not available to this agent; the audit was done by hand following /z-spec:audit: each row's tests were read, not matched by name (see verifiedBy)."

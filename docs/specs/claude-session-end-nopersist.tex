@@ -389,8 +389,15 @@ relay is lost by neither, and a restored session finds it where it was.
 \end{schema}
 
 The relay's row lifetime and the name reservation's lifetime run out, independently of the record: while the
-daemon is down (the record outlives the name, \texttt{rsStopped}) or after a drop.  A restored session finds its
-name gone; the model does not re-reserve it.  This is the
+daemon is down (the record outlives the name, \texttt{rsStopped}) or after a drop.  A restored session keeps the row's
+tty name and does not claim one: \texttt{SessionRestore} restores only a session whose row the relay still lists, and
+\texttt{PresenceRow.ensure} keeps an existing row, name included, and claims a name
+(\texttt{claim\_tty\_name}) only when the row is missing.  So $RestoreRecord$ leaves $ttyOwner$ as it is, with the
+name possibly aged out, and the code does not take it again; the row missing at restore is a drop
+($dRowGone$), never a new alias.  (A row that expires between the lookup and the registration would make
+the registration claim a new name; the model has no step for that window.)  The ownership invariant is
+intact: $NewHello$ needs $recState = rsNone$, so it cannot run under a stopped or restored record, and
+$ReleaseTty$ frees a name only when the old session owns it.  This is the
 NATS relay.  The local relay (no relay URL configured) keeps a reservation as a
 lockfile with no lifetime: there $TtyAgesOut$ does not happen, and the session of a dropped
 record holds its name until something releases it.  The model has no local
@@ -1153,8 +1160,10 @@ stopped record: $repoGone = zfalse \land rowPresent = ztrue \Rightarrow e(Restor
 $repoGone = ztrue \Rightarrow e(DropRecord)$; $repoGone = zfalse \land rowPresent = zfalse
 \Rightarrow e(DropRecord)$; $starts = 1$ (the last start before the drop) with the repository
 there $\Rightarrow e(DropRecord) \lor e(RestoreRecord)$; $repoGone = zfalse \land starts > 0 \Rightarrow
-e(HelloFirst)$.  $e(TtyAgesOut)$ for a stopped record whose name is still held ($ttyOwner = tOld$), and the goal
-$recState = rsStopped \land ttyOwner = tNone$ (the name aged out under a stopped record).  The reachability
+e(HelloFirst)$.  $e(TtyAgesOut)$ for a stopped record whose name is still held ($ttyOwner = tOld$), and the goals
+$recState = rsStopped \land ttyOwner = tNone$ (the name aged out under a stopped record) and
+$recState = rsDormant \land ttyOwner = tNone \land rowPresent = ztrue$ (that record restored: the session
+holds its row without its name, as the code leaves it).  The reachability
 check $AG\,(\,recState = rsStopped \Rightarrow EF\;recState \neq rsStopped\,)$ says that from a stopped record a state
 with the record restored, dropped or reattached by a hello is reachable.  It is reachability and no more: the model states no fairness, $Quiesce$ may repeat for ever, and no liveness is claimed, so it does
 not say that a start in fact completes.
@@ -1235,7 +1244,7 @@ thing taken out:
 %%   goals (stops): "lastStop=sGraceful & recState=rsDormant & forgot=zfalse & stopHeld>0 & stopLost=0 & sessN>=stopHeld & starts=0",
 %%       "lastStop=sTimedOut & stopLost>0", "lastStop=sProcess & stopLost=stopHeld & stopLost>0 & recState=rsDormant"
 %%   goals (restart): "dropCause=dRepoGone & recState=rsNone" (and dRowGone, dFailedStarts), "strandedN>0 & dropCause=dRowGone",
-%%       "recState=rsStopped & starts=1", "recState=rsLive & lastStop=sGraceful & forgot=zfalse & stopHeld>0 & age=0 & starts=0 & sessN=0" (needs a RestoreFail first), "recState=rsStopped & ttyOwner=tNone"
+%%       "recState=rsStopped & starts=1", "recState=rsLive & lastStop=sGraceful & forgot=zfalse & stopHeld>0 & age=0 & starts=0 & sessN=0" (needs a RestoreFail first), "recState=rsStopped & ttyOwner=tNone", "recState=rsDormant & ttyOwner=tNone & rowPresent=ztrue"
 %%   enabledness: AG({recState=rsDormant & outboxN>0} => e(GracefulStop)) (and ProcessLoss),
 %%       AG({recState=rsStopped & repoGone=zfalse & rowPresent=ztrue} => e(RestoreRecord)),
 %%       AG({recState=rsStopped & repoGone=ztrue} => e(DropRecord)),

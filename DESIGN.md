@@ -9979,7 +9979,9 @@ starts in a row failed (`dFailedStarts`; the model bounds the count at 2).
 `BiffDaemon.start` restores every record before it serves, so no hello can come first
 at the first attempt. `RestoreFail` does not depend on the row: the relay lookup
 itself can fail. The tty name ages out independently of the record, so under a
-stopped record it may already be gone. A hello
+stopped record it may already be gone. A restored session keeps its row's tty name and claims
+none (`PresenceRow.ensure` claims only for a missing row, and a missing row is a
+drop at restore), so it may hold a row without the name's reservation. A hello
 whose record cannot be written is refused, so no session exists without one.
 The spec's old forgetting stops (`GracefulStopForget`, `ProcessLossForget`)
 are the control `claude-session-end-nopersist.tex`: it strands mail with no
