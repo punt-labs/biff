@@ -34,6 +34,7 @@ from biff.run_dir import RunDir
 from biff.server.app import create_server
 from biff.server.mcp_assembly import McpAssembly
 from biff.server.mcp_link import McpLink
+from biff.server.tools._descriptions import get_tty_name
 from biff.session_routing import SessionRouting
 from biff.testing import RecordingClient, Transcript
 from biff.testing.caller import StampedClient, caller_for
@@ -469,6 +470,29 @@ async def test_an_auto_plan_that_keeps_the_manual_one_rewrites_the_marker(
         "Plan unchanged (manual):\n   mine",
         "mine",
     )
+
+
+async def test_a_tty_name_is_claimed_by_biffd_and_kept_here_for_the_hints(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai")
+
+    text = await kai.call("tty", name="kaitty")
+
+    assert (text, rig.asked.count("tty"), get_tty_name()) == (
+        "TTY: kaitty",
+        1,
+        "kaitty",
+    )
+
+
+async def test_mesg_goes_to_biffd(rig: _Rig) -> None:
+    kai = await rig.client("kai")
+
+    off = await kai.call("mesg", enabled=False)
+    on = await kai.call("mesg", enabled=True)
+
+    assert (off, on, rig.asked.count("mesg")) == ("is n", "is y", 2)
 
 
 async def test_a_relay_set_only_in_this_process_is_refused_by_name(

@@ -14,7 +14,11 @@ from biff._stdlib import expand_bead_id
 from biff.plan_marker import PlanMarker
 from biff.server.daemon_calls import DaemonCalls
 from biff.server.tools._activity import track_activity
-from biff.server.tools._descriptions import refresh_read_messages
+from biff.server.tools._descriptions import (
+    refresh_read_messages,
+    set_biff_enabled,
+    set_tty_name,
+)
 from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
@@ -40,13 +44,17 @@ PLAN_DESCRIPTION = (
     "around 40 characters. Example: 'refactoring the auth layer' or "
     "'biff-if2: CLI identity fix'."
 )
+MESG_DESCRIPTION = (
+    "Control message reception. Use 'on' to accept messages, 'off' to block them."
+)
+TTY_DESCRIPTION = "Name the current session. Visible in /who and /finger TTY column."
 
 
 @final
 class DaemonWriteTools:
     """Registers the write-side tools on a server, backed by one link to biffd."""
 
-    NAMES: ClassVar[tuple[str, ...]] = ("write", "plan")
+    NAMES: ClassVar[tuple[str, ...]] = ("write", "plan", "mesg", "tty")
     """The tools it registers: the in-process tools it replaces."""
 
     __slots__ = ("_calls", "_mcp", "_state")
@@ -70,6 +78,8 @@ class DaemonWriteTools:
         guard = track_activity(self._state)
         self._mcp.tool(name="write", description=WRITE_DESCRIPTION)(guard(self.write))
         self._mcp.tool(name="plan", description=PLAN_DESCRIPTION)(guard(self.plan))
+        self._mcp.tool(name="mesg", description=MESG_DESCRIPTION)(guard(self.mesg))
+        self._mcp.tool(name="tty", description=TTY_DESCRIPTION)(guard(self.tty))
 
     async def write(self, to: str, message: str) -> str:
         """Deliver a durable message to a teammate.
@@ -122,5 +132,48 @@ class DaemonWriteTools:
             # The marker is keyed on this repository and session, which biffd
             # does not have; a kept manual plan is written back as it stands.
             PlanMarker.sync(str(data["plan"]), self._state.bound_session_id)
+        await refresh_read_messages(self._mcp, self._state)
+        return reply.text
+
+    async def mesg(self, *, enabled: bool) -> str:
+        """Control whether this session accepts messages.
+
+        Use enabled=True to accept messages or False to block them. This changes
+        the session's availability, not repository-wide enablement.
+
+        Returns:
+            BSD-style confirmation: 'is y' for enabled or 'is n' for disabled.
+
+        Raises:
+            ToolError: biffd is not installed, did not start, or refused the call;
+                the message names the cause and the command that repairs it.
+        """
+        set_biff_enabled(enabled=enabled)
+        reply = await self._calls.ask("mesg", value="y" if enabled else "n")
+        await refresh_read_messages(self._mcp, self._state)
+        return reply.text
+
+    async def tty(self, name: str = "") -> str:
+        """Name the current session for use in teammate addresses.
+
+        Args:
+            name: A unique name of at most 20 characters. An empty value claims
+                the next available ttyN name.
+
+        Returns:
+            'TTY: <name>' on success, or an error for an invalid, occupied, or
+            unclaimable name. Successful renames update presence and talk hints.
+
+        Raises:
+            ToolError: biffd is not installed, did not start, or refused the call;
+                the message names the cause and the command that repairs it.
+        """
+        reply = await self._calls.ask("tty", name=name)
+        data = reply.data
+        if isinstance(data, dict) and "tty" in data:
+            # Talk invite hints and the status line render the name from here.
+            claimed = str(data["tty"])
+            set_tty_name(claimed)
+            self._state.talk.set_tty_name(claimed)
         await refresh_read_messages(self._mcp, self._state)
         return reply.text
