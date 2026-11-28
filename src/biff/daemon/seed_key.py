@@ -44,9 +44,12 @@ class SeedKey:
     def load(self) -> bytes:
         """Return the key, making it on first use and again when it is unusable.
 
-        A file that is empty, short, a link, another user's or open to others is
-        replaced, with a warning: biffd keeps serving and the records it holds stay
-        dormant, because the hashes made with the old key no longer match.
+        A file that is empty, short, a directory, a link, another user's, open to
+        others or unreadable is moved aside, with a warning: biffd keeps serving and
+        the records it holds stay dormant, because the hashes made with the old key no
+        longer match.  A file is never removed when it is merely missing, and a key
+        another biffd linked into place first is the one used, so two starts at once
+        end with the key on disk.
 
         Raises:
             OSError: The directory cannot be written.
@@ -54,11 +57,10 @@ class SeedKey:
         key = self._read()
         if key is not None:
             return key
-        self._path.unlink(missing_ok=True)
-        key = secrets.token_bytes(_BYTES)
-        self._create(key)
-        key = self._read() or key  # another biffd may have made it first
-        if self._path.with_name(_RECORD).exists():
+        fresh = secrets.token_bytes(_BYTES)
+        self._create(fresh)
+        key = self._read() or fresh
+        if key == fresh and self._path.with_name(_RECORD).exists():
             logger.warning(
                 "made a new key at %s beside an existing %s; sessions opened with "
                 "the old key are kept dormant, and a changed 'credentials or path' "
@@ -69,10 +71,13 @@ class SeedKey:
         return key
 
     def _read(self) -> bytes | None:
-        """Return the key if the file is usable, else say why not and return None."""
+        """Return the key if the file is usable; ``None`` if missing or moved aside."""
         try:
             info = self._path.lstat()
         except FileNotFoundError:
+            return None
+        except OSError:
+            self._set_aside("cannot be examined")
             return None
         why = ""
         if not stat.S_ISREG(info.st_mode):
@@ -84,15 +89,26 @@ class SeedKey:
         elif info.st_size != _BYTES:
             why = f"is not {_BYTES} bytes"
         if why:
-            logger.warning("the key file %s %s; making a new one", self._path, why)
+            self._set_aside(why)
             return None
         try:
             return self._path.read_bytes()
         except OSError:
-            logger.warning(
-                "the key file %s cannot be read; making a new one", self._path
-            )
+            self._set_aside("cannot be read")
             return None
+
+    def _set_aside(self, why: str) -> None:
+        """Move the unusable file out of the way, never deleting it, and say so."""
+        aside = self._path.with_name(
+            f"{self._path.name}.bad.{os.getpid()}.{secrets.token_hex(4)}"
+        )
+        logger.warning(
+            "the key file %s %s; moving it aside and making a new one", self._path, why
+        )
+        try:
+            self._path.rename(aside)
+        except OSError:
+            logger.warning("the key file %s could not be moved aside", self._path)
 
     def _create(self, key: bytes) -> None:
         """Write *key* to a flushed private temporary file, then link it into place."""

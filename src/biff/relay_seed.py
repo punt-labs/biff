@@ -48,6 +48,11 @@ _TLS_FALSE_VALUES: Final = frozenset({"0", "false", "no"})
 
 _HOST: Final = re.compile(r"[a-z0-9.\-:\[\]]+")
 _SCHEME: Final = re.compile(r"[a-z][a-z0-9+.\-]*")
+_IDENTITY: Final = re.compile(
+    r"(?P<names>none|BIFF_RELAY_[A-Z_]+(?:, BIFF_RELAY_[A-Z_]+)*)"
+    r"(?: \(relay (?P<relay>[a-z][a-z0-9+.\-]*://[a-z0-9.\-:\[\]]+|unparseable)\))?"
+    r"(?:; settings (?P<settings>[0-9a-f]{64}))?"
+)
 
 _CREDENTIALS: Final[tuple[RelayVariable, ...]] = (
     "BIFF_RELAY_NKEYS_SEED",
@@ -386,16 +391,36 @@ class RelaySeed:
 
     @staticmethod
     def explain_change(previous: str, current: str) -> str:
-        """Say how two identities differ, repeating no value.
+        """Say how two identities differ, repeating no stored text and no value.
 
-        Names both hosts when the names or the host differ, and otherwise says that
-        the credentials or the path do.  Empty when they are the same.
+        *previous* may come from a file that holds an older format or a value
+        edited by hand, so it is parsed strictly and its display is rebuilt from the
+        parts that passed; text that does not parse is never repeated.  Names both
+        hosts when the names or host differ, says that the credentials or path do
+        when only the hash differs, and is empty when nothing differs.
         """
-        before, _, old = previous.partition("; settings ")
-        after, _, new = current.partition("; settings ")
-        if before != after:
-            return f"started with {after}; the last start had {before}"
-        return "credentials or path differs" if old != new else ""
+        old, new = RelaySeed._parse(previous), RelaySeed._parse(current)
+        if old is None or new is None:
+            return "the relay settings changed"
+        if old[0] != new[0]:
+            return f"started with {new[0]}; the last start had {old[0]}"
+        return "credentials or path differs" if old[1] != new[1] else ""
+
+    @staticmethod
+    def _parse(identity: str) -> tuple[str, str] | None:
+        """Return the display and the hash of a stored identity, or ``None``.
+
+        The display is rebuilt from the matched parts, every one of which is a known
+        variable name or drawn from the plain characters of a displayed host.
+        """
+        match = _IDENTITY.fullmatch(identity.strip())
+        if match is None:
+            return None
+        names = match["names"]
+        if names != "none" and any(n not in RELAY_VARIABLES for n in names.split(", ")):
+            return None
+        relay = match["relay"]
+        return (f"{names} (relay {relay})" if relay else names, match["settings"] or "")
 
     def digest_of(self, name: RelayVariable) -> str:
         """Return the digest of *name*'s value, or ``""`` when it is unset."""

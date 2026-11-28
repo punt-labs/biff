@@ -79,7 +79,9 @@ class Foreground:
         # Names only: the values are secrets and never reach a log or a screen.
         try:
             run_dir.ensure()
-            key = SeedKey(run_dir.path / "relay-seed.key").load()
+            # No key is made, or looked for, when there is no seed to hash.
+            keyed = bool(RelaySeed.of(os.environ))
+            key = SeedKey(run_dir.path / "relay-seed.key").load() if keyed else b""
             seed = RelaySeed.for_daemon(os.environ, key)
         except (OSError, ValueError) as exc:
             self._fail(str(exc))

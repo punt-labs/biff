@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import stat
+import threading
+import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -92,3 +94,54 @@ def test_the_first_key_is_made_without_a_warning(
 ) -> None:
     SeedKey(path).load()
     assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_two_starts_at_once_both_end_with_the_key_on_disk(path: Path) -> None:
+    original = SeedKey._read  # pyright: ignore[reportPrivateUsage]
+    a_done = threading.Event()
+    paused: list[bool] = []
+    keys: dict[str, bytes] = {}
+
+    def read(self: SeedKey) -> bytes | None:
+        found = original(self)
+        if threading.current_thread().name == "B" and not paused:
+            paused.append(True)
+            a_done.wait(timeout=10)  # B has seen no key; A now makes one
+        return found
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SeedKey, "_read", read)
+        b = threading.Thread(
+            target=lambda: keys.update(B=SeedKey(path).load()), name="B"
+        )
+        b.start()
+        while not paused:
+            time.sleep(0.01)
+        keys["A"] = SeedKey(path).load()
+        a_done.set()
+        b.join(timeout=10)
+    assert (keys["A"] == path.read_bytes(), keys["B"] == path.read_bytes()) == (
+        True,
+        True,
+    )
+
+
+def test_a_directory_at_the_key_path_is_replaced_with_a_warning(
+    path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path.mkdir()
+    key = SeedKey(path).load()
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert (path.is_file(), len(key), any(str(path) in m for m in warned)) == (
+        True,
+        32,
+        True,
+    )
+
+
+def test_a_bad_key_file_is_moved_aside_not_deleted(path: Path) -> None:
+    path.write_bytes(b"short")
+    path.chmod(0o600)
+    SeedKey(path).load()
+    aside = [p for p in path.parent.iterdir() if p.name != path.name]
+    assert [p.read_bytes() for p in aside] == [b"short"]

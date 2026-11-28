@@ -10142,7 +10142,10 @@ relay through the environment could not use the daemon at all.
    writes the identity to `relay-seed` (0600) in its run directory. A start whose
    identity differs from the file's logs a warning that names both display forms
    when the names or host differ and says only `credentials or path differs`
-   otherwise, never a value, and reports it in `/health`, `biff daemon status` and
+   otherwise, never a value. The old state in that note is rebuilt from a strict
+   parse of what the file holds, never copied: text that is not in the current format
+   (an older one, or edited by hand) yields only `the relay settings changed`. It
+   is reported in `/health`, `biff daemon status` and
    `biff doctor`. Each harness session record carries the identity it was opened
    under; `SessionRestore` keeps a record whose identity differs from the running
    biffd's dormant, with a log line, and brings it back when biffd is started with
