@@ -9975,7 +9975,11 @@ code retries at 5, 15 and 45 s while it runs and at the next start).
 (`dRepoGone`, at once), the relay lists no row (`dRowGone`: the session ended
 and its record outlived the end, or the row aged out while down), or five
 starts in a row failed (`dFailedStarts`; the model bounds the count at 2).
-`HelloFirst` is a hello that arrives before the restore and wins. A hello
+`HelloFirst` is a hello that arrives while a failed restore is being retried, and wins:
+`BiffDaemon.start` restores every record before it serves, so no hello can come first
+at the first attempt. `RestoreFail` does not depend on the row: the relay lookup
+itself can fail. The tty name ages out independently of the record, so under a
+stopped record it may already be gone. A hello
 whose record cannot be written is refused, so no session exists without one.
 The spec's old forgetting stops (`GracefulStopForget`, `ProcessLossForget`)
 are the control `claude-session-end-nopersist.tex`: it strands mail with no
@@ -9985,15 +9989,18 @@ drop (`strandedN > 0` implies a drop cause).
 One limit is deliberate, and stated, not repaired: the mail waiting in the
 relay inbox of a dropped session stays there, because the relay is not stored
 in the record and so cannot be reached from it. The model counts it as
-`strandedN` (not conserved to the user), and only a drop strands. The model
+`strandedN` (not conserved to the user), and only a drop strands. The spec's
+`AG ... EF` check on a stopped record is reachability only: no fairness is stated
+and no liveness is claimed. The model
 also pauses the retention age while the daemon is down; the code's clock,
 resumed from the stored dormant time, runs on.
 
-**Audit status.** `claude-session-end.audit.json` reports 20 of 20 clauses
-covered and zero GAP, reconciled by reading the tests against each clause
-(the z-spec audit tool was not run); its rows name them. `ProcessLoss` is
-covered by an in-process kill (`_kill` in `test_durable_sessions.py`), not a
-process death, so its confidence is medium. Limits without a test: the
+**Audit status.** `claude-session-end.audit.json` reports 20 of 21 clauses
+covered and one GAP (a crash during a read, which no test exercises), reconciled by reading the tests against each clause
+(the z-spec audit tool was not run); its rows name them. `ProcessLoss` with no
+read running is covered by an in-process kill (`_kill` in
+`test_durable_sessions.py`), not a process death, so its confidence is medium;
+its test kills after the read replied. Limits without a test: the
 refile deadline's remainder and the late broadcast fetch (PL-1777, the open
 residual: the remainder is dropped and logged, and a spill transition will be
 modelled with that fix), the pre-storage crash (PL-1753), and the stranded

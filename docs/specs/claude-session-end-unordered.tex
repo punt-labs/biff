@@ -375,8 +375,7 @@ relay is lost by neither, and a restored session finds it where it was.
   \Delta Effects \\
   \Xi Mail
   \where
-  forgot = ztrue \\
-  recState = rsNone \\
+  ( recState = rsStopped \lor ( forgot = ztrue \land recState = rsNone ) ) \\
   ttyOwner = tOld \\
   ttyOwner' = tNone \\
   rowPresent' = rowPresent \\
@@ -389,8 +388,9 @@ relay is lost by neither, and a restored session finds it where it was.
   ownEnded' = ownEnded
 \end{schema}
 
-The relay's row lifetime and the name reservation's lifetime run out, while the daemon is down or after
-a drop.  This is the
+The relay's row lifetime and the name reservation's lifetime run out, independently of the record: while the
+daemon is down (the record outlives the name, \texttt{rsStopped}) or after a drop.  A restored session finds its
+name gone; the model does not re-reserve it.  This is the
 NATS relay.  The local relay (no relay URL configured) keeps a reservation as a
 lockfile with no lifetime: there $TtyAgesOut$ does not happen, and the session of a dropped
 record holds its name until something releases it.  The model has no local
@@ -509,7 +509,6 @@ drops it at the budget, and the late broadcast fetch is a loss only through the 
   \where
   recState = rsStopped \\
   repoGone = zfalse \\
-  rowPresent = ztrue \\
   starts + 1 < maxFails \\
   recState' = rsStopped \\
   conns' = \emptyset \\
@@ -544,8 +543,7 @@ drops it at the budget, and the late broadcast fetch is a loss only through the 
   recState = rsStopped \\
   ( cause? = dRepoGone \land repoGone = ztrue ) \lor
     ( cause? = dRowGone \land repoGone = zfalse \land rowPresent = zfalse ) \lor
-    ( cause? = dFailedStarts \land repoGone = zfalse \land rowPresent = ztrue \land
-      starts + 1 = maxFails ) \\
+    ( cause? = dFailedStarts \land repoGone = zfalse \land starts + 1 = maxFails ) \\
   recState' = rsNone \\
   conns' = \emptyset \\
   age' = 0 \\
@@ -577,6 +575,7 @@ drops it at the budget, and the late broadcast fetch is a loss only through the 
   \where
   recState = rsStopped \\
   repoGone = zfalse \\
+  starts > 0 \\
   recState' = rsLive \\
   conns' = \{ currentRun \} \\
   age' = 0 \\
@@ -640,7 +639,9 @@ At the next start each record is dealt with once:
     has no stored dormant time and starts a fresh retention, which the stops model by
     $age' = 0$ for a live record.  $starts$ goes back to $0$ ($mark$).
   \item $RestoreFail$: the start cannot build the session (the relay is down, a registration
-    fails, the configuration is unusable): the record is kept and the failure counted
+    fails, the configuration is unusable, or the row lookup itself fails, so whether the row is
+    there is not known): the record is kept and the failure counted.  It does not depend on
+    $rowPresent$: the failure comes before the lookup answers, so it is possible with the row gone too
     ($starts$; the code retries at 5, 15 and 45 s while it runs, and the model does not
     count those, only starts).  $maxFails$ is $2$ here, $5$ in the code.
   \item $DropRecord$: the record is removed, with its cause.  The repository is gone
@@ -652,8 +653,11 @@ At the next start each record is dealt with once:
     mail as $strandedN$.  This is a limit, stated and not repaired, and it is the only way mail
     is stranded: $strandedN > 0 \Rightarrow dropCause \in \{ dRepoGone, dRowGone,
     dFailedStarts \}$.
-  \item $HelloFirst$: a hello for the session arrives before the start restores it, and wins;
-    the failure count goes back to $0$.
+  \item $HelloFirst$: a hello for the session arrives while a restore is still being retried, and
+    wins; the failure count goes back to $0$.  It needs $starts > 0$: \texttt{BiffDaemon.start} restores
+    every record \emph{before} it serves, so no hello can come first at the first attempt, and a
+    record is still waiting only after a start whose restore failed (the retry runs while the
+    daemon serves).
   \item $RepoVanishes$: the environment; the repository directory goes.
 \end{itemize}
 
@@ -1145,10 +1149,13 @@ $recState = rsDormant \land outboxN > 0 \Rightarrow e(GracefulStop)$, the same f
 $ProcessLoss$, $flightN > 0 \land recState \neq rsNone \Rightarrow e(MailHandOver)$, and for a
 stopped record: $repoGone = zfalse \land rowPresent = ztrue \Rightarrow e(RestoreRecord)$;
 $repoGone = ztrue \Rightarrow e(DropRecord)$; $repoGone = zfalse \land rowPresent = zfalse
-\Rightarrow e(DropRecord)$; $starts = 1$ (the last start before the drop) with the row and the
-repository there $\Rightarrow e(DropRecord) \lor e(RestoreRecord)$; $repoGone = zfalse \Rightarrow
-e(HelloFirst)$.  The reachability check $AG\,(\,recState = rsStopped \Rightarrow EF\;recState \neq
-rsStopped\,)$: a stopped record is always restored, dropped or reattached by a hello.
+\Rightarrow e(DropRecord)$; $starts = 1$ (the last start before the drop) with the repository
+there $\Rightarrow e(DropRecord) \lor e(RestoreRecord)$; $repoGone = zfalse \land starts > 0 \Rightarrow
+e(HelloFirst)$.  $e(TtyAgesOut)$ for a stopped record whose name is still held ($ttyOwner = tOld$), and the goal
+$recState = rsStopped \land ttyOwner = tNone$ (the name aged out under a stopped record).  The reachability
+check $AG\,(\,recState = rsStopped \Rightarrow EF\;recState \neq rsStopped\,)$ says that from a stopped record a state
+with the record restored, dropped or reattached by a hello is reachable.  It is reachability and no more: the model states no fairness, $Quiesce$ may repeat for ever, and no liveness is claimed, so it does
+not say that a start in fact completes.
 
 Thirteen frozen variants are the negative controls, each the shipped file with one
 thing taken out:
@@ -1182,7 +1189,7 @@ thing taken out:
     tNew$ is violated.
   \item \texttt{claude-session-end-unordered-owned.tex}: the same unordered
     $NewHello$ with the owner-checked $ReleaseTty$ of the shipped model: the
-    invariant \textbf{holds} over its 67,453 states.  This is the positive control:
+    invariant \textbf{holds} over its 89,153 states.  This is the positive control:
     the owner check is what keeps the new session's name.
   \item \texttt{claude-session-end-orphan.tex}: $ExpireClaude$ owes no row deletion
     (the retention path forgets the row): the record goes with the row still
@@ -1222,16 +1229,18 @@ thing taken out:
 %%   goals: "recState=rsEnding & age=2", "newLive=ztrue & ownEnded=ztrue & forgot=zfalse", "recState=rsLive & conns/={} & currentRun=1"
 %%   "$PROBCLI" docs/specs/claude-session-end.tex $P -model_check -ctlformula \
 %%       "AG({forgot=ztrue & recState=rsNone & rowPresent=ztrue} => e(RowAgesOut))"   (and TtyAgesOut)
-%%   shipped model, exhaustive: 42,325 states; unordered-owned: 67,453 states, no violation
+%%   shipped model, exhaustive: 64,025 states; unordered-owned: 89,153 states, no violation
 %%   goals (stops): "lastStop=sGraceful & recState=rsDormant & forgot=zfalse & stopHeld>0 & stopLost=0 & sessN>=stopHeld & starts=0",
 %%       "lastStop=sTimedOut & stopLost>0", "lastStop=sProcess & stopLost=stopHeld & stopLost>0 & recState=rsDormant"
 %%   goals (restart): "dropCause=dRepoGone & recState=rsNone" (and dRowGone, dFailedStarts), "strandedN>0 & dropCause=dRowGone",
-%%       "recState=rsStopped & starts=1", "recState=rsLive & lastStop=sGraceful & forgot=zfalse & stopHeld>0 & age=0 & starts=0 & sessN=0"
+%%       "recState=rsStopped & starts=1", "recState=rsLive & lastStop=sGraceful & forgot=zfalse & stopHeld>0 & age=0 & starts=0 & sessN=0" (needs a RestoreFail first), "recState=rsStopped & ttyOwner=tNone"
 %%   enabledness: AG({recState=rsDormant & outboxN>0} => e(GracefulStop)) (and ProcessLoss),
 %%       AG({recState=rsStopped & repoGone=zfalse & rowPresent=ztrue} => e(RestoreRecord)),
 %%       AG({recState=rsStopped & repoGone=ztrue} => e(DropRecord)),
 %%       AG({recState=rsStopped & repoGone=zfalse & rowPresent=zfalse} => e(DropRecord)),
-%%       AG({recState=rsStopped & repoGone=zfalse} => e(HelloFirst)),
+%%       AG({recState=rsStopped & repoGone=zfalse & starts>0} => e(HelloFirst)),
+%%       AG({recState=rsStopped & ttyOwner=tOld} => e(TtyAgesOut)),
+%%       AG({recState=rsStopped & repoGone=zfalse & starts=1} => (e(DropRecord) or e(RestoreRecord))),
 %%       AG({recState=rsStopped} => EF {recState/=rsStopped}),
 %%       AG({flightN>0 & recState/=rsNone} => e(MailHandOver))
 %%

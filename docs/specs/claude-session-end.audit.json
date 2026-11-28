@@ -5,9 +5,9 @@
   "timestamp": "2026-11-27T00:00:00Z",
   "summary": {
     "covered": 20,
-    "total": 20,
-    "percentage": 100,
-    "gaps": 0
+    "total": 21,
+    "percentage": 95,
+    "gaps": 1
   },
   "constraints": [
     {
@@ -107,12 +107,21 @@
       "verifiedBy": "a reply is handed over (request_held), never confirmed, the client closes, a new connection reads and finds the message still unread. It shows no consumption without a confirming client, which is what the model's connected-client guard stands for"
     },
     {
-      "text": "ProcessLoss (live or dormant): a crash loses the daemon's outbox and any read in flight; the relay's mail and the record are not lost (PL-1753)",
+      "text": "ProcessLoss (live or dormant, no read running): a crash loses the daemon's outbox; the relay's mail and the record are not lost (PL-1753)",
       "category": "effect",
       "source": "ProcessLoss",
       "coveredBy": "tests/test_daemon/test_durable_sessions.py::test_a_crash_loses_the_outbox_but_not_the_mail_still_in_the_relay; tests/test_daemon/test_durable_sessions.py::test_a_crash_keeps_the_record_and_the_relays_mail_of_a_live_session",
       "confidence": "medium",
-      "verifiedBy": "read on main 8cc73dd. _kill closes the listener and the relays, cancels the sweep and the retry, and patches SessionTable.release so no connection is noted as left: no hand-back, no cleanup, as a kill. The first holds an unconfirmed batch (request_held on a consuming relay), writes a second message, kills and restarts; at retention 0 the mailbox holds only the second message. The second kills a session with a connection on it and asserts the restored session reaches retention, its row goes, its mail reaches the mailbox and its record goes. It is an in-process kill, not a process death: medium"
+      "verifiedBy": "read on main 8cc73dd. _kill closes the listener and the relays, cancels the sweep and the retry, and patches SessionTable.release so no connection is noted as left: no hand-back, no cleanup, as a kill. The first holds an unconfirmed batch (request_held returns, so the read has already replied: the batch is in the outbox, not in flight), writes a second message, kills and restarts; at retention 0 the mailbox holds only the second message. The second kills a session with a connection on it and asserts the restored session reaches retention, its row goes, its mail reaches the mailbox and its record goes. It is an in-process kill, not a process death: medium. A crash during a read (flightN > 0: the fetch consumed the mail and the read has not replied) is not exercised; see the row below"
+    },
+    {
+      "text": "ProcessLoss during a read (flightN > 0): a crash after the consuming fetch and before the read replies loses the mail in flight (and the outbox)",
+      "category": "effect",
+      "source": "ProcessLoss",
+      "coveredBy": "",
+      "confidence": "none",
+      "status": "untested",
+      "verifiedBy": "no test. test_a_crash_loses_the_outbox_but_not_the_mail_still_in_the_relay waits for request_held to return before it kills, so it crashes after the read replied; no test kills while a fetch is stalled. Counted as uncovered"
     },
     {
       "text": "GracefulStop (settled? = ztrue): the held outbox of every session, and mail of a read that settled, is filed back to the relay before the daemon closes; the relay's mail is untouched",
@@ -155,7 +164,7 @@
       "verifiedBy": "the first restarts with a resolver that fails for /work/missing-soon, a directory that does not exist: the record is gone after one start (the unusable-configuration test, whose directory exists, keeps its record: that is RestoreFail); the second deletes the relay row and restarts: the session is not held and no record remains; the third sets MAX_FAILED_STARTS 2 and fails every start: the record stays after the first and is gone after the second; the fourth sets 3 and makes the registration fail: the record is dropped on the third start. The model bounds the count at 2; the code's 5 is a constant the tests change"
     },
     {
-      "text": "HelloFirst: a hello for the session before the start restores it wins; the restore leaves it alone and the failure count is cleared",
+      "text": "HelloFirst: after a start whose restore failed, a hello for the session arrives during the retry and wins; the restore leaves it alone and the failure count is cleared (BiffDaemon.start restores before it serves, so no hello comes first at the first attempt)",
       "category": "effect",
       "source": "HelloFirst",
       "coveredBy": "tests/test_daemon/test_durable_sessions.py::test_a_retry_leaves_a_session_that_reconnected_first_alone",
@@ -177,7 +186,7 @@
       "reason": "a deliberate limit of the code: the relay is not stored in the record, so a drop cannot forward the mail. The model counts it as stranded, not as conserved, and only a drop strands. No test asserts the mail stays after a drop; it is stated, not repaired"
     },
     {
-      "text": "RowAgesOut, TtyAgesOut: the relay row and the name age out by the relay's own lifetime while the daemon is down or after a drop; the retention age is paused while down",
+      "text": "RowAgesOut, TtyAgesOut: the relay row and the name age out by the relay's own lifetime, independently of the record: while the daemon is down (the record outlives the name) or after a drop; the retention age is paused while down",
       "reason": "relay behaviour, outside biffd; the model's age does not run while the daemon is down (the code resumes from the stored dormant time, which keeps running), a conservative simplification. The local relay's name reservation has no lifetime, so there TtyAgesOut does not happen. PL-1777 is the open residual (deadline remainder, spill)"
     },
     {
@@ -202,7 +211,7 @@
     },
     {
       "text": "claude-session-end-unrecorded-loss.tex: a settled stop that adds the dropped mail to lostN without reporting it in stopLost",
-      "reason": "model result (invariant 15, lostN = lostBefore + stopLost, violated; conservation and lastStop = sGraceful => stopLost = 0 hold); the shipped model holds over 42,325 states"
+      "reason": "model result (invariant 15, lostN = lostBefore + stopLost, violated; conservation and lastStop = sGraceful => stopLost = 0 hold); the shipped model holds over 64,025 states"
     },
     {
       "text": "a crash after the relay gave session mail up and before the daemon stored it",
