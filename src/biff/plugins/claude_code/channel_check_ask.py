@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self, final
@@ -129,7 +130,7 @@ class DaemonAsk:
                 seconds + _DAEMON_MARGIN_SECONDS,
                 "channel_check",
                 to=session_key,
-                seconds=seconds,
+                seconds=math.ceil(seconds),  # the method takes whole seconds
             )
         finally:
             await client.close()

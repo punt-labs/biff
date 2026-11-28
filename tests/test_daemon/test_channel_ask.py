@@ -7,12 +7,16 @@ daemon's ``channel_check`` method and reads whether the session acknowledged.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from biff.client.connection import DaemonUnreachableError
+from biff.models import UserSession
 from biff.plugins.claude_code.channel_check_ask import CheckNotSentError, DaemonAsk
+from biff.plugins.claude_code.channel_check_report import ChannelCheckReport
+from biff.plugins.claude_code.channel_check_target import CheckTarget
 from tests.test_daemon.push_relay import PushRelay
 from tests.test_daemon.talk_bus import TalkBus
 
@@ -128,3 +132,43 @@ async def test_a_reason_biffd_gives_is_stripped_of_escapes(
     with pytest.raises(CheckNotSentError) as seen:
         await ask.confirmed("kai:abc", 0)
     assert "\x1b" not in str(seen.value)
+
+
+async def test_a_float_wait_reaches_the_session(
+    harness: Harness, bus: TalkBus, repo: Path
+) -> None:
+    """The doctor's wait is a float; the daemon method takes whole seconds."""
+    kai, key = await _session(harness, bus)
+    asked = asyncio.ensure_future(_ask(harness, repo).confirmed(key, 5.0))
+    token = _token(await asyncio.wait_for(kai.next_event(), _SOON))
+    await kai.request("channel_ack", token=token)
+    assert await asked is True
+
+
+class _OneSession:
+    """The doctor's presence lookup: one live session, whatever the handle."""
+
+    def __init__(self, key: str) -> None:
+        user, tty = key.split(":")
+        self._session = UserSession(user=user, tty=tty, last_active=datetime.now(UTC))
+
+    async def list_sessions_for_user(self, user: str) -> list[UserSession]:
+        return [self._session]
+
+    async def close(self) -> None:
+        return None
+
+
+async def test_the_doctor_with_its_default_wait_reaches_a_real_session(
+    harness: Harness, bus: TalkBus, repo: Path
+) -> None:
+    """ChannelCheckReport's default wait and the real DaemonAsk, end to end."""
+    kai, key = await _session(harness, bus)
+    report = ChannelCheckReport(
+        CheckTarget(_OneSession(key), ("kai",)), ask=lambda: _ask(harness, repo)
+    )
+    lines = asyncio.ensure_future(report.results())
+    token = _token(await asyncio.wait_for(kai.next_event(), _SOON))
+    await kai.request("channel_ack", token=token)
+    (line,) = await lines
+    assert line.message.endswith("channel live")
