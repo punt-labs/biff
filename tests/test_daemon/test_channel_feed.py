@@ -342,7 +342,7 @@ async def test_the_backoff_starts_again_once_a_subscription_is_up(rig: Rig) -> N
     await rig.wait_for(lambda: rig.opens >= 4)
     await asyncio.sleep(_QUIET)  # the fourth open is subscribed
 
-    assert rig.feed._wait == pytest.approx(0.05)  # pyright: ignore[reportPrivateUsage]
+    assert abs(rig.feed._wait - 0.05) < 1e-9  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_a_new_session_with_a_lower_mark_is_announced(rig: Rig) -> None:
