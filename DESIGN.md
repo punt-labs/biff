@@ -10062,6 +10062,59 @@ may not import the server; the server's copy goes with the in-process server.
 - *Acknowledging in the daemon on the event's delivery.* The acknowledgement is the
   model's, through `channel_ack`; delivery proves nothing about the model.
 
+## DES-103: `biff mcp` and the Hooks Go Through biffd by Default
+
+**Date:** 2026-11-28
+**Status:** SETTLED
+**Topic:** Migration step 5 of DES-095, in three pull requests: this one flips the
+default, the next deletes the in-process server, the last deletes `biff serve`.
+
+**Decision.**
+
+1. **The default is `daemon`.** `McpTransport.from_settings` returns `daemon` when
+   neither `BIFF_MCP_TRANSPORT` nor `mcp.transport` is set, so `biff mcp` answers
+   its tools and sends its channel events from biffd, and the SessionStart and
+   SessionEnd hooks open and end the session through it. biffd is installed by
+   `biff install` and started by the first call that needs it, as before.
+2. **The setting stays, for now.** `mcp.transport: inprocess` (or
+   `BIFF_MCP_TRANSPORT=inprocess`) is the way out while the in-process server
+   exists; DES-101 (the first, `mcp.transport` one) says the setting is removed in
+   the last PR of the migration, and it goes with the in-process server in the next
+   PR, not before: removing it here would leave no way to run the code that is
+   still there. A value that names neither transport is still refused by name.
+3. **`--data-dir` and `--relay-url` now need the setting.** biffd resolves the relay
+   from the repository, so with the default they are refused by name, with the
+   remedy (`mcp.transport: inprocess`), as DES-101 decided. They go with the
+   in-process server.
+4. **The suite pins the in-process transport.** A test that went through biffd by
+   default would start a real biffd on the machine, so `tests/conftest.py` sets
+   `BIFF_MCP_TRANSPORT=inprocess` for every test; a test of the daemon transport
+   sets `daemon`, and the default is tested on the settings alone.
+5. **Relay settings in the environment work.** biffd is seeded with the
+   `BIFF_RELAY_*` variables of the process that starts it and admits a client whose
+   own equal them (DES-104), so runners that hand biff its relay in the environment
+   (Devin, CI, the agent containers) no longer pin `inprocess`, and `biff mcp` has
+   no launch refusal for them: the daemon's admission rule is the one place that
+   refuses a conflicting value. A hook that cannot open or end its session logs why,
+   says so in the SessionStart context, and still cleans up locally; the channel
+   feed stops, with one error, when biffd refuses it, instead of retrying for ever,
+   and the server instructions tell the model to poll then; nothing falls back to
+   the in-process server.
+6. **Still hybrid.** Under the default `biff mcp` also builds the in-process state
+   and opens its own relay connection for the tool descriptions, the status line and
+   the display queue (the tools and the channel events come from biffd, DES-102).
+   Dropping that connection is the first change of the PR that deletes the
+   in-process server, not this one.
+
+**Rejected.**
+
+- *Removing the setting here.* It selects between two servers, one of which is
+  deleted by the next PR; a setting with one value is dead, but a PR that deletes
+  the setting and the server together is the larger, riskier change this split
+  avoids.
+- *Falling back to the in-process server when biffd cannot start.* A person would
+  believe the daemon is in use; DES-101 refuses to fall back, and so does this.
+
 ## DES-104: biffd Is Seeded With the Relay Settings of the Process That Starts It
 
 **Date:** 2026-11-28

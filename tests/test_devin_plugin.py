@@ -397,3 +397,10 @@ def test_launcher_environment_and_version(
     assert lines[1] == ("bound" if token == "test-only-input" else "")
     assert lines[2:] == [*prefix, "mcp", "--user", "devin"]
     assert result.stderr == ""
+
+
+def test_the_devin_server_names_no_transport() -> None:
+    """Devin hands biff its relay in the environment, and biffd is seeded with it."""
+    manifest = json.loads((_SURFACE / ".mcp.json").read_text())
+
+    assert "BIFF_MCP_TRANSPORT" not in manifest["mcpServers"]["biff"]["env"]

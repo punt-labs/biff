@@ -2014,6 +2014,10 @@ def test_the_instructions_do_not_tell_the_model_to_distrust_bodies() -> None:
     assert "channel events" in INSTRUCTIONS.lower()
 
 
+def test_the_instructions_tell_the_model_to_poll_when_biffd_refuses() -> None:
+    assert "refused this session" in INSTRUCTIONS
+
+
 # -- The mail event: two wakes, and competing wall work (notification-mail-event.tex) --
 
 

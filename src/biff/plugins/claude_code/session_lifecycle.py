@@ -54,28 +54,30 @@ class SessionLifecycle:
 
             asyncio.run(open_session_from_payload(self._data))
 
-    def end_through_biffd(self) -> bool:
+    def end_through_biffd(self) -> int | None:
         """End the session the payload names through biffd, if the transport says so.
 
-        Returns whether biffd's path settled it, so the caller skips the in-process
-        cleanup; ``False`` leaves that cleanup to run.  It is ``False`` for the
-        in-process transport, and when biffd could not be asked.  A payload with no
-        usable session id is logged and settled here: biffd may hold the session,
-        and the sentinel reaper would take a row it still serves.
+        Returns how many sessions biffd's path ended (one, or none when the
+        payload names no session), so the caller skips the in-process cleanup;
+        ``None`` leaves that cleanup to run.  It is ``None`` for the in-process
+        transport, and when biffd could not be asked.  A payload with no usable
+        session id is logged and settled here: biffd may hold the session, and the
+        sentinel reaper would take a row it still serves.
 
         Raises:
             SystemExit: A transport setting is invalid.
         """
         if self._transport() is not McpTransport.DAEMON:
-            return False
+            return None
         if HookDaemon.routing_of(self._data) is None:
             logger.warning(
                 "SessionEnd payload has no usable session_id (payload keys: %s); "
                 "nothing was ended and the sentinel reaper was not run",
                 sorted(self._data),
             )
-            return True
-        return asyncio.run(DaemonSessionCloser.for_host().end(self._data))
+            return 0
+        settled = asyncio.run(DaemonSessionCloser.for_host().end(self._data))
+        return 1 if settled else None
 
     def _transport(self) -> McpTransport:
         cwd = self._data.get("cwd")

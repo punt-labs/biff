@@ -96,7 +96,7 @@ def _same_environment(seeded_relay: _Relay, monkeypatch: pytest.MonkeyPatch) -> 
 
 def _commit_relay(repo: Path, url: str, *, allow_override: bool) -> None:
     config = repo / ".punt-labs" / "biff" / "config.yaml"
-    config.parent.mkdir(parents=True)
+    config.parent.mkdir(parents=True, exist_ok=True)
     allow = "  allow_env_override: true\n" if allow_override else ""
     config.write_text(f"relay:\n  url: {url}\n{allow}", encoding="utf-8")
 

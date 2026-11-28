@@ -14,7 +14,7 @@ _ENV: Final = "BIFF_MCP_TRANSPORT"
 
 
 class McpTransport(StrEnum):
-    """The two ways the MCP server runs while both exist."""
+    """The two ways the MCP server runs while both exist; biffd is the default."""
 
     INPROCESS = "inprocess"
     DAEMON = "daemon"
@@ -23,7 +23,7 @@ class McpTransport(StrEnum):
     def from_settings(
         cls, raw: Mapping[str, object], environ: Mapping[str, str]
     ) -> McpTransport:
-        """Return the transport *environ* names, else the config's, else in-process.
+        """Return the transport *environ* names, else the config's, else biffd.
 
         The environment variable ``BIFF_MCP_TRANSPORT`` wins over the config key
         ``mcp.transport``; an empty variable is absent.  A value that names
@@ -37,14 +37,12 @@ class McpTransport(StrEnum):
             return cls._named(named, _ENV)
         section = raw.get("mcp")
         if section is None:
-            return cls.INPROCESS
+            return cls.DAEMON
         if not isinstance(section, dict):
             msg = f"mcp must be a mapping with a transport key, got {section!r}"
             raise SystemExit(msg)
         settings = cast("dict[str, object]", section)
-        return cls._named(
-            settings.get("transport", cls.INPROCESS.value), "mcp.transport"
-        )
+        return cls._named(settings.get("transport", cls.DAEMON.value), "mcp.transport")
 
     @classmethod
     def _named(cls, value: object, where: str) -> McpTransport:

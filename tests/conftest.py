@@ -161,8 +161,16 @@ def strip_ambient_biff_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 def _no_ambient_biff_settings(  # pyright: ignore[reportUnusedFunction]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Strip biff's own settings so every test starts from the defaults."""
+    """Strip biff's own settings so every test starts from the defaults.
+
+    One default is not the product's: ``biff mcp`` and the hooks go through biffd
+    unless told otherwise, and a test that did so would start a real biffd on the
+    machine.  The suite pins the in-process transport, which its server and hook
+    tests exercise; a test of the daemon transport sets ``daemon`` itself, and the
+    default is tested on the settings alone (``tests/test_mcp_transport.py``).
+    """
     strip_ambient_biff_settings(monkeypatch)
+    monkeypatch.setenv("BIFF_MCP_TRANSPORT", "inprocess")
 
 
 @pytest.fixture(autouse=True)

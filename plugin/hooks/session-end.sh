@@ -10,7 +10,7 @@ MARKER="$REPO_ROOT/.punt-labs/biff/enabled"
 [[ -f "$MARKER" && ! -L "$MARKER" ]] || exit 0
 command -v biff-hook >/dev/null 2>&1 || exit 0
 # Detach the cleanup call. `biff-hook claude-code session-end` clears this
-# session's biff presence. With mcp.transport: daemon it asks biffd to end the
+# session's biff presence. By default (mcp.transport: daemon) it asks biffd to end the
 # session named in the payload, then removes the local files; otherwise it
 # writes reap sentinels and removes the local active markers (the relay KV
 # delete happens later, when a running relay reaps the sentinel). Its cost is

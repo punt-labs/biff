@@ -1386,7 +1386,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/plugins/claude_code/daemon_session.py": {
-    "efferent_coupling": 6.0,
+    "efferent_coupling": 7.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -1743,7 +1743,7 @@
     "avg_lcom": 0.333
   },
   "src/biff/server/daemon_channel.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 4.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.603,
@@ -1813,7 +1813,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/server/mcp_assembly.py": {
-    "efferent_coupling": 12.0,
+    "efferent_coupling": 13.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,

@@ -568,8 +568,12 @@ async def test_a_relay_set_only_in_this_process_is_refused_by_name(
     monkeypatch.setenv("BIFF_RELAY_URL", "nats://elsewhere:4222")
     kai = await rig.client("kai")
 
-    with pytest.raises(ToolError, match="BIFF_RELAY_URL"):
+    with pytest.raises(ToolError, match="BIFF_RELAY_URL") as caught:
         await kai.call("who")
+
+    # Loud and actionable: biffd names what it was started with and the way out.
+    assert "must equal biffd's" in str(caught.value)
+    assert "Set the same environment here" in str(caught.value)
 
 
 class _CountingRelay(LocalRelay):

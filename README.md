@@ -302,7 +302,7 @@ Setup and maintenance commands:
 | `biff enable` | Turn biff on for the current repo (see [Setup](#setup)) |
 | `biff disable` | Turn biff off for the current repo and remove what `enable` added |
 | `biff doctor` | Check the installation |
-| `biff daemon serve` | Run biffd, the per-user daemon, in the foreground. It serves the `BIFF_RELAY_*` settings of the environment it is started in, and refuses a client whose own differ (see [Environment-variable relay overrides](docs/guides/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd)) |
+| `biff daemon serve` | Run biffd, the per-user daemon, in the foreground (`biff install` runs it as a service; `biff mcp` and the hooks use it by default). It serves the `BIFF_RELAY_*` settings of the environment it is started in, and refuses a client whose own differ (see [Environment-variable relay overrides](docs/guides/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd)) |
 | `biff daemon install`, `uninstall` | Install or remove biffd's user service alone (systemd user unit, macOS LaunchAgent) |
 | `biff daemon start`, `stop`, `restart`, `status` | Control the service; `status` shows whether it is installed and running, and its version. `install`, `start` and `restart` wait up to 30 seconds for biffd to answer `/health` (set `BIFF_DAEMON_HEALTH_WAIT` to a number of seconds up to 600) and print one line to stderr when the wait passes 3 seconds; a biffd that is running but not yet answering exits 4 with `still starting`, not a failure; `status` also prints biffd's pid |
 | `biff install-statusline` | Add biff to your Claude Code status line |
@@ -438,7 +438,7 @@ peers:
   repos: ["my-org/other-repo"]  # repos that are always visible
 
 mcp:
-  transport: inprocess          # inprocess (the default) or daemon: every tool asks biffd
+  transport: daemon             # daemon (the default): tools ask biffd; inprocess is the way out for now
 ```
 
 The `peers:` key makes `/who`, `/write` and `/finger` reach sessions in other repos. `orgs` finds repos with active sessions; `repos` lists repos that are always visible. Both are optional.

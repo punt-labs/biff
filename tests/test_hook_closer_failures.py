@@ -91,6 +91,7 @@ def _leave_handle(tmp_path: Path) -> SessionHandleStore:
         TimeoutError(),
         DaemonError(ErrorCode.BAD_HELLO, "an older biffd does not know ends"),
         DaemonError(ErrorCode.SESSION_ENDED, "biffd holds no session sess-1"),
+        DaemonError(ErrorCode.BAD_HELLO, "relay settings must equal biffd's"),
     ],
 )
 async def test_a_hello_biffd_refuses_is_logged_and_left_to_the_fallback(
@@ -103,8 +104,11 @@ async def test_a_hello_biffd_refuses_is_logged_and_left_to_the_fallback(
         settled = await closer.end(_PAYLOAD)
 
     assert settled is False
-    assert handles.read(SessionRouting("sess-1")) == "kai:abc"  # nothing wiped
     assert "could not end session sess-1" in caplog.text
+    # biffd reads no sentinels, so the status files go here; the marker stays for
+    # the sentinel cleanup that follows.
+    assert handles.read(SessionRouting("sess-1")) is None
+    assert "removed its local status files" in caplog.text
 
 
 async def test_a_refusal_for_a_newer_run_is_a_warning_and_leaves_the_files(

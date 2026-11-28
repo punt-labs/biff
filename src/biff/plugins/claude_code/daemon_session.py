@@ -12,6 +12,7 @@ from biff._stdlib import (
     get_repo_slug,
     sanitize_repo_name,
 )
+from biff.client.connection import DaemonError
 from biff.models import UnreadSummary
 from biff.plugins.claude_code.daemon_session_end import DaemonSessionCloser
 from biff.plugins.claude_code.hook_daemon import HookDaemon
@@ -81,7 +82,7 @@ class DaemonSessionOpener:
                 status = await self._status(client)
             key = str(status["session_key"])
             self._leave_files(routing, where, key, status)
-        except (TimeoutError, KeyError, OSError):
+        except (TimeoutError, KeyError, OSError, ValueError, DaemonError):
             if started:
                 await self._abandon(routing, data, key)
             raise

@@ -87,13 +87,14 @@ class DaemonSessionCloser:
                 return True
             if not (sent and exc.code is ErrorCode.SESSION_ENDED):  # ended already
                 return self._unsettled(routing, exc, sent=sent)
-        except (ConnectionError, TimeoutError) as exc:
+        except (ConnectionError, TimeoutError, ValueError) as exc:
             return self._unsettled(routing, exc, sent=sent)
         daemon.forget(routing)
         return True
 
-    @staticmethod
-    def _unsettled(routing: SessionRouting, cause: Exception, *, sent: bool) -> bool:
+    def _unsettled(
+        self, routing: SessionRouting, cause: Exception, *, sent: bool
+    ) -> bool:
         """Log why the end is not confirmed; return whether to skip the fallback."""
         name = routing.session_id
         if sent:
@@ -105,9 +106,12 @@ class DaemonSessionCloser:
                 type(cause).__name__,
             )
             return True
+        # biffd reads no sentinels, so the status files and handle go now; the
+        # marker stays for the sentinel cleanup the caller runs next.
+        self._daemon.forget(routing, marker=False)
         logger.warning(
-            "could not end session %s through biffd: %s (%s); using the "
-            "sentinel cleanup",
+            "could not end session %s through biffd: %s (%s); removed its local "
+            "status files and using the sentinel cleanup",
             name,
             cause,
             type(cause).__name__,

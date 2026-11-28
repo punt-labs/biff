@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator, Generator, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
@@ -19,9 +20,10 @@ import pytest
 from fastmcp.client.transports import StdioTransport
 from mcp import Client as MCPClient, StdioServerParameters
 
+from biff.caller_identity import CALLER_KEY
 from biff.run_dir import RunDir
 from biff.testing import NotificationTracker, RecordingClient, Transcript
-from biff.testing.caller import StampedClient
+from biff.testing.caller import StampedClient, caller_for
 
 if TYPE_CHECKING:
     from fastmcp import Client
@@ -29,32 +31,28 @@ if TYPE_CHECKING:
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 
 
-def _make_transport(user: str, data_dir: Path) -> StdioTransport:
-    """Build a StdioTransport that spawns ``biff`` for the given user.
+def _make_transport(user: str, home: Path, repo: Path) -> StdioTransport:
+    """Build a StdioTransport that spawns ``biff mcp`` for *user*, through biffd.
 
-    Passes ``--relay-url ""`` to force local relay, preventing the
-    subprocess from connecting to a remote NATS server configured
-    in the repo's ``.punt-labs/biff/config.yaml``.
+    The process runs in *repo* with *home* as its home directory, so it finds the
+    biffd the ``run_dir`` fixture started there, as a person's first run does.
     """
     return StdioTransport(
-        command="uv",
-        args=[
-            "run",
-            "biff",
-            "mcp",
-            "--user",
-            user,
-            "--data-dir",
-            str(data_dir),
-            "--relay-url",
-            "",
-        ],
+        command=sys.executable,
+        args=["-m", "biff", "mcp", "--user", user],
+        env={
+            "HOME": str(home),
+            "PUNT_TELEMETRY": "off",
+            "BIFF_MCP_TRANSPORT": "daemon",
+        },
+        cwd=str(repo),
     )
 
 
 @pytest.fixture
-def shared_data_dir(tmp_path: Path) -> Path:
-    """Shared data directory for cross-process state."""
+def shared_data_dir(tmp_path: Path, run_dir: RunDir) -> Path:
+    """The home directory the spawned servers and the real biffd share."""
+    assert run_dir.port_path.exists()  # biffd is up before any server starts
     return tmp_path
 
 
@@ -75,10 +73,11 @@ def transcript(request: pytest.FixtureRequest) -> Generator[Transcript]:
 
 
 @pytest.fixture
-async def biff_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
+async def biff_client(shared_data_dir: Path, repo: Path) -> AsyncIterator[Client[Any]]:
     """MCP client connected to a biff subprocess for user 'kai'."""
-    transport = _make_transport("kai", shared_data_dir)
-    async with StampedClient(transport) as client:
+    user = "kai"
+    transport = _make_transport(user, shared_data_dir, repo)
+    async with StampedClient(transport, caller=caller_for(f"{user}-session")) as client:
         yield client
 
 
@@ -86,29 +85,35 @@ async def biff_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
 
 
 @pytest.fixture
-async def kai_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
+async def kai_client(shared_data_dir: Path, repo: Path) -> AsyncIterator[Client[Any]]:
     """MCP client connected to a biff subprocess for user 'kai'."""
-    transport = _make_transport("kai", shared_data_dir)
-    async with StampedClient(transport) as client:
+    user = "kai"
+    transport = _make_transport(user, shared_data_dir, repo)
+    async with StampedClient(transport, caller=caller_for(f"{user}-session")) as client:
         yield client
 
 
 @pytest.fixture
-def modern_kai_client(shared_data_dir: Path) -> MCPClient:
+def modern_kai_client(shared_data_dir: Path, repo: Path) -> MCPClient:
     """Build a modern client to enter and exit in the same test task."""
-    transport = _make_transport("kai", shared_data_dir)
+    transport = _make_transport("kai", shared_data_dir, repo)
     return MCPClient(
-        StdioServerParameters(command=transport.command, args=transport.args)
+        StdioServerParameters(
+            command=transport.command,
+            args=transport.args,
+            env=transport.env,
+            cwd=transport.cwd,
+        )
     )
 
 
 @pytest.fixture
 async def legacy_kai_client(
-    shared_data_dir: Path,
+    shared_data_dir: Path, repo: Path
 ) -> AsyncIterator[tuple[Client[Any], NotificationTracker]]:
     """Connect a handshake client whose server first attaches on a tool call."""
-    transport = _make_transport("kai", shared_data_dir)
-    transport.env = {"CLAUDE_CODE_SESSION_ID": ""}
+    transport = _make_transport("kai", shared_data_dir, repo)
+    transport.env = {**(transport.env or {}), "CLAUDE_CODE_SESSION_ID": ""}
     tracker = NotificationTracker()
     async with StampedClient(
         transport, message_handler=tracker, mode="legacy"
@@ -117,11 +122,23 @@ async def legacy_kai_client(
 
 
 @pytest.fixture
-async def eric_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
+async def eric_client(shared_data_dir: Path, repo: Path) -> AsyncIterator[Client[Any]]:
     """MCP client connected to a biff subprocess for user 'eric'."""
-    transport = _make_transport("eric", shared_data_dir)
-    async with StampedClient(transport) as client:
+    transport = _make_transport("eric", shared_data_dir, repo)
+    async with StampedClient(transport, caller=caller_for("eric-session")) as client:
         yield client
+
+
+@dataclass
+class _OwnSession(RecordingClient):
+    """A recording client whose every call declares its own user's session.
+
+    biffd keys a session by its id, so two users cannot share the default one.
+    """
+
+    async def call(self, tool_name: str, **kwargs: object) -> str:
+        kwargs.setdefault(CALLER_KEY, caller_for(f"{self.user}-session"))
+        return await super().call(tool_name, **kwargs)
 
 
 @pytest.fixture
@@ -130,7 +147,7 @@ async def kai(
     transcript: Transcript,
 ) -> RecordingClient:
     """Recording client for kai over subprocess."""
-    return RecordingClient(client=kai_client, transcript=transcript, user="kai")
+    return _OwnSession(client=kai_client, transcript=transcript, user="kai")
 
 
 @pytest.fixture
@@ -139,7 +156,7 @@ async def eric(
     transcript: Transcript,
 ) -> RecordingClient:
     """Recording client for eric over subprocess."""
-    return RecordingClient(client=eric_client, transcript=transcript, user="eric")
+    return _OwnSession(client=eric_client, transcript=transcript, user="eric")
 
 
 # --- Real biffd process ---
@@ -149,10 +166,13 @@ _DAEMON_STARTUP_TIMEOUT = 15.0
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A git repository the daemon's own configuration loader can resolve."""
+    """A git repository, with biff enabled, the daemon can resolve."""
     path = tmp_path / "work" / "demo"
     path.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(path)], check=True)  # noqa: S603, S607
+    marker = path / ".punt-labs" / "biff" / "enabled"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("")  # biff is enabled here, as `biff enable` leaves it
     return path
 
 

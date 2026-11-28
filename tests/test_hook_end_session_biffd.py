@@ -71,3 +71,7 @@ def test_a_malformed_transport_setting_surfaces(
 
     with pytest.raises(SystemExit):
         handle_session_end({"session_id": "sess-1"})
+
+
+def test_a_payload_with_no_session_id_cleans_nothing() -> None:
+    assert handle_session_end({"cwd": "/work/repo"}) == 0
