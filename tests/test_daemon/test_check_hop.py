@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import re
 
-from biff.daemon.check_hop import CHECK_SECONDS, CheckHop
+import pytest
+
+from biff.channel_check_pending import CheckRefusedError
+from biff.daemon.check_hop import CHECK_SECONDS, CheckHop, ForeignReplyError
 from biff.daemon.wakes import Wakes
 
 
@@ -31,14 +34,16 @@ def test_a_second_request_inside_the_window_is_refused_and_does_not_extend_it() 
     hop, clock = _hop()
     assert hop.request("_INBOX.one")
     clock.now += CHECK_SECONDS - 1
-    assert hop.request("_INBOX.two") == ""
+    with pytest.raises(CheckRefusedError, match=r"rate-limited \(60 s\)"):
+        hop.request("_INBOX.two")
     clock.now += 1  # the window ran from the first request, not the refused one
     assert hop.request("_INBOX.three")
 
 
 def test_a_foreign_subject_is_refused() -> None:
     hop, _ = _hop()
-    assert hop.request("attacker.subject") == ""
+    with pytest.raises(ForeignReplyError, match="not an inbox"):
+        hop.request("attacker.subject")
 
 
 def test_the_right_token_returns_the_reply_once() -> None:
@@ -114,3 +119,23 @@ async def test_a_listener_that_left_keeps_its_flag_clear() -> None:
     wakes.poke()
     assert not flag.is_set()
     assert isinstance(flag, asyncio.Event)
+
+
+def test_a_restored_token_is_acknowledged_once_more() -> None:
+    hop, _ = _hop()
+    token = hop.request("_INBOX.one")
+    assert hop.acknowledge(token) == "_INBOX.one"
+    hop.restore(token, "_INBOX.one")
+    assert hop.acknowledge(token) == "_INBOX.one"
+    assert hop.acknowledge(token) == ""
+
+
+def test_a_restore_does_not_replace_a_newer_token() -> None:
+    hop, clock = _hop()
+    old = hop.request("_INBOX.one")
+    hop.acknowledge(old)
+    clock.now += CHECK_SECONDS
+    new = hop.request("_INBOX.two")
+    hop.restore(old, "_INBOX.one")
+    assert hop.acknowledge(old) == ""
+    assert hop.acknowledge(new) == "_INBOX.two"

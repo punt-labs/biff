@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Final, Self, final
 from websockets.exceptions import ConnectionClosed
 
 from biff.daemon.acks import Acknowledgements
-from biff.daemon.refusal import HandshakeRefusedError, RefusalError
+from biff.daemon.refusal import ClientGoneError, HandshakeRefusedError, RefusalError
 from biff.daemon.resolver import ResolveError
 from biff.daemon.subscription import Subscription
 from biff.daemon.tasks import Supervised
@@ -349,7 +349,8 @@ class ConnectionHandler:
         core = self._core
 
         async def send(event: Event) -> None:
-            await self._send(ws, event)
+            if not await self._send(ws, event):
+                raise ClientGoneError
 
         def died(_exc: BaseException) -> None:
             reason = f"subscription failed in biffd; {LOG_HINT}"

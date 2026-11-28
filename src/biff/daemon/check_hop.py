@@ -10,13 +10,19 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
+from biff.channel_check_pending import CheckRefusedError
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-__all__ = ["CHECK_SECONDS", "CheckHop"]
+__all__ = ["CHECK_SECONDS", "CheckHop", "ForeignReplyError"]
 
 CHECK_SECONDS = 60.0
 """A session accepts at most one check request in this many seconds."""
+
+
+class ForeignReplyError(CheckRefusedError):
+    """The reply is not an inbox subject: it is never published to."""
 
 
 @final
@@ -53,16 +59,20 @@ class CheckHop:
         return self
 
     def request(self, reply: str) -> str:
-        """Accept a request naming *reply*; return its fresh token, or ``""``.
+        """Accept a request naming *reply*; return its fresh token.
 
-        A refusal (the reply is not an inbox, or a request was accepted within
-        the window) changes nothing and does not extend the window.
+        Raises:
+            ForeignReplyError: The reply is not an inbox subject.
+            CheckRefusedError: A request was accepted within the window.  A
+                refusal changes nothing and does not extend the window.
         """
         now = self._clock()
         if self._REPLY.fullmatch(reply) is None:
-            return ""
+            msg = "the reply is not an inbox subject"
+            raise ForeignReplyError(msg)
         if now < self._last_accepted + CHECK_SECONDS:
-            return ""
+            msg = f"rate-limited ({CHECK_SECONDS:g} s)"
+            raise CheckRefusedError(msg)
         self._last_accepted = now
         self._token = secrets.token_hex(16)
         self._reply = reply
@@ -80,6 +90,16 @@ class CheckHop:
             return ""
         self._token = ""
         return self._reply
+
+    def restore(self, token: str, reply: str) -> None:
+        """Make *token* pending again, if no newer request replaced it.
+
+        For an acknowledgement whose reply could not be sent, so the model's retry
+        is accepted rather than refused as a repeat.
+        """
+        if not self._token:
+            self._token = token
+            self._reply = reply
 
     @contextmanager
     def listen(self) -> Generator[asyncio.Queue[str]]:

@@ -7,8 +7,9 @@ import json
 import logging
 from typing import TYPE_CHECKING, Protocol, Self, cast, final, runtime_checkable
 
+from biff.channel_check_pending import CheckRefusedError
 from biff.channel_check_wire import CheckRequest
-from biff.daemon.check_hop import CheckHop
+from biff.daemon.check_hop import CheckHop, ForeignReplyError
 from biff.daemon.tasks import Supervised
 from biff.daemon.wakes import Wakes
 from biff.relay_errors import RELAY_ERRORS
@@ -50,6 +51,10 @@ class PushTransport(Protocol):
 
     def wall_notify_subject(self, repo: str) -> str:
         """Return the subject a wall change's wake poke rides."""
+        ...
+
+    async def publish_channel_check_refusal(self, reply: str, reason: str) -> None:
+        """Tell the doctor listening on *reply* why its request was refused."""
         ...
 
     async def get_nc(self) -> TalkClient:
@@ -207,7 +212,23 @@ class PushFeed:
         except ValueError:
             logger.debug("channel check request dropped: malformed", exc_info=True)
             return
-        self._checks.request(request.reply)
+        try:
+            self._checks.request(request.reply)
+        except ForeignReplyError as exc:
+            logger.warning("channel check refused for %s: %s", self._session_key, exc)
+        except CheckRefusedError as exc:
+            logger.warning("channel check refused for %s: %s", self._session_key, exc)
+            await self._refuse(request.reply, str(exc))
+
+    async def _refuse(self, reply: str, reason: str) -> None:
+        """Tell the doctor why, so it does not wait out the check."""
+        relay = self._relay
+        if not isinstance(relay, PushTransport):
+            return
+        try:
+            await relay.publish_channel_check_refusal(reply, reason)
+        except RELAY_ERRORS:
+            logger.warning("channel check refusal not sent", exc_info=True)
 
     async def _on_poke(self, _msg: TalkMessage) -> None:
         self._wakes.poke()

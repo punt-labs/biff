@@ -152,6 +152,22 @@
 
 ### Fixed
 
+- `biff doctor`'s channel check through biffd no longer always fails with
+  "seconds must be an integer": the doctor sent its 30.0 s wait as a float. It
+  sends whole seconds and biffd caps the wait at 25.
+- A channel check biffd refuses (a second request inside a minute, or a reply that
+  is not an inbox) is logged by biffd and answered to the doctor, which prints
+  `refused: rate-limited (60 s)` instead of waiting 25 s and blaming the channel.
+  A closed reply subscription reads as a lost relay, not as silence, and an
+  unreadable acknowledgement is logged.
+- `channel_ack` no longer says the channel is live when its reply to the doctor was
+  not published: the token is pending again, the answer is an error, and the
+  model's retry is accepted.
+- A subscription whose client has left ends quietly: the poll no longer advances
+  past a notice that was not delivered, nor reports the dead connection as a relay
+  outage.
+- A missing inbox stream no longer reads as an empty inbox: it is warned about once
+  per episode and the arrival poll reports `degraded`.
 - Reading an expired NATS wall deletes it at the revision that was read, so a wall
   posted between the read and the delete is kept and returned instead of lost.
 - A client can wait longer than the request timeout for a method that waits itself

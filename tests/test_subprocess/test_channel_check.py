@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from biff.channel_check_wire import PendingCheck
+    from biff.channel_check_pending import PendingCheck
 
 pytestmark = [pytest.mark.subprocess, pytest.mark.nats_local]
 

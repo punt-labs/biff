@@ -172,3 +172,31 @@ async def test_the_doctor_with_its_default_wait_reaches_a_real_session(
     await kai.request("channel_ack", token=token)
     (line,) = await lines
     assert line.message.endswith("channel live")
+
+
+async def test_a_second_doctor_run_inside_a_minute_is_told_it_was_refused(
+    harness: Harness, bus: TalkBus, repo: Path
+) -> None:
+    """The refusal reaches the doctor at once, not after it waited out the check."""
+    kai, key = await _session(harness, bus)
+    first = asyncio.ensure_future(_ask(harness, repo).confirmed(key, 5))
+    await kai.request(
+        "channel_ack", token=_token(await asyncio.wait_for(kai.next_event(), _SOON))
+    )
+    assert await first is True
+    with pytest.raises(CheckNotSentError, match=r"refused: rate-limited \(60 s\)"):
+        await asyncio.wait_for(_ask(harness, repo).confirmed(key, 20), 5)
+
+
+async def test_a_refusal_is_logged_by_the_daemon(
+    harness: Harness, bus: TalkBus, repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    kai, key = await _session(harness, bus)
+    first = asyncio.ensure_future(_ask(harness, repo).confirmed(key, 5))
+    await kai.request(
+        "channel_ack", token=_token(await asyncio.wait_for(kai.next_event(), _SOON))
+    )
+    await first
+    with caplog.at_level("WARNING"), pytest.raises(CheckNotSentError):
+        await _ask(harness, repo).confirmed(key, 20)
+    assert "channel check refused" in caplog.text

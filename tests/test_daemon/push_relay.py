@@ -7,6 +7,11 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, final
 
+from biff.channel_check_pending import (
+    CheckLostError,
+    CheckRefusal,
+    CheckRefusedError,
+)
 from biff.channel_check_wire import CheckAck, CheckRequest
 from tests.test_daemon.talk_bus import TalkBusRelay
 
@@ -25,19 +30,26 @@ class FakePending:
 
     def __init__(self, session_key: str) -> None:
         self._session_key = session_key
-        self._acks: asyncio.Queue[CheckAck] = asyncio.Queue()
+        self._replies: asyncio.Queue[bytes | None] = asyncio.Queue()
 
     async def receive(self, msg: BusMessage) -> None:
-        self._acks.put_nowait(CheckAck.from_payload(msg.data))
+        self._replies.put_nowait(msg.data)
+
+    def lose(self) -> None:
+        """End the wait as a dropped relay connection does."""
+        self._replies.put_nowait(None)
 
     async def confirmed(self, timeout: float) -> bool:
         try:
             async with asyncio.timeout(timeout):
-                while (await self._acks.get()).session_key != self._session_key:
-                    continue
+                while (data := await self._replies.get()) is not None:
+                    if reason := CheckRefusal.of(data):
+                        raise CheckRefusedError(reason)
+                    if CheckAck.from_payload(data).session_key == self._session_key:
+                        return True
         except TimeoutError:
             return False
-        return True
+        raise CheckLostError("the relay connection closed while waiting")
 
     async def close(self) -> None:
         """Nothing to release."""
@@ -50,6 +62,7 @@ class PushRelay(TalkBusRelay):
     def __init__(self, data_dir: Path, bus: TalkBus) -> None:
         super().__init__(data_dir, bus)
         self._poke_bus = bus
+        self.ack_failures = 0  # the next this many acknowledgements fail to publish
 
     def inbox_notify_subject(self, repo: str, user: str) -> str:
         return f"notify.{repo}.{user}"
@@ -80,7 +93,13 @@ class PushRelay(TalkBusRelay):
     async def publish_channel_check_ack(
         self, reply: str, session_key: str, token: str
     ) -> None:
+        if self.ack_failures > 0:
+            self.ack_failures -= 1
+            raise ConnectionError("relay down")
         await self._poke_bus.publish(reply, CheckAck(session_key, token).to_payload())
+
+    async def publish_channel_check_refusal(self, reply: str, reason: str) -> None:
+        await self._poke_bus.publish(reply, CheckRefusal(reason).to_payload())
 
     async def request_channel_check(self, session_key: str) -> FakePending:
         """Publish a doctor's request as the NATS relay does, and wait on its reply."""

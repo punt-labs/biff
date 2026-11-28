@@ -223,3 +223,38 @@ async def test_a_pending_check_never_precedes_the_summary(rig: Rig) -> None:
     kinds = [(await _next(again)).kind, (await _next(again)).kind]
     assert kinds[0] == "unread"
     assert kinds[1] == "channel_check_request"
+
+
+async def test_an_acknowledgement_that_could_not_be_relayed_can_be_retried(
+    harness: Harness,
+) -> None:
+    bus = TalkBus()
+    relays: list[PushRelay] = []
+
+    def build(path: Path) -> PushRelay:
+        relays.append(PushRelay(path, bus))
+        return relays[-1]
+
+    harness.factory.relay_type = build
+    rig = Rig(harness, bus)
+    kai, key = await _session(rig)
+    await _ask(rig, key)
+    token = _token(await _next(kai))
+    for relay in relays:
+        relay.ack_failures = 1
+    failed = cast("dict[str, object]", await kai.request("channel_ack", token=token))
+    assert failed["error"] is True
+    assert "not sent" in str(failed["text"])
+    assert rig.acks() == []
+    retried = cast("dict[str, object]", await kai.request("channel_ack", token=token))
+    assert (retried["error"], retried["text"]) == (False, "biff channel live.")
+    assert [(a.session_key, a.token) for a in rig.acks()] == [(key, token)]
+
+
+async def test_an_acknowledgement_is_never_live_without_a_relay_to_tell(
+    harness: Harness,
+) -> None:
+    kai = await harness.connect("s-kai", "kai", client="mcp")
+    reply = cast("dict[str, object]", await kai.request("channel_ack", token="0" * 32))
+    assert reply["error"] is True
+    assert "live" not in str(reply["text"])

@@ -83,9 +83,16 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/channel_check_pending.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 4.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/channel_check_wire.py": {
     "efferent_coupling": 0.0,
-    "public_names": 5.0,
+    "public_names": 4.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -511,11 +518,11 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/arrival_poll.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 3.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.524,
-    "avg_lcom": 0.524
+    "max_lcom": 0.722,
+    "avg_lcom": 0.722
   },
   "src/biff/daemon/arrivals_reading.py": {
     "efferent_coupling": 2.0,
@@ -532,15 +539,15 @@
     "avg_lcom": 0.764
   },
   "src/biff/daemon/channel_check_methods.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 3.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
   "src/biff/daemon/check_hop.py": {
-    "efferent_coupling": 0.0,
-    "public_names": 2.0,
+    "efferent_coupling": 1.0,
+    "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -665,11 +672,11 @@
     "avg_lcom": 0.2
   },
   "src/biff/daemon/push_feed.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 8.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.691,
-    "avg_lcom": 0.691
+    "max_lcom": 0.667,
+    "avg_lcom": 0.667
   },
   "src/biff/daemon/read_batch.py": {
     "efferent_coupling": 1.0,
@@ -687,7 +694,7 @@
   },
   "src/biff/daemon/refusal.py": {
     "efferent_coupling": 1.0,
-    "public_names": 2.0,
+    "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -1126,8 +1133,15 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/nats_missing.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/nats_relay.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 9.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.888,

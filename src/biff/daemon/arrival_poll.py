@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from biff.daemon.arrivals_reading import ArrivalsReading
+from biff.daemon.refusal import ClientGoneError
 from biff.relay_errors import RELAY_ERRORS, RelayLog
 
 if TYPE_CHECKING:
@@ -26,6 +28,15 @@ logger = logging.getLogger(__name__)
 _WHAT = "subscription check"
 
 
+@dataclass(frozen=True, slots=True)
+class _Reading:
+    """What one read of the relay found."""
+
+    mark: int
+    wall: WallPost | None
+    count: int | None  # the unread count, read only when the mark rose
+
+
 @final
 class ArrivalPoll:
     """Reads a session's mail mark and wall and announces what rose.
@@ -35,6 +46,10 @@ class ArrivalPoll:
     ``notification-mail-event.tex``): a push is at least once and may be lost, a
     wake is a flag so a repeat changes nothing, and the pass reads every kind, so
     no kind waits on another.  It marks no mail read.
+
+    A client that has left ends the poll quietly: nothing is announced to a
+    connection that is gone, and an arrival whose notice was not delivered is not
+    counted as announced.
 
     A relay outage is not fatal: the pass is tried again, the client is told once
     that it is ``degraded`` and once that it ``recovered``, and one log line is
@@ -86,7 +101,13 @@ class ArrivalPoll:
         return self._summarized
 
     async def run(self) -> None:
-        """Send the current summary, then each mail and wall arrival."""
+        """Send the current summary, then each arrival, until the client leaves."""
+        try:
+            await self._announce_forever()
+        except ClientGoneError:
+            logger.debug("client left; the arrival poll ends")
+
+    async def _announce_forever(self) -> None:
         mark, wall, count = await self._baseline()
         await self._emit("unread", {"count": count})
         if wall is not None:
@@ -97,11 +118,12 @@ class ArrivalPoll:
                 await asyncio.wait_for(self._wake.wait(), self._interval)
             self._wake.clear()
             try:
-                mark, wall = await self._pass(mark, wall)
+                reading = await self._read(mark)
             except RELAY_ERRORS as exc:
                 await self._outage(exc)
-            else:
-                await self._recovered()
+                continue
+            await self._recovered()
+            mark, wall = await self._announce(reading, mark, wall)
 
     async def _baseline(self) -> tuple[int, WallPost | None, int]:
         """Read the starting point, retrying through an outage."""
@@ -118,19 +140,29 @@ class ArrivalPoll:
                 await self._recovered()
                 return mark, wall, count
 
-    async def _pass(
-        self, mark: int, wall: WallPost | None
-    ) -> tuple[int, WallPost | None]:
-        """Emit what arrived since *mark* and *wall*; return the new baseline."""
+    async def _read(self, mark: int) -> _Reading:
+        """Read the relay: the mark, the wall, and the count if the mark rose."""
         current = await self._reading.mark()
         posted = await self._session.context.relay.get_wall()
         # A read can lower the mark; only a rise is an arrival.
-        if current > mark:
-            count = await self._reading.unread()
-            await self._emit("mail", {"count": count, "mark": current})
-        if posted is not None and posted != wall:
-            await self._emit("wall", posted.model_dump(mode="json"))
-        return current, posted
+        count = await self._reading.unread() if current > mark else None
+        return _Reading(current, posted, count)
+
+    async def _announce(
+        self, reading: _Reading, mark: int, wall: WallPost | None
+    ) -> tuple[int, WallPost | None]:
+        """Emit what *reading* finds new; advance each baseline once it was sent.
+
+        A send that fails ends the poll with the error, so an arrival whose
+        notice was not delivered is never counted as announced.  A send is the
+        client's business, not the relay's: it is never reported as an outage.
+        """
+        if reading.count is not None:
+            await self._emit("mail", {"count": reading.count, "mark": reading.mark})
+        mark = reading.mark
+        if reading.wall is not None and reading.wall != wall:
+            await self._emit("wall", reading.wall.model_dump(mode="json"))
+        return mark, reading.wall
 
     async def _outage(self, exc: Exception) -> None:
         self._log.failed(_WHAT, exc)

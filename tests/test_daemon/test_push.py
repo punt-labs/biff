@@ -158,3 +158,16 @@ async def test_a_pushed_pass_reads_every_kind(rig: Rig) -> None:
     await rig.bus.publish("notify.test.kai", b"1")  # one poke, for mail
     kinds = {(await _next(kai)).kind, (await _next(kai)).kind}
     assert kinds == {"mail", "wall"}  # the pass the poke woke read the wall too
+
+
+async def test_mail_for_a_client_that_left_ends_its_subscription_quietly(
+    rig: Rig, caplog: pytest.LogCaptureFixture
+) -> None:
+    kai = await rig.client("s-kai", "kai")
+    eric = await rig.client("s-eric", "eric")
+    await _subscribed(kai)
+    await kai.close()
+    with caplog.at_level("WARNING"):
+        await eric.request("write", to="kai", message="nobody listens")
+        await asyncio.sleep(_QUIET)
+    assert "failed in biffd" not in caplog.text
