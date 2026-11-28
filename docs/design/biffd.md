@@ -378,10 +378,15 @@ activity is claimed; a stamp older than the row's `last_tool_at` moves nothing.
 **Retention.** A harness session with no connection for `RETENTION_SECONDS` (the
 lifetime of its relay row, three days) is ended by the session sweep with the same
 effects (`ExpireClaude`); a hello that reattaches first restarts the clock. A relay
-failure leaves the record and the next sweep retries. The daemon keeps harness
-records in memory, so a restart forgets them (`claude-session-end.tex` models the
-record as durable): rows of sessions that never reattach age out by the relay's own
-row lifetime, and the held batch is lost with the outbox (PL-1753).
+failure leaves the record and the next sweep retries. The daemon keeps each
+harness session's record on disk (`~/.punt-labs/biff/harness-sessions/<session id>.json`,
+mode 0600: the client, session id, main agent, directory and user of the hello that
+opened it), written when the session opens and removed when it ends or expires. At
+start, before it listens, the daemon builds every kept session again, dormant, with
+the retention clock restarted: the mail waiting in its relay inbox is drained into the
+user's mailbox by an end or by retention, as for any session, and a hello reattaches
+it. A record whose repository or relay does not answer is kept and tried again at the
+next start. A crash still loses the batch held in the outbox (PL-1753).
 
 ## Z specification obligations
 

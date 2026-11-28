@@ -18,10 +18,12 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 
 from biff.daemon.connection import ConnectionHandler, DaemonCore
 from biff.daemon.handback import Handback
+from biff.daemon.harness_records import HarnessRecords
 from biff.daemon.methods import READ_BUDGET_BYTES, Methods
 from biff.daemon.relays import RelayPool
 from biff.daemon.resolver import DiskResolver
 from biff.daemon.session_methods import SessionMethods
+from biff.daemon.session_restore import SessionRestore
 from biff.daemon.session_sweep import SessionSweeper
 from biff.daemon.sessions import SessionTable
 from biff.daemon.tasks import Supervised
@@ -64,6 +66,7 @@ class BiffDaemon:
     __slots__ = (
         "_core",
         "_port",
+        "_records",
         "_run_dir",
         "_server",
         "_started",
@@ -75,6 +78,7 @@ class BiffDaemon:
     _run_dir: RunDir
     _port: int
     _core: DaemonCore
+    _records: HarnessRecords
     _server: Server | None
     _started: float
     _sweeper: SessionSweeper
@@ -110,9 +114,11 @@ class BiffDaemon:
         self._port = port
         resolver = resolver or DiskResolver()
         pool = RelayPool(relay_factory or RelayPool.selecting())
+        self._records = HarnessRecords(sessions.root.parent / "harness-sessions")
         live = SessionTable(
             heartbeat_interval=heartbeat_interval,
             org_refresh_interval=org_refresh_interval,
+            records=self._records,
         )
         self._core = DaemonCore(
             resolver=resolver,
@@ -145,6 +151,7 @@ class BiffDaemon:
 
     async def start(self) -> None:
         """Create the token, bind the loopback listener and record its port."""
+        await SessionRestore.run(self._records, self._core)
         handler = ConnectionHandler(self._run_dir.ensure_token(), self._core)
         self._server = await serve(
             handler.handle,

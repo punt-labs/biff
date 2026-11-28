@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from contextlib import AbstractAsyncContextManager
 
+    from biff.daemon.harness_records import HarnessRecords
     from biff.daemon.relays import RelayPool, RelayTarget, ResolvedSession
     from biff.frame_client import Hello
     from biff.relay import Relay
@@ -352,19 +353,37 @@ class Session:
 class SessionTable:
     """Every session the daemon holds, get-or-create by session id and role."""
 
-    __slots__ = ("_interval", "_locks", "_org_interval", "_sessions", "_users")
+    __slots__ = (
+        "_interval",
+        "_locks",
+        "_org_interval",
+        "_records",
+        "_sessions",
+        "_users",
+    )
 
     _interval: float
     _org_interval: float
+    _records: HarnessRecords
     _sessions: dict[SessionKey, Session]
     _locks: defaultdict[SessionKey, asyncio.Lock]
     _users: Counter[SessionKey]
 
-    def __new__(cls, *, heartbeat_interval: float, org_refresh_interval: float) -> Self:
-        """Create an empty table whose sessions run their timers at these intervals."""
+    def __new__(
+        cls,
+        *,
+        heartbeat_interval: float,
+        org_refresh_interval: float,
+        records: HarnessRecords,
+    ) -> Self:
+        """Create an empty table whose sessions run their timers at these intervals.
+
+        *records* keeps each harness session from its hello to its end.
+        """
         self = super().__new__(cls)
         self._interval = heartbeat_interval
         self._org_interval = org_refresh_interval
+        self._records = records
         self._sessions = {}
         self._locks = defaultdict(asyncio.Lock)
         self._users = Counter()
@@ -401,6 +420,8 @@ class SessionTable:
                     org_refresh_interval=self._org_interval,
                 )
                 self._sessions[key] = session
+                if key.role != CLI_ROLE:
+                    self._records.save(hello)
             else:
                 session.check_same(resolved)
                 if session.is_dormant:
@@ -425,6 +446,8 @@ class SessionTable:
         reply.
         """
         session = self._sessions.pop(key, None)
+        if key.role != CLI_ROLE:
+            self._records.remove(key)
         if self._users[key] == 0:
             self._locks.pop(key, None)  # guard drops it only while no session
         if session is not None and session is not spare:
