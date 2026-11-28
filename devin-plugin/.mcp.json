@@ -8,6 +8,7 @@
         "case \"${BIFF_RELAY_TOKEN:-}\" in ''|'${'*) unset BIFF_RELAY_TOKEN ;; esac\nif [ -z \"${CLAUDE_CODE_SESSION_ID:-}\" ]; then\n  if [ -r /proc/sys/kernel/random/uuid ]; then\n    read -r CLAUDE_CODE_SESSION_ID < /proc/sys/kernel/random/uuid\n  else\n    CLAUDE_CODE_SESSION_ID=\"devin-$(date +%s)-$$\"\n  fi\n  export CLAUDE_CODE_SESSION_ID\nfi\nfor repo in \"${DEVIN_PROJECT_DIR:-}\" \"$HOME/repos/punt-labs\" \"$HOME\"/repos/*; do\n  [ -n \"$repo\" ] && [ -e \"$repo/.git\" ] || continue\n  cd \"$repo\" || continue\n  if biff version 2>/dev/null | awk '$1 == \"biff\" { split($2, v, \".\"); if (v[1] + 0 > 1 || (v[1] + 0 == 1 && v[2] + 0 >= 24)) ok = 1 } END { exit !ok }'; then\n    exec biff mcp --user devin\n  elif command -v uvx >/dev/null 2>&1; then\n    exec uvx --from 'punt-biff>=1.24.0' biff mcp --user devin\n  elif command -v uv >/dev/null 2>&1; then\n    exec uv tool run --from 'punt-biff>=1.24.0' biff mcp --user devin\n  else\n    exec biff mcp --user devin\n  fi\ndone\nprintf '%s\\n' 'biff: no git repository found' >&2\nexit 1"
       ],
       "env": {
+        "BIFF_MCP_TRANSPORT": "inprocess",
         "BIFF_RELAY_TOKEN": "${MCP_BIFF_RELAY_TOKEN}",
         "BIFF_RELAY_URL": "tls://biff-relay.punt-labs.com:4222",
         "BIFF_RELAY_TLS_HANDSHAKE_FIRST": "true"

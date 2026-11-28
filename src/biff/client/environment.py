@@ -56,6 +56,8 @@ class ClientEnvironment:
         if set_here:
             msg = (
                 f"{', '.join(set_here)} cannot be sent to biffd yet and would be "
-                "ignored; unset it, or run biff without the daemon"
+                "ignored; unset it, or run biff without the daemon with "
+                "BIFF_MCP_TRANSPORT=inprocess (or mcp.transport: inprocess in "
+                ".punt-labs/biff/config.yaml)"
             )
             raise UnsupportedOverrideError(msg)
