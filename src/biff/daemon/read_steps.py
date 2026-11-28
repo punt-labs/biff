@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, final
 
-from biff.commands.inbox import Inbox
+from biff.daemon.session_fetch import SessionFetch
 from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
+    from biff.commands.inbox import Inbox
     from biff.daemon.sessions import Session
     from biff.models import Message
 
@@ -26,7 +27,7 @@ class ReadSteps:
     @staticmethod
     async def unread(session: Session) -> Inbox:
         """Fetch *session*'s unread mail."""
-        return await Inbox.unread(session.context)
+        return await SessionFetch.unread(session)
 
     @staticmethod
     async def refile(
