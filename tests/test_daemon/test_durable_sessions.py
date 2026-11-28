@@ -17,11 +17,14 @@ from biff.daemon.resolver import ResolveError
 from biff.daemon.server import BiffDaemon
 from biff.daemon.session_key import SessionKey
 from biff.daemon.session_restore import SessionRestore
+from biff.daemon.sessions import SessionTable
+from biff.relay import LocalRelay
 from biff.session_id import CLAUDE_CODE_ROLE
-from tests.test_daemon.claude_seats import seat, until
+from tests.test_daemon.claude_seats import ConsumingLogging, seat, until
 from tests.test_daemon.conftest import FakeResolver
 
 if TYPE_CHECKING:
+    from biff.daemon.attachment import Attachment
     from biff.daemon.relays import ResolvedSession
     from biff.daemon.resolver import SessionResolver
     from biff.frame_client import Hello
@@ -38,9 +41,11 @@ class ScriptedResolver:
         hang: tuple[str, ...] = (),
         boom: tuple[str, ...] = (),
         gone: tuple[str, ...] = (),
+        broken: tuple[str, ...] = (),
         down: int = 0,
     ) -> None:
         self._inner = FakeResolver(base)
+        self._broken = broken
         self._hang = hang
         self._boom = boom
         self._gone = gone
@@ -53,6 +58,9 @@ class ScriptedResolver:
         if name in self._boom:
             msg = "a resolver bug"
             raise ValueError(msg)
+        if name in self._broken:
+            msg = f"{hello.cwd}/.punt-labs/biff/config.yaml is not valid YAML"
+            raise ResolveError(msg)
         if name in self._gone:
             msg = f"{hello.cwd} is no longer a biff repository"
             raise ResolveError(msg)
@@ -76,9 +84,18 @@ async def _restart(
     resolver: SessionResolver | None = None,
     *,
     after: BiffDaemon | None = None,
+    crash: bool = False,
 ) -> BiffDaemon:
-    """Stop the daemon (the harness's, or *after*) and start another over its relays."""
-    await (after or harness.daemon).stop()
+    """Stop the daemon (the harness's, or *after*) and start another over its relays.
+
+    *crash* stops it as a kill does: the listener and relays close, and nothing
+    else runs: no hand-back of the outbox, no cleanup of a connection.
+    """
+    daemon = after or harness.daemon
+    if crash:
+        await _kill(daemon)
+    else:
+        await daemon.stop()
     restarted = BiffDaemon(
         run_dir=harness.run_dir,
         port=0,
@@ -93,8 +110,27 @@ async def _restart(
     return restarted
 
 
+async def _kill(daemon: BiffDaemon) -> None:
+    """Close the listener and the relays and run no shutdown step."""
+
+    def not_noted(_table: SessionTable, _attachment: Attachment) -> None:
+        """A killed process does not note that its connections left."""
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SessionTable, "release", not_noted)
+        server = daemon._server  # pyright: ignore[reportPrivateUsage]
+        assert server is not None
+        server.close()
+        await server.wait_closed()
+    await daemon._core.pool.close()  # pyright: ignore[reportPrivateUsage]
+
+
 async def _connect(
-    harness: Harness, daemon: BiffDaemon, session_id: str, cwd: str = "/work/repo"
+    harness: Harness,
+    daemon: BiffDaemon,
+    session_id: str,
+    cwd: str = "/work/repo",
+    run: str = "a1",
 ) -> DaemonClient:
     client = await DaemonClient.connect(
         run_dir=harness.run_dir,
@@ -102,7 +138,7 @@ async def _connect(
         identity=ClientIdentity(
             client="mcp",
             session_id=session_id,
-            main_agent_id="a1",
+            main_agent_id=run,
             cwd=cwd,
             user="kai",
         ),
@@ -349,5 +385,135 @@ async def test_a_session_that_had_a_connection_at_the_restart_gets_a_fresh_reten
         )
         await restarted.sweep_sessions()
         assert await s.row_present() is True
+    finally:
+        await restarted.stop()
+
+
+async def test_a_refused_hello_leaves_no_session_for_mail_to_reach(
+    harness: Harness,
+) -> None:
+    sender = await harness.connect("s-eric", "eric", client="mcp")
+    directory = _records_dir(harness)
+    directory.chmod(stat.S_IRUSR | stat.S_IXUSR)  # no new record can be written
+    try:
+        with pytest.raises(DaemonError, match="cannot keep the session record"):
+            await _connect(harness, harness.daemon, "s-refused")
+        await sender.request("write", to="kai", message="for kai, wherever he is")
+    finally:
+        directory.chmod(stat.S_IRWXU)
+
+    viewer = LocalRelay(harness.factory.built[0])
+    rows = [row for row in await viewer.get_sessions() if row.user == "kai"]
+    assert rows == []  # nothing lists the refused session, so nothing routes to it
+
+
+async def test_a_replaced_run_is_the_run_that_comes_back(harness: Harness) -> None:
+    first = await _connect(harness, harness.daemon, "s-run", run="a1")
+    second = await _connect(harness, harness.daemon, "s-run", run="a2")
+    await first.close()
+    await second.close()
+    await until(lambda: all(x.attached == 0 for x in harness.daemon.status().sessions))
+
+    restarted = await _restart(harness)
+    try:
+        runs = {x.session_id: x.run for x in restarted.status().sessions}
+        assert runs["s-run"] == "a2"
+    finally:
+        await restarted.stop()
+
+
+async def test_a_session_with_an_unusable_configuration_is_kept_until_it_is_fixed(
+    harness: Harness, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo = tmp_path / "work" / "badrepo"
+    repo.mkdir(parents=True)
+    client = await _connect(harness, harness.daemon, "s-cfg", str(repo))
+    await client.close()
+    await until(lambda: all(x.attached == 0 for x in harness.daemon.status().sessions))
+
+    broken = await _restart(
+        harness, ScriptedResolver(harness.relays_dir, broken=("badrepo",))
+    )
+    held_while_broken = "s-cfg" in {x.session_id for x in broken.status().sessions}
+    kept_while_broken = _records(harness)
+    fixed = await _restart(harness, after=broken)
+    try:
+        assert (
+            held_while_broken,
+            kept_while_broken,
+            "s-cfg" in {x.session_id for x in fixed.status().sessions},
+        ) == (False, ["s-cfg"], True)
+        assert str(repo) in caplog.text  # the error names where to look
+    finally:
+        await fixed.stop()
+
+
+async def test_a_retry_leaves_a_session_that_reconnected_first_alone(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(SessionRestore, "RETRY_DELAYS", (0.5,))
+    client = await _connect(harness, harness.daemon, "s-back")
+    await client.close()
+    await until(lambda: harness.daemon.status().sessions[0].attached == 0)
+    key = SessionKey("s-back", CLAUDE_CODE_ROLE)
+    records = HarnessRecords(_records_dir(harness))
+    records.mark(key, datetime.now(UTC) - timedelta(days=10))
+    began = datetime.now(UTC)
+
+    restarted = await _restart(harness, ScriptedResolver(harness.relays_dir, down=1))
+    try:
+        back = await _connect(harness, restarted, "s-back")  # before the retry
+        await back.close()
+        await until(lambda: restarted.status().sessions[0].attached == 0)
+        retry = restarted._restore._retry  # pyright: ignore[reportPrivateUsage]
+        assert retry is not None
+        await asyncio.wait_for(retry, 5.0)
+
+        (kept,) = records.load()
+        assert kept.dormant_since is not None
+        assert kept.dormant_since >= began  # the new disconnect, not the old record
+    finally:
+        await restarted.stop()
+
+
+async def test_a_crash_keeps_the_record_and_the_relays_mail_of_a_live_session(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = await seat(harness, "s-live")  # a connection is on it when the daemon dies
+    sender = await harness.connect("s-eric", "eric", client="mcp")
+    await sender.request("write", to=f"kai:{s.tty}", message="unread in the relay")
+
+    restarted = await _restart(harness, crash=True)
+    try:
+        monkeypatch.setattr("biff.daemon.session_sweep.RETENTION_SECONDS", 0.0)
+        await restarted.sweep_sessions()
+
+        mailbox = [m.body for m in await s.viewer.fetch_user_inbox("kai")]
+        assert (mailbox, await s.row_present(), "s-live" in _records(harness)) == (
+            ["unread in the relay"],
+            False,
+            False,
+        )
+    finally:
+        await restarted.stop()
+
+
+async def test_a_crash_loses_the_outbox_but_not_the_mail_still_in_the_relay(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.factory.relay_type = ConsumingLogging
+    s = await seat(harness, "s-held")
+    sender = await harness.connect("s-eric", "eric", client="mcp")
+    await sender.request("write", to=f"kai:{s.tty}", message="held in the outbox")
+    await s.client.request_held("read")  # fetched, never confirmed: only in memory
+    await sender.request("write", to=f"kai:{s.tty}", message="still in the relay")
+
+    restarted = await _restart(harness, crash=True)
+    try:
+        monkeypatch.setattr("biff.daemon.session_sweep.RETENTION_SECONDS", 0.0)
+        await restarted.sweep_sessions()
+
+        mailbox = [m.body for m in await s.viewer.fetch_user_inbox("kai")]
+        assert mailbox == ["still in the relay"]
     finally:
         await restarted.stop()

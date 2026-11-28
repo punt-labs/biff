@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from biff.daemon.resolver import ResolveError
@@ -97,12 +98,22 @@ class SessionRestore:
     async def _restore(self, kept: KeptSession) -> bool:
         """Open the session dormant; ``False``: try again, ``True``: done or dropped."""
         hello = kept.hello
+        if SessionKey.of(hello) in self._core.sessions.snapshot():
+            return True  # a hello came first: its record is newer than this one
         try:
             async with asyncio.timeout(self._core.attach_timeout):
                 attachment = await self._open(hello)
         except ResolveError:
-            self._drop(kept, "its repository is gone")
-            return True
+            if not Path(hello.cwd).is_dir():
+                self._drop(kept, "its repository is gone")
+                return True
+            logger.exception(
+                "could not restore session %s: the configuration under %s is "
+                "unusable; fix it and the next try restores the session",
+                hello.session_id,
+                hello.cwd,
+            )
+            return False
         except (TimeoutError, *RELAY_ERRORS):
             logger.warning(
                 "could not restore session %s", hello.session_id, exc_info=True

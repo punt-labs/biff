@@ -417,6 +417,8 @@ class SessionTable:
         async with self.guard(key):
             session = self._sessions.get(key)
             if session is None:
+                if key.role != CLI_ROLE:
+                    self._records.keep(hello)  # before the relay can list a session
                 session = await Session.register(
                     hello,
                     resolved,
@@ -424,18 +426,17 @@ class SessionTable:
                     heartbeat_interval=self._interval,
                     org_refresh_interval=self._org_interval,
                 )
-                if key.role != CLI_ROLE:
-                    self._records.keep(hello)  # refuses before the session exists
                 self._sessions[key] = session
             else:
                 session.check_same(resolved)
                 if session.is_dormant:
                     await session.revive()
-                if key.role != CLI_ROLE:
-                    self._records.mark(key, None)
             if hello.client == "cli":
                 await session.touch()
-            return session.attach(hello.main_agent_id)
+            attachment = session.attach(hello.main_agent_id)
+            if key.role != CLI_ROLE:
+                self._records.attached(key, session.run)
+            return attachment
 
     def release(self, attachment: Attachment) -> None:
         """Let go of a connection; a harness session left with none is dormant now."""

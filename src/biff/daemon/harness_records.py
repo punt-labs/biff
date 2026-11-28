@@ -10,13 +10,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, final
 
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from biff.daemon.refusal import RefusalError
-from biff.frame_client import Hello
+from biff.frame_client import ClientType, Hello
 from biff.frame_reply import ErrorCode
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from biff.daemon.session_key import SessionKey
 
 __all__ = ["HarnessRecords", "KeptSession"]
@@ -28,12 +30,24 @@ _NO_MAC: Final = "0" * 64
 _SUFFIX: Final = ".json"
 
 
+class _StoredHello(BaseModel):
+    """Who a kept session is: the hello's fields, without its proof."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    client: ClientType
+    session_id: str
+    main_agent_id: str
+    cwd: str
+    user: str
+
+
 class _Stored(BaseModel):
     """What one record file holds; anything else in the file is refused."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    hello: dict[str, JsonValue]
+    hello: _StoredHello
     dormant_since: datetime | None = None
     failed_starts: int = 0
 
@@ -75,7 +89,15 @@ class HarnessRecords:
             RefusalError: The record cannot be written; the session is then not
                 opened, since a restart would forget it.
         """
-        stored = _Stored(hello=hello.model_dump(exclude={"mac", "type"}))
+        stored = _Stored(
+            hello=_StoredHello(
+                client=hello.client,
+                session_id=hello.session_id,
+                main_agent_id=hello.main_agent_id,
+                cwd=hello.cwd,
+                user=hello.user,
+            )
+        )
         try:
             self._write(self._path(hello.session_id), stored)
         except OSError as exc:
@@ -84,13 +106,30 @@ class HarnessRecords:
 
     def mark(self, key: SessionKey, dormant_since: datetime | None) -> None:
         """Record when the session's last connection left (``None``: one is on it)."""
-        self._update(key, dormant_since=dormant_since)
+        self._change(
+            key, lambda s: s.model_copy(update={"dormant_since": dormant_since})
+        )
+
+    def attached(self, key: SessionKey, run: str) -> None:
+        """Record that a connection is on the session, and the run it claims.
+
+        An empty *run* is a client that claims none, and leaves the kept run be.
+        """
+
+        def step(stored: _Stored) -> _Stored:
+            hello = stored.hello
+            if run:
+                hello = hello.model_copy(update={"main_agent_id": run})
+            return stored.model_copy(update={"hello": hello, "dormant_since": None})
+
+        self._change(key, step)
 
     def failed(self, key: SessionKey) -> int:
         """Count one more start that could not build the session; return the count."""
-        count = self._failed_starts(key) + 1
-        self._update(key, failed_starts=count)
-        return count
+        stored = self._change(
+            key, lambda s: s.model_copy(update={"failed_starts": s.failed_starts + 1})
+        )
+        return 1 if stored is None else stored.failed_starts
 
     def remove(self, key: SessionKey) -> None:
         """Forget the session *key* names; a session that was never kept is fine.
@@ -121,23 +160,27 @@ class HarnessRecords:
                 )
         return tuple(kept)
 
-    def _failed_starts(self, key: SessionKey) -> int:
-        try:
-            return self._read(self._path(key.session_id)).failed_starts
-        except (OSError, ValueError, ValidationError):
-            return 0
+    def _change(
+        self, key: SessionKey, step: Callable[[_Stored], _Stored]
+    ) -> _Stored | None:
+        """Rewrite one record with *step* applied; ``None``: it could not be.
 
-    def _update(self, key: SessionKey, **changes: datetime | int | None) -> None:
-        """Rewrite one record with *changes*; a failure is logged, never raised."""
+        A failure is logged, never raised: the record is a promise for a restart,
+        and the session in memory is fine without it.
+        """
         path = self._path(key.session_id)
         try:
-            self._write(path, self._read(path).model_copy(update=changes))
+            changed = step(self._read(path))
+            self._write(path, changed)
         except (OSError, ValueError, ValidationError):
             logger.warning("could not update the record at %s", path, exc_info=True)
+            return None
+        return changed
 
-    def _parse(self, path: Path) -> KeptSession:
-        stored = self._read(path)
-        hello = Hello.model_validate({**stored.hello, "mac": _NO_MAC})
+    @staticmethod
+    def _parse(path: Path) -> KeptSession:
+        stored = HarnessRecords._read(path)
+        hello = Hello(mac=_NO_MAC, **stored.hello.model_dump())
         since = stored.dormant_since
         return KeptSession(
             hello=hello,

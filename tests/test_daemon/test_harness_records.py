@@ -9,8 +9,13 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import ValidationError
 
-from biff.daemon.harness_records import HarnessRecords
+from biff.daemon.harness_records import (
+    HarnessRecords,
+    _Stored,  # pyright: ignore[reportPrivateUsage]
+    _StoredHello,  # pyright: ignore[reportPrivateUsage]
+)
 from biff.daemon.refusal import RefusalError
 from biff.daemon.session_key import SessionKey
 from biff.frame_client import Hello
@@ -159,3 +164,30 @@ def test_a_record_is_synced_to_disk_with_its_directory(
     HarnessRecords(tmp_path / "records").keep(_hello())
 
     assert synced == [False, True]  # the file's data, then the directory entry
+
+
+def test_what_a_record_holds_cannot_be_changed_in_memory() -> None:
+    stored = _Stored(
+        hello=_StoredHello(
+            client="mcp", session_id="s-one", main_agent_id="a1", cwd="/w", user="kai"
+        )
+    )
+
+    field = "cwd"
+    with pytest.raises(ValidationError):
+        setattr(stored.hello, field, "/elsewhere")
+
+
+def test_a_reattach_records_the_run_it_claims_and_keeps_the_run_of_a_silent_client(
+    tmp_path: Path,
+) -> None:
+    records = HarnessRecords(tmp_path / "records")
+    records.keep(_hello())
+    records.mark(_KEY, datetime(2026, 1, 1, tzinfo=UTC))
+
+    records.attached(_KEY, "a2")
+    after_run = records.load()[0]
+    records.attached(_KEY, "")
+
+    assert (after_run.hello.main_agent_id, after_run.dormant_since) == ("a2", None)
+    assert records.load()[0].hello.main_agent_id == "a2"
