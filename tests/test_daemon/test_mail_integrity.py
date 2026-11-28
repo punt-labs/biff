@@ -144,6 +144,7 @@ async def _short_patience_client(harness: Harness, timeout: float) -> DaemonClie
 async def test_a_reply_the_client_gave_up_on_does_not_consume_the_mail(
     harness: Harness,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     relay_type: Callable[[Path], LocalRelay],
 ) -> None:
     harness.factory.relay_type = relay_type
@@ -153,7 +154,11 @@ async def test_a_reply_the_client_gave_up_on_does_not_consume_the_mail(
     monkeypatch.setattr(relay_type, "delay", 0.25)
     with pytest.raises(RequestTimeoutError):
         await kai.request("read")  # the daemon replies after the client left
-    await asyncio.sleep(0.4)  # the late reply was written and discarded
+    # The client logs a reply to a request it abandoned, so that line proves the
+    # daemon finished the read and its late reply was written and discarded.
+    async with asyncio.timeout(_WAIT):
+        while "answered after it was abandoned" not in caplog.text:
+            await asyncio.sleep(0.01)
     monkeypatch.setattr(relay_type, "delay", 0.0)
     assert _bodies(await kai.request("read")) == ["do not lose me"]
 
