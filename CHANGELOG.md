@@ -176,6 +176,31 @@
 
 ### Fixed
 
+- A graceful stop of biffd no longer loses mail a consuming relay had already given
+  up. As soon as the stop has sealed the outboxes it writes everything it holds to
+  `~/.punt-labs/biff/handback-spill.json` (0600, synced; a second copy goes to the
+  run directory if that cannot be written), then files it back and removes what it
+  filed, so a process killed at any point after that has the mail on disk. A read
+  still fetching delivers late into the file too. The stop bounds its wait for the
+  listener and the closing of the relays (they close in parallel), and the launchd
+  plist sets `ExitTimeOut` above the whole stop budget (a restart waits longer than
+  that), and the `systemctl` and `launchctl` calls that wait for the stop (stop,
+  restart, install, uninstall) give it 60 s, so an install no longer rolls the unit
+  back in the middle of the hand-back; the systemd unit sets `TimeoutStopSec=45` to
+  match, and an existing LaunchAgent or unit keeps its old kill timeout until
+  `biff daemon install` rewrites it. The next start files the spill back
+  before it serves, a running daemon keeps trying (after 5, 15 and 45 s, then every
+  five minutes), and mail goes to `handback-spill.undeliverable` only after 20
+  failed tries and seven days of failing (days with the daemon off do not count);
+  the shelf is tried again at every start and once a day. A file that cannot be
+  parsed is set aside under a new name, never overwritten, and counted; one that
+  cannot be read for an I/O reason is left where it is and logged, and the
+  snapshots written meanwhile outrank it, so it cannot replay mail already filed
+  or hide mail spilled since. Delivery is at
+  least once: a refile after a restart can still duplicate a message the relay
+  already took, beyond its duplicate window, which a newly created inbox stream
+  now keeps for 15 minutes instead of 2. `biff status` shows how many spilled,
+  shelved and set-aside files there are.
 - `biff doctor` strips control and escape characters from every reason a
   channel check was not sent, including the text of a refusal biffd relays, so
   relay-derived bytes no longer reach the terminal.

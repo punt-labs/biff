@@ -50,6 +50,10 @@ class ScriptedSupervisor:
         """Return whether a command starting with *prefix* was run."""
         return any(call[: len(prefix)] == prefix for call in self._calls)
 
+    def timeout_of(self, *prefix: str) -> float:
+        """Return the time limit of the last command starting with *prefix*."""
+        return self._timeouts[self.index(*prefix)]
+
     def index(self, *prefix: str) -> int:
         """Return the position of the last command starting with *prefix*."""
         positions = [

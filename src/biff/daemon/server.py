@@ -26,6 +26,7 @@ from biff.daemon.session_methods import SessionMethods
 from biff.daemon.session_restore import SessionRestore
 from biff.daemon.session_sweep import SessionSweeper
 from biff.daemon.sessions import SessionTable
+from biff.daemon.spill import Spill
 from biff.daemon.tasks import Supervised
 from biff.frame_base import MAX_FRAME_BYTES
 
@@ -57,6 +58,9 @@ class DaemonStatus:
 
     relay_connections: int
     sessions: tuple[SessionStatus, ...]
+    spilled: int
+    undeliverable: int
+    set_aside: int
 
 
 @final
@@ -69,6 +73,8 @@ class BiffDaemon:
         "_restore",
         "_run_dir",
         "_server",
+        "_spill",
+        "_spill_task",
         "_started",
         "_sweep_interval",
         "_sweep_task",
@@ -79,6 +85,8 @@ class BiffDaemon:
     _port: int
     _core: DaemonCore
     _restore: SessionRestore
+    _spill: Spill
+    _spill_task: asyncio.Task[None] | None
     _server: Server | None
     _started: float
     _sweeper: SessionSweeper
@@ -115,6 +123,10 @@ class BiffDaemon:
         resolver = resolver or DiskResolver()
         pool = RelayPool(relay_factory or RelayPool.selecting())
         records = HarnessRecords(sessions.root.parent / "harness-sessions")
+        spill = Spill(
+            sessions.root.parent / "handback-spill.json",
+            run_dir.path / "handback-spill.json",
+        )
         live = SessionTable(
             heartbeat_interval=heartbeat_interval,
             org_refresh_interval=org_refresh_interval,
@@ -124,13 +136,19 @@ class BiffDaemon:
             resolver=resolver,
             pool=pool,
             sessions=live,
-            methods=Methods(SessionMethods(sessions, live), read_budget),
+            methods=Methods(
+                SessionMethods(sessions, live),
+                read_budget,
+                annotate_status=spill.annotate,
+            ),
             seq=count(1),
             poll_interval=poll_interval,
             attach_timeout=attach_timeout,
             request_timeout=request_timeout,
         )
         self._restore = SessionRestore(records, self._core)
+        self._spill = spill
+        self._spill_task = None
         self._server = None
         self._started = 0.0
         self._sweeper = SessionSweeper(sessions, resolver, pool, live)
@@ -148,10 +166,28 @@ class BiffDaemon:
         return DaemonStatus(
             relay_connections=self._core.pool.connection_count,
             sessions=self._core.sessions.statuses,
+            spilled=self._spill.pending(),
+            undeliverable=self._spill.undeliverable(),
+            set_aside=self._spill.set_aside(),
         )
 
     async def start(self) -> None:
         """Create the token, bind the loopback listener and record its port."""
+        await self._spill.resume(self._core)  # mail the last stop could not file
+        self._spill_task = Supervised.spawn(
+            self._spill.keep_filing(self._core), "spill retry"
+        )
+        try:
+            await self._listen()
+        except BaseException:
+            # A start that fails leaves nothing running: stop() is not called.
+            refiling, self._spill_task = self._spill_task, None
+            refiling.cancel()
+            await asyncio.gather(refiling, return_exceptions=True)
+            raise
+
+    async def _listen(self) -> None:
+        """Restore the sessions, bind the listener and record its port."""
         await self._restore.run()
         handler = ConnectionHandler(self._run_dir.ensure_token(), self._core)
         self._server = await serve(
@@ -183,18 +219,36 @@ class BiffDaemon:
         await self._restore.stop()
         server, self._server = self._server, None
         sweep, self._sweep_task = self._sweep_task, None
-        if sweep is not None:
-            sweep.cancel()
-            await asyncio.gather(sweep, return_exceptions=True)
+        refiling, self._spill_task = self._spill_task, None
+        for task in (sweep, refiling):
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         try:
             if server is not None:
                 server.close()
-                await server.wait_closed()
+                await self._wait_closed(server)
         finally:
             try:
-                await Handback.close_relays(self._core)
+                await Handback.close_relays(self._core, self._spill)
             finally:
                 self._run_dir.remove_port(owned_by=self._port)
+
+    @staticmethod
+    async def _wait_closed(server: Server) -> None:
+        """Wait for the listener's connections to close, for a bounded time.
+
+        A request in flight can hold the listener for its own timeout; the
+        hand-back has the mail to give back and the supervisor's deadline to meet.
+        """
+        try:
+            async with asyncio.timeout(Handback.CLOSE_SECONDS):
+                await server.wait_closed()
+        except TimeoutError:
+            logger.warning(
+                "the listener did not close within %g s; stopping anyway",
+                Handback.CLOSE_SECONDS,
+            )
 
     async def run_foreground(self) -> None:
         """Serve until SIGINT or SIGTERM, then shut down cleanly.
