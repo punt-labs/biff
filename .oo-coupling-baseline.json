@@ -1483,12 +1483,26 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
-  "src/biff/server/daemon_tools.py": {
-    "efferent_coupling": 8.0,
+  "src/biff/server/daemon_calls.py": {
+    "efferent_coupling": 3.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.291,
-    "avg_lcom": 0.291
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
+  },
+  "src/biff/server/daemon_tools.py": {
+    "efferent_coupling": 6.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.111,
+    "avg_lcom": 0.111
+  },
+  "src/biff/server/daemon_write_tools.py": {
+    "efferent_coupling": 4.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/biff/server/display_queue.py": {
     "efferent_coupling": 0.0,
@@ -1526,7 +1540,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/server/mcp_assembly.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 8.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,

@@ -32,6 +32,9 @@ class WriteRouter:
         comes from session history: the message then reaches the mailbox
         the sender addressed instead of whichever repo the user is in.
         """
+        if not user:
+            msg = "Empty user: give a user or user:tty to write to."
+            raise ValueError(msg)
         sessions = await relay.get_sessions_for_repos(frozenset(self.visible_repos))
         if not tty:
             return self.resolve(sessions, user, None)

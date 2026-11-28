@@ -12,6 +12,7 @@ from biff.mcp_transport import McpTransport
 from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
 from biff.server.daemon_tools import DaemonReadTools
+from biff.server.daemon_write_tools import DaemonWriteTools
 from biff.server.launch import McpLaunch
 from biff.server.mcp_link import McpLink
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 
 __all__ = ["McpAssembly"]
 
-_READS: Final = ("who", "finger", "last", "read_messages")
+_FAMILIES: Final = (DaemonReadTools, DaemonWriteTools)
 _MOVED: Final = (
     "mcp.transport: daemon cannot be used with --data-dir or --relay-url: biffd "
     "resolves the relay from the repository, so the read tools would read another "
@@ -88,14 +89,15 @@ class McpAssembly:
         if asks_biffd:
             cwd = str(Path.cwd())
             link = McpLink.for_host(user=self.resolved.config.user, cwd=cwd)
-            self.answer_reads_from(link, server, state)
+            self.answer_from(link, server, state)
         return server
 
     @staticmethod
-    def answer_reads_from(
+    def answer_from(
         link: McpLink, server: ChannelServer[ServerState], state: ServerState
     ) -> None:
-        """Have *server* ask biffd, through *link*, for what its read tools say."""
-        for name in _READS:
-            server.local_provider.remove_tool(name)
-        DaemonReadTools(server, state, link).register()
+        """Have *server* ask biffd, through *link*, for what its tools say."""
+        for family in _FAMILIES:
+            for name in family.NAMES:
+                server.local_provider.remove_tool(name)
+            family(server, state, link).register()

@@ -126,7 +126,7 @@ class _Rig:
             pwd="/test",
         )
         server = create_server(state)
-        McpAssembly.answer_reads_from(link or self.link(user), server, state)
+        McpAssembly.answer_from(link or self.link(user), server, state)
         stamped = StampedClient(FastMCPTransport(server))
         await self.stack.enter_async_context(stamped)
         recording = RecordingClient(
@@ -218,7 +218,7 @@ async def test_the_tools_a_daemon_server_lists_are_the_ones_the_in_process_serve
     plain = create_server(create_state(config, tmp_path / "plain"))
     served_state = create_state(config, tmp_path / "served")
     served = create_server(served_state)
-    McpAssembly.answer_reads_from(rig.link("kai"), served, served_state)
+    McpAssembly.answer_from(rig.link("kai"), served, served_state)
 
     def listing(tools: Sequence[Tool]) -> dict[str, tuple[object, ...]]:
         return {t.name: (t.description, t.parameters, t.meta) for t in tools}
@@ -424,6 +424,21 @@ async def _plain(tmp_path: Path, stack: AsyncExitStack) -> RecordingClient:
     stamped = StampedClient(FastMCPTransport(create_server(state)))
     await stack.enter_async_context(stamped)
     return RecordingClient(client=stamped, transcript=Transcript(title=""))
+
+
+async def test_a_write_goes_to_biffd_and_an_empty_address_is_answered_in_text(
+    rig: _Rig,
+) -> None:
+    kai = await rig.client("kai")
+
+    sent = await kai.call("write", to="eric", message="hi")
+    empty = await kai.call("write", to="", message="hi")
+
+    assert (sent, empty, rig.asked.count("write")) == (
+        "Message sent to eric.",
+        "Empty user: give a user or user:tty to write to.",
+        2,
+    )
 
 
 async def test_a_relay_set_only_in_this_process_is_refused_by_name(

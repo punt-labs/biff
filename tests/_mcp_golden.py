@@ -195,6 +195,12 @@ STEPS: Final[tuple[Step, ...]] = (
         "user a not found in visible repos",
     ),
     Step(
+        "kai",
+        "write",
+        {"to": "", "message": "hi"},
+        "Empty user: give a user or user:tty to write to.",
+    ),
+    Step(
         "eric",
         "read_messages",
         {},
