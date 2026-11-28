@@ -1,17 +1,17 @@
 {
   "specification": "docs/specs/claude-session-end.tex",
   "testDirectory": "tests/",
-  "branch": "spec-graceful-stop (main 5684388 merged in)",
+  "branch": "spec-durable-records (main 8cc73dd)",
   "timestamp": "2026-11-27T00:00:00Z",
   "summary": {
-    "covered": 14,
-    "total": 15,
-    "percentage": 93,
-    "gaps": 1
+    "covered": 20,
+    "total": 20,
+    "percentage": 100,
+    "gaps": 0
   },
   "constraints": [
     {
-      "text": "rowPresent => recState /= rsNone (unless forgot): no row outlives its record (no BadOrphan)",
+      "text": "rowPresent => recState /= rsNone (unless the record was dropped): no row outlives its record (no BadOrphan)",
       "category": "invariant",
       "source": "EndInv",
       "coveredBy": "tests/test_daemon/test_claude_end.py::test_an_end_that_fails_keeps_the_record_and_the_next_one_finishes; tests/test_daemon/test_claude_end.py::test_a_logout_that_cannot_be_recorded_keeps_the_record_for_the_next_end; tests/test_daemon/test_claude_end.py::test_another_connection_of_an_ended_session_cannot_rebuild_its_row",
@@ -19,7 +19,7 @@
       "verifiedBy": "the first two make delete_session / append_wtmp fail once and assert the record (status().sessions) stays while the row is still readable, then the next end removes row and record; the third asserts a second connection cannot recreate the row after the end"
     },
     {
-      "text": "ttyOwner = tOld => recState /= rsNone (unless forgot): the name does not outlive the record",
+      "text": "ttyOwner = tOld => recState /= rsNone (unless the record was dropped): the name does not outlive the record",
       "category": "invariant",
       "source": "EndInv",
       "coveredBy": "tests/test_daemon/test_claude_end.py::test_ending_a_session_removes_its_row_and_frees_its_name; tests/test_daemon/test_claude_expiry.py::test_a_session_nobody_is_attached_to_expires_at_retention",
@@ -35,12 +35,12 @@
       "verifiedBy": "the test releases the old session's reservation, reserves the name for kai:someone-else, ends the session, and asserts the owner is still kai:someone-else"
     },
     {
-      "text": "outboxN + flightN + sessN + userN + shownN + lostN + strandedN = issuedN: an end files the held batch and drains the session inbox into the user's mailbox; a graceful stop files the outbox (and the mail of a read that settles) back to the relay; a stop whose bounded wait expires loses only the broadcast mail a late fetch takes; a process loss loses the outbox and the read in flight",
+      "text": "outboxN + flightN + sessN + userN + shownN + lostN + strandedN = issuedN: an end files the held batch and drains the session inbox into the user's mailbox; a graceful stop files the outbox back; a process loss loses the outbox and the read in flight; a drop of the record strands the session inbox (strandedN counts it; it is not recovered)",
       "category": "invariant",
       "source": "EndInv",
-      "coveredBy": "tests/test_daemon/test_claude_end.py::test_an_end_files_back_the_mail_the_session_holds; tests/test_daemon/test_claude_end.py::test_an_end_loses_no_mail_still_in_the_inbox; tests/test_daemon/test_shutdown_reads.py::test_mail_a_read_took_while_the_daemon_stopped_is_there_after_a_restart; tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_keeps_the_mail_a_read_held",
+      "coveredBy": "tests/test_daemon/test_claude_end.py::test_an_end_files_back_the_mail_the_session_holds; tests/test_daemon/test_claude_end.py::test_an_end_loses_no_mail_still_in_the_inbox; tests/test_daemon/test_shutdown_reads.py::test_mail_a_read_took_while_the_daemon_stopped_is_there_after_a_restart; tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_keeps_the_mail_a_read_held; tests/test_daemon/test_durable_sessions.py::test_a_crash_loses_the_outbox_but_not_the_mail_still_in_the_relay",
       "confidence": "high",
-      "verifiedBy": "the first holds an unconfirmed batch (consuming relay) and asserts it is in the user mailbox after the end; the second asserts both inbox messages reach the user mailbox; the two tests of the graceful stop (test_shutdown_reads.py, test_claude_expiry.py) assert the stop side of the equation: the held batch and the settled read's mail are back in the relay. The loss side (a crash, a late broadcast fetch) has no test: see ProcessLoss and limitsWithoutTest. shownN is not asserted. flightN is asserted only through the first graceful-stop test (a read mid-fetch when the stop arrives)"
+      "verifiedBy": "the first holds an unconfirmed batch (consuming relay) and asserts it is in the user mailbox after the end; the second asserts both inbox messages reach the user mailbox; the two tests of the graceful stop (test_shutdown_reads.py, test_claude_expiry.py) assert the stop side of the equation: the held batch and the settled read's mail are back in the relay. The last asserts the crash side: the held batch is lost and the mail still in the relay reaches the user's mailbox at retention. The late broadcast fetch has no test: see limitsWithoutTest. shownN is not asserted. flightN is asserted only through the first graceful-stop test (a read mid-fetch when the stop arrives)"
     },
     {
       "text": "recState = rsEnding => endRun = currentRun: a replaced run cannot end the session",
@@ -107,32 +107,79 @@
       "verifiedBy": "a reply is handed over (request_held), never confirmed, the client closes, a new connection reads and finds the message still unread. It shows no consumption without a confirming client, which is what the model's connected-client guard stands for"
     },
     {
-      "text": "ProcessLoss (live or dormant): a crash loses the daemon's outbox and any read in flight; the relay's mail is not lost (PL-1753)",
+      "text": "ProcessLoss (live or dormant): a crash loses the daemon's outbox and any read in flight; the relay's mail and the record are not lost (PL-1753)",
       "category": "effect",
       "source": "ProcessLoss",
-      "coveredBy": "",
-      "confidence": "low",
-      "status": "untested",
-      "verifiedBy": "no test. A crash cannot be tested in-process: the daemon test harness stops a daemon gracefully, and a graceful stop now files the outbox back. The only test that asserted an outbox loss (test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail) was removed with the hand-back, because what it stopped was a graceful stop. Counted as uncovered"
+      "coveredBy": "tests/test_daemon/test_durable_sessions.py::test_a_crash_loses_the_outbox_but_not_the_mail_still_in_the_relay; tests/test_daemon/test_durable_sessions.py::test_a_crash_keeps_the_record_and_the_relays_mail_of_a_live_session",
+      "confidence": "medium",
+      "verifiedBy": "read on main 8cc73dd. _kill closes the listener and the relays, cancels the sweep and the retry, and patches SessionTable.release so no connection is noted as left: no hand-back, no cleanup, as a kill. The first holds an unconfirmed batch (request_held on a consuming relay), writes a second message, kills and restarts; at retention 0 the mailbox holds only the second message. The second kills a session with a connection on it and asserts the restored session reaches retention, its row goes, its mail reaches the mailbox and its record goes. It is an in-process kill, not a process death: medium"
     },
     {
-      "text": "GracefulStop / GracefulStopForget (settled? = ztrue): the held outbox of every session, and mail of a read that settled, is filed back to the relay before the daemon closes; the relay's mail is untouched",
+      "text": "GracefulStop (settled? = ztrue): the held outbox of every session, and mail of a read that settled, is filed back to the relay before the daemon closes; the relay's mail is untouched",
       "category": "effect",
-      "source": "GracefulStop, GracefulStopForget",
+      "source": "GracefulStop",
       "coveredBy": "tests/test_daemon/test_shutdown_reads.py::test_mail_a_read_took_while_the_daemon_stopped_is_there_after_a_restart; tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_keeps_the_mail_a_read_held; tests/test_daemon/test_shutdown_reads.py::test_one_held_message_the_relay_refuses_does_not_drop_the_others",
       "confidence": "high",
-      "verifiedBy": "read on main 5684388. The first: a consuming relay whose fetch_user_inbox consumes the mail and stalls 0.3 s; harness.daemon.stop() is called while a read is mid-fetch (consumed set); a new BiffDaemon queried by a cli client returns the mail: the settle step waits for the read and the hand-over files it. The second is parametrised over consuming and non-consuming relays: a seat holds an unconfirmed batch (request_held 'read'), the daemon is stopped and revived, and a reattached read returns it. The third holds three unconfirmed messages, makes the first publish at stop fail, and asserts m2 and m3 are given back (one refused message does not drop the rest; the refused one stays held and is logged). All restart a daemon that has forgotten its harness records, so they exercise GracefulStopForget, not the durable GracefulStop; the filing is the same step"
+      "verifiedBy": "read on main 5684388. The first: a consuming relay whose fetch_user_inbox consumes the mail and stalls 0.3 s; harness.daemon.stop() is called while a read is mid-fetch (consumed set); a new BiffDaemon queried by a cli client returns the mail: the settle step waits for the read and the hand-over files it. The second is parametrised over consuming and non-consuming relays: a seat holds an unconfirmed batch (request_held 'read'), the daemon is stopped and revived, and a reattached read returns it. The third holds three unconfirmed messages, makes the first publish at stop fail, and asserts m2 and m3 are given back (one refused message does not drop the rest; the refused one stays held and is logged). The second also asserts the session is restored from its record, dormant, before any hello (RestoreRecord); the first and third restart a daemon and read the mail back through a client"
     },
     {
-      "text": "GracefulStop / GracefulStopForget (settled? = zfalse, lastStop = sTimedOut): the settle wait is bounded and the stop returns; held mail is filed back; mail the read had not yet taken stays in the relay; session mail already in the outbox survives",
+      "text": "GracefulStop (settled? = zfalse, lastStop = sTimedOut): the settle wait is bounded and the stop returns; held mail is filed back; mail the read had not yet taken stays in the relay; session mail already in the outbox survives",
       "category": "effect",
-      "source": "GracefulStop, GracefulStopForget",
+      "source": "GracefulStop",
       "coveredBy": "tests/test_daemon/test_shutdown_reads.py::test_a_read_that_never_finishes_does_not_hold_the_stop_or_the_held_mail; tests/test_daemon/test_shutdown_reads.py::test_session_mail_a_read_took_before_a_stuck_broadcast_fetch_survives_a_stop",
       "confidence": "high",
       "verifiedBy": "the first sets SETTLE_SECONDS to 0.1, holds m1 (request_held), writes m2, and starts a read that hangs before taking m2; stop() completes inside 0.4 s and a restarted daemon reads m1 and m2 (m1 filed back, m2 never taken). The second makes the broadcast fetch stick after the session fetch took the session mail; stop() runs out the wait and a restarted daemon reads the session mail (SessionFetch put it into the outbox before the broadcast fetch). Neither test makes a fetch consume mail and then outlive the wait: that loss (lostN with sTimedOut) is the window PL-1777 tracks, see limitsWithoutTest"
+    },
+    {
+      "text": "RestoreRecord: a kept record whose repository is there and whose relay row is listed is built again at start, dormant; retention resumes from the stored dormant time; a session that had a connection starts a fresh retention; the claimed run comes back",
+      "category": "effect",
+      "source": "RestoreRecord",
+      "coveredBy": "tests/test_daemon/test_durable_sessions.py::test_unread_session_mail_reaches_the_mailbox_after_a_daemon_restart; tests/test_daemon/test_durable_sessions.py::test_a_restored_session_ends_on_request_and_drains_its_mail; tests/test_daemon/test_durable_sessions.py::test_a_restored_session_resumes_its_retention_from_when_it_went_idle; tests/test_daemon/test_durable_sessions.py::test_a_session_that_had_a_connection_at_the_restart_gets_a_fresh_retention; tests/test_daemon/test_durable_sessions.py::test_a_replaced_run_is_the_run_that_comes_back; tests/test_daemon/test_harness_records.py::test_a_session_is_marked_dormant_and_attached_again",
+      "confidence": "high",
+      "verifiedBy": "the first closes the client, restarts, and at retention 0 the unread session mail is in the mailbox and the row gone; the second restarts, sees the session held with no connection, reattaches and ends it, mail drained and record deleted; the third marks dormant_since ten days ago, restarts, and a sweep at three days ends it; the fourth restarts a session that had a connection and a sweep at three days leaves its row (fresh retention); the fifth opens two runs and the restored run is a2; the last stores and clears dormant_since. The model's retention age is paused while the daemon is down (the code's runs on): see limitsWithoutTest"
+    },
+    {
+      "text": "RestoreFail: a start that cannot build the session keeps the record and counts the failure; retried at 5/15/45 s while running and at the next start",
+      "category": "effect",
+      "source": "RestoreFail",
+      "coveredBy": "tests/test_daemon/test_durable_sessions.py::test_a_session_the_relay_could_not_serve_at_start_is_retried_while_running; tests/test_daemon/test_durable_sessions.py::test_a_session_with_an_unusable_configuration_is_kept_until_it_is_fixed; tests/test_daemon/test_durable_sessions.py::test_a_registration_that_fails_at_restore_keeps_the_dormant_time; tests/test_daemon/test_durable_sessions.py::test_a_hanging_and_a_failing_session_do_not_hold_back_the_good_one; tests/test_daemon/test_harness_records.py::test_failed_starts_are_counted_and_kept",
+      "confidence": "high",
+      "verifiedBy": "the first fails one resolve with a relay error and the session is present after the retry; the second breaks the configuration of an existing repository: the session is absent and its record kept, and after the fix a restart restores it; the third makes the registration fail: the record keeps its old dormant time with failed_starts 1; the fourth restores the good session beside a hanging and a failing one; the last counts 1, 2. The retry delays are shortened by the tests, not asserted as 5/15/45"
+    },
+    {
+      "text": "DropRecord: dRepoGone (repository directory gone: dropped at once), dRowGone (the relay lists no row: the session ended, or aged out while down), dFailedStarts (MAX_FAILED_STARTS starts in a row failed)",
+      "category": "effect",
+      "source": "DropRecord",
+      "coveredBy": "tests/test_daemon/test_durable_sessions.py::test_a_session_whose_repository_is_gone_is_dropped; tests/test_daemon/test_durable_sessions.py::test_a_record_whose_session_ended_is_dropped_not_brought_back; tests/test_daemon/test_durable_sessions.py::test_a_session_that_fails_to_restore_start_after_start_is_dropped; tests/test_daemon/test_durable_sessions.py::test_registrations_that_keep_failing_at_restore_end_in_a_drop",
+      "confidence": "high",
+      "verifiedBy": "the first restarts with a resolver that fails for /work/missing-soon, a directory that does not exist: the record is gone after one start (the unusable-configuration test, whose directory exists, keeps its record: that is RestoreFail); the second deletes the relay row and restarts: the session is not held and no record remains; the third sets MAX_FAILED_STARTS 2 and fails every start: the record stays after the first and is gone after the second; the fourth sets 3 and makes the registration fail: the record is dropped on the third start. The model bounds the count at 2; the code's 5 is a constant the tests change"
+    },
+    {
+      "text": "HelloFirst: a hello for the session before the start restores it wins; the restore leaves it alone and the failure count is cleared",
+      "category": "effect",
+      "source": "HelloFirst",
+      "coveredBy": "tests/test_daemon/test_durable_sessions.py::test_a_retry_leaves_a_session_that_reconnected_first_alone",
+      "confidence": "high",
+      "verifiedBy": "a restart with one failed resolve, then a connect and a close before the retry: after the retry the record's dormant_since is the new disconnect, not the old record"
+    },
+    {
+      "text": "a record is kept from its hello to its end; a hello whose record cannot be written is refused and leaves no session",
+      "category": "invariant",
+      "source": "records",
+      "coveredBy": "tests/test_daemon/test_durable_sessions.py::test_a_session_is_kept_from_its_hello_to_its_end; tests/test_daemon/test_durable_sessions.py::test_a_record_that_cannot_be_written_refuses_the_hello_and_a_retry_keeps_it; tests/test_daemon/test_durable_sessions.py::test_a_refused_hello_leaves_no_session_for_mail_to_reach; tests/test_daemon/test_durable_sessions.py::test_an_end_whose_record_cannot_be_deleted_still_ends",
+      "confidence": "high",
+      "verifiedBy": "the first sees the record after the hello and none after the end; the second blocks the directory: the hello is refused with a message naming the record and a retry keeps it; the third refuses a hello and writes to the user: no row lists the refused session; the fourth makes the delete fail: the end still ends and logs it (the stale record is dropped at the next start, DropRecord with dRowGone)"
     }
   ],
   "limitsWithoutTest": [
+    {
+      "text": "DropRecord: the mail waiting in the relay inbox of a dropped session stays there (strandedN)",
+      "reason": "a deliberate limit of the code: the relay is not stored in the record, so a drop cannot forward the mail. The model counts it as stranded, not as conserved, and only a drop strands. No test asserts the mail stays after a drop; it is stated, not repaired"
+    },
+    {
+      "text": "RowAgesOut, TtyAgesOut: the relay row and the name age out by the relay's own lifetime while the daemon is down or after a drop; the retention age is paused while down",
+      "reason": "relay behaviour, outside biffd; the model's age does not run while the daemon is down (the code resumes from the stored dormant time, which keeps running), a conservative simplification. The local relay's name reservation has no lifetime, so there TtyAgesOut does not happen. PL-1777 is the open residual (deadline remainder, spill)"
+    },
     {
       "text": "GracefulStop with settled? = zfalse and mail in flight (lostN > 0, lastStop = sTimedOut): a read whose broadcast fetch consumed the user's mail and outlives the settle wait loses it",
       "reason": "the window the code cannot close without a further change (PL-1777: the late broadcast fetch). The session mail is not in it: SessionFetch holds it in the outbox first, which test_session_mail_a_read_took_before_a_stuck_broadcast_fetch_survives_a_stop asserts. No test asserts the loss itself, because it would pin a defect. The model's loss is of the broadcast fetch only (BroadcastFetch, flightN); the session fetch (MailFetch) enters the outbox atomically"
@@ -140,14 +187,6 @@
     {
       "text": "Handback refile budget (REFILE_SECONDS, 15 s) spent: the held messages not yet filed are dropped and logged",
       "reason": "the deadline remainder is lost with the process (PL-1777). test_slow_publishes_at_stop_end_at_a_total_budget_and_are_logged asserts the stop ends at the budget and logs the count, not that the remainder survives. The model has no transition for it yet: a spill transition (the remainder written to local storage) will be modelled with the fix"
-    },
-    {
-      "text": "ProcessLoss: the crash loses the outbox and any read in flight (PL-1753), and the forgotten harness records (PL-1771)",
-      "reason": "counted as a GAP in the summary, not as covered: a crash cannot be tested in-process, and the only test that asserted an outbox loss was removed with the hand-back. The loss is kept in the model as ProcessLoss and ProcessLossForget"
-    },
-    {
-      "text": "GracefulStopForget, ProcessLossForget, RowAgesOut, TtyAgesOut: the code keeps harness records in memory, so a restart forgets them; the row and (on NATS) the name age out by the relay's lifetime, the local relay's name reservation has no lifetime, and the restarted session's own relay inbox is stranded (strandedN; the user's mailbox is untouched)",
-      "reason": "a divergence from the durable-record model, reported as a finding (PL-1771 tracks the code fix): a name held up to the row lifetime, or for good on the local relay, and unread session-inbox mail never drained to the user mailbox. No test asserts the forgotten record or the stranding"
     },
     {
       "text": "claude-session-end-unordered-owned.tex: the owner check alone keeps the new session's name",
@@ -163,11 +202,15 @@
     },
     {
       "text": "claude-session-end-unrecorded-loss.tex: a settled stop that adds the dropped mail to lostN without reporting it in stopLost",
-      "reason": "model result (invariant 15, lostN = lostBefore + stopLost, violated; conservation and lastStop = sGraceful => stopLost = 0 hold); the shipped model holds over 12,769 states"
+      "reason": "model result (invariant 15, lostN = lostBefore + stopLost, violated; conservation and lastStop = sGraceful => stopLost = 0 hold); the shipped model holds over 42,325 states"
     },
     {
       "text": "a crash after the relay gave session mail up and before the daemon stored it",
       "reason": "PL-1753; not representable in the model (the fetch and the storage are one step); a documented limit"
+    },
+    {
+      "text": "claude-session-end-nopersist.tex: the records are not kept (the old forgetting behaviour) and the mail is stranded with no drop behind it",
+      "reason": "model result (invariant 8, strandedN > 0 => dropCause in the drop causes, violated by MailArrive, ProcessLoss); the code keeps the records, covered by the restore rows above"
     }
   ],
   "notes": "The z-spec audit tool is not available to this agent; the audit was done by hand following /z-spec:audit: each row's tests were read, not matched by name (see verifiedBy)."
