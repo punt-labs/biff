@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from biff.client.connection import ClientIdentity, DaemonClient, RequestTimeoutError
+from biff.client.connection import (
+    ClientIdentity,
+    DaemonClient,
+    DaemonError,
+    RequestTimeoutError,
+)
 from biff.daemon.connection import ConnectionHandler
 from biff.relay import LocalRelay
 from tests.test_daemon.consuming import ConsumingRelay
@@ -155,6 +160,22 @@ async def test_a_reply_the_client_gave_up_on_does_not_consume_the_mail(
         await kai.request("read")  # the daemon replies after the client left
     await asyncio.sleep(0.4)  # the late reply was written and discarded
     monkeypatch.setattr(relay_type, "delay", 0.0)
+    assert _bodies(await kai.request("read")) == ["do not lose me"]
+
+
+async def test_a_read_the_daemon_timed_out_does_not_lose_the_mail_it_fetched(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.factory.relay_type = SlowConsumingRelay
+    kai = await _short_patience_client(harness, _WAIT)
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="do not lose me")
+    # Longer than the daemon's own request timeout (0.5 s in the harness): the
+    # daemon cancels the read after the relay consumed the mail.
+    monkeypatch.setattr(SlowConsumingRelay, "delay", 0.7)
+    with pytest.raises(DaemonError, match="timed out"):
+        await kai.request("read")
+    monkeypatch.setattr(SlowConsumingRelay, "delay", 0.0)
     assert _bodies(await kai.request("read")) == ["do not lose me"]
 
 
