@@ -58,6 +58,7 @@ class ArrivalsReading:
         mark = await reading.mark()  # the mark first: the count is read after it
         unread = await reading.unread()
         wall = await ctx.relay.get_wall()
+        row = await ctx.relay.get_session(ctx.session_key)
         queued, invites = ctx.talk.peek()
         data = {
             "mark": mark,
@@ -68,5 +69,7 @@ class ArrivalsReading:
                 for i in invites.values()
             ],
             "talk_pending": len(queued),
+            # The session record holds mesg; an absent record is not off.
+            "mesg": row is None or row.biff_enabled,
         }
         return CommandResult(text=f"unread: {unread}", json_data=data)

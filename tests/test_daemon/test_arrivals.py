@@ -105,3 +105,14 @@ async def test_arrivals_refuses_params(harness: Harness) -> None:
     kai = await harness.connect("s-kai", "kai")
     with pytest.raises(DaemonError):
         await kai.request("arrivals", session_key="eric:abc")
+
+
+async def test_arrivals_reports_whether_the_session_takes_messages(
+    harness: Harness,
+) -> None:
+    kai = await harness.connect("s-kai", "kai")
+    assert (await _arrivals(kai))["mesg"] is True
+
+    await kai.request("mesg", value="n")
+
+    assert (await _arrivals(kai))["mesg"] is False
