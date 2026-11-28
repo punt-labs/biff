@@ -182,6 +182,10 @@
 
 ### Fixed
 
+- A channel check request that biffd delivers again no longer makes a second
+  `channel_check` event. The session remembers the last eight tokens it was
+  owed, so a replay, also after the `channel_ack`, sends nothing and cannot
+  re-arm the token for a second acknowledgement.
 - A graceful stop of biffd no longer loses mail a consuming relay had already given
   up. As soon as the stop has sealed the outboxes it writes everything it holds to
   `~/.punt-labs/biff/handback-spill.json` (0600, synced; a second copy goes to the

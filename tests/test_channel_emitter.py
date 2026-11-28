@@ -1885,6 +1885,7 @@ class TestChannelCheck:
     """``docs/specs/channel-check.tex``: an accepted request sends exactly one event."""
 
     _REPLY = "_INBOX.doctor1"
+    _TOKEN = "b" * 32
 
     async def test_a_request_sends_exactly_one_check_event(self, rig: _Rig) -> None:
         rig.open()
@@ -1931,6 +1932,80 @@ class TestChannelCheck:
         await rig.emitter.check()
         assert sorted(m["kind"] for m in rig.sink.metas) == ["channel_check", "mail"]
         assert rig.emitter.held == frozenset()
+
+    async def test_the_same_request_delivered_twice_emits_one_event(
+        self, rig: _Rig
+    ) -> None:
+        """biffd delivers a request at least once: a replay is not a new check."""
+        rig.open()
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+        assert rig.sink.metas == [{"kind": "channel_check"}]
+
+    async def test_a_request_held_by_the_gate_is_emitted_once_when_released(
+        self, rig: _Rig
+    ) -> None:
+        """Owed is not emitted: a held request, replayed while held, goes out once."""
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+        rig.emitter.owe_check(self._TOKEN)  # the replay arrives while it is held
+        await rig.emitter.check()
+        assert rig.sink.metas == []
+
+        rig.open()
+        await rig.emitter.check()
+        await rig.emitter.check()
+        assert rig.sink.metas == [{"kind": "channel_check"}]
+
+    async def test_a_request_replayed_after_the_ack_emits_nothing(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+        assert rig.check.acknowledge(self._TOKEN) is not None
+
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+
+        assert rig.sink.metas == [{"kind": "channel_check"}]
+
+    async def test_a_repeated_ack_after_a_replay_changes_nothing(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+        rig.check.acknowledge(self._TOKEN)
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+
+        assert rig.check.acknowledge(self._TOKEN) is None
+
+    async def test_a_new_request_is_owed_after_an_older_one_replays(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+        rig.emitter.owe_check("f" * 32)
+        await rig.emitter.check()
+        rig.emitter.owe_check(self._TOKEN)  # the first request, redelivered late
+        await rig.emitter.check()
+        assert len(rig.sink.metas) == 2
+
+    async def test_a_new_session_owes_a_token_the_old_one_spent(
+        self, rig: _Rig
+    ) -> None:
+        rig.open()
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+        rig.check.reset()
+        rig.emitter.owe_check(self._TOKEN)
+        await rig.emitter.check()
+        assert len(rig.sink.metas) == 2
 
 
 def test_the_instructions_do_not_tell_the_model_to_distrust_bodies() -> None:

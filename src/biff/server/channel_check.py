@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import hmac
 import logging
+import math
 import re
 import secrets
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Self
 
@@ -33,10 +35,11 @@ class ChannelCheck:
 
     _REPLY = re.compile(r"_INBOX\.[A-Za-z0-9_.-]{1,120}")
     _clock: Callable[[], float]
-    _last_accepted: float | None  # absent until the first request is accepted
+    _last_accepted: float  # -inf until the first request is accepted
     _token: str | None  # absent when no check is pending
     _reply: str
     _is_unsent: bool
+    _owed: deque[str]  # the last 8 tokens owed, so a replayed request is not a new one
 
     def __new__(cls, clock: Callable[[], float] = time.monotonic) -> Self:
         """Create a session's check state with nothing pending."""
@@ -51,10 +54,9 @@ class ChannelCheck:
         A ``/clear`` or resume keeps the process but is a new session, which
         inherits neither the old session's cooldown nor its pending token.
         """
-        self._last_accepted = None
-        self._token = None
-        self._reply = ""
-        self._is_unsent = False
+        self._last_accepted = -math.inf
+        self._token, self._reply, self._is_unsent = None, "", False
+        self._owed = deque(maxlen=8)
 
     def request(self, reply: str) -> str | None:
         """Accept a request naming *reply*; return its fresh token, or ``None``.
@@ -64,12 +66,8 @@ class ChannelCheck:
         extend the window.  An accepted one retires any earlier token.
         """
         now = self._clock()
-        if self._REPLY.fullmatch(reply) is None:  # a forger's subject
-            return None
-        if (
-            self._last_accepted is not None
-            and now < self._last_accepted + CHECK_SECONDS
-        ):
+        is_forged = self._REPLY.fullmatch(reply) is None  # a forger's subject
+        if is_forged or now < self._last_accepted + CHECK_SECONDS:
             return None
         self._last_accepted = now
         self._token = secrets.token_hex(16)
@@ -80,12 +78,13 @@ class ChannelCheck:
     def owe(self, token: str) -> None:
         """Owe the event for *token*, made by biffd, which also took the request.
 
-        biffd keeps the cooldown and the reply subject, so only the token and
-        the fact that it is unsent are held here.
+        biffd keeps the cooldown and the reply subject.  It delivers a request at
+        least once, so a token already owed, sent or spent, is not owed again.
         """
-        self._token = token
-        self._reply = ""
-        self._is_unsent = True
+        if token in self._owed:
+            return
+        self._owed.append(token)
+        self._token, self._reply, self._is_unsent = token, "", True
 
     def take_unsent(self) -> str | None:
         """Return the token whose event is owed, once; ``None`` if none is owed."""
