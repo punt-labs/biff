@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from enum import Enum, auto
-from typing import Self
+from typing import Protocol, Self
 
 from biff.relay_errors import RelayLog
 from biff.server.channel_reading import ArrivalSource
@@ -20,6 +20,22 @@ class Gate(Enum):
     OPEN = auto()
     CLOSED = auto()  # not initialised, or mesg off: stays owed, nothing to retry
     UNREADABLE = auto()  # the mesg record could not be read: try again
+
+
+class ReadinessGate(Protocol):
+    """What the emitter asks before it sends: ready and allowed, or not."""
+
+    def initializing(self) -> None:
+        """Close the gate: the client sent ``initialize`` and is not yet ready."""
+        ...
+
+    def initialized(self) -> None:
+        """Open the gate to the client: it sent ``notifications/initialized``."""
+        ...
+
+    async def state(self) -> Gate:
+        """Say whether an event may go out now."""
+        ...
 
 
 class SendGate:

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from biff.daemon.handback import Handback
 from biff.supervision.biffd import BIFFD_SPEC
 from biff.supervision.errors import (
     BinaryNotFoundError,
@@ -141,6 +142,16 @@ class TestSystemdUnit:
     def test_a_crash_loop_is_bounded(self, home: Path) -> None:
         text = SystemdBackend(BIFFD_SPEC).unit_text()
         assert "StartLimitIntervalSec=" in text and "StartLimitBurst=" in text
+
+    def test_systemd_waits_for_the_daemons_whole_stop_before_it_kills_it(
+        self, home: Path
+    ) -> None:
+        # The same ordering as launchd's ExitTimeOut: above the stop, below the
+        # limit of the call that waits for it.
+        lines = SystemdBackend(BIFFD_SPEC).unit_text().splitlines()
+        (given,) = (ln for ln in lines if ln.startswith("TimeoutStopSec="))
+        seconds = float(given.partition("=")[2])
+        assert Handback.STOP_SECONDS < seconds < Supervisor.STOP_TIMEOUT_SECONDS
 
     def test_a_permanent_failure_status_is_not_restarted(self, home: Path) -> None:
         text = SystemdBackend(BIFFD_SPEC).unit_text()
@@ -277,12 +288,62 @@ class TestLaunchdPlist:
     def test_a_crash_loop_is_throttled(self, home: Path) -> None:
         assert self._plist(home)["ThrottleInterval"] == 30
 
+    def test_launchd_waits_for_the_daemons_whole_stop_before_it_kills_it(
+        self, home: Path
+    ) -> None:
+        # Without ExitTimeOut launchd SIGKILLs biffd after about 20 s; the stop
+        # has Handback.STOP_SECONDS, and a restart waits longer than launchd does.
+        exit_timeout = self._plist(home)["ExitTimeOut"]
+        assert isinstance(exit_timeout, int)
+        assert Handback.STOP_SECONDS < exit_timeout < LaunchdBackend.UNLOAD_WAIT_SECONDS
+
     def test_the_plist_passes_the_port_explicitly(self, home: Path) -> None:
         args = self._plist(home)["ProgramArguments"]
         assert isinstance(args, list) and args[-2:] == [
             "--port",
             str(BIFFD_SPEC.health_port),
         ]
+
+
+class TestTheSupervisorOutwaitsTheDaemonsStop:
+    """The daemon's stop takes up to Handback.STOP_SECONDS; a supervisor call that
+    waits for it must not give up first, or install rolls back mid hand-back."""
+
+    LIMIT = Handback.STOP_SECONDS + 15
+
+    def test_the_limit_for_a_stop_exceeds_the_stop_budget(self) -> None:
+        assert Supervisor.STOP_TIMEOUT_SECONDS >= self.LIMIT
+
+    @pytest.mark.parametrize("verb", ["stop", "restart"])
+    def test_systemctl_stop_and_restart(
+        self, home: Path, script: ScriptedSupervisor, verb: str
+    ) -> None:
+        backend = SystemdBackend(BIFFD_SPEC)
+        getattr(backend, verb)()
+        limit = script.timeout_of("systemctl", "--user", verb)
+        assert limit >= self.LIMIT
+
+    def test_systemctl_restart_inside_install(
+        self, home: Path, script: ScriptedSupervisor
+    ) -> None:
+        SystemdBackend(BIFFD_SPEC).install()
+        limit = script.timeout_of("systemctl", "--user", "restart")
+        assert limit >= self.LIMIT
+
+    def test_systemctl_disable_now_inside_uninstall(
+        self, home: Path, script: ScriptedSupervisor
+    ) -> None:
+        installed_unit(home)
+        script.answer("systemctl", "--user", "is-active", rc=3, out="inactive\n")
+        SystemdBackend(BIFFD_SPEC).uninstall()
+        limit = script.timeout_of("systemctl", "--user", "disable", "--now")
+        assert limit >= self.LIMIT
+
+    def test_launchctl_bootout(self, home: Path, script: ScriptedSupervisor) -> None:
+        script.answer_in_turn("launchctl", "print", rcs=[0, 113])
+        LaunchdBackend(BIFFD_SPEC).stop()
+        limit = script.timeout_of("launchctl", "bootout")
+        assert limit >= self.LIMIT
 
 
 class TestLaunchd:

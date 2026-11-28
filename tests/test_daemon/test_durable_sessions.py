@@ -12,10 +12,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from biff.client.connection import ClientIdentity, DaemonClient, DaemonError
-from biff.daemon.harness_records import (
-    HarnessRecords,
-    _Stored,  # pyright: ignore[reportPrivateUsage]
-)
+from biff.daemon.durable_file import DurableFile
+from biff.daemon.harness_records import HarnessRecords
 from biff.daemon.resolver import ResolveError
 from biff.daemon.server import SESSION_SWEEP_SECONDS, BiffDaemon
 from biff.daemon.session_key import SessionKey
@@ -614,13 +612,13 @@ async def test_a_first_hello_writes_its_record_once(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     writes: list[Path] = []
-    write = HarnessRecords._write  # pyright: ignore[reportPrivateUsage]
+    write = DurableFile.replace
 
-    def counting(self: HarnessRecords, path: Path, stored: _Stored) -> None:
-        writes.append(path)
-        write(self, path, stored)
+    def counting(directory: Path, name: str, text: str) -> None:
+        writes.append(directory / name)
+        write(directory, name, text)
 
-    monkeypatch.setattr(HarnessRecords, "_write", counting)
+    monkeypatch.setattr(DurableFile, "replace", staticmethod(counting))
 
     await _connect(harness, harness.daemon, "s-once")
 

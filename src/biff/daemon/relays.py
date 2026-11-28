@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,7 +114,7 @@ class RelayPool:
         return relay
 
     async def close(self) -> None:
-        """Close every relay.
+        """Close every relay, all at once, so one slow peer does not delay the rest.
 
         A relay that fails to close for a reason a dead peer explains is logged
         and does not keep the rest open.  Any other failure is a bug: it is
@@ -124,15 +125,19 @@ class RelayPool:
                 is not a relay outage.
         """
         relays, self._relays = list(self._relays.values()), {}
-        bugs: list[Exception] = []
-        for relay in relays:
-            try:
-                await relay.close()
-            except RELAY_ERRORS:
-                logger.warning("failed to close a relay", exc_info=True)
-            except Exception as exc:
-                logger.exception("a relay failed to close")
-                bugs.append(exc)
-        if bugs:
+        outcomes = await asyncio.gather(*(self._close_one(r) for r in relays))
+        if bugs := [exc for exc in outcomes if exc is not None]:
             msg = "relays failed to close"
             raise ExceptionGroup(msg, bugs)
+
+    @staticmethod
+    async def _close_one(relay: Relay) -> Exception | None:
+        """Close *relay*; return the failure that is a bug, if there was one."""
+        try:
+            await relay.close()
+        except RELAY_ERRORS:
+            logger.warning("failed to close a relay", exc_info=True)
+        except Exception as exc:
+            logger.exception("a relay failed to close")
+            return exc
+        return None

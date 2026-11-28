@@ -170,6 +170,22 @@ class McpLink:
         """Return the link that starts biffd on this host when it is down."""
         return cls(user=user, cwd=cwd, connect=HostConnector.for_host().connect)
 
+    async def open(self, session_id: str) -> DaemonClient:
+        """Open a connection of its own to *session_id*, which the caller closes.
+
+        It attaches to the session beside the connection the tools use, so a
+        subscription on it disturbs neither.
+
+        Raises:
+            ConnectionError: biffd is absent, cannot start, or the hello failed.
+            DaemonError: biffd refused the hello.
+        """
+        return await self._connect(
+            ClientIdentity(
+                client="mcp", session_id=session_id, cwd=self._cwd, user=self._user
+            )
+        )
+
     async def ask(self, session_id: str, method: str, **params: JsonValue) -> Reply:
         """Run *method* for *session_id* and return its reply.
 

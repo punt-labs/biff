@@ -38,6 +38,7 @@ from biff.models import BiffConfig, WallPost
 from biff.relay import LocalRelay
 from biff.run_dir import RunDir
 from biff.server.app import create_server
+from biff.server.daemon_channel_tools import DaemonChannelAck
 from biff.server.mcp_assembly import McpAssembly
 from biff.server.mcp_link import McpLink
 from biff.server.state import ServerState
@@ -244,6 +245,34 @@ async def test_the_tools_a_daemon_server_lists_are_the_ones_the_in_process_serve
     assert listing(list(await served.list_tools())) == listing(
         list(await plain.list_tools())
     )
+
+
+async def test_binding_a_session_starts_the_channel_feed_on_biffd(
+    rig: _Rig, tmp_path: Path
+) -> None:
+    state = create_state(BiffConfig(user="kai", repo_name=REPO), tmp_path / "feed")
+    in_process = state.emitter
+    feed = McpAssembly.feed_channel_from(rig.link("kai"), state)
+
+    state.bind(SessionRouting("s-fed"))
+
+    assert state.emitter is not in_process  # the channel loop serves biffd's
+    deadline = asyncio.get_running_loop().time() + 3.0
+    while "s-fed" not in {s.session_id for s in rig.daemon.status().sessions}:
+        assert asyncio.get_running_loop().time() < deadline, "the feed never attached"
+        await asyncio.sleep(0.02)
+    await feed.close()
+
+
+async def test_channel_ack_asks_biffd(rig: _Rig, tmp_path: Path) -> None:
+    state = create_state(BiffConfig(user="kai", repo_name=REPO), tmp_path / "ack")
+    state.bind(SessionRouting("s-ack"))
+    ack = DaemonChannelAck(create_server(state), state, rig.link("kai"))
+
+    text = await ack.channel_ack("0" * 32)
+
+    # biffd, not this process, holds the check: a local relay cannot carry one.
+    assert "no NATS relay" in text
 
 
 async def test_mail_stays_unread_until_the_tool_has_returned_it(rig: _Rig) -> None:

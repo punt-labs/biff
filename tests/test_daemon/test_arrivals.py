@@ -8,10 +8,12 @@ mark it announces, so a client orders what it was told.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from biff.relay import LocalRelay
 from tests.test_daemon.consuming import ConsumingRelay
 
 if TYPE_CHECKING:
@@ -105,3 +107,49 @@ async def test_arrivals_refuses_params(harness: Harness) -> None:
     kai = await harness.connect("s-kai", "kai")
     with pytest.raises(DaemonError):
         await kai.request("arrivals", session_key="eric:abc")
+
+
+async def test_arrivals_reports_whether_the_session_takes_messages(
+    harness: Harness,
+) -> None:
+    kai = await harness.connect("s-kai", "kai")
+    assert (await _arrivals(kai))["mesg"] is True
+
+    await kai.request("mesg", value="n")
+
+    assert (await _arrivals(kai))["mesg"] is False
+
+
+async def test_an_invite_nobody_has_read_yet_is_listed_as_live(
+    harness: Harness, bus: object
+) -> None:
+    assert bus is not None
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    status = cast("dict[str, dict[str, str]]", await kai.request("status"))
+    await eric.request("talk", to=f"kai:{status['data']['tty_name']}", message="")
+    await asyncio.sleep(0.2)  # the invite is queued, not yet drained by talk_read
+
+    data = await _arrivals(kai)
+
+    invites = cast("list[dict[str, str]]", data["invites"])
+    assert [i["from"] for i in invites] == ["eric"]
+    # The queued frame is the invite: it is a frame waiting, but not a talk line.
+    assert (data["talk_pending"], data["talk_lines"]) == (1, 0)
+
+
+async def test_a_session_whose_row_is_gone_is_logged_once_as_mesg_on(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    kai = await harness.connect("s-kai", "kai")
+    key = cast("dict[str, dict[str, str]]", await kai.request("status"))["data"][
+        "session_key"
+    ]
+    await LocalRelay(harness.factory.built[0]).delete_session(key)
+
+    with caplog.at_level(logging.WARNING, logger="biff.daemon.arrivals_reading"):
+        first = await _arrivals(kai)
+        second = await _arrivals(kai)
+
+    assert first["mesg"] is True and second["mesg"] is True
+    assert caplog.text.count("has no session row") == 1

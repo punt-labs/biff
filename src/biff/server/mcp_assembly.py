@@ -12,6 +12,8 @@ from biff.mcp_transport import McpTransport
 from biff.repo_transport import RepoTransport
 from biff.server.app import create_server
 from biff.server.caller_policy import CallerPolicy
+from biff.server.daemon_channel import DaemonChannelFeed
+from biff.server.daemon_channel_tools import DaemonChannelAck
 from biff.server.daemon_talk_tools import DaemonTalkTools
 from biff.server.daemon_tools import DaemonReadTools
 from biff.server.daemon_write_tools import DaemonWriteTools
@@ -69,13 +71,28 @@ class McpAssembly:
         if asks_biffd and any(o is not None for o in self.overrides):
             raise SystemExit(_MOVED)
         state = McpLaunch(self.resolved, self.toggle).state()
+        link = None
+        if asks_biffd:
+            link = McpLink.for_host(user=self.resolved.config.user, cwd=str(Path.cwd()))
+            self.feed_channel_from(link, state)
         caller = CallerPolicy.for_launch(self.user, self.transport)
         server = create_server(state, default_caller=caller)
-        if asks_biffd:
-            cwd = str(Path.cwd())
-            link = McpLink.for_host(user=self.resolved.config.user, cwd=cwd)
+        if link is not None:
             self.answer_from(link, server, state)
         return server
+
+    @staticmethod
+    def feed_channel_from(link: McpLink, state: ServerState) -> DaemonChannelFeed:
+        """Have *state*'s channel events come from biffd's subscription.
+
+        The emitter is replaced before the server is created, so the channel
+        loop serves the one that reads biffd; the feed follows the session the
+        server binds to.
+        """
+        feed = DaemonChannelFeed(link=link, check=state.channel_check)
+        object.__setattr__(state, "emitter", feed.emitter)
+        object.__setattr__(state, "session_bound", feed.bind)
+        return feed
 
     @staticmethod
     def answer_from(
@@ -86,3 +103,5 @@ class McpAssembly:
             for name in family.NAMES:
                 server.local_provider.remove_tool(name)
             family(server, state, link).register()
+        # ``channel_ack`` exists only while channel mode serves: biffd's answers it.
+        server.attach_channel_tools(DaemonChannelAck(server, state, link).register)

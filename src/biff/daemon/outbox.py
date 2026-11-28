@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
     import uuid
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from biff.models import Message
 
@@ -31,16 +31,18 @@ class Outbox:
     fetched is lost if the client dies: delivery is at least once, never silent.
     """
 
-    __slots__ = ("_held", "_retains")
+    __slots__ = ("_held", "_retains", "_sink")
 
     _held: dict[uuid.UUID, Message]
     _retains: bool
+    _sink: Callable[[Sequence[Message]], object] | None
 
     def __new__(cls, *, retains: bool) -> Self:
         """Create an empty outbox; *retains* is whether the relay consumes on fetch."""
         self = super().__new__(cls)
         self._held = {}
         self._retains = retains
+        self._sink = None
         return self
 
     def __len__(self) -> int:
@@ -49,12 +51,35 @@ class Outbox:
 
     def merge(self, fetched: Sequence[Message]) -> list[Message]:
         """Hold *fetched*, replacing a held message its copy came back for; list all."""
+        if self._retains and self._sink is not None:
+            # Sealed: what is held is in the spill and the hand-back files it back.
+            # A fetched message that is already held is not spilled twice; the copy
+            # of a held one replaces it (filing the original later would reuse the
+            # copy's id, which the relay may drop as a duplicate). The read, whose
+            # client is gone, is left nothing.
+            fresh: list[Message] = []
+            for message in fetched:
+                original = message.original_in(self._held)
+                if original == message.id and message.id in self._held:
+                    continue
+                self._held.pop(original, None)
+                fresh.append(message)
+            self._sink(fresh)
+            return []
         if self._retains:
             for message in fetched:
                 self._held.pop(message.original_in(self._held), None)
                 self._held[message.id] = message
             fetched = list(self._held.values())
         return sorted(fetched, key=lambda m: (m.timestamp, m.id))
+
+    def seal(self, sink: Callable[[Sequence[Message]], object]) -> None:
+        """Stop holding: what is fetched from now on goes to *sink*.
+
+        For a daemon that is stopping: it gives back what is held, and a fetch
+        that finishes after that would be held in a process about to exit.
+        """
+        self._sink = sink
 
     def held(self) -> list[Message]:
         """Return every message held, oldest first."""
