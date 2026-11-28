@@ -160,6 +160,14 @@
     {
       "text": "claude-session-end-noflight.tex and -noflight-counted.tex: a settled stop that drops the read's mail (uncounted: conservation is violated; counted: lastStop = sGraceful => stopLost = 0 is violated)",
       "reason": "model results (the first violates invariant 8, the second invariant 13); the code files the settled read's mail, covered by the first test of the graceful-stop row"
+    },
+    {
+      "text": "claude-session-end-unrecorded-loss.tex: a settled stop that adds the dropped mail to lostN without reporting it in stopLost",
+      "reason": "model result (invariant 15, lostN = lostBefore + stopLost, violated; conservation and lastStop = sGraceful => stopLost = 0 hold); the shipped model holds over 12,769 states"
+    },
+    {
+      "text": "a crash after the relay gave session mail up and before the daemon stored it",
+      "reason": "PL-1753; not representable in the model (the fetch and the storage are one step); a documented limit"
     }
   ],
   "notes": "The z-spec audit tool is not available to this agent; the audit was done by hand following /z-spec:audit: each row's tests were read, not matched by name (see verifiedBy)."

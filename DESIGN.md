@@ -9913,13 +9913,20 @@ The plain retention statement "a dormant record at its retention enables
 states what holds: the expiry or the read's hand-over is enabled, and from
 every such state the expiry is reachable.
 
-Two windows remain, tracked by PL-1777, and the model keeps them as losses:
-a broadcast fetch that outlives the settle wait consumes the user's mail in a
-process that is about to exit (`lastStop = sTimedOut`, `lostN`), and a
-refile that spends its 15 s budget drops the held messages not yet filed (the
-deadline remainder; the stop logs the count). A spill transition, writing
-that remainder to local storage, will be modelled with the PL-1777 fix. A
-process loss (`ProcessLoss`: a crash or kill) loses the outbox and any read in
+Two windows remain, tracked by PL-1777. The settle timeout is modelled
+(`GracefulStop` with `settled? = zfalse`, `lastStop = sTimedOut`, `lostN`): a
+broadcast fetch that outlives the 5 s wait consumes the user's mail in a
+process that is about to exit. The other two are not modelled: the late
+broadcast fetch as a distinct step (the model has the loss only through the
+timeout), and the refile deadline, where a refile that spends its 15 s budget
+drops the held messages not yet filed (the stop logs the count). In the model
+`GracefulStop` files all held mail and never drops it at the deadline. Both
+are modelled with the PL-1777 fix, together with a spill transition that
+writes the remainder to local storage. The model also cannot represent a crash
+after the relay gave session mail up and before the daemon stored it: that is
+PL-1753, a documented limit of the spec.
+
+A process loss (`ProcessLoss`: a crash or kill) loses the outbox and any read in
 flight, as before (PL-1753); no code path can file mail back from a dead
 process. The conservation invariant counts in-flight mail, so a stop that
 skips the hand-back (`claude-session-end-nograceful.tex`) violates it, and a
@@ -9945,7 +9952,10 @@ holds its name and its unread session-inbox mail is stranded. The spec keeps the
 durable and the forgetting stops; the properties about the record hold unless the
 stop forgot it. Persisting the records, or scanning the relay's rows at start,
 closes it: PL-1771. The tests of the graceful stop restart a daemon that has
-forgotten its records, so they exercise `GracefulStopForget`.
+forgotten its records, so they exercise `GracefulStopForget`. `GracefulStopForget` counts the
+mail it files back as stranded: that another session finds and reads it is not
+verified, because that needs a second session in the model, and belongs to the
+PL-1771 model change (the durable record fix).
 
 **Audit status.** `claude-session-end.audit.json` reports 14 of 15 clauses
 covered and one GAP: `ProcessLoss`, which a crash makes untestable in-process

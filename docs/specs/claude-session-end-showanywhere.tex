@@ -155,7 +155,8 @@ session of a clear, after its hello.
   forgot : ZBOOL \\
   lastStop : StopKind \\
   stopHeld : 0 \upto maxMail \\
-  stopLost : 0 \upto maxMail
+  stopLost : 0 \upto maxMail \\
+  lostBefore : 0 \upto maxMail
 \end{schema}
 
 Mail counts: held by the session ($outboxN$), in the session's own inbox in the
@@ -175,7 +176,10 @@ back), $sTimedOut$ (a graceful stop whose bounded wait ended with a read still i
 flight), $sProcess$ (the process was lost).  $stopHeld$ and $stopLost$ are ghosts of that last
 stop alone: the mail the stop found held ($outboxN + flightN$ at the moment of the stop) and the
 part of it the stop lost.  Neither is cumulative, so a goal on them cannot be met by mail an
-earlier crash lost.
+earlier crash lost.  $lostBefore$ is $lostN$ as the last stop found it, so that
+$lostN = lostBefore + stopLost$ ties what a stop reports losing to what it added to
+$lostN$: only a stop changes $lostN$, so a stop that adds dropped mail to $lostN$
+without reporting it in $stopLost$ breaks the equation.
 
 \begin{schema}{EndState}
   Record \\
@@ -198,6 +202,7 @@ earlier crash lost.
   outboxN + flightN + sessN + userN + shownN + lostN + strandedN = issuedN \\
   lastStop = sGraceful \implies stopLost = 0 \\
   stopLost \leq stopHeld \\
+  lostN = lostBefore + stopLost \\
   shownDormant = zfalse
 \end{schema}
 
@@ -211,7 +216,7 @@ shown, lost with a restart of the daemon (the outbox is its memory), or stranded
 by a restart that forgot the record.  An end loses nothing: $FileOutbox$ files
 what is held and drains the session's inbox into the user's mailbox.  A stop that
 settled ($sGraceful$) lost nothing of its own ($stopLost = 0$); a stop never loses
-more than it found held.
+more than it found held, and what it reports losing is what $lostN$ gained.
 
 \begin{schema}{Invariant}
   EndInv
@@ -245,6 +250,7 @@ more than it found held.
   lastStop' = sNone \\
   stopHeld' = 0 \\
   stopLost' = 0 \\
+  lostBefore' = 0 \\
   shownDormant' = zfalse \\
   forgot' = zfalse
 \end{schema}
@@ -340,6 +346,7 @@ The daemon's sweep counts a dormant record's age.
   issuedN' = issuedN \\
   shownDormant' = shownDormant \\
   forgot' = ztrue \\
+  lostBefore' = lostN \\
   stopHeld' = outboxN + flightN \\
   stopLost' = ( \IF settled? = ztrue \THEN 0 \ELSE flightN ) \\
   lastStop' = ( \IF settled? = ztrue \THEN sGraceful \ELSE sTimedOut )
@@ -366,6 +373,7 @@ The daemon's sweep counts a dormant record's age.
   issuedN' = issuedN \\
   shownDormant' = shownDormant \\
   forgot' = ztrue \\
+  lostBefore' = lostN \\
   stopHeld' = outboxN + flightN \\
   stopLost' = outboxN + flightN \\
   lastStop' = sProcess
@@ -381,7 +389,9 @@ $TtyAgesOut$ below).  The two stops differ in the mail.
     request timeout for the reads in flight ($settled? = ztrue$ when they finish
     in time), files every session's held outbox back to the relay
     (\texttt{Handback.close\_relays}), and closes the relays.  Nothing is lost: the
-    held batch and the finished reads' mail go back to the session's relay inbox.
+    held batch and the finished reads' mail go back to the session's relay inbox.  The model counts that mail as $strandedN$: that another session finds and reads it
+    is not verified here, because it needs a second session; it belongs to the model
+    change that makes the record durable (PL-1771).
     If the wait times out ($settled? = zfalse$, $sTimedOut$) the mail of a read
     still between its consuming fetch and its hand-over is lost with the process,
     which is the one loss a graceful stop has; the unread mail still in the relay
@@ -470,6 +480,7 @@ variant: the NATS behaviour is the favourable one.
   shownDormant' = shownDormant \\
   strandedN' = strandedN \\
   forgot' = forgot \\
+  lostBefore' = lostN \\
   stopHeld' = outboxN + flightN \\
   stopLost' = ( \IF settled? = ztrue \THEN 0 \ELSE flightN ) \\
   lastStop' = ( \IF settled? = ztrue \THEN sGraceful \ELSE sTimedOut )
@@ -496,6 +507,7 @@ variant: the NATS behaviour is the favourable one.
   shownDormant' = shownDormant \\
   strandedN' = strandedN \\
   forgot' = forgot \\
+  lostBefore' = lostN \\
   stopHeld' = outboxN + flightN \\
   stopLost' = outboxN + flightN \\
   lastStop' = sProcess
@@ -510,7 +522,9 @@ for the reads in flight can time out ($settled? = zfalse$), and the mail of a re
 still in flight is then lost.  $ProcessLoss$ loses the outbox and the mail in
 flight (the window the unconfirmed batch has in DES-099, PL-1753); the mail the
 relay holds is not lost by either.  A stop in the middle of an end ($rsEnding$) is
-not modelled.
+not modelled.  Nor is the code's refile deadline: $GracefulStop$ files all the held mail and never
+drops it at the budget, and the late broadcast fetch is a loss only through the timeout
+($sTimedOut$).  Both are tracked as PL-1777 and will be modelled with its fix.
 
 %%----------------------------------------------------------------------
 \section{Ending a session}
@@ -668,6 +682,7 @@ from being claimed while it is still held.
   lastStop' = lastStop \\
   stopHeld' = stopHeld \\
   stopLost' = stopLost \\
+  lostBefore' = lostBefore \\
   mailTodo' = zfalse \\
   rowPresent' = rowPresent \\
   ttyOwner' = ttyOwner \\
@@ -755,7 +770,8 @@ reply before it sends the hello.
   flightN' = flightN \\
   lastStop' = lastStop \\
   stopHeld' = stopHeld \\
-  stopLost' = stopLost
+  stopLost' = stopLost \\
+  lostBefore' = lostBefore
 \end{schema}
 
 A read makes two consuming fetches.  The session's own mail goes into the outbox at once
@@ -783,7 +799,8 @@ the fetch running in a process that is about to exit, and the mail it takes is l
   flightN' = flightN \\
   lastStop' = lastStop \\
   stopHeld' = stopHeld \\
-  stopLost' = stopLost
+  stopLost' = stopLost \\
+  lostBefore' = lostBefore
 \end{schema}
 
 Mail addressed to the user, not to one session (a broadcast), arrives in the user's
@@ -803,6 +820,7 @@ mailbox.
   lastStop' = lastStop \\
   stopHeld' = stopHeld \\
   stopLost' = stopLost \\
+  lostBefore' = lostBefore \\
   shownN' = shownN \\
   issuedN' = issuedN \\
   lostN' = lostN \\
@@ -811,7 +829,9 @@ mailbox.
   forgot' = forgot
 \end{schema}
 
-The first of a read's two fetches: the session's own mail.  The code puts it into
+The first of a read's two fetches: the session's own mail.  The model cannot represent a
+crash after the relay gave the mail up and before the daemon stored it: the fetch and the
+storage are one step here.  That window is PL-1753, a documented limit of this model.  The code puts it into
 the outbox before the next step can run (\texttt{SessionFetch.unread} merges it at once), so
 there is no moment at which it is held by neither the relay nor the outbox.
 
@@ -829,6 +849,7 @@ there is no moment at which it is held by neither the relay nor the outbox.
   lastStop' = lastStop \\
   stopHeld' = stopHeld \\
   stopLost' = stopLost \\
+  lostBefore' = lostBefore \\
   shownN' = shownN \\
   issuedN' = issuedN \\
   lostN' = lostN \\
@@ -856,7 +877,8 @@ there is no moment at which it is held by neither the relay nor the outbox.
   forgot' = forgot \\
   lastStop' = lastStop \\
   stopHeld' = stopHeld \\
-  stopLost' = stopLost
+  stopLost' = stopLost \\
+  lostBefore' = lostBefore
 \end{schema}
 
 The read finishes: the mail the broadcast fetch took is now held in the outbox.  The held mail is
@@ -888,7 +910,8 @@ is the count $shownN$ took when it was handed over.
   flightN' = flightN \\
   lastStop' = lastStop \\
   stopHeld' = stopHeld \\
-  stopLost' = stopLost
+  stopLost' = stopLost \\
+  lostBefore' = lostBefore
 \end{schema}
 
 \begin{schema}{Quiesce}
@@ -964,7 +987,7 @@ $recState = rsDormant \land outboxN > 0 \Rightarrow e(GracefulStop)$, the same f
 $ProcessLoss$, and $flightN > 0 \land recState \neq rsNone \Rightarrow
 e(MailHandOver)$.
 
-Eleven frozen variants are the negative controls, each the shipped file with one
+Twelve frozen variants are the negative controls, each the shipped file with one
 thing taken out:
 \begin{itemize}
   \item \texttt{claude-session-end-nograceful.tex}: $GracefulStop$ and
@@ -979,6 +1002,10 @@ thing taken out:
     mail and count it as lost, still reporting $sGraceful$.  Conservation holds (the loss is
     counted), and the invariant $lastStop = sGraceful \Rightarrow stopLost = 0$ is violated:
     a stop that reports success must have lost nothing.
+  \item \texttt{claude-session-end-unrecorded-loss.tex}: a settled stop drops the read's mail
+    and adds it to $lostN$ without reporting it in $stopLost$.  Conservation holds and
+    $lastStop = sGraceful \Rightarrow stopLost = 0$ holds; $lostN = lostBefore + stopLost$ is
+    violated.
   \item \texttt{claude-session-end-nofile.tex}: $FileOutbox$ drops what the session
     holds (the end that does not file mail back, the requirement A2 of DES-099
     states): the conservation invariant is violated.
@@ -1040,7 +1067,7 @@ thing taken out:
 %% Negative controls (each reports an invariant violation, the noexpire one a
 %% FALSE CTL formula):
 %%
-%%   for V in nograceful noflight noflight-counted nofile unordered orphan anyrun showanywhere; do
+%%   for V in nograceful noflight noflight-counted unrecorded-loss nofile unordered orphan anyrun showanywhere; do
 %%     "$PROBCLI" docs/specs/claude-session-end-$V.tex $P -model_check
 %%   done
 %%   "$PROBCLI" docs/specs/claude-session-end-noexpire.tex $P -model_check -ctlformula \
