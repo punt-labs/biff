@@ -34,6 +34,11 @@ class Health:
     uptime_seconds: float
     # A biffd older than the field does not report it; absence is the contract.
     pid: int | None = None
+    # What biffd's environment seeded: variable names and relay host, no value.
+    # Empty from a biffd older than the field.
+    relay_seed: str = ""
+    # How the seed changed since biffd last started; empty when it did not.
+    relay_seed_note: str = ""
 
 
 @final
@@ -95,10 +100,14 @@ class HealthProbe:
             msg = f"{_LOOPBACK}:{self._port} is not biffd: /health lacks its fields"
             raise NotBiffdError(msg)
         pid = fields.get("pid")
+        seed = fields.get("relay_seed")
+        note = fields.get("relay_seed_note")
         return Health(
             version,
             float(uptime),
             pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
+            seed if isinstance(seed, str) else "",
+            note if isinstance(note, str) else "",
         )
 
 

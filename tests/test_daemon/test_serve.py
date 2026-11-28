@@ -60,10 +60,16 @@ async def daemon(
     await daemon.stop()
 
 
-async def test_health_answers_with_version_uptime_and_pid_only(
+async def test_health_answers_with_version_uptime_pid_and_the_seed_names(
     daemon: BiffDaemon,
 ) -> None:
-    assert set(await health(daemon.port)) == {"version", "uptime_seconds", "pid"}
+    assert set(await health(daemon.port)) == {
+        "version",
+        "uptime_seconds",
+        "pid",
+        "relay_seed",
+        "relay_seed_note",
+    }
 
 
 async def test_health_reports_the_daemons_own_pid(daemon: BiffDaemon) -> None:

@@ -94,15 +94,15 @@ async def test_a_client_with_the_same_environment_reaches_the_seeded_relay(
     assert relay.accepted >= 1
 
 
-async def test_a_client_with_no_relay_environment_reaches_the_seeded_relay(
+async def test_a_client_with_no_relay_environment_is_refused_naming_the_seed(
     biffd: Biffd, relay: _Relay, repo: Path
 ) -> None:
-    with pytest.raises(DaemonError) as unreachable:
+    with pytest.raises(DaemonError, match="started with BIFF_RELAY_TOKEN") as refused:
         await DaemonClient.connect(
             run_dir=biffd.run_dir, identity=_identity(repo, "s-none")
         )
-    assert "BIFF_RELAY" not in str(unreachable.value)
-    assert relay.accepted >= 1
+    assert _TOKEN not in str(refused.value)
+    assert relay.accepted == 0
 
 
 async def test_a_client_with_another_token_is_refused_before_any_relay_work(

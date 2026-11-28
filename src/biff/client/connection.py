@@ -119,6 +119,7 @@ class DaemonClient:
         "_lost",
         "_pending",
         "_reader",
+        "_relay_seed",
         "_request_timeout",
         "_ws",
     )
@@ -130,8 +131,12 @@ class DaemonClient:
     _reader: asyncio.Task[None]
     _lost: str
     _request_timeout: float
+    # What biffd's environment seeded, as it said in its hello reply.
+    _relay_seed: str
 
-    def __new__(cls, ws: ClientConnection, request_timeout: float) -> Self:
+    def __new__(
+        cls, ws: ClientConnection, request_timeout: float, relay_seed: str = ""
+    ) -> Self:
         """Wrap *ws*, an open connection whose hello the daemon accepted."""
         self = super().__new__(cls)
         self._ws = ws
@@ -140,6 +145,7 @@ class DaemonClient:
         self._events = asyncio.Queue()
         self._lost = ""
         self._request_timeout = request_timeout
+        self._relay_seed = relay_seed
         self._reader = asyncio.create_task(self._read())
         return self
 
@@ -181,19 +187,22 @@ class DaemonClient:
         try:
             mac = await cls._handshake(ws, token, bound, proof_timeout)
             hello = identity.hello(mac)
-            await cls._say_hello(ws, hello, bound, proof_timeout)
+            seeded = await cls._say_hello(ws, hello, bound, proof_timeout)
         except BaseException:
             # Any exit, a cancellation included, that does not hand the socket to
             # a client closes it: the daemon may already have attached the session.
             await ws.close()
             raise
-        return cls(ws, request_timeout)
+        return cls(ws, request_timeout, seeded)
 
     @classmethod
     async def _say_hello(
         cls, ws: ClientConnection, hello: Hello, port: int, timeout: float
-    ) -> None:
-        """Send *hello* and read the daemon's reply to it; the caller closes *ws*."""
+    ) -> str:
+        """Send *hello*, read the reply, and return what biffd says it was seeded with.
+
+        The caller closes *ws*.
+        """
         try:
             await ws.send(Frames.encode(hello))
             frame = cls._decode(await asyncio.wait_for(ws.recv(), timeout=timeout))
@@ -213,6 +222,17 @@ class DaemonClient:
             raise ConnectionLostError(msg)
         if frame.error is not None:
             raise DaemonError(frame.error.code, frame.error.message)
+        result = frame.result
+        seeded = result.get("relay_seed") if isinstance(result, dict) else None
+        return seeded if isinstance(seeded, str) else ""
+
+    @property
+    def relay_seed(self) -> str:
+        """Say which relay settings biffd was started with, and its relay's host.
+
+        Empty from a biffd that does not say.  It names variables, never values.
+        """
+        return self._relay_seed
 
     @staticmethod
     def _port(run_dir: RunDir, port: int | None) -> int:

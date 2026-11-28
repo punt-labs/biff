@@ -276,8 +276,8 @@
     "efferent_coupling": 9.0,
     "public_names": 7.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.714,
-    "avg_lcom": 0.714
+    "max_lcom": 0.743,
+    "avg_lcom": 0.743
   },
   "src/biff/client/environment.py": {
     "efferent_coupling": 1.0,
@@ -483,7 +483,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/config.py": {
-    "efferent_coupling": 3.0,
+    "efferent_coupling": 4.0,
     "public_names": 7.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -570,8 +570,8 @@
     "efferent_coupling": 14.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.758,
-    "avg_lcom": 0.758
+    "max_lcom": 0.682,
+    "avg_lcom": 0.682
   },
   "src/biff/daemon/durable_file.py": {
     "efferent_coupling": 0.0,
@@ -609,7 +609,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/harness_records.py": {
-    "efferent_coupling": 4.0,
+    "efferent_coupling": 5.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.778,
@@ -734,12 +734,19 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/daemon/seed_record.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/daemon/server.py": {
-    "efferent_coupling": 14.0,
+    "efferent_coupling": 15.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.6,
-    "avg_lcom": 0.6
+    "max_lcom": 0.564,
+    "avg_lcom": 0.564
   },
   "src/biff/daemon/service_cli.py": {
     "efferent_coupling": 1.0,
@@ -1534,10 +1541,10 @@
   },
   "src/biff/relay_seed.py": {
     "efferent_coupling": 0.0,
-    "public_names": 4.0,
+    "public_names": 5.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.583,
-    "avg_lcom": 0.583
+    "max_lcom": 0.327,
+    "avg_lcom": 0.327
   },
   "src/biff/relay_select.py": {
     "efferent_coupling": 2.0,

@@ -22,6 +22,7 @@ from biff.daemon.harness_records import HarnessRecords
 from biff.daemon.methods import READ_BUDGET_BYTES, Methods
 from biff.daemon.relays import RelayPool
 from biff.daemon.resolver import DiskResolver
+from biff.daemon.seed_record import SeedRecord
 from biff.daemon.session_methods import SessionMethods
 from biff.daemon.session_restore import SessionRestore
 from biff.daemon.session_sweep import SessionSweeper
@@ -73,6 +74,7 @@ class BiffDaemon:
         "_port",
         "_restore",
         "_run_dir",
+        "_seed_note",
         "_server",
         "_spill",
         "_spill_task",
@@ -88,6 +90,7 @@ class BiffDaemon:
     _restore: SessionRestore
     _spill: Spill
     _spill_task: asyncio.Task[None] | None
+    _seed_note: str
     _server: Server | None
     _started: float
     _sweeper: SessionSweeper
@@ -127,7 +130,7 @@ class BiffDaemon:
         self._port = port
         resolver = resolver or DiskResolver()
         pool = RelayPool(relay_factory or RelayPool.selecting())
-        records = HarnessRecords(sessions.root.parent / "harness-sessions")
+        records = HarnessRecords(sessions.root.parent / "harness-sessions", relay_seed)
         spill = Spill(
             sessions.root.parent / "handback-spill.json",
             run_dir.path / "handback-spill.json",
@@ -155,12 +158,18 @@ class BiffDaemon:
         self._restore = SessionRestore(records, self._core)
         self._spill = spill
         self._spill_task = None
+        self._seed_note = ""
         self._server = None
         self._started = 0.0
         self._sweeper = SessionSweeper(sessions, resolver, pool, live)
         self._sweep_interval = session_sweep_interval
         self._sweep_task = None
         return self
+
+    @property
+    def seed_note(self) -> str:
+        """Say how the relay settings changed since biffd last started; else empty."""
+        return self._seed_note
 
     @property
     def port(self) -> int:
@@ -196,6 +205,11 @@ class BiffDaemon:
         """Restore the sessions, bind the listener and record its port."""
         await self._restore.run()
         handler = ConnectionHandler(self._run_dir.ensure_token(), self._core)
+        self._seed_note = SeedRecord(self._run_dir.path / "relay-seed").record(
+            self._core.relay_seed
+        )
+        if self._seed_note:
+            logger.warning("biffd %s", self._seed_note)
         self._server = await serve(
             handler.handle,
             _LOOPBACK,
@@ -293,6 +307,8 @@ class BiffDaemon:
                 "version": pkg_version("punt-biff"),
                 "uptime_seconds": round(time.monotonic() - self._started, 3),
                 "pid": os.getpid(),
+                "relay_seed": self._core.relay_seed.describe(),
+                "relay_seed_note": self._seed_note,
             }
             response = connection.respond(HTTPStatus.OK, json.dumps(body))
             # respond() stamps text/plain; setting would add a second header.

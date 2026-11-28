@@ -14,11 +14,13 @@ from biff.daemon.durable_file import DurableFile, UnsyncedError
 from biff.daemon.refusal import RefusalError
 from biff.frame_client import ClientType, Hello
 from biff.frame_reply import ErrorCode
+from biff.relay_seed import NO_RELAY_SETTINGS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from biff.daemon.session_key import SessionKey
+    from biff.relay_seed import RelaySeed
 
 __all__ = ["HarnessRecords", "KeptSession"]
 
@@ -49,6 +51,9 @@ class _Stored(BaseModel):
     hello: _StoredHello
     dormant_since: datetime | None = None
     failed_starts: int = 0
+    # The relay variables biffd was seeded with when it opened the session: names
+    # only, so the file holds no secret.
+    relay_seed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +65,8 @@ class KeptSession:
     """When its last connection left; ``None``: one was on it when written."""
     failed_starts: int
     """How many starts in a row could not build it again."""
+    relay_seed: tuple[str, ...]
+    """The relay variables biffd was seeded with when it opened the session."""
 
 
 @final
@@ -71,14 +78,20 @@ class HarnessRecords:
     A shell session is not kept here: its record is the CLI session store's.
     """
 
-    __slots__ = ("_root",)
+    __slots__ = ("_root", "_seed")
 
     _root: Path
+    _seed: tuple[str, ...]
 
-    def __new__(cls, root: Path) -> Self:
-        """Keep the records under *root*, created when the first is kept."""
+    def __new__(cls, root: Path, seed: RelaySeed = NO_RELAY_SETTINGS) -> Self:
+        """Keep the records under *root*, created when the first is kept.
+
+        Each record is tagged with the names of *seed*, the relay settings biffd
+        holds as it opens the session.
+        """
         self = super().__new__(cls)
         self._root = root
+        self._seed = seed.names()
         return self
 
     def keep(self, hello: Hello) -> None:
@@ -95,7 +108,8 @@ class HarnessRecords:
                 main_agent_id=hello.main_agent_id,
                 cwd=hello.cwd,
                 user=hello.user,
-            )
+            ),
+            relay_seed=self._seed,
         )
         try:
             self._write(hello.session_id, stored)
@@ -195,6 +209,7 @@ class HarnessRecords:
             hello=hello,
             dormant_since=None if since is None else since.astimezone(UTC),
             failed_starts=stored.failed_starts,
+            relay_seed=stored.relay_seed,
         )
 
     @staticmethod

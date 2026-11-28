@@ -100,6 +100,16 @@ class SessionRestore:
         hello = kept.hello
         if SessionKey.of(hello) in self._core.sessions.snapshot():
             return True  # a hello came first: its record is newer than this one
+        if kept.relay_seed != self._core.relay_seed.names():
+            logger.warning(
+                "session %s was opened with relay settings %s and biffd now has "
+                "%s; its record is kept dormant until biffd is started with them "
+                "again",
+                hello.session_id,
+                ", ".join(kept.relay_seed) or "none",
+                self._core.relay_seed.listed(),
+            )
+            return True
         try:
             async with asyncio.timeout(self._core.attach_timeout):
                 attachment = await self._open(hello)

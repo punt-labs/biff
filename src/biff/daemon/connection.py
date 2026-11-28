@@ -142,6 +142,7 @@ class ConnectionHandler:
         result: dict[str, JsonValue] = {
             "protocol": PROTOCOL_VERSION,
             "session_key": attachment.session.context.session_key,
+            "relay_seed": self._core.relay_seed.describe(),
         }
         await self._send(ws, Reply(id=_HELLO_ID, result=result))
         return attachment
@@ -204,10 +205,16 @@ class ConnectionHandler:
         core = self._core
         try:
             async with asyncio.timeout(core.attach_timeout):
+                # An end resolves no relay and sends no credential, so it is not
+                # compared: a hook that runs in another environment than the client
+                # that opened the session must still be able to end it.
                 if hello.ends:
                     return await core.sessions.attach_ending(hello)
                 core.relay_seed.admit(RelaySeed.from_wire(hello.relay))
                 resolved = await core.resolver.resolve(hello)
+                core.relay_seed.require_credentials_home(
+                    resolved.config.relay_url, resolved.config.relay_auth
+                )
                 return await core.sessions.open(hello, resolved, core.pool)
         except RefusalError:
             raise

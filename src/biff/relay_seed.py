@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Self, final
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from biff.models import RelayAuth
 
 __all__ = [
     "NO_RELAY_SETTINGS",
@@ -34,6 +38,22 @@ RELAY_VARIABLES: Final[tuple[RelayVariable, ...]] = (
 """The environment variables that choose a relay; sorted, so messages are stable."""
 
 
+_TLS_TRUE_VALUES: Final = frozenset({"1", "true", "yes"})
+_TLS_FALSE_VALUES: Final = frozenset({"0", "false", "no"})
+
+_CREDENTIALS: Final[tuple[RelayVariable, ...]] = (
+    "BIFF_RELAY_NKEYS_SEED",
+    "BIFF_RELAY_TOKEN",
+    "BIFF_RELAY_USER_CREDENTIALS",
+)
+
+
+_CREDENTIAL_PATHS: Final[tuple[RelayVariable, ...]] = (
+    "BIFF_RELAY_NKEYS_SEED",
+    "BIFF_RELAY_USER_CREDENTIALS",
+)
+
+
 class RelayConflictError(ValueError):
     """A client's relay settings differ from the ones biffd was started with."""
 
@@ -48,14 +68,17 @@ class RelaySeed:
     empty value counts as unset, as the relay configuration reads it.
     """
 
-    __slots__ = ("_digests",)
+    __slots__ = ("_digests", "_host")
 
     _digests: Mapping[RelayVariable, str]
+    # The relay's host and port, no credential: what a client may be told.
+    _host: str
 
-    def __new__(cls, digests: Mapping[RelayVariable, str]) -> Self:
+    def __new__(cls, digests: Mapping[RelayVariable, str], host: str = "") -> Self:
         """Create the seed that holds *digests*, keyed by variable name."""
         self = super().__new__(cls)
         self._digests = dict(digests)
+        self._host = host
         return self
 
     @classmethod
@@ -63,11 +86,43 @@ class RelaySeed:
         """Return the seed of *environ*: one digest per relay variable it sets."""
         return cls(
             {
-                name: hashlib.sha256(environ[name].encode()).hexdigest()
+                name: cls._digest(environ[name], name)
                 for name in RELAY_VARIABLES
-                if environ.get(name)
-            }
+                if cls._is_setting(name, environ.get(name, ""))
+            },
+            host=urlsplit(environ.get("BIFF_RELAY_URL", "")).netloc.rpartition("@")[2],
         )
+
+    @staticmethod
+    def tls_value(raw: str) -> bool | None:
+        """Read ``BIFF_RELAY_TLS_HANDSHAKE_FIRST``; ``None`` when it does nothing.
+
+        The one reading the relay configuration and the seed share: case and
+        padding do not matter, and a value that is neither a yes nor a no is
+        ignored.
+        """
+        normalized = raw.strip().casefold()
+        if normalized in _TLS_TRUE_VALUES:
+            return True
+        if normalized in _TLS_FALSE_VALUES:
+            return False
+        return None
+
+    @classmethod
+    def _is_setting(cls, name: RelayVariable, raw: str) -> bool:
+        """Return whether *raw* sets *name* as the relay configuration reads it."""
+        if name == "BIFF_RELAY_TLS_HANDSHAKE_FIRST":
+            return cls.tls_value(raw) is not None
+        return bool(raw)
+
+    @classmethod
+    def _digest(cls, value: str, name: RelayVariable) -> str:
+        """Return the SHA-256 of *value* in the form the configuration reads."""
+        if name == "BIFF_RELAY_URL":
+            value = value.strip().rstrip("/").casefold()
+        elif name == "BIFF_RELAY_TLS_HANDSHAKE_FIRST":
+            value = str(cls.tls_value(value))
+        return hashlib.sha256(value.encode()).hexdigest()
 
     @classmethod
     def from_wire(cls, digests: Mapping[RelayVariable, str]) -> Self:
@@ -82,44 +137,106 @@ class RelaySeed:
         """Return the variables this seed sets, sorted."""
         return tuple(name for name in RELAY_VARIABLES if name in self._digests)
 
-    def conflicts_with(self, seeded: RelaySeed) -> tuple[RelayVariable, ...]:
-        """Return the variables set here that *seeded* does not set to the same value.
-
-        A variable only *seeded* sets is no conflict: a client that carries none
-        of its own is served by the settings biffd was started with.
-        """
+    def differing_from(self, other: RelaySeed) -> tuple[RelayVariable, ...]:
+        """Return the variables set in one seed and not set the same in the other."""
         return tuple(
             name
-            for name in self.names()
-            if self._digests[name] != seeded.digest_of(name)
+            for name in RELAY_VARIABLES
+            if self._digests.get(name, "") != other.digest_of(name)
         )
 
     def admit(self, client: RelaySeed) -> None:
-        """Accept *client*, or say which of its variables differ from this seed.
+        """Accept *client* only if its settings equal this seed's, in both directions.
+
+        A client that sets less than biffd was started with would otherwise be
+        served by relay settings it never chose, and one that sets more would be
+        ignored.
 
         Raises:
-            RelayConflictError: *client* sets a variable this seed lacks or sets to
-                another value.  The message names variables, never values.
+            RelayConflictError: A relay variable is set in one and not set the same
+                in the other.  The message names variables, never values.
         """
-        differing = client.conflicts_with(self)
+        differing = client.differing_from(self)
         if not differing:
             return
-        names = ", ".join(differing)
-        started = (
-            f"biffd was started without {names}"
-            if not any(self.digest_of(name) for name in differing)
-            else f"{names} differ from the ones biffd was started with"
-        )
         msg = (
-            f"{started}; biffd serves one relay setting for all its sessions. "
-            f"Unset {names} here, or stop biffd and run `biff daemon serve` from "
-            "an environment that sets them"
+            f"this process's relay settings must equal biffd's: biffd was started "
+            f"with {self.listed()}, this process sets "
+            f"{client.listed()} (differing: {', '.join(differing)}). Set "
+            "the same environment here, or stop biffd and let it start again from "
+            "this environment"
         )
         raise RelayConflictError(msg)
 
+    def listed(self) -> str:
+        """Return the variable names, comma separated, or ``none``."""
+        return (
+            ", ".join(name for name in RELAY_VARIABLES if name in self._digests)
+            or "none"
+        )
+
+    @classmethod
+    def for_daemon(cls, environ: Mapping[str, str]) -> Self:
+        """Return the seed biffd starts with, or say why it cannot.
+
+        biffd sends the credentials it was started with only to the relay it was
+        started with, so it needs one URL and at most one credential.  A key or
+        credentials file is read by biffd from its own directory, so it must be an
+        absolute path to a file that exists.
+
+        Raises:
+            RelayConflictError: A credential has no ``BIFF_RELAY_URL``, there is
+                more than one credential, or a credentials path is not an absolute
+                path to an existing file.  The message names variables only.
+        """
+        seed = cls.of(environ)
+        held = [name for name in _CREDENTIALS if name in seed.names()]
+        if len(held) > 1:
+            msg = f"{', '.join(held)} are all set; biffd takes at most one of them"
+            raise RelayConflictError(msg)
+        if held and "BIFF_RELAY_URL" not in seed.names():
+            msg = (
+                f"{held[0]} is set but BIFF_RELAY_URL is not; biffd sends its "
+                "credentials only to the relay it was started with. Set "
+                "BIFF_RELAY_URL too, or unset it"
+            )
+            raise RelayConflictError(msg)
+        for name in _CREDENTIAL_PATHS:
+            raw = environ.get(name, "")
+            if raw and not (Path(raw).is_absolute() and Path(raw).is_file()):
+                msg = f"{name} must be an absolute path to a file that exists"
+                raise RelayConflictError(msg)
+        return seed
+
+    def require_credentials_home(
+        self, relay_url: str | None, auth: RelayAuth | None
+    ) -> None:
+        """Refuse a session that would send the seeded credentials elsewhere.
+
+        Raises:
+            RelayConflictError: *auth* holds a credential this seed holds and
+                *relay_url* is not this seed's ``BIFF_RELAY_URL``.
+        """
+        if auth is None:
+            return
+        seeded = {self._digests[name] for name in _CREDENTIALS if name in self._digests}
+        held = {
+            self._digest(value, "BIFF_RELAY_TOKEN")
+            for value in (auth.token, auth.nkeys_seed, auth.user_credentials)
+            if value
+        }
+        here = self._digest(relay_url or "", "BIFF_RELAY_URL")
+        if held & seeded and here != self._digests.get("BIFF_RELAY_URL"):
+            msg = (
+                "this session's relay is not the BIFF_RELAY_URL biffd was started "
+                "with, the only relay it sends its BIFF_RELAY_* credentials to"
+            )
+            raise RelayConflictError(msg)
+
     def describe(self) -> str:
-        """Return the variable names for a log line, or ``none``."""
-        return ", ".join(self.names()) or "none"
+        """Say which variables are set and the relay's host, never a value."""
+        names = self.listed()
+        return f"{names} (relay {self._host})" if self._host else names
 
     def digest_of(self, name: RelayVariable) -> str:
         """Return the digest of *name*'s value, or ``""`` when it is unset."""
@@ -131,7 +248,7 @@ class RelaySeed:
 
     def __repr__(self) -> str:
         """Name the variables; the digests stay out of any log line."""
-        return f"RelaySeed({', '.join(self.names())})"
+        return f"RelaySeed({', '.join(sorted(self._digests))})"
 
 
 NO_RELAY_SETTINGS: Final = RelaySeed({})

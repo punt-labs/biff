@@ -262,8 +262,19 @@ class DaemonChecks:
             return self._fail(
                 name, f"cannot check the relay: biffd is not answering ({_START})"
             )
+        seeded = (
+            f"; started with {health.relay_seed}, which every client is served by"
+            if health.relay_seed and health.relay_seed != "none"
+            else ""
+        )
+        changed = (
+            f"; WARNING {health.relay_seed_note}: sessions opened under the others "
+            "are kept dormant"
+            if health.relay_seed_note
+            else ""
+        )
         return self._pass(
             name,
-            "not reported by biffd yet: no daemon method returns the relay "
-            "connections without registering a session",
+            "connections not reported by biffd yet: no daemon method returns them "
+            f"without registering a session{seeded}{changed}",
         )

@@ -9,7 +9,7 @@ import os
 import sys
 from importlib import import_module
 from importlib.metadata import version as pkg_version
-from typing import TYPE_CHECKING, Self, cast, final
+from typing import TYPE_CHECKING, NoReturn, Self, cast, final
 
 import typer
 from punt_observe.logging import Role
@@ -76,7 +76,10 @@ class Foreground:
                 err=True,
             )
         # Names only: the values are secrets and never reach a log or a screen.
-        seed = RelaySeed.of(os.environ)
+        try:
+            seed = RelaySeed.for_daemon(os.environ)
+        except ValueError as exc:
+            self._fail(str(exc))
         logger.info("biffd relay settings from its environment: %s", seed.describe())
         # Loaded here, after the line above: the relay stack is most of biffd's
         # start-up time, and a daemon that is still importing it has said so.
@@ -105,7 +108,7 @@ class Foreground:
             self._fail(str(exc))
 
     @staticmethod
-    def _fail(message: str) -> None:
+    def _fail(message: str) -> NoReturn:
         """Report *message* as biffd's one-line error and exit permanently.
 
         It goes to the log as well as stderr: under a service manager nobody reads
