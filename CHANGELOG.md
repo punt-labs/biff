@@ -140,13 +140,19 @@
 ### Fixed
 
 - A graceful stop of biffd no longer loses mail a consuming relay had already given
-  up. What the hand-back cannot file within its budget, a relay refused, or a read
-  still fetching delivers late is written to `~/.punt-labs/biff/handback-spill.json`
-  (0600, synced; a second copy goes to the run directory if that cannot be written),
-  and the next start files it back before it serves. A file or entry that cannot be
-  read is set aside under a new name, never overwritten; mail that cannot be filed
-  for seven days goes to `handback-spill.undeliverable`. `biff status` shows how
-  many spilled messages are pending.
+  up. As soon as the stop has sealed the outboxes it writes everything it holds to
+  `~/.punt-labs/biff/handback-spill.json` (0600, synced; a second copy goes to the
+  run directory if that cannot be written), then files it back and removes what it
+  filed, so a process killed at any point after that has the mail on disk. A read
+  still fetching delivers late into the file too. The stop bounds its wait for the
+  listener, and the launchd plist sets `ExitTimeOut` above the stop budget (a
+  restart waits longer than that). The next start files the spill back before it
+  serves, a running daemon keeps trying (after 5, 15 and 45 s, then every five
+  minutes), and mail goes to `handback-spill.undeliverable` only after 20 failed
+  tries over seven days; the shelf is tried again at every start. A file or entry
+  that cannot be read is set aside under a new name, never overwritten, and
+  counted. `biff status` shows how many spilled, shelved and set-aside files there
+  are.
 - A NATS read confirms each ack with the server, all at once, before it deletes
   its consumer. Acks were plain publishes the server could still be processing
   at that moment, so a large inbox came back from the next read: messages were

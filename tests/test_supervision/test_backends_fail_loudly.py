@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from biff.daemon.handback import Handback
 from biff.supervision.biffd import BIFFD_SPEC
 from biff.supervision.errors import (
     BinaryNotFoundError,
@@ -276,6 +277,15 @@ class TestLaunchdPlist:
 
     def test_a_crash_loop_is_throttled(self, home: Path) -> None:
         assert self._plist(home)["ThrottleInterval"] == 30
+
+    def test_launchd_waits_for_the_daemons_whole_stop_before_it_kills_it(
+        self, home: Path
+    ) -> None:
+        # Without ExitTimeOut launchd SIGKILLs biffd after about 20 s; the stop
+        # has Handback.STOP_SECONDS, and a restart waits longer than launchd does.
+        exit_timeout = self._plist(home)["ExitTimeOut"]
+        assert isinstance(exit_timeout, int)
+        assert Handback.STOP_SECONDS < exit_timeout < LaunchdBackend.UNLOAD_WAIT_SECONDS
 
     def test_the_plist_passes_the_port_explicitly(self, home: Path) -> None:
         args = self._plist(home)["ProgramArguments"]

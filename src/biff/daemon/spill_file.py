@@ -41,10 +41,20 @@ class Held(BaseModel):
 
     message: Message
     since: datetime = Field(default_factory=_now)
+    attempts: int = 0
+    """How many times filing it back failed; a week with no try is not a failure."""
 
     def age(self) -> timedelta:
         """How long this message has been waiting."""
         return _now() - self.since
+
+    def failed(self) -> Self:
+        """Return this after one more failed try at filing it back."""
+        return self.model_copy(update={"attempts": self.attempts + 1})
+
+    def renewed(self) -> Self:
+        """Return this as new: no failed tries, waiting from now."""
+        return self.model_copy(update={"attempts": 0, "since": _now()})
 
 
 class Spilled(BaseModel):
@@ -93,10 +103,21 @@ class Spilled(BaseModel):
         )
 
     def with_mail(self, messages: Sequence[Message]) -> Self:
-        """Return this with *messages* added from now; one already here is not twice."""
-        known = {h.message.id for h in self.held}
+        """Return this with *messages* added from now; one already here is not twice.
+
+        A message that is the refiled copy of one held here replaces it: filing
+        the original later would reuse the copy's id, which the relay may drop.
+        """
+        copies = {m.id for m in messages}
+        kept = tuple(h for h in self.held if h.message.refiled().id not in copies)
+        known = {h.message.id for h in kept}
         added = tuple(Held(message=m) for m in messages if m.id not in known)
-        return self.model_copy(update={"held": (*self.held, *added)})
+        return self.model_copy(update={"held": (*kept, *added)})
+
+    def without(self, gone: Sequence[Message]) -> Self:
+        """Return this without *gone*, which was filed back."""
+        ids = {m.id for m in gone}
+        return self.keeping([h for h in self.held if h.message.id not in ids])
 
     def merged_with(self, other: Self) -> Self:
         """Return this with what *other* holds that it does not, with their times."""
@@ -136,11 +157,37 @@ class SpillFile:
 
     def read(self) -> dict[SpillKey, Spilled]:
         """Return the newest snapshot; what cannot be read is quarantined."""
-        places = (self._fallback, self._path)  # the first place wins a tie
+        before = len(self.asides("unreadable"))
+        places = (
+            self._fallback,
+            self._path,
+        )  # the later place, the primary, wins a tie
         found = [(self._read_one(p), rank) for rank, p in enumerate(places)]
         (seq, items), _ = max(found, key=lambda f: (f[0][0], f[1]))
         self._seq = max(seq, 0)
+        if len(self.asides("unreadable")) > before and items:
+            logger.critical(
+                "a spill file could not be read and was set aside; the older "
+                "snapshot is used, and it may replay mail already filed back"
+            )
         return {item.key: item for item in items}
+
+    def asides(self, *kinds: str) -> list[Path]:
+        """Return the files set aside as *kinds* (every kind if none), both places."""
+        found: list[Path] = []
+        for path in {self._path, self._fallback}:
+            for kind in kinds or ("corrupt", "unreadable"):
+                pattern = f"{path.stem}.{kind}-*{path.suffix}"
+                found.extend(path.parent.glob(pattern))
+        return sorted(found)
+
+    def take_shelf(self) -> list[Spilled]:
+        """Return what the shelf holds, for another try; the shelf is left as is."""
+        return self._read_one(self._shelf())[1]
+
+    def clear_shelf(self) -> None:
+        """Remove the shelf, whose mail is in the spill again."""
+        self._drop(self._shelf())
 
     def write(self, entries: Mapping[SpillKey, Spilled]) -> None:
         """Make the spill hold *entries*, as the newest snapshot.

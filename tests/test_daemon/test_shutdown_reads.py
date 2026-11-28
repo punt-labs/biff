@@ -367,3 +367,50 @@ async def test_a_late_read_cannot_take_the_refiled_copy_of_a_held_message(
     finally:
         BarrierRelay.published.set()  # let the read end
         await asyncio.gather(reading, return_exceptions=True)
+
+
+async def test_held_mail_is_in_the_spill_file_before_the_hand_back_files_any_of_it(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stop killed at launchd's 20 s must find the mail on disk: the spill is the
+    # durable copy first, and what is filed is removed from it after.
+    monkeypatch.setattr(Handback, "SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(Handback, "REFILE_SECONDS", 30.0)
+    monkeypatch.setattr(PacedRelay, "publishing", asyncio.Event())
+    harness.factory.relay_type = PacedRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="m1")
+    await kai.request_held("read")  # m1 is held, unconfirmed
+    monkeypatch.setattr(PacedRelay, "pace", 60.0)  # the publish never ends
+    PacedRelay.publishing.clear()  # the writes above published too
+
+    stopping = asyncio.create_task(harness.daemon.stop())
+    await asyncio.wait_for(PacedRelay.publishing.wait(), _WAIT)  # filing has begun
+    spill = harness.sessions.root.parent / "handback-spill.json"
+    try:
+        assert spill.exists()
+        assert '"m1"' in spill.read_text()
+    finally:  # the process is "killed" here
+        stopping.cancel()
+        await asyncio.gather(stopping, return_exceptions=True)
+
+
+async def test_a_listener_that_never_closes_does_not_hold_back_the_hand_back(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    async def never(_self: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("websockets.asyncio.server.Server.wait_closed", never)
+    monkeypatch.setattr(Handback, "CLOSE_SECONDS", 0.1, raising=False)
+    harness.factory.relay_type = ConsumingRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to="kai", message="m1")
+    await kai.request_held("read")  # m1 is held
+
+    async with asyncio.timeout(_WAIT):
+        await harness.daemon.stop()
+
+    assert await _read_after_restart(harness, tmp_path) == ["m1"]
