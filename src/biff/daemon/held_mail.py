@@ -10,6 +10,7 @@ from biff.relay_errors import RELAY_ERRORS
 
 if TYPE_CHECKING:
     from biff.daemon.sessions import Session
+    from biff.models import Message
 
 __all__ = ["HeldMail"]
 
@@ -31,13 +32,22 @@ class HeldMail:
         logged, and the first such failure is raised once the rest were tried.
         """
         inbox = Inbox(session.context, (), ())
-        first: Exception | None = None
-        for message in session.outbox.held():
-            try:
-                if await inbox.refile(message):
-                    session.outbox.forget([message])
-            except RELAY_ERRORS as exc:
-                logger.warning("could not file held message %s again", message.id)
-                first = first or exc
-        if first is not None:
-            raise first
+        outcomes = [
+            await HeldMail._attempt(session, inbox, message)
+            for message in session.outbox.held()
+        ]
+        if failures := [outcome for outcome in outcomes if outcome is not None]:
+            raise failures[0]
+
+    @staticmethod
+    async def _attempt(
+        session: Session, inbox: Inbox, message: Message
+    ) -> Exception | None:
+        """File *message* again and release it; return the relay's refusal, if any."""
+        try:
+            if await inbox.refile(message):
+                session.outbox.forget([message])
+        except RELAY_ERRORS as exc:
+            logger.warning("could not file held message %s again", message.id)
+            return exc
+        return None

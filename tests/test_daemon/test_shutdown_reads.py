@@ -55,6 +55,23 @@ class FlakyRelay(ConsumingRelay):
         await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
 
 
+class StalledPublishRelay(ConsumingRelay):
+    """A consuming relay whose publishes can be made to never return."""
+
+    stalled = False
+
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
+        if type(self).stalled:
+            await asyncio.Event().wait()  # never; the caller's deadline cancels it
+        await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
+
+
 class StuckRelay(ConsumingRelay):
     """A consuming relay whose broadcast fetch can hang before it takes any mail."""
 
@@ -66,6 +83,18 @@ class StuckRelay(ConsumingRelay):
         if type(self).hanging:
             type(self).stuck.set()
             await type(self).release.wait()
+        return await super().fetch_user_inbox(user)
+
+
+class BroadcastStuckRelay(ConsumingRelay):
+    """A consuming relay whose broadcast fetch hangs once the session fetch is done."""
+
+    stuck = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fetch_user_inbox(self, user: str) -> list[Message]:
+        type(self).stuck.set()
+        await type(self).release.wait()
         return await super().fetch_user_inbox(user)
 
 
@@ -162,3 +191,47 @@ async def test_a_read_that_never_finishes_does_not_hold_the_stop_or_the_held_mai
     finally:
         StuckRelay.release.set()  # end the leftover read so the test leaves none
         await asyncio.gather(reading, return_exceptions=True)
+
+
+async def test_session_mail_a_read_took_before_a_stuck_broadcast_fetch_survives_a_stop(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(BroadcastStuckRelay, "stuck", asyncio.Event())
+    monkeypatch.setattr(BroadcastStuckRelay, "release", asyncio.Event())
+    monkeypatch.setattr(Handback, "SETTLE_SECONDS", 0.1)
+    harness.factory.relay_type = BroadcastStuckRelay
+    kai = await harness.connect("s-kai", "kai")
+    tty = cast("dict[str, dict[str, str]]", await kai.request("status"))["data"][
+        "tty_name"
+    ]
+    eric = await harness.connect("s-eric", "eric")
+    await eric.request("write", to=f"kai:{tty}", message="for this session")
+    reading = asyncio.create_task(kai.request("read"))
+    # The session fetch took the mail; the broadcast fetch has not returned.
+    await asyncio.wait_for(BroadcastStuckRelay.stuck.wait(), _WAIT)
+    try:
+        await harness.daemon.stop()  # the wait for the read runs out
+        assert await _read_after_restart(harness, tmp_path) == ["for this session"]
+    finally:
+        BroadcastStuckRelay.release.set()
+        await asyncio.gather(reading, return_exceptions=True)
+
+
+async def test_slow_publishes_at_stop_end_at_a_total_budget_and_are_logged(
+    harness: Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(Handback, "REFILE_SECONDS", 0.1)
+    harness.factory.relay_type = StalledPublishRelay
+    kai = await harness.connect("s-kai", "kai")
+    eric = await harness.connect("s-eric", "eric")
+    for body in ("m1", "m2", "m3"):
+        await eric.request("write", to="kai", message=body)
+    await kai.request_held("read")  # all three are held, none confirmed
+    monkeypatch.setattr(StalledPublishRelay, "stalled", True)
+
+    async with asyncio.timeout(0.4):  # the first publish would never end
+        await harness.daemon.stop()
+
+    assert "3 held messages were not given back" in caplog.text
