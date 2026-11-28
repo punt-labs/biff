@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from biff._stdlib import active_dir
-from biff.client.connection import ClientIdentity, DaemonClient
+from biff.client.connection import ClientIdentity, DaemonClient, DaemonError
+from biff.frame_reply import ErrorCode
 from biff.plugins.claude_code.daemon_session import DaemonSessionOpener
 from biff.plugins.claude_code.hook_daemon import HookDaemon
 from biff.relay import LocalRelay
@@ -203,3 +204,33 @@ async def test_a_partial_open_ends_the_session_it_started(
     assert harness.daemon.status().sessions == ()
     assert handles.read(SessionRouting("sess-1")) is None
     assert not active_dir().exists() or not list(active_dir().iterdir())
+
+
+async def test_a_refused_status_request_ends_the_session_the_hello_made(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "work" / "repo"
+    repo.mkdir(parents=True)
+    real_request = DaemonClient.request
+
+    async def refuse_status(
+        self: DaemonClient, method: str, **params: object
+    ) -> object:
+        if method == "status":
+            raise DaemonError(ErrorCode.INTERNAL, "biffd could not answer status")
+        return await real_request(self, method, **params)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(DaemonClient, "request", refuse_status)
+    opener = DaemonSessionOpener(
+        HookDaemon(
+            connect=_connector(harness),
+            unread_dir=tmp_path / "unread",
+            handles=SessionHandleStore(tmp_path / "sessions"),
+            deadline=5.0,
+        ),
+    )
+
+    with pytest.raises(DaemonError):
+        await opener.open({"session_id": "sess-1", "cwd": str(repo)})
+
+    assert harness.daemon.status().sessions == ()  # biffd keeps no half-opened one

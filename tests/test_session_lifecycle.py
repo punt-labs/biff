@@ -50,7 +50,7 @@ def test_a_daemon_checkout_ends_through_biffd(
     root = _checkout(tmp_path / "a", "daemon")
     data: dict[str, object] = {"session_id": "s1", "cwd": str(root)}
 
-    assert SessionLifecycle(data).end_through_biffd() is True
+    assert SessionLifecycle(data).end_through_biffd() == 1
     assert closer.ended == [data]
 
 
@@ -61,7 +61,7 @@ def test_a_checkout_that_chose_in_process_is_left_to_the_sentinel_path(
 
     assert (
         SessionLifecycle({"session_id": "s1", "cwd": str(root)}).end_through_biffd()
-        is False
+        is None
     )
     assert closer.ended == []
 
@@ -76,7 +76,7 @@ def test_every_reason_ends_the_session(
     root = _checkout(tmp_path / "a", "daemon")
     data: dict[str, object] = {"session_id": "s1", "cwd": str(root), "reason": reason}
 
-    assert SessionLifecycle(data).end_through_biffd() is True
+    assert SessionLifecycle(data).end_through_biffd() == 1
     assert closer.ended == [data]
 
 
@@ -92,7 +92,7 @@ def test_a_closer_that_could_not_settle_leaves_the_sentinel_cleanup_to_run(
         {"session_id": "s1", "cwd": str(root)}
     ).end_through_biffd()
 
-    assert handled is False
+    assert handled is None
 
 
 def test_a_payload_without_a_session_id_is_logged_and_runs_no_reaper(
@@ -103,6 +103,6 @@ def test_a_payload_without_a_session_id_is_logged_and_runs_no_reaper(
     with caplog.at_level(logging.WARNING):
         handled = SessionLifecycle({"cwd": str(root)}).end_through_biffd()
 
-    assert handled is True  # biffd may hold the session; the reaper must not run
+    assert handled == 0  # biffd may hold the session; the reaper must not run
     assert closer.ended == []
     assert "no usable session_id" in caplog.text

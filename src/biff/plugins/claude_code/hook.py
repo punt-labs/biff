@@ -721,18 +721,24 @@ def _lifecycle(data: dict[str, object]) -> SessionLifecycle:
     return SessionLifecycle(data)
 
 
-def _open_session(data: dict[str, object]) -> None:
+def _open_session(data: dict[str, object]) -> str:
     """Register the Claude session named by the SessionStart payload.
 
     SessionStart is the harness declaring ``session_id`` to biff, so this is
-    where the durable record is opened.  Best-effort: a failure forfeits
-    presence until the first tool call opens the session instead, but must
-    never break session startup, so it is logged and swallowed.
+    where the durable record is opened.  A failure must never break session
+    startup: it is logged, and returned as one sentence for the model, because
+    the hook's stderr goes nowhere and a session that did not open has no
+    presence until something repairs it.  An empty string means it opened.
     """
     try:
         _lifecycle(data).open()
-    except Exception:
+    except Exception as exc:
         logger.warning("Failed to open session at SessionStart", exc_info=True)
+        return (
+            f"biff could not open this session ({type(exc).__name__}: {exc}). "
+            "Run biff doctor; biff install installs and starts biffd."
+        )
+    return ""
 
 
 def handle_session_start(data: dict[str, object] | None = None) -> str:
@@ -834,8 +840,9 @@ def handle_session_end(data: dict[str, object] | None = None) -> int:
     Raises:
         SystemExit: The ``mcp.transport`` setting is invalid.
     """
-    if _lifecycle(data or {}).end_through_biffd():
-        return 1
+    ended = _lifecycle(data or {}).end_through_biffd()
+    if ended is not None:
+        return ended
     from biff._stdlib import (  # noqa: PLC0415
         active_dir,
         find_git_root,
@@ -939,8 +946,10 @@ def _run_session_start(*, resume: bool) -> None:
     from biff.plugins.claude_code.session_output import SessionOutput  # noqa: PLC0415
 
     data = _read_hook_input()
-    _open_session(data)
+    note = _open_session(data) or ""
     context = handle_session_resume() if resume else handle_session_start(data)
+    if note:
+        context = f"{context} {note}"
     _emit(SessionOutput.warned(_hook_context("SessionStart", context), data))
 
 

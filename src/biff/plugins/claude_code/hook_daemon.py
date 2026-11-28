@@ -116,12 +116,16 @@ class HookDaemon:
         )
         return await self._connect(identity)
 
-    def forget(self, routing: SessionRouting, key: str | None = None) -> None:
+    def forget(
+        self, routing: SessionRouting, key: str | None = None, *, marker: bool = True
+    ) -> None:
         """Remove the active marker, unread status files and handle of a session.
 
         *key* is the session key when the caller knows it; else the handle names it.
+        With ``marker=False`` the active marker stays, for the sentinel cleanup that
+        reads it.
         """
-        if (key := key or self._handles.read(routing)) is not None:
+        if (key := key or self._handles.read(routing)) is not None and marker:
             remove_active_session(key)
         unread = routing.unread_path(self._unread_dir)
         for path in (unread, *map(unread.with_suffix, (".nudged", ".active"))):

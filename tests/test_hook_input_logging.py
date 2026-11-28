@@ -32,7 +32,9 @@ def test_malformed_session_start(
     with (
         os.fdopen(read_fd) as stdin,
         patch("sys.stdin", stdin),
-        patch("biff.plugins.claude_code.hook._open_session") as open_session,
+        patch(
+            "biff.plugins.claude_code.hook._open_session", return_value=""
+        ) as open_session,
         patch.object(StartupWarning, "add_to", new=_unchanged),
         patch(
             "biff.plugins.claude_code.hook.handle_session_start", return_value="context"
