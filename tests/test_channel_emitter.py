@@ -1937,3 +1937,58 @@ def test_the_instructions_do_not_tell_the_model_to_distrust_bodies() -> None:
     """Teammates' messages are acted on, not refused, until signed trust lands."""
     assert_no_trust_phrase(INSTRUCTIONS)
     assert "channel events" in INSTRUCTIONS.lower()
+
+
+# -- The mail event: two wakes, and competing wall work (notification-mail-event.tex) --
+
+
+class TestWakes:
+    """ReadBegin under the lock, PollWake, and the per-kind fairness (PL-1769)."""
+
+    async def test_two_wakes_at_once_announce_an_arrival_once(self, rig: _Rig) -> None:
+        """ReadBegin takes the lock: the push's pass and the poll's do not both send."""
+        rig.open()
+        rig.sink.on_send.append(_yield)  # a send gives the other pass its chance
+        await rig.mail()
+        await asyncio.gather(rig.emitter.check(), rig.emitter.check())
+        assert rig.sink.metas == [{"kind": "mail", "count": "1"}]
+
+    async def test_a_pass_reads_every_kind_with_no_push(self, rig: _Rig) -> None:
+        """PollWake needs nothing: mail and a wall both go out from one bare pass."""
+        rig.open()
+        await rig.mail()
+        await rig.wall()
+        await rig.emitter.check()
+        assert {m["kind"] for m in rig.sink.metas} == {"mail", "wall"}
+
+    async def test_mail_pending_is_announced_while_wall_work_competes(
+        self, rig: _Rig
+    ) -> None:
+        """Fairness: a wall that changes before every pass never starves the mail."""
+        rig.open()
+        for turn in range(4):
+            await rig.wall(text=f"wall {turn}")
+            await rig.mail()
+            rig.clock.advance(120)  # each kind's window is open again
+            await rig.emitter.check()
+            sent = [m["kind"] for m in rig.sink.metas[-2:]]
+            assert sorted(sent) == ["mail", "wall"], f"turn {turn}: {sent}"
+        kinds = [m["kind"] for m in rig.sink.metas]
+        assert (kinds.count("mail"), kinds.count("wall")) == (4, 4)
+
+    async def test_mail_goes_out_while_a_wall_is_held_by_its_rate_window(
+        self, rig: _Rig
+    ) -> None:
+        """The wall's window is closed, the mail's is open: mail is not held for it."""
+        rig.open()
+        await rig.wall(text="first")
+        await rig.emitter.check()
+        await rig.wall(text="second")  # held: the wall sent a moment ago
+        await rig.mail()
+        await rig.emitter.check()
+        assert [m["kind"] for m in rig.sink.metas] == ["wall", "mail"]
+        assert EventKind.WALL in rig.emitter.held
+
+
+async def _yield() -> None:
+    await asyncio.sleep(0)
