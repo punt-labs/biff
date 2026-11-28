@@ -509,6 +509,25 @@ async def test_a_request_within_a_longer_deadline_outwaits_the_request_timeout(
         }
 
 
+async def test_a_request_within_forwards_a_seconds_parameter_to_the_method(
+    run_dir: RunDir,
+) -> None:
+    async def echo(ws: ServerConnection) -> None:
+        request = json.loads(str(await ws.recv()))
+        reply = {
+            "type": "reply",
+            "version": PROTOCOL_VERSION,
+            "id": request["id"],
+            "result": request["params"],
+        }
+        await ws.send(json.dumps(reply))
+        await ws.wait_closed()
+
+    async for client in _client_of(run_dir, echo):
+        result = await client.request_within(5.0, "channel_check", to="a", seconds=7)
+        assert result == {"to": "a", "seconds": 7}
+
+
 async def test_a_plain_request_gives_up_before_a_slow_answer(
     run_dir: RunDir,
 ) -> None:

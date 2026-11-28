@@ -289,7 +289,11 @@ class TestTalkInviteFrame:
                 frames = [json.loads(r) for r in received]
                 invite = next(f for f in frames if f.get("type") == "invite")
                 assert invite["from"] == "kai"
-                assert invite["body"] == "hello"
+                # An invite carries no text: the opening line waits in the
+                # sender's talk state and goes out as a message once the
+                # partner accepts (docs/design/biffd.md).
+                assert invite["body"] == ""
+                assert all("hello" not in r.decode() for r in received)
                 assert invite["from_key"] == kai_state.session_key
                 assert invite["to_key"] == _ERIC_KEY
         finally:

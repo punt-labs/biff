@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -258,19 +259,45 @@ async def test_unsupported_version_names_both_versions_and_the_fix(
     assert "biff daemon serve" in message
 
 
-async def test_a_version_one_client_is_told_to_upgrade_at_the_hello(
+async def test_a_version_one_client_is_refused_before_it_can_subscribe(
     harness: Harness,
 ) -> None:
-    """Version 1 predates the channel check event; it would drop mid-stream."""
-    opened = await _open(harness)
-    hello = opened.hello(harness.run_dir.read_token(), version=1)
-    async with opened.ws:
-        await opened.ws.send(Frames.encode(hello))
-        reply = Frames.decode(str(await opened.ws.recv()))
+    """Version 1 cannot decode channel_check_request: it is refused, not dropped."""
+    nonce = Challenge.fresh().client_nonce
+
+    def v1(frame: dict[str, object]) -> str:
+        return json.dumps({**frame, "version": 1})
+
+    received: list[str] = []
+    ws = await _unproven(harness)
+    async with ws:
+        await ws.send(v1({"type": "challenge", "client_nonce": nonce}))
+        with suppress(ConnectionClosed):  # the rest of a version-1 client's turn
+            await ws.send(v1({"type": "subscribe", "id": 1}))
+        with pytest.raises(ConnectionClosed):
+            while True:
+                received.append(str(await asyncio.wait_for(ws.recv(), timeout=5)))
+    frames = [Frames.decode(text) for text in received]
+    assert [type(frame) for frame in frames] == [Reply]
+    reply = frames[0]
     assert isinstance(reply, Reply)
     assert reply.error is not None
     assert reply.error.code is ErrorCode.UNSUPPORTED_VERSION
     assert "client speaks protocol 1, biffd speaks 2" in reply.error.message
+    assert _no_state(harness)
+
+
+async def test_a_refused_version_one_client_leaves_the_daemon_serving(
+    harness: Harness,
+) -> None:
+    nonce = Challenge.fresh().client_nonce
+    ws = await _unproven(harness)
+    async with ws:
+        challenge = {"type": "challenge", "version": 1, "client_nonce": nonce}
+        await ws.send(json.dumps(challenge))
+        await ws.recv()
+    kai = await harness.connect("s-kai", "kai")
+    assert await kai.request("status")
 
 
 async def test_unsupported_version_registers_no_session(harness: Harness) -> None:

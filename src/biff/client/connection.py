@@ -321,15 +321,17 @@ class DaemonClient:
         return held.result
 
     async def request_within(
-        self, seconds: float, method: str, **params: JsonValue
+        self, deadline: float, method: str, /, **params: JsonValue
     ) -> JsonValue:
-        """Run *method* like :meth:`request`, waiting up to *seconds* for the reply.
+        """Run *method* like :meth:`request`, waiting up to *deadline* seconds.
 
         For a method that answers only after it has waited on something itself
         (a channel check waits for the session's acknowledgement), so the
-        request timeout would end the call before the daemon replies.
+        request timeout would end the call before the daemon replies.  The
+        deadline and the method are positional-only, so every keyword reaches
+        the method, a ``seconds`` parameter included.
         """
-        held = await self._hold(method, params, seconds)
+        held = await self._hold(method, params, deadline)
         await held.confirm()
         return held.result
 

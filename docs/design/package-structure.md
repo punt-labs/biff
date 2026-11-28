@@ -39,7 +39,7 @@ From the bottom up:
 | `server` | The MCP server and its tools, the same for every AI tool that connects | `kernel`, `wire`, `engine`, `render`, `commands`, `client` |
 | `plugins` | The plugin contract (`plugins/contract.py`): the `Installer` and `SessionStart` interfaces, and the registry that holds each tool's adapter | `kernel`, `wire`, `engine` |
 | `service` | Install, enable, `biff doctor`, git hooks, the CI notification workflow, optional integrations such as vox | `kernel`, `wire`, `engine`, `render`, `plugins` |
-| `plugins/<tool>` | One Python adapter per AI tool: `claude_code`, `codex`, `opencode`, `pi`, `devin`. Each implements the parts of the contract its tool needs, and may own that tool's console script (Claude Code's `biff-hook`) | `kernel`, `wire`, `engine`, `render`, `commands`, `plugins`, `service`; never `server`, `cli` or another tool's adapter |
+| `plugins/<tool>` | One Python adapter per AI tool: `claude_code`, `codex`, `opencode`, `pi`, `devin`. Each implements the parts of the contract its tool needs, and may own that tool's console script (Claude Code's `biff-hook`) | `kernel`, `wire`, `engine`, `render`, `commands`, `plugins`, `service`, `client`; never `server`, `cli` or another tool's adapter |
 | `cli` | The `biff` command, the interactive shell, command-line sessions; registers each tool's adapter at startup | every package above |
 
 `testing` (the test helpers in `biff.testing`) is outside this stack. It may

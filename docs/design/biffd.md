@@ -381,10 +381,26 @@ activity is claimed; a stamp older than the row's `last_tool_at` moves nothing.
 **Retention.** A harness session with no connection for `RETENTION_SECONDS` (the
 lifetime of its relay row, three days) is ended by the session sweep with the same
 effects (`ExpireClaude`); a hello that reattaches first restarts the clock. A relay
-failure leaves the record and the next sweep retries. The daemon keeps harness
-records in memory, so a restart forgets them (`claude-session-end.tex` models the
-record as durable): rows of sessions that never reattach age out by the relay's own
-row lifetime, and the held batch is lost with the outbox (PL-1753).
+failure leaves the record and the next sweep retries. The daemon keeps each
+harness session's record on disk (`~/.punt-labs/biff/harness-sessions/<session id>.json`,
+mode 0600, written and synced when the session opens): the hello's client, session id,
+main agent, directory and user, when its last connection left (`dormant_since`, null
+while one is on it) and how many starts in a row failed to restore it. A session that
+cannot be recorded is refused its hello. The record is removed last when the session
+ends or expires; a record that cannot be deleted is logged, and a restart drops it when
+the relay no longer lists the session.
+
+At start, before it listens, the daemon builds every kept session again, dormant, each
+bounded by the attach timeout and none able to stop the start. Retention resumes from
+`dormant_since`; a session that had a connection when the daemon died starts a fresh
+period. The mail waiting in its relay inbox is drained into the user's mailbox by an
+end or by retention, as for any session, and a hello reattaches it. A session the
+relay could not serve is tried again after 5, 15 and 45 seconds, and at each start,
+until five starts in a row have failed. A record whose repository is gone, whose relay
+row is gone (the session ended, or aged out while the daemon was down), or that failed
+five starts is dropped and logged; its mail stays in the relay inbox, since forwarding
+it needs the relay the record can no longer reach. A crash still loses the batch held
+in the outbox (PL-1753).
 
 **Push and poll are one path.** The relay publishes a wake poke when mail or a
 wall arrives (a frame to the user's repository subject, the repository's wall

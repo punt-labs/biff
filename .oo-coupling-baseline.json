@@ -556,8 +556,8 @@
     "efferent_coupling": 13.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.833,
-    "avg_lcom": 0.833
+    "max_lcom": 0.758,
+    "avg_lcom": 0.758
   },
   "src/biff/daemon/environment.py": {
     "efferent_coupling": 0.0,
@@ -586,6 +586,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/biff/daemon/harness_records.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.727,
+    "avg_lcom": 0.727
   },
   "src/biff/daemon/heartbeat.py": {
     "efferent_coupling": 3.0,
@@ -707,7 +714,7 @@
     "avg_lcom": 0.0
   },
   "src/biff/daemon/server.py": {
-    "efferent_coupling": 10.0,
+    "efferent_coupling": 12.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.611,
@@ -783,6 +790,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/daemon/session_restore.py": {
+    "efferent_coupling": 6.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.5,
+    "avg_lcom": 0.5
+  },
   "src/biff/daemon/session_select.py": {
     "efferent_coupling": 4.0,
     "public_names": 2.0,
@@ -815,8 +829,8 @@
     "efferent_coupling": 16.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.746,
-    "avg_lcom": 0.498
+    "max_lcom": 0.757,
+    "avg_lcom": 0.545
   },
   "src/biff/daemon/subscription.py": {
     "efferent_coupling": 2.0,
