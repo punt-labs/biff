@@ -95,6 +95,29 @@ class TestWhereTheDaemonIsUsed:
 
         assert McpAssembly.uses_biffd(transport, None, environ) is expected
 
+    def test_the_daemon_is_refused_at_launch_when_the_environment_carries_the_relay(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # biffd cannot carry the override, so every channel subscription would fail
+        # and the model would be told not to poll: refuse where it is seen.
+        monkeypatch.setenv("BIFF_MCP_TRANSPORT", "daemon")
+        monkeypatch.setenv("BIFF_RELAY_URL", "nats://elsewhere:4222")
+        options = McpServerOptions(user="rmh", data_dir=None, relay_url=None)
+
+        with pytest.raises(SystemExit, match="BIFF_RELAY_URL") as caught:
+            options.create_server(CliInvocation.repo_toggle())
+
+        assert "BIFF_MCP_TRANSPORT=inprocess" in str(caught.value)
+
+    def test_the_in_process_server_still_accepts_the_relay_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("BIFF_MCP_TRANSPORT", "inprocess")
+        monkeypatch.setenv("BIFF_RELAY_URL", "")
+        options = McpServerOptions(user="rmh", data_dir=tmp_path, relay_url=None)
+
+        options.create_server(CliInvocation.repo_toggle())  # does not raise
+
     def test_the_daemon_is_refused_when_an_option_moves_the_relay(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

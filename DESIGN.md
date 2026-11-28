@@ -10095,7 +10095,9 @@ default, the next deletes the in-process server, the last deletes `biff serve`.
    relay configuration, DES-095), and the refusal names the variable and the way
    out (`BIFF_MCP_TRANSPORT=inprocess` or `mcp.transport: inprocess`). A hook that
    cannot open or end its session logs why, says so in the SessionStart context,
-   and still cleans up locally; nothing falls back to the in-process server. Runners
+   and still cleans up locally; `biff mcp` refuses at launch, naming the variable and
+   the way out, because its channel feed could never subscribe; nothing falls back
+   to the in-process server. Runners
    that have no persistent biffd and hand biff its relay in the environment (Devin,
    CI, the agent containers) therefore pin `inprocess` until biffd is seeded from
    the environment of the process that starts it, which is the next change, before
