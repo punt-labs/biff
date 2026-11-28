@@ -346,3 +346,5 @@
 {"ts":"2026-11-28T11:07:49Z","commit":"e0305df","source":null,"files_scored":324,"files_improved":0,"files_regressed":2,"verdict":"fail","reason":null,"deltas":{}}
 {"ts":"2026-11-28T11:59:20Z","commit":"9668394","source":null,"files_scored":324,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"PL-1670 B5 review: the opener imports DaemonError to end a session whose request a refusal broke","deltas":{"src/biff/plugins/claude_code/daemon_session.py":{"efferent_coupling":[6.0,7.0]}}}
 {"ts":"2026-11-28T11:59:21Z","commit":"9668394","source":null,"files_scored":324,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-11-28T12:15:40Z","commit":"bd6077f","source":null,"files_scored":324,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"PL-1670 B5: the launch refusal imports the client environment","deltas":{"src/biff/server/mcp_assembly.py":{"efferent_coupling":[12.0,13.0]}}}
+{"ts":"2026-11-28T12:15:40Z","commit":"bd6077f","source":null,"files_scored":324,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
