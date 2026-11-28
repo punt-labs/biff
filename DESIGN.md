@@ -9891,16 +9891,20 @@ second group of daemon additions for PL-1670. Model:
 
 **Divergence from the model.** The durable model keeps the record across a daemon
 restart (`DaemonRestart`). The daemon holds harness records in memory, so a
-restart forgets them, which the spec now states as `DaemonRestartForget`: the row
-and the tty name age out by the relay's own lifetime (`RowAgesOut`,
-`TtyAgesOut`), the unconfirmed batch is lost with the outbox (PL-1753), and the
-unread mail in the session's relay inbox is never drained to the user's mailbox
-(`strandedN`, kept in the relay until its own retention, and found again if the
-session resumes under the same id). That is not wholly safe: a forgotten session
-holds its name for the row lifetime and its unread mail is stranded. The spec keeps
-both restarts; the properties about the record hold unless the restart forgot it.
-Persisting the records, or scanning the relay's rows at start, would close it and
-is not in this change.
+restart forgets them, which the spec states as `DaemonRestartForget`: the
+unconfirmed batch is lost with the outbox (PL-1753), and the unread mail in the
+restarted session's own relay inbox is never drained, which the spec counts as
+`strandedN`. Stranded mail is that session-inbox mail only: mail already filed in
+the user's mailbox (by an end, or addressed to the user) is untouched by the loss
+of a record. It stays in the relay until its own retention, and is found again if
+the session resumes under the same id. The row and the tty name stay as well, and
+age out by the relay's own lifetime on NATS (`RowAgesOut`, `TtyAgesOut`). The
+local relay (no relay URL) keeps a name reservation as a lockfile with no
+lifetime, so there `TtyAgesOut` does not happen and a forgotten session holds its
+name until something releases it. That is not wholly safe: a forgotten session
+holds its name and its unread session-inbox mail is stranded. The spec keeps both
+restarts; the properties about the record hold unless the restart forgot it.
+Persisting the records, or scanning the relay's rows at start, closes it: PL-1771.
 
 **Audit status.** `claude-session-end.audit.json` reports 13 of 13 clauses covered
 and zero GAP. It was reconciled by reading the tests against each clause (the

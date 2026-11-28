@@ -35,7 +35,7 @@
       "verifiedBy": "the test releases the old session's reservation, reserves the name for kai:someone-else, ends the session, and asserts the owner is still kai:someone-else"
     },
     {
-      "text": "outboxN + inboxN + shownN + lostN + strandedN = issuedN: an end loses no mail; a restart loses the outbox",
+      "text": "outboxN + sessN + userN + shownN + lostN + strandedN = issuedN: an end files the held batch and drains the session inbox into the user's mailbox; a restart loses the outbox and strands the session inbox",
       "category": "invariant",
       "source": "EndInv",
       "coveredBy": "tests/test_daemon/test_claude_end.py::test_an_end_files_back_the_mail_the_session_holds; tests/test_daemon/test_claude_end.py::test_an_end_loses_no_mail_still_in_the_inbox; tests/test_daemon/test_claude_expiry.py::test_a_daemon_restart_loses_the_outbox_but_not_the_relays_mail",
@@ -83,7 +83,7 @@
       "verifiedBy": "one test per effect; the failure tests make delete_session and append_wtmp fail once; the concurrency test parks the first end mid-effect and asserts one logout. A failure of the refile or the drain is not injected"
     },
     {
-      "text": "NewHello: the new session of a clear takes the name only after the old end is complete",
+      "text": "NewHello: the new session of a clear takes the name only after the old end is complete (the goal needs an EndOwnSession step: ownEnded)",
       "category": "precondition",
       "source": "NewHello",
       "coveredBy": "tests/test_daemon/test_claude_end.py::test_a_clear_ends_the_old_session_before_the_new_hello",
@@ -117,8 +117,8 @@
   ],
   "limitsWithoutTest": [
     {
-      "text": "DaemonRestartForget, RowAgesOut, TtyAgesOut: the code keeps harness records in memory, so a restart forgets them; the row and the name age out by the relay's row lifetime, and the session's unread relay inbox is stranded (strandedN)",
-      "reason": "a divergence from the durable-record model, reported as a finding: not wholly safe (a name held up to the row lifetime, unread mail never drained to the user mailbox). No test asserts the forgotten record or the stranding; the closing fix is persisting the records or a scan of the relay's rows at start"
+      "text": "DaemonRestartForget, RowAgesOut, TtyAgesOut: the code keeps harness records in memory, so a restart forgets them; the row and (on NATS) the name age out by the relay's lifetime, the local relay's name reservation has no lifetime, and the restarted session's own relay inbox is stranded (strandedN; the user's mailbox is untouched)",
+      "reason": "a divergence from the durable-record model, reported as a finding (PL-1771 tracks the code fix): a name held up to the row lifetime, or for good on the local relay, and unread session-inbox mail never drained to the user mailbox. No test asserts the forgotten record or the stranding"
     },
     {
       "text": "claude-session-end-unordered-owned.tex: the owner check alone keeps the new session's name",
